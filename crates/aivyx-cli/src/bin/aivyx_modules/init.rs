@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
+use aivyx_config::AccessLevel;
 use aivyx_llm::verify::{verify_provider_credentials, VerifyError, VerifyProvider};
 use aivyx_llm::LlmProvider;
 
@@ -371,6 +372,12 @@ struct InitConfig {
     api_key: Option<String>,
     storage_path: String,
     fs_root: String,
+    /// Chapter N — the operator-chosen access level. `Sandbox` (default)
+    /// renders exactly as before (`[fs] root`); expanded levels render an
+    /// `[access]` section instead.
+    access_level: AccessLevel,
+    /// Chapter N — confirm-first posture for expanded levels.
+    confirm_destructive: bool,
     /// Phase 46: enable bundled web search MCP server.
     enable_web_search: bool,
     /// Phase 57 / Phase 181 — the full P13 Profile, collected by
@@ -427,10 +434,28 @@ fn render_toml(cfg: &InitConfig) -> String {
         }
     }
 
-    // [fs] and [storage] sections
+    // [fs] / [access] section (Chapter N). Sandbox renders the legacy
+    // `[fs] root` unchanged; expanded levels render `[access]` instead
+    // (the level derives fs_root, with an explicit `root` for workspace).
+    match cfg.access_level {
+        AccessLevel::Sandbox => {
+            out.push_str(&format!("\n[fs]\nroot = \"{}\"\n", cfg.fs_root));
+        }
+        level => {
+            out.push_str(&format!("\n[access]\nlevel = \"{level}\"\n"));
+            if matches!(level, AccessLevel::Workspace | AccessLevel::Custom) {
+                out.push_str(&format!("root = \"{}\"\n", cfg.fs_root));
+            }
+            out.push_str(&format!(
+                "confirm_destructive = {}\n",
+                cfg.confirm_destructive
+            ));
+        }
+    }
+    // [storage] section
     out.push_str(&format!(
-        "\n[fs]\nroot = \"{}\"\n\n[storage]\npath = \"{}\"\n",
-        cfg.fs_root, cfg.storage_path,
+        "\n[storage]\npath = \"{}\"\n",
+        cfg.storage_path,
     ));
 
     // Phase 46: bundled web search MCP server.
@@ -1331,12 +1356,84 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         .clone()
         .unwrap_or(default_storage_fallback);
 
-    let fs_root = prompt_line(
-        &format!("Sandbox root [{default_fs}]: "),
+    // 5a. Access level (Chapter N) — how far the agent reaches. The
+    // choice picks the fs_root boundary + the confirm-first posture; the
+    // capability/audit/trust-tier machinery is unchanged, and remote
+    // channels stay tier-attenuated regardless.
+    let level_idx = prompt_choice(
+        "Access level — how much of your machine can the agent reach?",
+        &[
+            "sandbox   — a dedicated sandbox directory (safest; default)",
+            "workspace — a single project directory you choose",
+            "home      — your entire home directory (full personal assistant)",
+            "full      — the whole filesystem, incl. system files (advanced)",
+        ],
+        0,
         &mut reader,
         &mut writer,
     )?;
-    let fs_root = if fs_root.is_empty() { default_fs } else { fs_root };
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let (access_level, fs_root) = match level_idx {
+        1 => {
+            let r = prompt_line(
+                "Workspace directory: ",
+                &mut reader,
+                &mut writer,
+            )?;
+            let r = if r.is_empty() { default_fs } else { r };
+            (AccessLevel::Workspace, r)
+        }
+        2 => {
+            writeln!(
+                writer,
+                "\n  \u{26a0} 'home' grants full read/write/shell over your entire \
+                 home directory ({home_dir}).",
+            )
+            .ok();
+            (AccessLevel::Home, home_dir.clone())
+        }
+        3 => {
+            writeln!(
+                writer,
+                "\n  \u{26a0} 'full' grants access to the ENTIRE filesystem, including \
+                 system files. A mistaken command could damage your OS.",
+            )
+            .ok();
+            (AccessLevel::Full, "/".to_string())
+        }
+        // 0 (or any out-of-range) → sandbox, keeping the customizable
+        // sandbox-root prompt for back-compat.
+        _ => {
+            let r = prompt_line(
+                &format!("Sandbox root [{default_fs}]: "),
+                &mut reader,
+                &mut writer,
+            )?;
+            (AccessLevel::Sandbox, if r.is_empty() { default_fs } else { r })
+        }
+    };
+    // Expanded levels require an explicit confirmation, then offer the
+    // confirm-first safety posture (default on).
+    let confirm_destructive = if access_level.is_expanded() {
+        let proceed = prompt_yes_no(
+            &format!("Grant '{access_level}' access to this agent?"),
+            false,
+            &mut reader,
+            &mut writer,
+        )?;
+        if !proceed {
+            return Err("init cancelled — expanded access not confirmed".into());
+        }
+        prompt_yes_no(
+            "Require confirmation before destructive actions \
+             (delete / overwrite / destructive shell)?",
+            true,
+            &mut reader,
+            &mut writer,
+        )?
+    } else {
+        false
+    };
 
     let storage_path = prompt_line(
         &format!("Storage path [{default_storage}]: "),
@@ -1385,6 +1482,8 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         api_key,
         storage_path,
         fs_root,
+        access_level,
+        confirm_destructive,
         enable_web_search,
         profile_assistant_name: identity.assistant_name,
         profile_operator_profile: identity.operator_profile,
@@ -1815,6 +1914,8 @@ mod tests {
             api_key: api_key.map(String::from),
             storage_path: storage_path.into(),
             fs_root: fs_root.into(),
+            access_level: AccessLevel::Sandbox,
+            confirm_destructive: false,
             enable_web_search,
             profile_assistant_name: None,
             profile_operator_profile: None,
@@ -1925,6 +2026,66 @@ mod tests {
         let toml = render_toml(&cfg);
         assert!(toml.contains("root = \"/custom/workspace\""));
         assert!(toml.contains("path = \"/custom/store.redb\""));
+    }
+
+    // -- Chapter N: access levels in init --------------------------------
+
+    #[test]
+    fn render_toml_sandbox_omits_access_section() {
+        // Back-compat: the default sandbox level renders `[fs] root` and
+        // NO `[access]` section, byte-identical to pre-Chapter-N output.
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "data/aivyx.redb",
+            "/home/user/aivyx-sandbox",
+            false,
+        );
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[fs]"));
+        assert!(toml.contains("root = \"/home/user/aivyx-sandbox\""));
+        assert!(!toml.contains("[access]"));
+    }
+
+    #[test]
+    fn render_toml_home_level_emits_access_not_fs() {
+        let mut cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "data/aivyx.redb",
+            "/home/user",
+            false,
+        );
+        cfg.access_level = AccessLevel::Home;
+        cfg.confirm_destructive = true;
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[access]"));
+        assert!(toml.contains("level = \"home\""));
+        assert!(toml.contains("confirm_destructive = true"));
+        // fs_root is derived from the level — no [fs] root, no explicit root.
+        assert!(!toml.contains("[fs]"));
+        assert!(!toml.contains("\nroot = "));
+    }
+
+    #[test]
+    fn render_toml_workspace_level_emits_explicit_root() {
+        let mut cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "data/aivyx.redb",
+            "/home/user/project",
+            false,
+        );
+        cfg.access_level = AccessLevel::Workspace;
+        cfg.confirm_destructive = true;
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("level = \"workspace\""));
+        assert!(toml.contains("root = \"/home/user/project\""));
+        assert!(toml.contains("confirm_destructive = true"));
+        assert!(!toml.contains("[fs]"), "workspace carries its root via [access]");
     }
 
     // -- Phase 46: web search in init ------------------------------------
