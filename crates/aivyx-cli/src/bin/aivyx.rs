@@ -1204,6 +1204,23 @@ fn print_config_banner(config: &AivyxConfig) {
         config.fs_root.value,
         source_label(config.fs_root.source),
     );
+    // Chapter N — make the operator's chosen reach + safety posture
+    // visible at startup, next to the fs_root they shape.
+    eprintln!(
+        "  access_level      = {} ({}){}",
+        config.access_level.value,
+        source_label(config.access_level.source),
+        if config.access_level.value == aivyx_config::AccessLevel::Full {
+            "  ⚠ whole-filesystem access"
+        } else {
+            ""
+        },
+    );
+    eprintln!(
+        "  confirm_destructive = {} ({})",
+        config.confirm_destructive.value,
+        source_label(config.confirm_destructive.source),
+    );
     eprintln!(
         "  storage_path      = {:?} ({})",
         config.storage_path.value,
@@ -4393,6 +4410,13 @@ async fn run_async(
     // at execute time. Using the un-canonicalized `fs_root` here would
     // let a symlink in the user's `$HOME` silently widen the scope.
     let canonical_root = fs_read.sandbox_root().to_path_buf();
+    // Chapter N — the enforced fs root, shared into every prompt-assembly
+    // closure so the system prompt can name the actual sandbox boundary
+    // (the model must know its real root to neither over-refuse a granted
+    // path nor mislabel a narrow sandbox). `Arc<Path>` so each `move`
+    // closure clones cheaply rather than fighting the borrow checker.
+    let prompt_fs_root: std::sync::Arc<std::path::Path> =
+        std::sync::Arc::from(canonical_root.as_path());
     let root_display = canonical_root.display();
     let fs_read_scope = Scope::parse(&format!("fs.read:{root_display}/**")).ok_or_else(|| {
         format!("canonical fs.read sandbox scope not parseable from {canonical_root:?}")
@@ -5674,6 +5698,7 @@ async fn run_async(
         &system_prompt,
         &prompt_tool_catalog,
         ollama_prompt_strategy,
+        Some(&*prompt_fs_root),
     );
 
     // ---- Capabilities -------------------------------------------------
@@ -5712,11 +5737,26 @@ async fn run_async(
         Scope::parse("net.fetch").unwrap(),
         Scope::parse("net.post").unwrap(),
     ];
+    // Chapter N — the `<root>/**` scopes above grant the root's
+    // DESCENDANTS only; the glob does not match the bare root path.
+    // Also grant the root directory itself so the agent can inspect /
+    // operate on its own root (e.g. list `$HOME` when access level =
+    // home, or `ls .` in a workspace). Without these, a `fs.metadata`
+    // or `shell.exec` whose cwd/path IS the root is denied even though
+    // everything under it is allowed.
+    let root_str = canonical_root.display().to_string();
+    backcompat_floor.push(Scope::parse(&format!("fs.read:{root_str}")).unwrap());
+    backcompat_floor.push(Scope::parse(&format!("fs.write:{root_str}")).unwrap());
+    backcompat_floor.push(Scope::parse(&format!("fs.metadata:{root_str}")).unwrap());
     if let Some(s) = shell_exec_scope {
         backcompat_floor.push(s);
+        // Bare-root shell cwd (the run-from-the-root case).
+        backcompat_floor
+            .push(Scope::parse(&format!("shell.exec:cwd:{root_str}")).unwrap());
     }
     if let Some(s) = fs_delete_scope {
         backcompat_floor.push(s);
+        backcompat_floor.push(Scope::parse(&format!("fs.delete:{root_str}")).unwrap());
     }
     // Phase 36 — grant ollama model management scopes in the
     // backcompat floor when provider is Ollama, so the default
@@ -5828,6 +5868,9 @@ async fn run_async(
     // sub-agents inherit the same composition.
     let persona_refiner_for_factory = system_prompt_refiner.clone();
 
+    // Chapter N — each prompt-assembly closure owns its own cheap Arc
+    // clone of the fs root (a `move` closure can't borrow the outer one).
+    let prompt_fs_root_cf = prompt_fs_root.clone();
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
         // map the parent was built against, so a missing key is a
@@ -5919,6 +5962,7 @@ async fn run_async(
                 &child_assembled,
                 &child_prompt_tool_catalog,
                 ollama_prompt_strategy,
+                Some(&*prompt_fs_root_cf),
             );
 
         // Build the child's planner factory. Same shape as the
@@ -5965,6 +6009,7 @@ async fn run_async(
         // child_system_prompt, cloned into every per-turn
         // re-assembly.
         let child_refresher_catalog = child_prompt_tool_catalog.clone();
+        let prompt_fs_root_cpf = prompt_fs_root_cf.clone();
         let child_planner_factory = move || {
             let mut cfg = planner_config.clone();
             let snap = child_refresher_shared
@@ -5981,6 +6026,7 @@ async fn run_async(
                     &assembled,
                     &child_refresher_catalog,
                     ollama_prompt_strategy,
+                    Some(&*prompt_fs_root_cpf),
                 ),
             );
             drop(snap);
@@ -6254,6 +6300,7 @@ async fn run_async(
         // re-assembly preserves the `## Tools available`
         // block. Empty when strategy is `None` → no-op append.
         let daemon_refresher_catalog = prompt_tool_catalog.clone();
+        let prompt_fs_root_pf = prompt_fs_root.clone();
         let planner_factory = move || {
             let mut cfg = planner_config.clone();
             // Per-turn rebuild from current Persona state.
@@ -6271,6 +6318,7 @@ async fn run_async(
                     &assembled,
                     &daemon_refresher_catalog,
                     ollama_prompt_strategy,
+                    Some(&*prompt_fs_root_pf),
                 ),
             );
             drop(snap);
@@ -6847,6 +6895,7 @@ async fn run_async(
             // refresher; preserves the `## Tools available`
             // block on every per-turn re-assembly.
             let refresher_catalog = prompt_tool_catalog.clone();
+            let prompt_fs_root_r1 = prompt_fs_root.clone();
             let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
                 Arc::new(move || {
                     let snap = refresher_shared
@@ -6862,6 +6911,7 @@ async fn run_async(
                         &assembled,
                         &refresher_catalog,
                         ollama_prompt_strategy,
+                        Some(&*prompt_fs_root_r1),
                     )
                 });
 
@@ -7307,6 +7357,7 @@ async fn run_async(
                     role_for_envelope.system_prompt.value.clone();
                 let refresher_shared = shared_persona.clone();
                 let refresher_catalog = prompt_tool_catalog.clone();
+                let prompt_fs_root_r2 = prompt_fs_root.clone();
                 let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
                     Arc::new(move || {
                         let snap = refresher_shared
@@ -7322,6 +7373,7 @@ async fn run_async(
                             &assembled,
                             &refresher_catalog,
                             ollama_prompt_strategy,
+                            Some(&*prompt_fs_root_r2),
                         )
                     });
 

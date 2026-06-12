@@ -434,6 +434,7 @@ fn render_persona_section(persona: &EffectivePersona) -> String {
 pub fn append_tool_catalog(
     base_prompt: &str,
     tools: &[LlmToolDescriptor],
+    fs_root: Option<&std::path::Path>,
 ) -> String {
     if tools.is_empty() {
         return base_prompt.to_string();
@@ -455,27 +456,39 @@ pub fn append_tool_catalog(
         }
     }
 
-    // Filesystem tools are sandboxed. Make the model DISCLOSE that
-    // boundary rather than silently substitute its sandbox for the
-    // path the operator actually asked about. Observed failure: asked
-    // to "list the folders in my home directory," the agent listed its
-    // sandbox root and presented the result as the operator's home —
-    // only admitting the sandbox limit when challenged. Gated on an
-    // `fs.*` tool actually being registered so non-filesystem agents
-    // don't carry the note.
+    // Filesystem tools are rooted at a sandbox boundary that the
+    // operator chooses (Chapter N access levels). Tell the model the
+    // ACTUAL root so it reasons correctly about what is in/out of
+    // bounds: with a narrow root it must not present sandbox contents
+    // as the operator's home; with a broad root (`$HOME`, `/`) it must
+    // NOT over-refuse a request that is in fact inside its root. Gated
+    // on an `fs.*` tool actually being registered.
     if tools.iter().any(|t| t.name.starts_with("fs.")) {
-        out.push_str(
-            "\n\nYour filesystem tools (the `fs.*` tools) are SANDBOXED: \
-             they only reach files and folders under your sandbox root, \
-             NOT the operator's real home directory or arbitrary paths on \
-             the machine. When the operator asks about a path outside your \
-             sandbox (their home directory, an absolute system path, etc.), \
-             say plainly that it is outside your sandbox and you cannot see \
-             it — do NOT list your sandbox's contents as if they were that \
-             location. When you report files or folders, make clear they \
-             come from your sandbox/workspace, not the operator's home \
-             directory.\n",
-        );
+        match fs_root {
+            Some(root) => {
+                out.push_str(&format!(
+                    "\n\nYour filesystem tools (the `fs.*` tools) are rooted \
+                     at `{root}`. You CAN read, write, and list anything \
+                     under `{root}` — including `{root}` itself (pass `.` or \
+                     an absolute path under it). You CANNOT reach paths \
+                     outside `{root}`; if the operator asks about one, say \
+                     plainly it is outside your accessible root. Resolve a \
+                     bare or relative path against `{root}`, and when a \
+                     request clearly targets a location under `{root}`, \
+                     invoke the tool rather than refusing.\n",
+                    root = root.display(),
+                ));
+            }
+            None => {
+                out.push_str(
+                    "\n\nYour filesystem tools (the `fs.*` tools) are \
+                     SANDBOXED to a root directory and cannot reach paths \
+                     outside it. When the operator asks about a path outside \
+                     your sandbox, say so plainly rather than presenting your \
+                     sandbox's contents as that location.\n",
+                );
+            }
+        }
     }
 
     out.trim_end().to_string()
@@ -615,14 +628,15 @@ pub fn apply_ollama_prompt_strategy(
     base_prompt: &str,
     tools: &[LlmToolDescriptor],
     strategy: OllamaFamilyStrategy,
+    fs_root: Option<&std::path::Path>,
 ) -> String {
     match strategy {
         OllamaFamilyStrategy::None => base_prompt.to_string(),
         OllamaFamilyStrategy::StructuredInjection => {
-            append_tool_catalog(base_prompt, tools)
+            append_tool_catalog(base_prompt, tools, fs_root)
         }
         OllamaFamilyStrategy::FewShotExamples => {
-            let with_catalog = append_tool_catalog(base_prompt, tools);
+            let with_catalog = append_tool_catalog(base_prompt, tools, fs_root);
             append_few_shot_examples(&with_catalog, tools)
         }
     }
@@ -1095,7 +1109,7 @@ mod tests {
     #[test]
     fn phase_122_append_tool_catalog_empty_tools_is_noop() {
         let base = "## Active role: default\n\nYou are helpful.";
-        let out = append_tool_catalog(base, &[]);
+        let out = append_tool_catalog(base, &[], None);
         assert_eq!(out, base);
     }
 
@@ -1103,7 +1117,7 @@ mod tests {
     fn phase_122_append_tool_catalog_adds_section_header() {
         let base = "## Active role: default\n\nYou are helpful.";
         let tools = vec![tool("fs.read", "Read a file")];
-        let out = append_tool_catalog(base, &tools);
+        let out = append_tool_catalog(base, &tools, None);
         assert!(out.contains("## Tools available"));
         assert!(out.starts_with(base));
     }
@@ -1116,7 +1130,7 @@ mod tests {
             tool("fs.write", "Write a file"),
             tool("memory.read", "Read a memory entry"),
         ];
-        let out = append_tool_catalog(base, &tools);
+        let out = append_tool_catalog(base, &tools, None);
         // Each tool name appears literally in the output.
         assert!(out.contains("`fs.read`"));
         assert!(out.contains("`fs.write`"));
@@ -1136,7 +1150,7 @@ mod tests {
         // hallucination prompt.
         let base = "role";
         let tools = vec![tool("fs.read", "Read a file")];
-        let out = append_tool_catalog(base, &tools);
+        let out = append_tool_catalog(base, &tools, None);
         let lower = out.to_lowercase();
         assert!(
             lower.contains("do not invent") || lower.contains("do not guess"),
@@ -1145,27 +1159,45 @@ mod tests {
     }
 
     #[test]
-    fn append_tool_catalog_adds_sandbox_disclosure_when_fs_tools_present() {
-        // Observed: asked to list the operator's home directory, the
-        // agent listed its sandbox root and called it the home dir.
-        // The catalog must instruct the model to disclose the sandbox
-        // boundary instead of substituting its contents.
+    fn append_tool_catalog_names_the_actual_fs_root() {
+        // Chapter N — when a root is known, the note must NAME it so the
+        // model reasons correctly: with a narrow root it won't mislabel
+        // its sandbox; with a broad root (home/full) it won't over-refuse
+        // a path that is in fact inside its root.
         let tools = vec![tool("fs.metadata", "Inspect a file or directory")];
-        let out = append_tool_catalog("role", &tools).to_lowercase();
-        assert!(out.contains("sandbox"), "expected a sandbox note; got: {out}");
-        assert!(
-            out.contains("home directory"),
-            "the note should name the home-directory substitution it guards against",
+        let out = append_tool_catalog(
+            "role",
+            &tools,
+            Some(std::path::Path::new("/home/julian")),
         );
+        assert!(out.contains("/home/julian"), "names the real root: {out}");
+        assert!(
+            out.to_lowercase().contains("invoke the tool rather than refusing"),
+            "tells the model to act on in-root requests: {out}",
+        );
+    }
+
+    #[test]
+    fn append_tool_catalog_generic_note_when_root_unknown() {
+        // With no root supplied, fall back to the generic sandbox note.
+        let tools = vec![tool("fs.metadata", "Inspect a file or directory")];
+        let out = append_tool_catalog("role", &tools, None).to_lowercase();
+        assert!(out.contains("sandbox"), "expected a sandbox note; got: {out}");
     }
 
     #[test]
     fn append_tool_catalog_omits_sandbox_note_without_fs_tools() {
         // A non-filesystem agent (only memory tools) shouldn't carry
-        // filesystem-sandbox guidance.
+        // filesystem-sandbox guidance, even with a root supplied.
         let tools = vec![tool("memory.write", "Store a memory")];
-        let out = append_tool_catalog("role", &tools).to_lowercase();
+        let out = append_tool_catalog(
+            "role",
+            &tools,
+            Some(std::path::Path::new("/home/julian")),
+        )
+        .to_lowercase();
         assert!(!out.contains("sandbox"), "no fs tools → no sandbox note: {out}");
+        assert!(!out.contains("/home/julian"), "no fs tools → no root note: {out}");
     }
 
     #[test]
@@ -1175,7 +1207,7 @@ mod tests {
         // em-dash and empty body.
         let base = "role";
         let tools = vec![tool("fs.read", "")];
-        let out = append_tool_catalog(base, &tools);
+        let out = append_tool_catalog(base, &tools, None);
         assert!(out.contains("- `fs.read`\n") || out.ends_with("- `fs.read`"));
         assert!(!out.contains("- `fs.read` — "));
     }
@@ -1187,7 +1219,7 @@ mod tests {
         // intact end-to-end.
         let base = "## About this assistant\n\nYour name is Aivyx.\n\n## Active role: default\n\nbody";
         let tools = vec![tool("fs.read", "Read a file")];
-        let out = append_tool_catalog(base, &tools);
+        let out = append_tool_catalog(base, &tools, None);
         assert!(out.contains("Your name is Aivyx."));
         assert!(out.contains("## Active role: default"));
         assert!(out.contains("body"));
@@ -1210,7 +1242,7 @@ mod tests {
             "You are helpful.",
         );
         let tools = vec![tool("fs.read", "Read a file")];
-        let composed = append_tool_catalog(&assembled, &tools);
+        let composed = append_tool_catalog(&assembled, &tools, None);
         // Profile section preserved.
         assert!(composed.contains("## About this assistant"));
         // Active role section preserved.
@@ -1235,7 +1267,7 @@ mod tests {
         // base prompt has.
         let base = "role\n\n\n\n";
         let tools = vec![tool("fs.read", "Read a file")];
-        let out = append_tool_catalog(base, &tools);
+        let out = append_tool_catalog(base, &tools, None);
         assert!(out.contains("role\n\n## Tools available"));
         assert!(!out.contains("role\n\n\n## Tools available"));
     }
@@ -1337,7 +1369,7 @@ mod tests {
             "You are helpful.",
         );
         let tools = vec![tool("fs.write", "Write a file")];
-        let with_catalog = append_tool_catalog(&assembled, &tools);
+        let with_catalog = append_tool_catalog(&assembled, &tools, None);
         let composed = append_few_shot_examples(&with_catalog, &tools);
         let catalog_idx = composed.find("## Tools available").unwrap();
         let example_idx = composed.find("## Example tool use").unwrap();
@@ -1359,7 +1391,7 @@ mod tests {
         // `append_few_shot_examples` with the same (empty) slice
         // is also a no-op — chained no-ops compose to no-op.
         let base = "role";
-        let after_catalog = append_tool_catalog(base, &[]);
+        let after_catalog = append_tool_catalog(base, &[], None);
         let after_examples = append_few_shot_examples(&after_catalog, &[]);
         assert_eq!(after_examples, base);
     }
