@@ -130,6 +130,7 @@ dependencies = [
  "aivyx-cost",
  "aivyx-crypto",
  "aivyx-discord",
+ "aivyx-ipc",
  "aivyx-llm",
  "aivyx-mcp",
  "aivyx-memory",
@@ -346,6 +347,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "uuid 1.23.0",
+]
+
+[[package]]
+name = "aivyx-ipc"
+version = "0.1.0"
+dependencies = [
+ "aivyx-team-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

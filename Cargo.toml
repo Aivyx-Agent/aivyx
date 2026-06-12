@@ -29,6 +29,7 @@ members = [
     "crates/aivyx-cli",
     "crates/aivyx-team",
     "crates/aivyx-team-types",
+    "crates/aivyx-ipc",
     "crates/aivyx-kitchen",
     "crates/aivyx-cost",
 ]

@@ -1,0 +1,18 @@
+[package]
+name = "aivyx-ipc"
+description = "The daemon ↔ client wire protocol (Chapter M) — wasm-clean shared types so the browser Mission-Control app and the daemon serialize from one source of wire truth. No async / storage / network deps; compiles to wasm32. Seeded with the team-mission types (M.2a); the full IPC envelope + remaining embedded data types land in later M.2 slices."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# The mission DAG + roster types the wire carries (TeamRun { plan, config }).
+aivyx-team-types = { path = "../aivyx-team-types" }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -105,6 +105,10 @@ aivyx-cost = { path = "../aivyx-cost" }
 # Chapter L — the daemon runs Nonagon team missions (TeamRuntime + the
 # MissionPlan/MissionReport types the TeamMission store persists).
 aivyx-team = { path = "../aivyx-team" }
+# Chapter M.2 — the wasm-clean wire protocol crate. The TeamMission data types
+# moved here (shared with the browser app); aivyx-channel re-exports + adds the
+# encrypted storage CRUD over them.
+aivyx-ipc = { path = "../aivyx-ipc" }
 aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider-openai", "provider-ollama"] }
 
 # Phase 8 Task 4 — `aivyx --channel telegram` delegates into
