@@ -35,6 +35,9 @@ pub enum Action {
     /// human-approval gate (approve = `true`). The driver reads the selected
     /// row's `id` + `pending_gate` and sends `ResolveTeamGate`.
     ResolveTeamGate(bool),
+    /// Chapter L — submit the composed "new mission" goal: the driver sends
+    /// `TeamRunGoal`, the daemon decomposes + runs it.
+    SubmitMission,
     /// Tear down and exit.
     Quit,
     /// Ignore this keystroke.
@@ -63,6 +66,24 @@ pub fn key_to_action(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
+    // While a goal is being decomposed/started, the panel is inert.
+    if state.mission_starting {
+        return Action::None;
+    }
+
+    // The "new mission" compose box (Chapter L) captures input until Enter
+    // submits or Esc cancels.
+    if state.mission_compose.is_some() {
+        return match key.code {
+            KeyCode::Enter => Action::SubmitMission,
+            KeyCode::Esc => Action::Update(Msg::MissionComposeCancel),
+            KeyCode::Backspace => Action::Update(Msg::MissionComposeBackspace),
+            KeyCode::Char(c) if !ctrl => Action::Update(Msg::MissionComposeChar(c)),
+            KeyCode::Char('c') if ctrl => Action::Update(Msg::MissionComposeCancel),
+            _ => Action::None,
+        };
+    }
+
     // Tab cycles the top-level views (universal — Tab is not text input).
     match key.code {
         KeyCode::Tab => return Action::Update(Msg::NextView),
@@ -87,12 +108,12 @@ pub fn key_to_action(key: KeyEvent, state: &AppState) -> Action {
             match key.code {
                 KeyCode::Up => return Action::Update(Msg::MissionSelectPrev),
                 KeyCode::Down => return Action::Update(Msg::MissionSelectNext),
+                // `n` opens the "new mission" compose box (Chapter L).
+                KeyCode::Char('n') => return Action::Update(Msg::MissionComposeOpen),
                 KeyCode::Char('a') | KeyCode::Char('y') if awaiting => {
                     return Action::ResolveTeamGate(true)
                 }
-                KeyCode::Char('r') | KeyCode::Char('n') if awaiting => {
-                    return Action::ResolveTeamGate(false)
-                }
+                KeyCode::Char('r') if awaiting => return Action::ResolveTeamGate(false),
                 _ => {}
             }
         }
@@ -389,7 +410,6 @@ mod tests {
         assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::ResolveTeamGate(true));
         assert_eq!(key_to_action(key(KeyCode::Char('y')), &s), Action::ResolveTeamGate(true));
         assert_eq!(key_to_action(key(KeyCode::Char('r')), &s), Action::ResolveTeamGate(false));
-        assert_eq!(key_to_action(key(KeyCode::Char('n')), &s), Action::ResolveTeamGate(false));
         // Arrows still move the selection.
         assert_eq!(
             key_to_action(key(KeyCode::Down), &s),
@@ -399,9 +419,48 @@ mod tests {
 
     #[test]
     fn non_awaiting_mission_leaves_gate_keys_inert() {
-        // An executing mission isn't gated — a/r/y/n do nothing.
+        // An executing mission isn't gated — a/r/y do nothing.
         let s = missions_with_phase(crate::model::MissionPhase::Executing, None);
         assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::None);
         assert_eq!(key_to_action(key(KeyCode::Char('r')), &s), Action::None);
+    }
+
+    // ---- Chapter L — new-mission compose box ----
+
+    #[test]
+    fn n_opens_the_new_mission_compose_box() {
+        let s = missions_with_phase(crate::model::MissionPhase::Executing, None);
+        assert_eq!(
+            key_to_action(key(KeyCode::Char('n')), &s),
+            Action::Update(Msg::MissionComposeOpen)
+        );
+    }
+
+    #[test]
+    fn compose_box_captures_typing_enter_and_esc() {
+        let mut s = missions_with_phase(crate::model::MissionPhase::Executing, None);
+        s.mission_compose = Some("clo".into());
+        // Letters (incl. those that are panel hotkeys when closed) type.
+        assert_eq!(
+            key_to_action(key(KeyCode::Char('n')), &s),
+            Action::Update(Msg::MissionComposeChar('n'))
+        );
+        assert_eq!(
+            key_to_action(key(KeyCode::Backspace), &s),
+            Action::Update(Msg::MissionComposeBackspace)
+        );
+        assert_eq!(key_to_action(key(KeyCode::Enter), &s), Action::SubmitMission);
+        assert_eq!(
+            key_to_action(key(KeyCode::Esc), &s),
+            Action::Update(Msg::MissionComposeCancel)
+        );
+    }
+
+    #[test]
+    fn input_is_inert_while_a_mission_is_starting() {
+        let mut s = missions_with_phase(crate::model::MissionPhase::Executing, None);
+        s.mission_starting = true;
+        assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::None);
+        assert_eq!(key_to_action(key(KeyCode::Enter), &s), Action::None);
     }
 }

@@ -21,8 +21,8 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
 use aivyx_channel::daemon_client::{
-    resolve_team_gate, spawn_daemon_and_wait, team_mission_list, DaemonCancelHandle,
-    DaemonSession,
+    resolve_team_gate, spawn_daemon_and_wait, team_mission_list, team_run_goal,
+    DaemonCancelHandle, DaemonSession,
 };
 use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload};
 
@@ -120,6 +120,20 @@ async fn run_loop(
             Action::Quit => apply(state, Msg::Quit),
             Action::ResolveTeamGate(approved) => {
                 resolve_team_gate_action(socket_path, state, approved).await;
+            }
+            Action::SubmitMission => {
+                let goal = state.mission_compose.take().unwrap_or_default().trim().to_string();
+                if !goal.is_empty() {
+                    // Show the "starting…" indicator across the (slow) LLM
+                    // decomposition, then refresh so the new mission appears.
+                    state.mission_starting = true;
+                    tui.draw(state).map_err(|e| format!("draw: {e}"))?;
+                    if let Err(e) = team_run_goal(socket_path, goal).await {
+                        apply(state, Msg::Error(e.to_string()));
+                    }
+                    state.mission_starting = false;
+                    poll_missions(socket_path, state).await;
+                }
             }
             Action::Submit => {
                 let Some(text) = state.submittable() else {

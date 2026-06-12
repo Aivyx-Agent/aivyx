@@ -292,6 +292,14 @@ pub struct AppState {
     pub missions: MissionsState,
     /// A pending approval gate, if any.
     pub gate: Option<PendingGate>,
+    /// Chapter L — the in-progress "new mission" goal the operator is typing
+    /// in the Missions panel (`Some` ⇒ the compose box is open and captures
+    /// input). `None` ⇒ closed.
+    pub mission_compose: Option<String>,
+    /// Chapter L — set while a submitted goal is being decomposed + started on
+    /// the daemon (the LLM planning call); the panel shows a "starting…"
+    /// indicator and input is inert until it resolves.
+    pub mission_starting: bool,
     /// Set once the operator asks to quit; the driver's event loop
     /// observes this and tears down the terminal.
     pub should_quit: bool,
@@ -339,6 +347,14 @@ pub enum Msg {
     /// Move the Missions selection to the next / previous mission (clamped).
     MissionSelectNext,
     MissionSelectPrev,
+    /// Chapter L — open the "new mission" compose box (empty goal).
+    MissionComposeOpen,
+    /// Chapter L — close the compose box without starting a mission.
+    MissionComposeCancel,
+    /// Chapter L — append a typed char to the in-progress goal.
+    MissionComposeChar(char),
+    /// Chapter L — delete the last char of the in-progress goal.
+    MissionComposeBackspace,
 
     // ---- scrolling ----
     /// Scroll up (toward older lines) by `n` lines.
@@ -455,6 +471,18 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         }
         Msg::MissionSelectPrev => {
             state.missions.selected = state.missions.selected.saturating_sub(1);
+        }
+        Msg::MissionComposeOpen => state.mission_compose = Some(String::new()),
+        Msg::MissionComposeCancel => state.mission_compose = None,
+        Msg::MissionComposeChar(c) => {
+            if let Some(goal) = state.mission_compose.as_mut() {
+                goal.push(c);
+            }
+        }
+        Msg::MissionComposeBackspace => {
+            if let Some(goal) = state.mission_compose.as_mut() {
+                goal.pop();
+            }
         }
 
         Msg::Submit => {
@@ -898,6 +926,20 @@ mod tests {
         assert_eq!(row.steps[0].state, StepState::Done);
         assert_eq!(row.steps[1].state, StepState::Gated, "awaiting → gated dot");
         assert_eq!(row.steps[2].state, StepState::Pending);
+    }
+
+    #[test]
+    fn mission_compose_open_edit_and_cancel() {
+        let mut s = AppState::new();
+        s = update(s, Msg::MissionComposeOpen);
+        assert_eq!(s.mission_compose.as_deref(), Some(""));
+        s = update(s, Msg::MissionComposeChar('h'));
+        s = update(s, Msg::MissionComposeChar('i'));
+        assert_eq!(s.mission_compose.as_deref(), Some("hi"));
+        s = update(s, Msg::MissionComposeBackspace);
+        assert_eq!(s.mission_compose.as_deref(), Some("h"));
+        s = update(s, Msg::MissionComposeCancel);
+        assert!(s.mission_compose.is_none());
     }
 
     #[test]

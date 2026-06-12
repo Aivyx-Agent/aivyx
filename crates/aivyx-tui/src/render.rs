@@ -77,13 +77,28 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             render_input(frame, rows[2], state);
         }
         View::Missions => {
-            let rows = Layout::vertical([
-                Constraint::Min(1),    // master/detail body
-                Constraint::Length(1), // status bar
-            ])
-            .split(body);
-            render_missions(frame, rows[0], state);
-            render_status(frame, rows[1], state);
+            // A compose row appears while the operator is typing / starting a
+            // new mission (Chapter L).
+            let composing = state.mission_compose.is_some() || state.mission_starting;
+            if composing {
+                let rows = Layout::vertical([
+                    Constraint::Min(1),    // master/detail body
+                    Constraint::Length(3), // new-mission compose box
+                    Constraint::Length(1), // status bar
+                ])
+                .split(body);
+                render_missions(frame, rows[0], state);
+                render_mission_compose(frame, rows[1], state);
+                render_status(frame, rows[2], state);
+            } else {
+                let rows = Layout::vertical([
+                    Constraint::Min(1),    // master/detail body
+                    Constraint::Length(1), // status bar
+                ])
+                .split(body);
+                render_missions(frame, rows[0], state);
+                render_status(frame, rows[1], state);
+            }
         }
         View::Dashboard | View::Audit | View::Tools => {
             let rows = Layout::vertical([
@@ -279,7 +294,7 @@ fn render_mission_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             lines.push(Line::from(vec![
                 Span::styled("a/y", fg(palette::OK)),
                 Span::styled(" approve   ", fg(palette::DIM)),
-                Span::styled("r/n", fg(palette::ERR)),
+                Span::styled("r", fg(palette::ERR)),
                 Span::styled(" reject", fg(palette::DIM)),
             ]));
         }
@@ -387,6 +402,16 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
             sep(),
             Span::styled("^Q quit ", fg(palette::DIM)),
         ]
+    } else if state.view == View::Missions && state.mission_compose.is_some() {
+        vec![Span::styled(
+            "type a goal · Enter start · Esc cancel ",
+            fg(palette::DIM),
+        )]
+    } else if state.view == View::Missions {
+        vec![Span::styled(
+            "n new · ↑↓ select · a approve · r reject · Esc chat · ^Q quit ",
+            fg(palette::DIM),
+        )]
     } else if state.view != View::Chat {
         vec![Span::styled(
             "Tab views · 1-4 jump · ↑↓ scroll · Esc chat · ^Q quit ",
@@ -452,6 +477,43 @@ fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
     let cx = area.x + 1 + state.cursor.min(area.width.saturating_sub(2) as usize) as u16;
     let cy = area.y + 1;
     frame.set_cursor_position(Position::new(cx, cy));
+}
+
+/// Chapter L — the "new mission" compose box: a bordered goal input, or a
+/// "starting…" indicator while the daemon decomposes the goal.
+fn render_mission_compose(frame: &mut Frame, area: Rect, state: &AppState) {
+    if state.mission_starting {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(fg(palette::LAV))
+            .title(Span::styled(" Starting mission… ", bold(palette::LAV)))
+            .style(Style::default().bg(palette::BG));
+        frame.render_widget(
+            Paragraph::new("decomposing the goal into a plan…")
+                .style(fg(palette::LAV))
+                .block(block),
+            area,
+        );
+        return;
+    }
+
+    let goal = state.mission_compose.as_deref().unwrap_or("");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(fg(palette::AMBER))
+        .title(Span::styled(
+            " New mission · Enter start · Esc cancel ",
+            bold(palette::AMBER),
+        ))
+        .style(Style::default().bg(palette::BG));
+    frame.render_widget(Paragraph::new(goal).style(fg(palette::FG)).block(block), area);
+
+    // Cursor at the end of the typed goal.
+    let len = goal.chars().count();
+    let cx = area.x + 1 + (len as u16).min(area.width.saturating_sub(2));
+    frame.set_cursor_position(Position::new(cx, area.y + 1));
 }
 
 #[cfg(test)]
@@ -608,6 +670,35 @@ mod tests {
         assert!(text.contains("gate `approve` awaiting"), "gate affordance shown");
         assert!(text.contains("approve"), "approve key hint shown");
         assert!(text.contains("reject"), "reject key hint shown");
+    }
+
+    #[test]
+    fn new_mission_compose_box_renders_the_goal_and_hints() {
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Missions;
+        state.mission_compose = Some("close the kitchen".into());
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("New mission"), "compose box titled");
+        assert!(text.contains("close the kitchen"), "typed goal shown");
+        assert!(text.contains("Enter start"), "submit hint shown");
+    }
+
+    #[test]
+    fn starting_mission_shows_progress_indicator() {
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Missions;
+        state.mission_starting = true;
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Starting mission"), "starting indicator shown");
+        assert!(text.contains("decomposing"), "decomposition note shown");
     }
 
     #[test]
