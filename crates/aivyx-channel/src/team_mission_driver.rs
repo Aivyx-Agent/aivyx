@@ -24,7 +24,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 use aivyx_capability::{Scope, TrustTier};
 use aivyx_core::{
     AivyxError, AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
-    SessionId, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome, Verification,
+    GatePolicy, SessionId, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome,
+    Verification,
 };
 use serde_json::{json, Value};
 use aivyx_llm::LlmProvider;
@@ -181,7 +182,7 @@ pub async fn team_run(
     // Pin the mission to `config` (persisted on the record), then drive it —
     // `config` doubles as the resume fallback.
     let id = register_mission(shared, plan, id, Some(config.clone())).await?;
-    drive_registered(shared, deps, config, &id).await?;
+    drive_registered(shared, deps, config, &id, GatePolicy::Interactive).await?;
     Ok(id)
 }
 
@@ -215,13 +216,14 @@ pub async fn drive_registered(
     deps: &TeamRunDeps,
     default_config: TeamConfig,
     id: &str,
+    policy: GatePolicy,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
     let config = shared
         .snapshot(id)
         .and_then(|r| r.config)
         .unwrap_or(default_config);
     let runtime = assemble_runtime(deps, config)?;
-    drive(shared, runtime, id).await
+    drive(shared, runtime, id, policy).await
 }
 
 /// Resume (`approve`) or abort (`!approve`) a mission paused at a human gate.
@@ -237,8 +239,12 @@ pub async fn resolve_team_gate(
     approve: bool,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
     match prepare_gate_resolution(shared, id, step, approve).await? {
-        // Approve flipped the mission to `Executing` — drive the resume.
-        TeamMissionPhase::Executing => drive_registered(shared, deps, config, id).await,
+        // Approve flipped the mission to `Executing` — drive the resume. A
+        // resume after an operator decision is inherently interactive (a human
+        // just acted), so the next human gate, if any, parks as usual.
+        TeamMissionPhase::Executing => {
+            drive_registered(shared, deps, config, id, GatePolicy::Interactive).await
+        }
         // Reject is terminal; nothing left to drive.
         terminal => Ok(terminal),
     }
@@ -303,14 +309,23 @@ pub struct TeamMissionService {
     state: SharedMissionState,
     deps: TeamRunDeps,
     config: TeamConfig,
+    /// Chapter H — the gate posture for missions this service drives. A
+    /// headless service rejects (rather than parks) at a human gate.
+    gate_policy: GatePolicy,
 }
 
 impl TeamMissionService {
-    /// A service over `state`, assembling `config` with `deps` per run. (For
-    /// L.5 the daemon passes the default Nonagon; vertical-pack configs are a
-    /// later increment.)
-    pub fn new(state: SharedMissionState, deps: TeamRunDeps, config: TeamConfig) -> Self {
-        TeamMissionService { state, deps, config }
+    /// A service over `state`, assembling `config` with `deps` per run, under
+    /// `gate_policy` (the daemon's posture; `Interactive` parks at a human
+    /// gate, headless rejects). (For L.5 the daemon passes the default Nonagon;
+    /// vertical-pack configs are a later increment.)
+    pub fn new(
+        state: SharedMissionState,
+        deps: TeamRunDeps,
+        config: TeamConfig,
+        gate_policy: GatePolicy,
+    ) -> Self {
+        TeamMissionService { state, deps, config, gate_policy }
     }
 
     /// The underlying registry — the read path (`reload`, `snapshot`, `list`).
@@ -386,8 +401,14 @@ impl TeamMissionService {
     fn spawn_drive(&self, id: String) {
         let this = self.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                drive_registered(&this.state, &this.deps, this.config.clone(), &id).await
+            if let Err(e) = drive_registered(
+                &this.state,
+                &this.deps,
+                this.config.clone(),
+                &id,
+                this.gate_policy,
+            )
+            .await
             {
                 eprintln!("aivyx team: mission {id} drive failed — {e}");
             }
@@ -426,6 +447,7 @@ async fn drive(
     shared: &SharedMissionState,
     runtime: Arc<TeamRuntime>,
     id: &str,
+    policy: GatePolicy,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
     let mut record = shared
         .snapshot(id)
@@ -474,8 +496,20 @@ async fn drive(
         }
         RunYield::AwaitingHuman { step, outputs } => {
             record.outputs = outputs;
-            record.phase = TeamMissionPhase::AwaitingApproval;
-            record.pending_gate = Some(step);
+            record.pending_gate = None;
+            if policy.is_headless() {
+                // Chapter H — no operator to approve; the human gate is a
+                // refusal. Reject the mission (dependents never run, partial
+                // outputs preserved) — the same terminal shape as an operator
+                // reject, decided by policy.
+                record
+                    .outputs
+                    .insert(step, "rejected: headless run (no operator)".to_string());
+                record.phase = TeamMissionPhase::Rejected;
+            } else {
+                record.phase = TeamMissionPhase::AwaitingApproval;
+                record.pending_gate = Some(step);
+            }
         }
     }
     let phase = record.phase;
@@ -938,6 +972,7 @@ mod tests {
             SharedMissionState::new(store.clone()),
             deps("ok"),
             default_nonagon(),
+            GatePolicy::Interactive,
         );
         let plan = MissionPlan::new("prep", vec![Step::delegate("a", "line", "chop")]);
         let id = svc.start(plan, Some(custom_team())).await.unwrap();
@@ -960,6 +995,7 @@ mod tests {
             SharedMissionState::new(team_domain().await),
             deps("ok"),
             default_nonagon(),
+            GatePolicy::Interactive,
         );
         let plan = MissionPlan::new("g", vec![Step::delegate("a", "writer", "p")]);
         let id = svc.start(plan, None).await.unwrap();
@@ -975,6 +1011,7 @@ mod tests {
             SharedMissionState::new(team_domain().await),
             deps("ok"),
             default_nonagon(),
+            GatePolicy::Interactive,
         );
         // start returns immediately with a fresh id; the drive runs in the bg.
         let id = svc.start(gated_plan(), None).await.unwrap();
@@ -988,6 +1025,25 @@ mod tests {
         assert_eq!(phase, TeamMissionPhase::Executing);
         wait_for(&svc, &id, TeamMissionPhase::Done).await;
         assert_eq!(svc.snapshot(&id).unwrap().outputs["write"], "ok");
+    }
+
+    #[tokio::test]
+    async fn headless_run_rejects_at_a_human_gate() {
+        // Chapter H — a headless service rejects (not parks) at a human gate.
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps("ok"),
+            default_nonagon(),
+            GatePolicy::RejectAndAbort,
+        );
+        let id = svc.start(gated_plan(), None).await.unwrap();
+        wait_for(&svc, &id, TeamMissionPhase::Rejected).await;
+
+        let rec = svc.snapshot(&id).unwrap();
+        assert!(rec.pending_gate.is_none(), "headless never leaves a pending gate");
+        assert!(rec.outputs.contains_key("research"), "upstream work still ran");
+        assert!(rec.outputs["approve"].starts_with("rejected"), "the human gate auto-rejected");
+        assert!(!rec.outputs.contains_key("write"), "the gated dependent never ran");
     }
 
     // ---- team.run tool (L.7) ------------------------------------------
@@ -1028,6 +1084,7 @@ mod tests {
             SharedMissionState::new(team_domain().await),
             deps(TOOL_PLAN_JSON),
             default_nonagon(),
+            GatePolicy::Interactive,
         );
         let tool = TeamRunTool::new();
         assert!(tool.set_service(svc.clone()));
@@ -1064,6 +1121,7 @@ mod tests {
             SharedMissionState::new(team_domain().await),
             deps(TOOL_PLAN_JSON),
             default_nonagon(),
+            GatePolicy::Interactive,
         );
         let tool = TeamRunTool::new();
         assert!(tool.set_service(svc));

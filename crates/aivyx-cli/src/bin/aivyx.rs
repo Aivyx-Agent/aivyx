@@ -6325,6 +6325,9 @@ async fn run_async(
                 state,
                 deps,
                 aivyx_team::default_nonagon(),
+                // Chapter H — the daemon's gate posture (Interactive for now;
+                // H.4/H.5 set headless for operator-absent runs).
+                aivyx_core::GatePolicy::default(),
             );
             // L.7 — give the team.run tool the live service so loop / interactive
             // turns can delegate goals to durable team missions.
