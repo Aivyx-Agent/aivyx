@@ -147,6 +147,8 @@ fn Topbar(view: Signal<View>, connected: bool) -> Element {
             nav { class: "tabs",
                 {tab(View::Missions, "Missions")}
                 {tab(View::Chat, "Chat")}
+                // Panes not yet ported to WASM (audit / memory / learning / …).
+                a { class: "tab classic", href: "/classic", "Classic ↗" }
             }
             span {
                 class: if connected { "dot ok" } else { "dot off" },

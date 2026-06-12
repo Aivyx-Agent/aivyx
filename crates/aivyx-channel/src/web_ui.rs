@@ -244,9 +244,17 @@ fn request_path(request_line: &str) -> String {
 /// fallback). Any other path is looked up in the embedded bundle and served
 /// with its content-type; a miss is a 404.
 async fn serve_static(stream: tokio::net::TcpStream, path: String) -> Result<(), DaemonError> {
+    // `/classic` always serves the legacy single-file inspection UI (audit /
+    // memory / learning / proposals / notifications / sessions) — the panes the
+    // Dioxus app hasn't ported yet (Chapter M ships Missions + Chat). The new
+    // app links to it so building the bundle never loses a pane.
+    if path == "/classic" {
+        return serve_bytes(stream, "200 OK", "text/html; charset=utf-8", HTML.as_bytes()).await;
+    }
     if path == "/" || path == "/index.html" {
         return match bundle_index() {
             Some((bytes, mime)) => serve_bytes(stream, "200 OK", mime, bytes).await,
+            // No bundle built → the legacy page is the whole UI.
             None => serve_bytes(stream, "200 OK", "text/html; charset=utf-8", HTML.as_bytes()).await,
         };
     }
