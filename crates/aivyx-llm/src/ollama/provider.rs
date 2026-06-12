@@ -193,6 +193,14 @@ pub struct OllamaProvider {
     /// the `None` outcome avoids re-querying on every
     /// turn when the model isn't introspectable.
     family_cache: Mutex<HashMap<String, Option<String>>>,
+    /// Per-model `thinking`-capability cache. A "thinking" model
+    /// (qwen3, …) routes its answer into a separate `thinking`
+    /// field — which the agent discards — and leaves `content`
+    /// empty when tools are present, so we send `think: false`
+    /// for these models to get the answer back in `content`.
+    /// `bool` value: `true` = supports thinking (so disable it);
+    /// caching both outcomes avoids re-querying `/api/show`.
+    thinking_cache: Mutex<HashMap<String, bool>>,
 }
 
 impl OllamaProvider {
@@ -201,6 +209,7 @@ impl OllamaProvider {
             config,
             transport: Box::new(ReqwestTransport::new()?),
             family_cache: Mutex::new(HashMap::new()),
+            thinking_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -212,6 +221,7 @@ impl OllamaProvider {
             config,
             transport,
             family_cache: Mutex::new(HashMap::new()),
+            thinking_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -258,6 +268,53 @@ impl OllamaProvider {
         Some(family)
     }
 
+    /// Query Ollama `/api/show` for the model's top-level
+    /// `capabilities` array (e.g. `["completion","tools","thinking"]`)
+    /// and report whether it advertises `"thinking"`. Best-effort:
+    /// any failure (network, model not pulled, parse error, missing
+    /// field) reports `false` so we fall back to the model's default
+    /// behavior rather than sending a `think` flag it may reject.
+    async fn query_model_supports_thinking(&self, model: &str) -> bool {
+        let url = format!("{}/api/show", self.base_url());
+        let Ok(body) = serde_json::to_vec(&json!({ "name": model })) else {
+            return false;
+        };
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let Ok(bytes) = self
+            .transport
+            .post_json(&url, &[("content-type", "application/json")], body, &cancellation)
+            .await
+        else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            return false;
+        };
+        value
+            .get("capabilities")
+            .and_then(|c| c.as_array())
+            .map(|caps| caps.iter().any(|c| c.as_str() == Some("thinking")))
+            .unwrap_or(false)
+    }
+
+    /// Cached lookup of whether `model` is a thinking model whose
+    /// reasoning we should suppress (`think: false`). Queries
+    /// `/api/show` once per model, then serves from cache.
+    async fn disable_thinking_for(&self, model: &str) -> bool {
+        {
+            if let Ok(cache) = self.thinking_cache.lock() {
+                if let Some(cached) = cache.get(model) {
+                    return *cached;
+                }
+            }
+        }
+        let supports = self.query_model_supports_thinking(model).await;
+        if let Ok(mut cache) = self.thinking_cache.lock() {
+            cache.insert(model.to_string(), supports);
+        }
+        supports
+    }
+
     /// Lightweight health check against the Ollama base URL.
     /// Same shape as `OpenAiProvider::health_check`; Ollama
     /// answers GET / with the plain-text body
@@ -292,7 +349,14 @@ impl crate::LlmProvider for OllamaProvider {
         request: crate::LlmRequest<'_>,
         cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Box<dyn crate::LlmStream>, LlmError> {
-        let body = build_request_body(&request, &self.config.options)?;
+        // Thinking models (qwen3, …) otherwise dump their answer into
+        // a `thinking` field — which the agent discards — and leave
+        // `content` empty when tools are present. Detect the capability
+        // (cached `/api/show`) and turn thinking off so the answer
+        // lands in `content`.
+        let disable_thinking = self.disable_thinking_for(request.model).await;
+        let body =
+            build_request_body(&request, &self.config.options, disable_thinking)?;
         let body_bytes = serde_json::to_vec(&body).map_err(|e| {
             LlmError::Parse(format!("request serialization: {e}"))
         })?;
@@ -385,6 +449,7 @@ impl crate::LlmProvider for OllamaProvider {
 pub fn build_request_body(
     request: &LlmRequest<'_>,
     options: &OllamaOptions,
+    disable_thinking: bool,
 ) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
@@ -403,6 +468,14 @@ pub fn build_request_body(
         "messages": messages,
         "stream": true,
     });
+
+    // Suppress a thinking model's reasoning (the agent discards it,
+    // and leaving it on empties `content` when tools are present).
+    // Only emitted for models that advertise the `thinking`
+    // capability, so non-thinking models never see a `think` flag.
+    if disable_thinking {
+        body["think"] = json!(false);
+    }
 
     if !request.tools.is_empty() {
         let tools: Vec<Value> = request
@@ -656,7 +729,7 @@ mod tests {
         let msgs = vec![LlmMessage::user_text("hello")];
         let req = simple_request(&msgs, &[]);
         let options = OllamaOptions::default();
-        let body = build_request_body(&req, &options).unwrap();
+        let body = build_request_body(&req, &options, false).unwrap();
         assert_eq!(body["model"], "qwen3.6:27b");
         assert_eq!(body["stream"], true);
         // No options block when both operator and request
@@ -672,6 +745,29 @@ mod tests {
     }
 
     #[test]
+    fn request_body_omits_think_by_default() {
+        // Non-thinking models must never see a `think` flag (some
+        // Ollama models reject it).
+        let msgs = vec![LlmMessage::user_text("hello")];
+        let req = simple_request(&msgs, &[]);
+        let body =
+            build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        assert!(body.get("think").is_none());
+    }
+
+    #[test]
+    fn request_body_disables_think_for_thinking_models() {
+        // A thinking model (detected via /api/show capabilities)
+        // gets `think: false` so its answer lands in `content`
+        // instead of the discarded `thinking` field.
+        let msgs = vec![LlmMessage::user_text("hello")];
+        let req = simple_request(&msgs, &[]);
+        let body =
+            build_request_body(&req, &OllamaOptions::default(), true).unwrap();
+        assert_eq!(body["think"], false);
+    }
+
+    #[test]
     fn request_body_includes_system_as_leading_message() {
         let msgs = vec![LlmMessage::user_text("hello")];
         let req = LlmRequest {
@@ -682,7 +778,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         };
-        let body = build_request_body(&req, &OllamaOptions::default()).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "system");
@@ -699,7 +795,7 @@ mod tests {
             input_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
         }];
         let req = simple_request(&msgs, &tools);
-        let body = build_request_body(&req, &OllamaOptions::default()).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
         let tools_array = body["tools"].as_array().unwrap();
         assert_eq!(tools_array.len(), 1);
         assert_eq!(tools_array[0]["type"], "function");
@@ -719,7 +815,7 @@ mod tests {
             mirostat: Some(2),
             ..OllamaOptions::default()
         };
-        let body = build_request_body(&req, &options).unwrap();
+        let body = build_request_body(&req, &options, false).unwrap();
         let opts = body["options"].as_object().unwrap();
         assert_eq!(opts["num_ctx"], 16384);
         assert_eq!(opts["mirostat"], 2);
@@ -742,7 +838,7 @@ mod tests {
             max_tokens: 1024,
             temperature: Some(0.7),
         };
-        let body = build_request_body(&req, &OllamaOptions::default()).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
         let opts = body["options"].as_object().unwrap();
         // The request's temperature carried through.
         assert!((opts["temperature"].as_f64().unwrap() - 0.7).abs() < 1e-6);
@@ -765,7 +861,7 @@ mod tests {
             num_ctx: Some(8192),
             ..OllamaOptions::default()
         };
-        let body = build_request_body(&req, &options).unwrap();
+        let body = build_request_body(&req, &options, false).unwrap();
         let opts = body["options"].as_object().unwrap();
         // Both fields carried through.
         assert_eq!(opts["num_ctx"], 8192);
@@ -784,7 +880,7 @@ mod tests {
             temperature: None,
         };
         let err =
-            build_request_body(&req, &OllamaOptions::default()).unwrap_err();
+            build_request_body(&req, &OllamaOptions::default(), false).unwrap_err();
         assert!(matches!(err, LlmError::UnknownModel(_)));
     }
 
@@ -805,7 +901,7 @@ mod tests {
             }],
         }];
         let req = simple_request(&msgs, &[]);
-        let body = build_request_body(&req, &OllamaOptions::default()).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
         let messages = body["messages"].as_array().unwrap();
         let asst = &messages[0];
         assert_eq!(asst["role"], "assistant");
@@ -827,7 +923,7 @@ mod tests {
             is_error: false,
         }];
         let req = simple_request(&msgs, &[]);
-        let body = build_request_body(&req, &OllamaOptions::default()).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "tool");
         assert_eq!(messages[0]["tool_call_id"], "c1");
@@ -849,7 +945,7 @@ mod tests {
             ],
         }];
         let req = simple_request(&msgs, &[]);
-        let body = build_request_body(&req, &OllamaOptions::default()).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
         let user = &body["messages"].as_array().unwrap()[0];
         assert_eq!(user["role"], "user");
         assert_eq!(user["content"], "describe this");
