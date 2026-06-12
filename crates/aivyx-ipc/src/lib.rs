@@ -17,6 +17,10 @@ pub mod insights;
 pub mod ledgers;
 pub mod loop_state;
 pub mod persona;
+/// The daemon ↔ client IPC envelope + frame codec (Chapter M.2f): the
+/// `FrontendMessage` / `DaemonMessage` / `QueryPayload` / `QueryResponsePayload`
+/// protocol, the `*Summary` wire structs, and `encode_frame` / `decode_frame`.
+pub mod protocol;
 pub mod team_mission;
 
 pub use backlog::{Story, StoryStatus};
