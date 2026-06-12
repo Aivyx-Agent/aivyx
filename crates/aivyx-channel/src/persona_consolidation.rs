@@ -18,10 +18,12 @@
 //! them.
 
 use std::collections::HashSet;
+
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{PersonaConsolidationStat};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use aivyx_config::PersonaConsolidationConfig;
 use aivyx_core::CancellationToken;
@@ -56,37 +58,6 @@ pub struct ConsolidationCandidate {
     pub helpfulness_min: f32,
 }
 
-/// Phase 87 (Q4a) — last reflection cycle's consolidation
-/// outcome, for the Phase 78 trust surface. Ephemeral
-/// (last-cycle only, not persisted); a pattern-driven
-/// actuator must still be legible.
-///
-/// `llm_unavailable` records the cycle-wide degenerate case
-/// (the LLM provider could not phrase any survivor), so a
-/// quiet "0 filed" cycle is distinguishable from "0 filed,
-/// LLM down."
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PersonaConsolidationStat {
-    pub ts_secs: u64,
-    pub filed: u32,
-    pub deduped: u32,
-    pub skipped_unhelpful: u32,
-    pub llm_unavailable: bool,
-    /// `(A, B)` of each actually-filed pair, for the Phase 78
-    /// surface. Stable order = filing order.
-    pub pairs: Vec<(String, String)>,
-    /// Phase 92 — how many supersession pairs the cycle
-    /// filed. Each supersession produces TWO chain entries
-    /// (a `RemoveList` for the old facet + an `AppendList`
-    /// for the new); `superseded` counts the supersession
-    /// EVENTS, not the chain entries. The `filed` count
-    /// includes both halves of every supersession plus any
-    /// standard Phase 87 consolidations. `#[serde(default)]`
-    /// so older frames decode unchanged (Phase 84/91
-    /// wire-compat precedent).
-    #[serde(default)]
-    pub superseded: u32,
-}
 
 /// Shared handle the consolidation pass writes (per cycle)
 /// and `GetLearningInsights` reads. `None` inside = no cycle

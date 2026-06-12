@@ -12,11 +12,13 @@
 //! behavior — recall never errors a turn.
 
 use std::collections::HashMap;
+
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{RecallClusterStat};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use aivyx_core::llm_planner::ContextProvider;
 use aivyx_llm::embedding::EmbeddingProvider;
@@ -32,18 +34,6 @@ use crate::conversation_window::{
 /// turn's token budget.
 const MAX_BODY_CHARS: usize = 500;
 
-/// Phase 84 (Q4a) — the last turn's cluster-aware co-recall
-/// outcome, for the Phase 78 trust surface. Ephemeral
-/// (last-turn only, not persisted): an associative recall that
-/// silently widens context must stay legible. `pairs` is
-/// `(driver_topic, injected_sibling_topic)` for what actually
-/// landed (post budget-share).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RecallClusterStat {
-    pub ts_secs: u64,
-    pub injected: usize,
-    pub pairs: Vec<(String, String)>,
-}
 
 /// Shared handle the recall provider writes (per turn) and the
 /// `GetLearningInsights` handler reads. `None` inside = no

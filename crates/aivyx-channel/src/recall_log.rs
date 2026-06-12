@@ -16,28 +16,12 @@
 
 use serde::{Deserialize, Serialize};
 
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{RecallJudgment};
+
 use aivyx_core::SessionId;
 use aivyx_storage::DomainHandle;
 
-/// Phase 91 — the 3-way LLM-judged per-recall classification
-/// (Q2a). Mirrors the operator-facing helpfulness shape of
-/// the existing structural signal at finer granularity:
-///   `Used`       — the response leveraged the recall.
-///   `Irrelevant` — the response ignored it; no harm done.
-///   `Hurt`       — the recall misled the response.
-///
-/// Stable string labels for JSON wire-format: `"used"`,
-/// `"irrelevant"`, `"hurt"` (snake_case, matching the rest of
-/// the IPC enum convention).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RecallJudgment {
-    Used,
-    Irrelevant,
-    Hurt,
-}
 
 /// One memory that auto-recall injected into a turn, with the
 /// cosine score it was ranked at.

@@ -15,6 +15,9 @@
 
 use std::sync::Arc;
 
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{CorrectionJudgmentStat};
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -188,25 +191,6 @@ impl CorrectionJudge for LlmCorrectionJudge {
     }
 }
 
-/// Phase 178 (Q4a) — last reflection cycle's correction-judgment
-/// outcome, for the Phase 78 trust surface. Ephemeral
-/// (last-cycle only). `llm_unavailable` flags the cycle-wide
-/// degenerate case so a quiet cycle is distinguishable from an
-/// LLM outage.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct CorrectionJudgmentStat {
-    pub ts_secs: u64,
-    /// Judgeable events (a follow-up query was captured) judged
-    /// this cycle.
-    pub judged: u32,
-    pub rework: u32,
-    pub praise: u32,
-    pub unrelated: u32,
-    /// Events folded on the structural fallback (no follow-up
-    /// query captured, or the judge failed/over-cap).
-    pub structural_fallback: u32,
-    pub llm_unavailable: bool,
-}
 
 /// Shared last-cycle stat handle the pass writes + the learning
 /// surface reads.

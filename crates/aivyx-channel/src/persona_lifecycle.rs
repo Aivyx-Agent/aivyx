@@ -21,91 +21,19 @@
 
 use std::sync::{Arc, RwLock};
 
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{PersonaLifecycleProposed, PersonaLifecycleStat, SoftCategory};
+
 use serde::{Deserialize, Serialize};
 
 use aivyx_config::PersonaLifecycleConfig;
 use aivyx_llm::embedding::EmbeddingProvider;
 
 use crate::persona::{
-    EffectivePersona, PersonaDeltaCategory, PersonaDeltaOp,
+    EffectivePersona, PersonaDeltaOp,
     ProposedPersonaDelta,
 };
 
-/// The six reducible soft-list categories — and *only* these.
-/// There is deliberately no variant for the scalar identity
-/// (`assistant_name` / `operator_profile` /
-/// `communication_style`) or for `behavioral_constraints`: the
-/// lifecycle layer is structurally incapable of proposing a
-/// change to the always-on core (Q4a — the Phase 79 invariant
-/// extended).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-)]
-pub enum SoftCategory {
-    PrimaryUseCases,
-    BehavioralPreferences,
-    LearnedContext,
-    CommunicationAdaptations,
-    CharacterTraits,
-    RelationshipMilestones,
-}
-
-impl SoftCategory {
-    /// Stable lower-snake label for ids / breadcrumbs / the
-    /// Phase 78 surface.
-    pub fn label(self) -> &'static str {
-        match self {
-            SoftCategory::PrimaryUseCases => "primary_use_cases",
-            SoftCategory::BehavioralPreferences => {
-                "behavioral_preferences"
-            }
-            SoftCategory::LearnedContext => "learned_context",
-            SoftCategory::CommunicationAdaptations => {
-                "communication_adaptations"
-            }
-            SoftCategory::CharacterTraits => "character_traits",
-            SoftCategory::RelationshipMilestones => {
-                "relationship_milestones"
-            }
-        }
-    }
-
-    /// The six categories in stable order.
-    pub const ALL: [SoftCategory; 6] = [
-        SoftCategory::PrimaryUseCases,
-        SoftCategory::BehavioralPreferences,
-        SoftCategory::LearnedContext,
-        SoftCategory::CommunicationAdaptations,
-        SoftCategory::CharacterTraits,
-        SoftCategory::RelationshipMilestones,
-    ];
-
-    /// Map to the persona-chain delta category. Total over the
-    /// six soft lists — there is no arm for the always-on core,
-    /// so a lifecycle proposal can only ever target a soft list.
-    pub fn to_delta_category(self) -> PersonaDeltaCategory {
-        match self {
-            SoftCategory::PrimaryUseCases => {
-                PersonaDeltaCategory::PrimaryUseCases
-            }
-            SoftCategory::BehavioralPreferences => {
-                PersonaDeltaCategory::BehavioralPreferences
-            }
-            SoftCategory::LearnedContext => {
-                PersonaDeltaCategory::LearnedContext
-            }
-            SoftCategory::CommunicationAdaptations => {
-                PersonaDeltaCategory::CommunicationAdaptations
-            }
-            SoftCategory::CharacterTraits => {
-                PersonaDeltaCategory::CharacterTraits
-            }
-            SoftCategory::RelationshipMilestones => {
-                PersonaDeltaCategory::RelationshipMilestones
-            }
-        }
-    }
-}
 
 /// Extract every soft-list facet from an effective Persona,
 /// tagged with its category, in a stable order.
@@ -327,28 +255,7 @@ impl PersonaLifecycleAction {
     }
 }
 
-/// One filed lifecycle proposal, for the Phase 78 trust
-/// surface (Task 5). Ephemeral last-cycle only — an
-/// assistant-initiated identity proposal must stay legible.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PersonaLifecycleProposed {
-    /// "consolidate" or "decay".
-    pub kind: String,
-    pub category: SoftCategory,
-    /// The soft-list facet value the filed proposal removes.
-    pub value: String,
-    pub reason: String,
-}
 
-/// The last lifecycle cycle's outcome. Ephemeral (last-cycle
-/// only, not persisted) — the Phase 78 posture extended to the
-/// identity-maintenance layer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PersonaLifecycleStat {
-    pub ts_secs: u64,
-    pub proposed: Vec<PersonaLifecycleProposed>,
-    pub deduped: u32,
-}
 
 /// Shared handle the pass writes and the
 /// `GetLearningInsights` handler reads. `None` inside = the
@@ -652,6 +559,7 @@ impl PersonaLifecycleDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persona::PersonaDeltaCategory;
     use aivyx_config::{
         PersonaLifecycleConfig, PersonaLifecycleSignals,
     };

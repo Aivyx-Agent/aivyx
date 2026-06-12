@@ -16,10 +16,12 @@
 //! byte-identical full-Persona base prompt (Q3a).
 
 use std::collections::HashSet;
+
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{PersonaSelectionStat};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use aivyx_core::llm_planner::SystemPromptRefiner;
 use aivyx_llm::embedding::EmbeddingProvider;
@@ -43,16 +45,6 @@ pub const DEFAULT_TOP_K: usize = 12;
 /// rationale as the Phase 76 recall floor).
 pub const DEFAULT_MIN_SIMILARITY: f32 = 0.20;
 
-/// Phase 79 (Q4a) — the last turn's Persona selection, for the
-/// Phase 78 trust surface. Ephemeral (last-turn only, not
-/// persisted): an adaptive Soul that silently picks which
-/// identity to apply must still be legible.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PersonaSelectionStat {
-    pub ts_secs: u64,
-    pub selected: usize,
-    pub total: usize,
-}
 
 /// Shared handle the refiner writes and the
 /// `GetLearningInsights` handler reads. `None` inside = no

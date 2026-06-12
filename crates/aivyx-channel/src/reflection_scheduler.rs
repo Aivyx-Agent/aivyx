@@ -50,13 +50,15 @@
 //!   backoff. Self-healing on the next cron fire.
 
 use std::collections::{HashMap, VecDeque};
+
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{RecentReflectionStat};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use cron::Schedule as CronSchedule;
-use serde::{Deserialize, Serialize};
 
 use aivyx_audit::{AuditEvent, PersistentAuditLog, SignedEntry};
 use aivyx_config::ReflectionScheduleConfig;
@@ -97,26 +99,6 @@ pub fn should_fire_cycle(
     audit_growth >= u64::from(min_to_fire)
 }
 
-/// Phase 95 — per-schedule accumulating cadence stat. The
-/// scheduler increments `fired` on every actual fire and
-/// `skipped` on every `should_fire_cycle = false` decision.
-/// In-memory across the daemon lifetime; daemon restart
-/// resets to all-zero.
-///
-/// `#[serde(default)]` on each field keeps the IPC round-
-/// trip wire-compatible — clients on older versions decode
-/// the stat with zeroed missing fields, and pre-Phase-95
-/// daemons (which never produce this shape) still satisfy
-/// new clients' default-zero expectation.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize,
-)]
-pub struct RecentReflectionStat {
-    #[serde(default)]
-    pub fired: u32,
-    #[serde(default)]
-    pub skipped: u32,
-}
 
 /// Shared per-schedule cadence stats handle, keyed by
 /// schedule name. The scheduler writes to it on every cycle

@@ -32,47 +32,16 @@
 
 use std::sync::{Arc, RwLock};
 
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{RecallJudgmentStat};
+
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use aivyx_core::CancellationToken;
 use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStepEnd};
 
 pub use crate::recall_log::RecallJudgment;
 
-/// Phase 91 (Q4a) — the last reflection cycle's LLM-judged
-/// recall outcome, for the Phase 78 trust surface. Ephemeral
-/// (last-cycle only, not persisted); an actuator that
-/// silently classifies recalls must stay legible.
-///
-/// `llm_unavailable` records the cycle-wide degenerate case
-/// (the LLM provider returned all-`None` judgments), so a
-/// quiet "0 judged" cycle is distinguishable from "0 judged,
-/// LLM down."
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RecallJudgmentStat {
-    pub ts_secs: u64,
-    /// How many recall hits got a judgment this cycle.
-    pub judged: u32,
-    /// Of `judged`, how many were classified `Used`.
-    pub used: u32,
-    /// Of `judged`, how many were classified `Irrelevant`.
-    pub irrelevant: u32,
-    /// Of `judged`, how many were classified `Hurt`.
-    pub hurt: u32,
-    /// Recall hits that the per-cycle cap rolled to the next
-    /// cycle (`max_recalls_per_cycle` is bounded; the
-    /// remainder is judged later). Distinct from
-    /// `llm_unavailable`.
-    pub skipped: u32,
-    /// `true` iff the cycle attempted any judgments but the
-    /// LLM returned all-`None` (cycle-wide failure).
-    pub llm_unavailable: bool,
-    /// `(topic, judgment)` per actually-classified hit, in
-    /// classification order. Bounded by `judged`; the Phase 78
-    /// surface renders this list directly.
-    pub pairs: Vec<(String, RecallJudgment)>,
-}
 
 /// Shared handle the recall-judgment pass writes (per cycle)
 /// and `GetLearningInsights` reads. `None` inside = no cycle

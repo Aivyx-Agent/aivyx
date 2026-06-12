@@ -13,12 +13,19 @@
 //! Deps: `aivyx-team-types` (itself wasm-clean) + `serde` only.
 
 pub mod backlog;
+pub mod insights;
 pub mod ledgers;
 pub mod loop_state;
 pub mod persona;
 pub mod team_mission;
 
 pub use backlog::{Story, StoryStatus};
+pub use insights::{
+    CorrectionConsolidationStat, CorrectionJudgmentStat, PersonaConsolidationStat,
+    PersonaLifecycleProposed, PersonaLifecycleStat, PersonaSelectionStat, ProactiveKind,
+    ProactiveStat, ProactiveSurfaced, RecallClusterStat, RecallJudgment, RecallJudgmentStat,
+    RecentReflectionStat, SoftCategory,
+};
 pub use ledgers::{
     AccumulatedCorrections, AccumulatedHelpfulness, CooccurrencePatterns, PairScore,
     TopicCorrections, TopicScore,

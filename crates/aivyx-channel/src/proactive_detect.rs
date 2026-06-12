@@ -12,6 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
+// moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
+pub use aivyx_ipc::insights::{ProactiveKind, ProactiveStat, ProactiveSurfaced};
+
 use aivyx_config::ProactiveSignals;
 use aivyx_memory::MemoryEntry;
 
@@ -37,18 +40,6 @@ const DUE_MARKER: &str = "@due:";
 /// Max body characters echoed into a surfacing summary.
 const SUMMARY_CHARS: usize = 120;
 
-/// Which structural fact produced a surfacing.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-)]
-pub enum ProactiveKind {
-    /// A memory about to be TTL-evicted.
-    TtlExpiry,
-    /// A topic whose recalls keep helping.
-    RecallCluster,
-    /// A `@due:` reminder whose time has arrived.
-    DueReminder,
-}
 
 /// One thing the assistant wants to surface unprompted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,25 +56,7 @@ pub struct ProactiveItem {
     pub reason: String,
 }
 
-/// Phase 80 (Q4a) — one item the last proactive cycle actually
-/// dispatched, for the Phase 78 trust surface.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProactiveSurfaced {
-    pub kind: ProactiveKind,
-    pub topic: String,
-    pub reason: String,
-}
 
-/// The last proactive cycle's outcome. Ephemeral (last-cycle
-/// only, not persisted) — an autonomous *outbound* action must
-/// still be legible, the Phase 78 posture.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProactiveStat {
-    pub ts_secs: u64,
-    pub surfaced: Vec<ProactiveSurfaced>,
-    pub deduped: u32,
-    pub capped: u32,
-}
 
 /// Shared handle the proactive pass writes and the
 /// `GetLearningInsights` handler reads. `None` inside = the
