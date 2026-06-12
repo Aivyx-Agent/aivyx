@@ -16,6 +16,10 @@ readme.workspace = true
 # `LlmProvider` (aivyx-llm). `aivyx-team` sits above core/llm/capability
 # and below the daemon — a clean DAG, no cycle.
 aivyx-capability = { path = "../aivyx-capability" }
+# Chapter M.1 — the pure mission/team data types (MissionPlan / TeamConfig …)
+# live in this wasm-clean crate so the browser app can share them; aivyx-team
+# re-exports them so its public API is unchanged.
+aivyx-team-types = { path = "../aivyx-team-types" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-llm = { path = "../aivyx-llm" }
 # J.2.2: the SpecialistChannel impls ChannelContext (#[async_trait]) — a

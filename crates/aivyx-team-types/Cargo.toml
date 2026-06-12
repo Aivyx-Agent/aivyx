@@ -1,0 +1,19 @@
+[package]
+name = "aivyx-team-types"
+description = "Pure, wasm-clean mission + team data types (Chapter M.1) — the MissionPlan DAG and TeamConfig roster the daemon and the browser WASM app share over the wire. No async / storage / provider deps, so it compiles to wasm32."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# The roster's TrustTier / Scope / CapabilitySet live here; aivyx-capability
+# is itself wasm-clean (serde + globset only), so it rides along.
+aivyx-capability = { path = "../aivyx-capability" }
+serde = { workspace = true }
+# TeamConfig::{from_toml,to_toml,load} — toml is a pure parser (wasm-clean).
+toml = "0.8"
+thiserror = { workspace = true }

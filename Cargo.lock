@@ -497,12 +497,23 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-llm",
+ "aivyx-team-types",
  "async-trait",
  "futures-util",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "aivyx-team-types"
+version = "0.1.0"
+dependencies = [
+ "aivyx-capability",
+ "serde",
+ "thiserror 2.0.18",
  "toml 0.8.23",
 ]
 
