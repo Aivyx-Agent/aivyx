@@ -27,6 +27,11 @@ use serde::{Deserialize, Serialize};
 
 use aivyx_storage::DomainHandle;
 
+// The decayed-view data types (PairScore, CooccurrencePatterns) moved to the
+// wasm-clean `aivyx-ipc` crate (Chapter M.2d); re-exported here so the
+// persistent ledger + IPC are unchanged.
+pub use aivyx_ipc::ledgers::{CooccurrencePatterns, PairScore};
+
 /// EWMA half-life for a pair's joint-helpfulness (~60 days),
 /// matching the Phase 82 per-topic ledger so the two durable
 /// signals age on the same clock.
@@ -66,24 +71,6 @@ pub struct PairEntry {
     pub last_update_secs: u64,
 }
 
-/// One affined topic pair, for the Phase 78 surface.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PairScore {
-    pub a: String,
-    pub b: String,
-    pub score: f32,
-    pub samples: u32,
-}
-
-/// The durable, decayed top co-occurring topic pairs (the
-/// cross-session pattern view — "topics that consistently help
-/// together").
-#[derive(
-    Debug, Clone, Default, PartialEq, Serialize, Deserialize,
-)]
-pub struct CooccurrencePatterns {
-    pub top_pairs: Vec<PairScore>,
-}
 
 /// Decay `score` from `last_update` forward to `now` by the
 /// half-life. `dt == 0` → unchanged.

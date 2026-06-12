@@ -28,6 +28,11 @@ use serde::{Deserialize, Serialize};
 
 use aivyx_storage::DomainHandle;
 
+// The decayed-view data types (TopicScore, AccumulatedHelpfulness) moved to the
+// wasm-clean `aivyx-ipc` crate (Chapter M.2d); re-exported here so the
+// persistent ledger + IPC are unchanged.
+pub use aivyx_ipc::ledgers::{AccumulatedHelpfulness, TopicScore};
+
 /// EWMA half-life: the elapsed time over which an untouched
 /// topic's accumulated helpfulness halves. ~60 days — long
 /// enough that a genuinely stable preference persists across
@@ -86,26 +91,6 @@ fn decayed(score: f32, last_update: u64, now: u64) -> f32 {
     score * factor
 }
 
-/// One topic's decayed accumulated helpfulness, for the Phase
-/// 78 longitudinal surface. `samples` is the confidence proxy
-/// (one EWMA point is not a trend).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TopicScore {
-    pub topic: String,
-    pub score: f32,
-    pub samples: u32,
-}
-
-/// The durable, decayed top-helpful / top-unhelpful per-topic
-/// view (the longitudinal picture Phase 78 deferred — distinct
-/// from the windowed `LearningDigest.top_helpful`).
-#[derive(
-    Debug, Clone, Default, PartialEq, Serialize, Deserialize,
-)]
-pub struct AccumulatedHelpfulness {
-    pub top_helpful: Vec<TopicScore>,
-    pub top_unhelpful: Vec<TopicScore>,
-}
 
 /// Persistent helpfulness ledger over
 /// [`aivyx_storage::KeyDomain::HelpfulnessLedger`]. Key = topic

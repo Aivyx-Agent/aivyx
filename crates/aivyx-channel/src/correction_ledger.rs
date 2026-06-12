@@ -37,6 +37,11 @@ use serde::{Deserialize, Serialize};
 
 use aivyx_storage::DomainHandle;
 
+// The decayed-view data types (TopicCorrections, AccumulatedCorrections) moved
+// to the wasm-clean `aivyx-ipc` crate (Chapter M.2d); re-exported here so the
+// persistent ledger + IPC are unchanged.
+pub use aivyx_ipc::ledgers::{AccumulatedCorrections, TopicCorrections};
+
 /// EWMA half-life: the elapsed time over which an untouched
 /// topic's accumulated correction pressure halves. ~30 days —
 /// half the helpfulness half-life, because a correction signal
@@ -90,24 +95,6 @@ fn decayed(count: f32, last_update: u64, now: u64) -> f32 {
     count * factor
 }
 
-/// One topic's decayed accumulated correction pressure, for the
-/// Phase 78 longitudinal surface. `samples` is the confidence
-/// proxy.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TopicCorrections {
-    pub topic: String,
-    pub count: f32,
-    pub samples: u32,
-}
-
-/// The durable, decayed most-corrected-per-topic view for the
-/// Phase 78 learning surface.
-#[derive(
-    Debug, Clone, Default, PartialEq, Serialize, Deserialize,
-)]
-pub struct AccumulatedCorrections {
-    pub top_corrected: Vec<TopicCorrections>,
-}
 
 /// Persistent correction ledger over
 /// [`aivyx_storage::KeyDomain::CorrectionLedger`]. Key = topic
