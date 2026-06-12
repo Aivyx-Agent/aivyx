@@ -54,3 +54,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test --workspace
         run: cargo test --workspace
+      # Chapter M — the aivyx-web Dioxus client must compile to wasm32 (it
+      # speaks the daemon protocol through the shared aivyx-ipc types). The
+      # steps above build it on the native target; this guards the real one.
+      # The full `dx bundle` (→ crates/aivyx-web/dist/, embedded by the
+      # daemon's build.rs) runs at release time, not here.
+      - name: add the wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: aivyx-web builds + lints for wasm32
+        run: |
+          cargo build -p aivyx-web --target wasm32-unknown-unknown
+          cargo clippy -p aivyx-web --target wasm32-unknown-unknown -- -D warnings

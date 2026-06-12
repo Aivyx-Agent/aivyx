@@ -190,7 +190,7 @@ but rendered as Dioxus components and fed over the WebSocket.
 | **M.2** | `aivyx-ipc`: move the **full** protocol + frame codec out of `aivyx-channel` (wasm-clean); `aivyx-channel` re-exports. The crux — do it in slices behind the wasm-compat audit (StreamEventPayload first). Daemon byte-for-byte unchanged. |
 | **M.3** | `aivyx-web` skeleton (Dioxus): WS client, the IPC types, connect + handshake, a **read-only Mission feed** polled from `TeamMissionList`. Builds to wasm via `dx`. |
 | **M.4** | Mission Control interactions: detail pane, new-mission form (`TeamRunGoal`/`TeamRun`), approve/reject (`ResolveTeamGate`); plus the **chat** view (submit + stream + single-agent gate) for parity. |
-| **M.5** | Serve the bundle from the daemon (multi-asset static router + MIME), retire `web_ui_static.html`; `build-web` target + CI wasm job + fallback page. |
+| **M.5** | ✅ Serve the bundle from the daemon: `build.rs` embeds `crates/aivyx-web/dist/` (empty when unbuilt) → `web_ui.rs` static router serves `/`, `/<app>.wasm` (`application/wasm`), `/<app>.js`, … `/ws` unchanged. **Fallback at `/` is the legacy `web_ui_static.html`** while the bundle is unbuilt / until WASM chat parity (M.6) — so a plain `cargo build` needs no wasm toolchain and the browser never regresses. `justfile` (`build-web` / `check-web` / `clean-web`) + a CI wasm compile-check. (Retiring `web_ui_static.html` deferred to M.6 with chat parity.) |
 | **M.6** | Polish: palette/styling parity, loading/error states, the remaining read-only panels (Audit/Dashboard/Tools), and (optional) live mission **push** via `WebUiBroadcaster`. |
 
 ~7 phases, Chapter-L-sized. M.1 + M.2 (the extraction) are the bulk and the risk.
