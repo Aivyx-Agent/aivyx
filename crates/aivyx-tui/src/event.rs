@@ -12,7 +12,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::model::{AppState, Msg, View};
+use crate::model::{AppState, MissionPhase, Msg, View};
 
 /// How many lines a PageUp / PageDn scrolls.
 const PAGE: usize = 10;
@@ -31,6 +31,10 @@ pub enum Action {
     Cancel,
     /// Resolve the pending approval gate with the given verdict.
     ResolveGate(bool),
+    /// Chapter L.6 — resolve the selected Missions-panel team mission's
+    /// human-approval gate (approve = `true`). The driver reads the selected
+    /// row's `id` + `pending_gate` and sends `ResolveTeamGate`.
+    ResolveTeamGate(bool),
     /// Tear down and exit.
     Quit,
     /// Ignore this keystroke.
@@ -73,9 +77,22 @@ pub fn key_to_action(key: KeyEvent, state: &AppState) -> Action {
         // In the Missions panel, ↑↓ move the mission selection instead of
         // scrolling chat.
         if state.view == View::Missions {
+            // When the selected mission is paused at a human gate, a/y approve
+            // and r/n reject it (Chapter L.6). Guarded on the selection's
+            // phase so the keys are inert for non-gated missions.
+            let awaiting = matches!(
+                state.missions.selected_row().map(|m| m.phase),
+                Some(MissionPhase::AwaitingApproval)
+            );
             match key.code {
                 KeyCode::Up => return Action::Update(Msg::MissionSelectPrev),
                 KeyCode::Down => return Action::Update(Msg::MissionSelectNext),
+                KeyCode::Char('a') | KeyCode::Char('y') if awaiting => {
+                    return Action::ResolveTeamGate(true)
+                }
+                KeyCode::Char('r') | KeyCode::Char('n') if awaiting => {
+                    return Action::ResolveTeamGate(false)
+                }
                 _ => {}
             }
         }
@@ -344,5 +361,47 @@ mod tests {
             key_to_action(key(KeyCode::Char('a')), &s),
             Action::Update(Msg::InsertChar('a'))
         );
+    }
+
+    // ---- Chapter L.6 — Missions-panel gate keys ----
+
+    fn missions_with_phase(phase: crate::model::MissionPhase, gate: Option<&str>) -> AppState {
+        let mut s = AppState::new();
+        s.view = View::Missions;
+        s.missions.rows = vec![crate::model::MissionRow {
+            id: "m-1".into(),
+            title: "t".into(),
+            lead: "coordinator".into(),
+            phase,
+            progress: 0,
+            steps: vec![],
+            pending_gate: gate.map(str::to_string),
+        }];
+        s
+    }
+
+    #[test]
+    fn awaiting_mission_maps_approve_and_reject_keys() {
+        let s = missions_with_phase(
+            crate::model::MissionPhase::AwaitingApproval,
+            Some("approve"),
+        );
+        assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::ResolveTeamGate(true));
+        assert_eq!(key_to_action(key(KeyCode::Char('y')), &s), Action::ResolveTeamGate(true));
+        assert_eq!(key_to_action(key(KeyCode::Char('r')), &s), Action::ResolveTeamGate(false));
+        assert_eq!(key_to_action(key(KeyCode::Char('n')), &s), Action::ResolveTeamGate(false));
+        // Arrows still move the selection.
+        assert_eq!(
+            key_to_action(key(KeyCode::Down), &s),
+            Action::Update(Msg::MissionSelectNext)
+        );
+    }
+
+    #[test]
+    fn non_awaiting_mission_leaves_gate_keys_inert() {
+        // An executing mission isn't gated — a/r/y/n do nothing.
+        let s = missions_with_phase(crate::model::MissionPhase::Executing, None);
+        assert_eq!(key_to_action(key(KeyCode::Char('a')), &s), Action::None);
+        assert_eq!(key_to_action(key(KeyCode::Char('r')), &s), Action::None);
     }
 }

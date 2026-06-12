@@ -15,18 +15,19 @@
 //! modules. The pure CLI seams (`tui` arg parse) are tested in the
 //! binary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
 use aivyx_channel::daemon_client::{
-    spawn_daemon_and_wait, DaemonCancelHandle, DaemonSession,
+    resolve_team_gate, spawn_daemon_and_wait, team_mission_list, DaemonCancelHandle,
+    DaemonSession,
 };
 use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload};
 
 use crate::event::{key_to_action, Action};
-use crate::model::{update, AppState, Msg};
+use crate::model::{mission_rows_from_views, update, AppState, Msg};
 use crate::terminal::Tui;
 
 /// How long to wait for an auto-spawned daemon to come up. Matches the
@@ -36,6 +37,11 @@ const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Poll cadence for terminal key events. Short enough that an
 /// in-flight turn cancels promptly; long enough to idle near-zero CPU.
 const POLL: Duration = Duration::from_millis(100);
+
+/// Chapter L.6 — how often the Missions panel polls the daemon's
+/// `TeamMissionList` feed. Poll-based, mirroring `aivyx loop status`; a live
+/// mission updates within this window.
+const MISSION_POLL: Duration = Duration::from_millis(1500);
 
 /// Connect (auto-spawning the daemon if needed), enter the terminal,
 /// and drive the TUI to completion. Restores the terminal on every
@@ -64,7 +70,8 @@ pub async fn run(socket_path: PathBuf, role: Option<String>) -> Result<(), Strin
     let mut tui = Tui::init().map_err(|e| format!("terminal init: {e}"))?;
     let mut state = update(AppState::new(), Msg::Connected { role });
 
-    let loop_result = run_loop(&mut tui, &mut session, &cancel, &mut state).await;
+    let loop_result =
+        run_loop(&mut tui, &mut session, &cancel, &socket_path, &mut state).await;
 
     // Restore the terminal *before* the disconnect / error surfaces.
     drop(tui);
@@ -83,15 +90,27 @@ async fn run_loop(
     tui: &mut Tui,
     session: &mut DaemonSession,
     cancel: &DaemonCancelHandle,
+    socket_path: &Path,
     state: &mut AppState,
 ) -> Result<(), String> {
+    // Seed the Missions panel before the first draw.
+    poll_missions(socket_path, state).await;
+
     loop {
         tui.draw(state).map_err(|e| format!("draw: {e}"))?;
         if state.should_quit {
             return Ok(());
         }
 
-        let key = wait_for_key().await;
+        // Wait for a key, but wake on the mission-poll cadence so the panel
+        // stays live without a keystroke. On a tick we refresh and redraw.
+        let key = tokio::select! {
+            k = wait_for_key() => k,
+            _ = tokio::time::sleep(MISSION_POLL) => {
+                poll_missions(socket_path, state).await;
+                continue;
+            }
+        };
         match key_to_action(key, state) {
             Action::None | Action::Cancel => {
                 // `Cancel` is only meaningful during a turn (handled in
@@ -99,6 +118,9 @@ async fn run_loop(
             }
             Action::Update(msg) => apply(state, msg),
             Action::Quit => apply(state, Msg::Quit),
+            Action::ResolveTeamGate(approved) => {
+                resolve_team_gate_action(socket_path, state, approved).await;
+            }
             Action::Submit => {
                 let Some(text) = state.submittable() else {
                     continue;
@@ -124,6 +146,33 @@ async fn run_loop(
                 }
             }
         }
+    }
+}
+
+/// Chapter L.6 — poll the daemon's team-mission feed and push it into the
+/// Missions panel. Best-effort: a poll error (e.g. a daemon with no team
+/// service) leaves the panel as-is rather than surfacing a chat error every
+/// cadence.
+async fn poll_missions(socket_path: &Path, state: &mut AppState) {
+    if let Ok(records) = team_mission_list(socket_path).await {
+        let views = records.iter().map(|r| r.to_view()).collect();
+        apply(state, Msg::MissionsUpdated(mission_rows_from_views(views)));
+    }
+}
+
+/// Chapter L.6 — resolve the selected mission's human-approval gate, then
+/// refresh the feed so the panel reflects the new phase immediately.
+async fn resolve_team_gate_action(socket_path: &Path, state: &mut AppState, approved: bool) {
+    let Some((id, step)) = state
+        .missions
+        .selected_row()
+        .and_then(|m| m.pending_gate.clone().map(|g| (m.id.clone(), g)))
+    else {
+        return; // selection isn't awaiting a gate — keys were inert anyway
+    };
+    match resolve_team_gate(socket_path, id, step, approved).await {
+        Ok(_) => poll_missions(socket_path, state).await,
+        Err(e) => apply(state, Msg::Error(e.to_string())),
     }
 }
 

@@ -15,6 +15,7 @@
 //! over the IPC stream — no capability, trust, or audit concern.
 
 use aivyx_channel::daemon_ipc::StreamEventPayload;
+use aivyx_channel::team_mission::{TeamMissionPhase, TeamMissionView, TeamStepState};
 
 /// The provenance of a rendered chat line. The terminal driver maps
 /// each kind to a style; the pure model only tags.
@@ -194,6 +195,10 @@ pub struct MissionRow {
     /// Completion percent in `0..=100`.
     pub progress: u16,
     pub steps: Vec<MissionStep>,
+    /// Chapter L.6 — the step id awaiting an operator decision (set iff
+    /// `phase == AwaitingApproval`); what the panel's approve/reject keys
+    /// target via `ResolveTeamGate`.
+    pub pending_gate: Option<String>,
 }
 
 /// The Missions panel's model: the rows + which is selected for detail.
@@ -213,6 +218,55 @@ impl MissionsState {
     /// Keep `selected` a valid index (0 when empty).
     fn clamp(&mut self) {
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+    }
+}
+
+/// Chapter L.6 — map the daemon's neutral mission views (polled via
+/// `team_mission_list` then `TeamMissionRecord::to_view`) onto the panel's
+/// [`MissionRow`]s. The TUI's single point of contact with the team feed,
+/// keeping the rest of the model free of `aivyx-team` engine types.
+pub fn mission_rows_from_views(views: Vec<TeamMissionView>) -> Vec<MissionRow> {
+    views.into_iter().map(mission_row_from_view).collect()
+}
+
+fn mission_row_from_view(v: TeamMissionView) -> MissionRow {
+    let steps = v
+        .steps
+        .into_iter()
+        .map(|s| MissionStep {
+            label: s.label,
+            state: step_state_from(s.state),
+        })
+        .collect();
+    MissionRow {
+        id: v.id,
+        title: v.goal,
+        // The daemon runs the default Nonagon in L.5 (per-call team config is
+        // deferred), so the lead is the coordinator.
+        lead: "coordinator".to_string(),
+        phase: phase_from(v.phase),
+        progress: v.progress,
+        steps,
+        pending_gate: v.pending_gate,
+    }
+}
+
+fn phase_from(p: TeamMissionPhase) -> MissionPhase {
+    match p {
+        TeamMissionPhase::Planning => MissionPhase::Planning,
+        TeamMissionPhase::Executing => MissionPhase::Executing,
+        TeamMissionPhase::AwaitingApproval => MissionPhase::AwaitingApproval,
+        TeamMissionPhase::Done => MissionPhase::Done,
+        TeamMissionPhase::Rejected => MissionPhase::Rejected,
+    }
+}
+
+fn step_state_from(s: TeamStepState) -> StepState {
+    match s {
+        TeamStepState::Pending => StepState::Pending,
+        TeamStepState::Done => StepState::Done,
+        TeamStepState::Awaiting => StepState::Gated,
+        TeamStepState::Rejected => StepState::Failed,
     }
 }
 
@@ -765,6 +819,7 @@ mod tests {
                 label: "count".into(),
                 state: StepState::Running,
             }],
+            pending_gate: None,
         }
     }
 
@@ -812,6 +867,56 @@ mod tests {
         // Navigating an empty list never panics.
         let s = update(s, Msg::MissionSelectNext);
         assert_eq!(s.missions.selected, 0);
+    }
+
+    // ---- Chapter L.6 — daemon mission view → row mapping ----
+    use aivyx_channel::team_mission::TeamStepView;
+
+    #[test]
+    fn mission_rows_from_views_maps_phase_steps_and_gate() {
+        let view = TeamMissionView {
+            id: "m-1".into(),
+            goal: "ship the note".into(),
+            phase: TeamMissionPhase::AwaitingApproval,
+            pending_gate: Some("approve".into()),
+            progress: 33,
+            steps: vec![
+                TeamStepView { label: "research — researcher (delegate)".into(), state: TeamStepState::Done },
+                TeamStepView { label: "approve — reviewer (gate)".into(), state: TeamStepState::Awaiting },
+                TeamStepView { label: "write — writer (delegate)".into(), state: TeamStepState::Pending },
+            ],
+        };
+        let rows = mission_rows_from_views(vec![view]);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.id, "m-1");
+        assert_eq!(row.title, "ship the note");
+        assert_eq!(row.lead, "coordinator");
+        assert_eq!(row.phase, MissionPhase::AwaitingApproval);
+        assert_eq!(row.progress, 33);
+        assert_eq!(row.pending_gate.as_deref(), Some("approve"));
+        assert_eq!(row.steps[0].state, StepState::Done);
+        assert_eq!(row.steps[1].state, StepState::Gated, "awaiting → gated dot");
+        assert_eq!(row.steps[2].state, StepState::Pending);
+    }
+
+    #[test]
+    fn mission_rows_from_views_maps_a_rejected_step_to_failed() {
+        let view = TeamMissionView {
+            id: "m-2".into(),
+            goal: "g".into(),
+            phase: TeamMissionPhase::Rejected,
+            pending_gate: None,
+            progress: 50,
+            steps: vec![TeamStepView {
+                label: "approve — reviewer (gate)".into(),
+                state: TeamStepState::Rejected,
+            }],
+        };
+        let rows = mission_rows_from_views(vec![view]);
+        assert_eq!(rows[0].phase, MissionPhase::Rejected);
+        assert_eq!(rows[0].steps[0].state, StepState::Failed);
+        assert!(rows[0].pending_gate.is_none());
     }
 
     #[test]

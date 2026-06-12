@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
-use aivyx_team::MissionPlan;
+use aivyx_team::{MissionPlan, StepKind};
 
 /// The lifecycle phase of a daemon-run team mission — the live state the
 /// engine's terminal-only `MissionStatus` doesn't model. Maps onto the TUI's
@@ -91,6 +91,94 @@ impl TeamMissionRecord {
     pub fn touch(&mut self) {
         self.updated_at_unix_ms = now_millis();
     }
+
+    /// Project this record onto the TUI-agnostic [`TeamMissionView`] (Chapter
+    /// L.6) — the **driver seam**: per-step state is derived from the
+    /// checkpoint here, where `aivyx-team` types are already in scope, so the
+    /// TUI maps `TeamMissionView` → its `MissionRow` without ever touching the
+    /// engine's `MissionPlan` / `StepKind`.
+    pub fn to_view(&self) -> TeamMissionView {
+        let steps: Vec<TeamStepView> = self
+            .plan
+            .steps
+            .iter()
+            .map(|step| {
+                let (kind, member) = match &step.kind {
+                    StepKind::Delegate { specialist, .. } => ("delegate", specialist.as_str()),
+                    StepKind::Gate { reviewer, .. } => ("gate", reviewer.as_str()),
+                };
+                TeamStepView {
+                    label: format!("{} — {member} ({kind})", step.id),
+                    state: self.step_state(&step.id),
+                }
+            })
+            .collect();
+        let total = steps.len().max(1);
+        let done = steps
+            .iter()
+            .filter(|s| matches!(s.state, TeamStepState::Done | TeamStepState::Rejected))
+            .count();
+        TeamMissionView {
+            id: self.id.clone(),
+            goal: self.goal.clone(),
+            phase: self.phase,
+            pending_gate: self.pending_gate.clone(),
+            progress: ((done * 100) / total) as u16,
+            steps,
+        }
+    }
+
+    /// The operator-facing state of one step, derived from the checkpoint: the
+    /// pending human gate is `Awaiting`; a step whose output marks a rejection
+    /// is `Rejected`; any other completed step is `Done`; the rest `Pending`.
+    fn step_state(&self, step_id: &str) -> TeamStepState {
+        if self.pending_gate.as_deref() == Some(step_id) {
+            return TeamStepState::Awaiting;
+        }
+        match self.outputs.get(step_id) {
+            Some(v) if v.starts_with("rejected") => TeamStepState::Rejected,
+            Some(_) => TeamStepState::Done,
+            None => TeamStepState::Pending,
+        }
+    }
+}
+
+/// A TUI-agnostic projection of a [`TeamMissionRecord`] for the Missions feed
+/// (Chapter L.6). Carries only primitives + this module's own enums so the TUI
+/// maps it to its view-model without depending on `aivyx-team`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamMissionView {
+    pub id: String,
+    pub goal: String,
+    pub phase: TeamMissionPhase,
+    /// The step id awaiting an operator decision, when `phase ==
+    /// AwaitingApproval` — what `aivyx team approve|reject <id> <step>` /
+    /// the TUI's approve/reject keys target.
+    pub pending_gate: Option<String>,
+    /// Completion percent in `0..=100` (completed steps / total).
+    pub progress: u16,
+    pub steps: Vec<TeamStepView>,
+}
+
+/// One step in a [`TeamMissionView`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamStepView {
+    /// e.g. `"approve — reviewer (gate)"`.
+    pub label: String,
+    pub state: TeamStepState,
+}
+
+/// The checkpoint-derived state of a step for the feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeamStepState {
+    /// Not yet run.
+    Pending,
+    /// Completed (its output is in the checkpoint).
+    Done,
+    /// The human gate awaiting an operator decision.
+    Awaiting,
+    /// A gate the operator rejected.
+    Rejected,
 }
 
 fn now_millis() -> u64 {
@@ -211,6 +299,35 @@ mod tests {
         assert_eq!(got.outputs["count"], "12 low items");
         // The human gate's mode survived serde.
         assert!(got.plan.step("approve").unwrap().is_human_gate());
+    }
+
+    #[test]
+    fn to_view_derives_step_states_and_progress() {
+        // `sample` is research→[human gate approve]→order, paused at the gate
+        // with `count`… actually the sample plan is count→approve→order.
+        let rec = sample("v1");
+        let view = rec.to_view();
+        assert_eq!(view.id, "v1");
+        assert_eq!(view.phase, TeamMissionPhase::AwaitingApproval);
+        assert_eq!(view.pending_gate.as_deref(), Some("approve"));
+        // count is done, approve is awaiting, order is pending → 1/3 = 33%.
+        assert_eq!(view.steps.len(), 3);
+        assert_eq!(view.steps[0].state, TeamStepState::Done);
+        assert_eq!(view.steps[1].state, TeamStepState::Awaiting);
+        assert_eq!(view.steps[2].state, TeamStepState::Pending);
+        assert!(view.steps[1].label.contains("manager (gate)"));
+        assert_eq!(view.progress, 33);
+    }
+
+    #[test]
+    fn to_view_marks_a_rejected_gate() {
+        let mut rec = sample("v2");
+        rec.phase = TeamMissionPhase::Rejected;
+        rec.pending_gate = None;
+        rec.outputs.insert("approve".into(), "rejected by operator".into());
+        let view = rec.to_view();
+        assert_eq!(view.steps[1].state, TeamStepState::Rejected);
+        assert_eq!(view.steps[2].state, TeamStepState::Pending, "dependent never ran");
     }
 
     #[tokio::test]

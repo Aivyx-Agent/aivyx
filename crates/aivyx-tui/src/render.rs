@@ -268,6 +268,22 @@ fn render_mission_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::styled(m.lead.clone(), fg(palette::FG)),
         Span::styled(format!("   {}", m.phase.label()), fg(palette::DIMMER)),
     ]));
+    // Chapter L.6 — when the mission is paused at a human gate, surface the
+    // approve/reject affordance the Missions-panel keys drive.
+    if m.phase == MissionPhase::AwaitingApproval {
+        if let Some(gate) = &m.pending_gate {
+            lines.push(Line::from(Span::styled(
+                format!("⚑ gate `{gate}` awaiting your decision"),
+                fg(palette::AMBER),
+            )));
+            lines.push(Line::from(vec![
+                Span::styled("a/y", fg(palette::OK)),
+                Span::styled(" approve   ", fg(palette::DIM)),
+                Span::styled("r/n", fg(palette::ERR)),
+                Span::styled(" reject", fg(palette::DIM)),
+            ]));
+        }
+    }
 
     let title = format!("{} · STEPS", m.id);
     frame.render_widget(Paragraph::new(lines).block(panel_block(&title)), area);
@@ -538,6 +554,7 @@ mod tests {
                     MissionStep { label: "stocktake — count".into(), state: StepState::Done },
                     MissionStep { label: "inventory — low stock".into(), state: StepState::Running },
                 ],
+                pending_gate: None,
             },
             MissionRow {
                 id: "m-2".into(),
@@ -546,6 +563,7 @@ mod tests {
                 phase: MissionPhase::Planning,
                 progress: 0,
                 steps: vec![],
+                pending_gate: None,
             },
         ];
 
@@ -562,6 +580,34 @@ mod tests {
         assert!(!text.contains(" Input "), "no chat input in the Missions panel");
         // Tab bar lists the new view.
         assert!(text.contains("Missions"), "tab bar lists Missions");
+    }
+
+    #[test]
+    fn awaiting_mission_renders_the_approve_reject_affordance() {
+        use crate::model::{MissionPhase, MissionRow, MissionStep, StepState};
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = AppState::new();
+        state.view = View::Missions;
+        state.missions.rows = vec![MissionRow {
+            id: "m-1".into(),
+            title: "ship the note".into(),
+            lead: "coordinator".into(),
+            phase: MissionPhase::AwaitingApproval,
+            progress: 33,
+            steps: vec![MissionStep {
+                label: "approve — reviewer (gate)".into(),
+                state: StepState::Gated,
+            }],
+            pending_gate: Some("approve".into()),
+        }];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("gate `approve` awaiting"), "gate affordance shown");
+        assert!(text.contains("approve"), "approve key hint shown");
+        assert!(text.contains("reject"), "reject key hint shown");
     }
 
     #[test]
