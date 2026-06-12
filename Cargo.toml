@@ -32,6 +32,47 @@ members = [
     "crates/aivyx-ipc",
     "crates/aivyx-kitchen",
     "crates/aivyx-cost",
+    "crates/aivyx-web",
+]
+
+# Chapter M — `aivyx-web` is a Dioxus app that only compiles for
+# `wasm32-unknown-unknown` (web-sys / wasm-bindgen). Excluding it from
+# `default-members` keeps a bare `cargo build` / `cargo test` (native) from
+# trying to build it; it is built explicitly with
+# `cargo build -p aivyx-web --target wasm32-unknown-unknown` (and via `dx` /
+# CI in M.5).
+default-members = [
+    "crates/aivyx-core",
+    "crates/aivyx-crypto",
+    "crates/aivyx-capability",
+    "crates/aivyx-audit",
+    "crates/aivyx-config",
+    "crates/aivyx-storage",
+    "crates/aivyx-llm",
+    "crates/aivyx-memory",
+    "crates/aivyx-channel",
+    "crates/aivyx-telegram",
+    "crates/aivyx-discord",
+    "crates/aivyx-slack",
+    "crates/aivyx-mcp",
+    "crates/aivyx-tool",
+    "crates/aivyx-gmail",
+    "crates/aivyx-toolkit",
+    "crates/aivyx-calendar",
+    "crates/aivyx-google-oauth",
+    "crates/aivyx-drive",
+    "crates/aivyx-notion",
+    "crates/aivyx-obsidian",
+    "crates/aivyx-n8n",
+    "crates/aivyx-auth-cli",
+    "crates/aivyx-voice",
+    "crates/aivyx-tui",
+    "crates/aivyx-cli",
+    "crates/aivyx-team",
+    "crates/aivyx-team-types",
+    "crates/aivyx-ipc",
+    "crates/aivyx-kitchen",
+    "crates/aivyx-cost",
 ]
 
 [workspace.package]

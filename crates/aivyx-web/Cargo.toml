@@ -1,0 +1,25 @@
+[package]
+name = "aivyx-web"
+description = "Chapter M — the browser Mission-Control GUI: a Dioxus (Rust→WASM) client that speaks the daemon's wire protocol via the shared, wasm-clean aivyx-ipc crate. Compiles only for wasm32-unknown-unknown (web-sys / wasm-bindgen); excluded from the workspace's default-members."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# The single source of wire truth — shared with the daemon, no JS mirror.
+aivyx-ipc = { path = "../aivyx-ipc" }
+# Keep Dioxus's default features (macro / signals / hooks / launch) and add the
+# web renderer; the defaults are renderer-agnostic, so no native deps leak.
+dioxus = { version = "0.6", features = ["web"] }
+# Browser WebSocket as a futures Stream + Sink.
+gloo-net = { version = "0.6", default-features = false, features = ["websocket"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+# `sink` brings SinkExt + StreamExt::split for the WebSocket halves.
+futures-util = { version = "0.3", features = ["sink"] }
+serde_json = { workspace = true }
+web-sys = { version = "0.3", features = ["Location", "Window"] }
+console_error_panic_hook = "0.1"
