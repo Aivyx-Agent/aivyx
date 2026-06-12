@@ -19,13 +19,14 @@
 //! lives entirely here, at the daemon boundary. See `docs/DAEMON_TEAMS.md` §5.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-use aivyx_capability::TrustTier;
+use aivyx_capability::{Scope, TrustTier};
 use aivyx_core::{
-    AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId,
-    StreamEvent, Tool, TurnOutcome,
+    AivyxError, AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
+    SessionId, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome, Verification,
 };
+use serde_json::{json, Value};
 use aivyx_llm::LlmProvider;
 use aivyx_storage::StorageError;
 use aivyx_team::{
@@ -550,6 +551,130 @@ impl ChannelContext for MissionLeadChannel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// team.run — the loop ↔ team seam (Chapter L.7)
+// ---------------------------------------------------------------------------
+
+/// `team.run` — delegate a free-text goal to a **durable** daemon team mission.
+///
+/// Mounted in the daemon tool list, so any daemon turn — most importantly an
+/// **autonomous-loop iteration** ([`crate::loop_driver`]) — can hand a large,
+/// multi-part story to a Nonagon team instead of implementing it single-handed.
+/// The daemon decomposes the goal, runs it through the checkpoint/resume engine
+/// (gate-pausable, restart-durable, shown in the TUI Missions panel), and the
+/// tool returns immediately with the new mission id (fire-and-forget; the
+/// caller tracks progress via `aivyx team status <id>`).
+///
+/// Wired like the loop tools: built into the tool list before the
+/// [`TeamMissionService`] exists, then [`set_service`](Self::set_service) is
+/// called once storage is up. Without a service (e.g. a no-daemon run) the
+/// call fails cleanly.
+pub struct TeamRunTool {
+    id: ToolId,
+    schema: Value,
+    service: OnceLock<TeamMissionService>,
+}
+
+impl std::fmt::Debug for TeamRunTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeamRunTool")
+            .field("id", &self.id)
+            .field("has_service", &self.service.get().is_some())
+            .finish()
+    }
+}
+
+impl Default for TeamRunTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TeamRunTool {
+    pub fn new() -> Self {
+        TeamRunTool {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "The mission goal — what the team should accomplish. \
+                                        The daemon decomposes it into a DAG of specialist steps."
+                    }
+                },
+                "required": ["goal"]
+            }),
+            service: OnceLock::new(),
+        }
+    }
+
+    /// Wire the daemon's team-mission service (call once, after storage opens).
+    pub fn set_service(&self, service: TeamMissionService) -> Result<(), TeamMissionService> {
+        self.service.set(service)
+    }
+}
+
+#[async_trait]
+impl Tool for TeamRunTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "team.run"
+    }
+    fn description(&self) -> &str {
+        "Delegate a goal to a durable, daemon-run agent team (the Nonagon). Use this for a \
+         large or multi-part task better handled by several specialists than by you alone: \
+         the daemon decomposes the goal into a plan and runs it in the background \
+         (gate-pausable, restart-durable, visible in `aivyx team status`). Input: \
+         `{ \"goal\": string }`. Returns the new mission id immediately — it does NOT wait \
+         for the mission to finish."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("team.run").expect("known base")
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let Some(service) = self.service.get() else {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "team.run invoked without a team-mission service; it is available \
+                         only on the daemon (start one with `aivyx daemon run`)"
+                    .to_string(),
+            });
+        };
+        let goal = match input.get("goal").and_then(Value::as_str) {
+            Some(g) if !g.trim().is_empty() => g.trim(),
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "team.run requires a non-empty `goal` (string)".to_string(),
+                });
+            }
+        };
+        // Default team for now (the Nonagon); per-call pack selection is a
+        // later increment, like the TUI new-mission prompt.
+        match service.start_from_goal(goal, None).await {
+            Ok(mission_id) => ToolOutcome::Completed {
+                output: json!({
+                    "mission_id": mission_id,
+                    "status": "started",
+                    "note": "the team mission runs in the background; track it with \
+                             `aivyx team status` or the TUI Missions panel",
+                }),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("team.run failed to start a mission: {e}"),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,5 +986,91 @@ mod tests {
         assert_eq!(phase, TeamMissionPhase::Executing);
         wait_for(&svc, &id, TeamMissionPhase::Done).await;
         assert_eq!(svc.snapshot(&id).unwrap().outputs["write"], "ok");
+    }
+
+    // ---- team.run tool (L.7) ------------------------------------------
+
+    /// A one-step plan the fake provider returns for a `team.run` decomposition.
+    const TOOL_PLAN_JSON: &str =
+        r#"{"goal":"g","steps":[{"id":"a","specialist":"writer","prompt":"draft"}]}"#;
+
+    fn tool_ctx_parts() -> (MissionLeadChannel, CancellationToken) {
+        (MissionLeadChannel::new(), CancellationToken::new())
+    }
+
+    fn tool_ctx<'a>(
+        ch: &'a MissionLeadChannel,
+        token: &'a CancellationToken,
+        audit: &'a NullAuditHook,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: aivyx_core::AgentId::new(),
+            session_id: ch.session,
+            turn_id: aivyx_core::TurnId::new(),
+            channel: ch,
+            audit,
+            cancellation: token,
+        }
+    }
+
+    #[test]
+    fn team_run_tool_name_and_scope() {
+        let tool = TeamRunTool::new();
+        assert_eq!(tool.name(), "team.run");
+        assert_eq!(tool.required_scope(&json!({})).base(), "team.run");
+    }
+
+    #[tokio::test]
+    async fn team_run_tool_starts_a_mission_via_the_service() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps(TOOL_PLAN_JSON),
+            default_nonagon(),
+        );
+        let tool = TeamRunTool::new();
+        assert!(tool.set_service(svc.clone()).is_ok());
+
+        let (ch, token) = tool_ctx_parts();
+        let audit = NullAuditHook;
+        let ctx = tool_ctx(&ch, &token, &audit);
+        let out = tool.execute(json!({ "goal": "do the big thing" }), &ctx).await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert!(output["mission_id"].as_str().is_some(), "returns a mission id");
+                assert_eq!(output["status"], "started");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(svc.list().len(), 1, "the mission was registered on the service");
+    }
+
+    #[tokio::test]
+    async fn team_run_tool_without_a_service_fails_cleanly() {
+        let tool = TeamRunTool::new(); // no set_service
+        let (ch, token) = tool_ctx_parts();
+        let audit = NullAuditHook;
+        let ctx = tool_ctx(&ch, &token, &audit);
+        assert!(matches!(
+            tool.execute(json!({ "goal": "x" }), &ctx).await,
+            ToolOutcome::Failed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn team_run_tool_rejects_an_empty_goal() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps(TOOL_PLAN_JSON),
+            default_nonagon(),
+        );
+        let tool = TeamRunTool::new();
+        assert!(tool.set_service(svc).is_ok());
+        let (ch, token) = tool_ctx_parts();
+        let audit = NullAuditHook;
+        let ctx = tool_ctx(&ch, &token, &audit);
+        assert!(matches!(
+            tool.execute(json!({ "goal": "  " }), &ctx).await,
+            ToolOutcome::Failed(_)
+        ));
     }
 }

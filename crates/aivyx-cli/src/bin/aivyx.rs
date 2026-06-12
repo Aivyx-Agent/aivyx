@@ -5069,6 +5069,14 @@ async fn run_async(
     let _ = loop_note_tool.set_memory(Arc::clone(&memory));
     tool_list.push(Arc::clone(&loop_note_tool) as Arc<dyn Tool>);
 
+    // Chapter L (L.7) — team.run lets a daemon turn (notably an autonomous-loop
+    // iteration) delegate a large goal to a durable Nonagon team mission. The
+    // TeamMissionService is built later (it needs the assembled provider/tools),
+    // so the tool is wired now and `set_service` is called in the daemon branch.
+    let team_run_tool: Arc<aivyx_channel::team_mission_driver::TeamRunTool> =
+        Arc::new(aivyx_channel::team_mission_driver::TeamRunTool::new());
+    tool_list.push(Arc::clone(&team_run_tool) as Arc<dyn Tool>);
+
     // Phase 183 — the remind.* channel-tier tools, sharing the
     // reminder store with the driver.
     let remind_set_tool =
@@ -6313,11 +6321,15 @@ async fn run_async(
                 audit: Arc::clone(&audit),
                 base_tools: tools.snapshot(),
             };
-            Some(aivyx_channel::team_mission_driver::TeamMissionService::new(
+            let service = aivyx_channel::team_mission_driver::TeamMissionService::new(
                 state,
                 deps,
                 aivyx_team::default_nonagon(),
-            ))
+            );
+            // L.7 — give the team.run tool the live service so loop / interactive
+            // turns can delegate goals to durable team missions.
+            let _ = team_run_tool.set_service(service.clone());
+            Some(service)
         };
 
         let agent: Arc<dyn Agent> = Arc::new(

@@ -388,6 +388,14 @@ const KNOWN_BASES: &[&str] = &[
     // Distinct from `team.delegate`: a specialist may talk, but not convene
     // its own team.
     "team.message",
+    // Chapter L (L.7) — `team.run` gates the daemon-side `team.run` tool:
+    // delegating a free-text goal to a **durable** daemon team mission
+    // (decomposed + checkpoint/resume-driven, gate-pausable, shown in the TUI
+    // Missions panel). It lets an autonomous-loop iteration hand a large story
+    // to a team rather than implementing it single-handed. Channel-tier,
+    // Trusted (like the loop tools); distinct from `team.delegate` (the
+    // in-assembly lead authority) — `team.run` *starts a whole mission*.
+    "team.run",
 ];
 
 // ---------------------------------------------------------------------------
@@ -1809,7 +1817,7 @@ mod tests {
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            81,
+            82,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

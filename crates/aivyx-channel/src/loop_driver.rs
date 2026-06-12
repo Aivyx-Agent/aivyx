@@ -60,7 +60,14 @@ Do exactly this, then stop:
    it reports the backlog is empty, stop immediately and report \
    that the backlog is complete — do not invent work.
 2. Implement ONLY that one story. Keep the change small and \
-   focused; do not start the next story.
+   focused; do not start the next story. If the story is genuinely \
+   large or spans several specialists (research + code + review, \
+   say), you MAY instead delegate it to a durable agent team with \
+   `team.run` (pass the story as the goal). The team mission runs \
+   in the background and is tracked separately; if you delegate, \
+   skip the gate/commit steps below and go straight to step 5 \
+   (mark the story complete — it is now the team's). Delegate \
+   sparingly: most stories you should just implement yourself.
 3. Run the project's quality gates with `shell` (build + tests / \
    typecheck). If they do not pass, fix the issue or stop — do \
    NOT mark the story done on red.

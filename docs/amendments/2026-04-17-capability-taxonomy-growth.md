@@ -180,6 +180,18 @@ So the infrastructure family grows 38 → 40:
 
 Total: 16 + 5 + 40 + 20 = 81.
 
+### Chapter L (daemon-side teams) addendum (+1 → 82 bases)
+
+Chapter L (`docs/DAEMON_TEAMS.md`) adds one **infrastructure** base:
+
+| Chapter | Base | Purpose |
+|---------|------|---------|
+| Chapter L (L.7) | `team.run` | Gates the daemon-side `team.run` tool — delegating a free-text goal to a **durable** daemon team mission (decomposed + checkpoint/resume-driven, gate-pausable, shown in the TUI Missions panel). Lets an autonomous-loop iteration hand a large story to a team rather than implementing it single-handed. Distinct from `team.delegate` (the in-assembly lead authority): `team.run` starts a whole mission. Trusted-tier default. |
+
+So the infrastructure family grows 40 → 41:
+
+Total: 16 + 5 + 41 + 20 = 82.
+
 ---
 
 ## Phase 54 addendum — current scope-base count (2026-05-12)
