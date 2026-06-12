@@ -31,6 +31,7 @@
 #![allow(dead_code)]
 
 pub mod agent;
+pub mod gate_policy;
 pub mod llm_planner;
 pub mod planner;
 pub mod relevance;
@@ -40,6 +41,7 @@ pub mod textual_tool_call;
 pub mod tools;
 
 pub use agent::{BudgetGate, ConcreteAgent, TurnBudgetGuard, MAX_STEPS_PER_TURN};
+pub use gate_policy::GatePolicy;
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};
 pub use planner::{
     NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner, VecPlanner,
