@@ -23,8 +23,9 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use aivyx_capability::{Scope, TrustTier};
 use aivyx_core::{
-    AivyxError, AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
-    GatePolicy, SessionId, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome,
+    AivyxError, AuditHook, AuditTag, CancellationToken, ChannelContext, ChannelError,
+    ChannelPlatform, GatePolicy, SessionId, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome,
+    TurnOutcome,
     Verification,
 };
 use serde_json::{json, Value};
@@ -223,7 +224,7 @@ pub async fn drive_registered(
         .and_then(|r| r.config)
         .unwrap_or(default_config);
     let runtime = assemble_runtime(deps, config)?;
-    drive(shared, runtime, id, policy).await
+    drive(shared, runtime, id, policy, &deps.audit).await
 }
 
 /// Resume (`approve`) or abort (`!approve`) a mission paused at a human gate.
@@ -448,6 +449,7 @@ async fn drive(
     runtime: Arc<TeamRuntime>,
     id: &str,
     policy: GatePolicy,
+    audit: &Arc<dyn AuditHook>,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
     let mut record = shared
         .snapshot(id)
@@ -502,6 +504,20 @@ async fn drive(
                 // refusal. Reject the mission (dependents never run, partial
                 // outputs preserved) — the same terminal shape as an operator
                 // reject, decided by policy.
+                //
+                // H.6 — land the refusal on the audit chain so the unattended
+                // path stays as legible as the attended one (the operator
+                // reviewing later sees exactly which step we declined on their
+                // behalf, and why).
+                let reason = format!(
+                    "team mission human-approval gate at step '{step}' refused (headless run, no operator)"
+                );
+                eprintln!("aivyx team: {reason} — mission {id} rejected");
+                audit.on_event(AuditTag::HeadlessRefusal {
+                    run_id: id.to_string(),
+                    step: step.clone(),
+                    reason,
+                });
                 record
                     .outputs
                     .insert(step, "rejected: headless run (no operator)".to_string());
@@ -790,6 +806,30 @@ mod tests {
         }
     }
 
+    /// Records `HeadlessRefusal` tags so a test can assert the driver lands the
+    /// refusal on the audit chain (H.6). Other tags are ignored.
+    #[derive(Default)]
+    struct CapturingAuditHook {
+        refusals: std::sync::Mutex<Vec<(String, String)>>,
+    }
+    impl AuditHook for CapturingAuditHook {
+        fn on_event(&self, tag: AuditTag) {
+            if let AuditTag::HeadlessRefusal { step, reason, .. } = tag {
+                self.refusals.lock().unwrap().push((step, reason));
+            }
+        }
+    }
+
+    fn deps_with_audit(line: &str, audit: Arc<dyn AuditHook>) -> TeamRunDeps {
+        TeamRunDeps {
+            provider: Arc::new(FakeProvider { line: line.into() }),
+            model: "test-model".into(),
+            max_tokens: 1024,
+            audit,
+            base_tools: vec![],
+        }
+    }
+
     /// research → [human gate] → write.
     fn gated_plan() -> MissionPlan {
         MissionPlan::new(
@@ -1044,6 +1084,30 @@ mod tests {
         assert!(rec.outputs.contains_key("research"), "upstream work still ran");
         assert!(rec.outputs["approve"].starts_with("rejected"), "the human gate auto-rejected");
         assert!(!rec.outputs.contains_key("write"), "the gated dependent never ran");
+    }
+
+    #[tokio::test]
+    async fn headless_team_refusal_lands_on_the_audit_chain() {
+        // H.6 — the headless gate refusal must also reach the audit chain
+        // (the unattended path stays as legible as an operator-resolved gate),
+        // carrying the gated step + a reason.
+        let audit = Arc::new(CapturingAuditHook::default());
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps_with_audit("ok", audit.clone()),
+            default_nonagon(),
+            GatePolicy::RejectAndAbort,
+        );
+        let id = svc.start(gated_plan(), None).await.unwrap();
+        wait_for(&svc, &id, TeamMissionPhase::Rejected).await;
+
+        let refusals = audit.refusals.lock().unwrap();
+        assert_eq!(refusals.len(), 1, "exactly one refusal audited");
+        assert_eq!(refusals[0].0, "approve", "the gated step id is recorded");
+        assert!(
+            refusals[0].1.contains("approve") && refusals[0].1.contains("headless"),
+            "the reason names the step and why it was refused"
+        );
     }
 
     // ---- team.run tool (L.7) ------------------------------------------

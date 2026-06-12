@@ -716,6 +716,21 @@ pub enum AuditTag {
         scope: Scope,
         query_or_key: String,
     },
+    /// Chapter H — a team-mission human-approval gate was refused because
+    /// the run is headless (no operator). The bridge maps this to
+    /// `AuditEvent::HeadlessRefusal` with a `TeamMission { step }` surface.
+    /// (The single-agent and trigger paths hold a `PersistentAuditLog`
+    /// directly and append `HeadlessRefusal` without routing through the
+    /// `AuditHook`; this tag exists for the team driver, which only holds an
+    /// `Arc<dyn AuditHook>`.)
+    HeadlessRefusal {
+        /// Mission id of the refused run.
+        run_id: String,
+        /// The step that requested the human gate.
+        step: String,
+        /// The refusal reason recorded on the chain.
+        reason: String,
+    },
 }
 
 /// Aggregate token usage for one turn. Mirrors `LlmUsage` from

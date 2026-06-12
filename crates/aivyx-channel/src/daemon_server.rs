@@ -1913,6 +1913,33 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 }
                             }
 
+                            // H.6 — a headless turn that escalated never parked
+                            // behind a gate (the block above is skipped when
+                            // !escalation_parks); record the refusal on the
+                            // audit chain so the unattended path stays as
+                            // legible as an operator-resolved gate (Phase 78
+                            // autonomous-action-must-stay-legible posture). The
+                            // turn still finalizes `Escalated` in `outcome_str`.
+                            if !escalation_parks(effective_policy)
+                                && let TurnOutcome::Escalated { reason, .. } = &outcome
+                            {
+                                eprintln!(
+                                    "aivyx daemon: escalation refused (headless) on session {sid}: {reason}",
+                                );
+                                if let Some(al) = &audit_log {
+                                    let event = aivyx_audit::AuditEvent::HeadlessRefusal {
+                                        run_id: sid.clone(),
+                                        surface: aivyx_audit::HeadlessSurfaceSummary::AgentTurn,
+                                        reason: reason.clone(),
+                                    };
+                                    if let Err(e) = al.append(event) {
+                                        eprintln!(
+                                            "aivyx daemon: failed to audit headless refusal: {e}",
+                                        );
+                                    }
+                                }
+                            }
+
                             let outcome_str = format_outcome(&outcome);
 
                             let resp = DaemonMessage::TurnComplete {
@@ -4001,6 +4028,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::SkillInvocation { .. } => "SkillInvocation",
         aivyx_audit::AuditEvent::ProfileHintApplied { .. } => "ProfileHintApplied",
         aivyx_audit::AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
+        aivyx_audit::AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
     }
     .to_string();
 

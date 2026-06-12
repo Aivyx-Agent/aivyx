@@ -13,7 +13,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use aivyx_audit::{
-    AuditEvent, AuditWriter, AutoNotifyOutcomeSummary, PersistentAuditLog, TriggerKindSummary,
+    AuditEvent, AuditWriter, AutoNotifyOutcomeSummary, HeadlessSurfaceSummary, PersistentAuditLog,
+    TriggerKindSummary,
 };
 use aivyx_core::{Agent, GatePolicy, Message, SessionId, TurnOutcome};
 
@@ -407,6 +408,24 @@ impl TriggerDispatch {
                         eprintln!(
                             "aivyx trigger: escalation refused (headless) on mission {mid}: {reason}",
                         );
+                        // H.6 — land the refusal on the audit chain (best-
+                        // effort; a failed append must not derail the mission
+                        // lifecycle) so the unattended trigger path is as
+                        // legible as an operator-resolved gate would be.
+                        if let Some(al) = &self.audit_log {
+                            let event = AuditEvent::HeadlessRefusal {
+                                run_id: session_id.to_string(),
+                                surface: HeadlessSurfaceSummary::Trigger {
+                                    trigger_kind: TriggerKindSummary::from(source),
+                                },
+                                reason: reason.clone(),
+                            };
+                            if let Err(e) = al.append(event) {
+                                eprintln!(
+                                    "aivyx trigger: failed to audit headless refusal for {mid}: {e}",
+                                );
+                            }
+                        }
                         mission::cancel_mission(&mut record)
                             .map_err(|e| format!("cancel mission: {e}"))?;
                     }

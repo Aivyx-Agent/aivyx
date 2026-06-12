@@ -141,6 +141,8 @@ enum GatePolicy {
 
 ~6 phases, smaller than L/M — it's a policy + a handful of interception points, not a new subsystem.
 
+**Status: H.0–H.6 complete.** H.6 added a dedicated `AuditEvent::HeadlessRefusal { run_id, surface, reason }` (with a `HeadlessSurfaceSummary` of `AgentTurn` / `TeamMission { step }` / `Trigger { trigger_kind }`) emitted at all three refusal points — the single-agent turn (`daemon_server`) and trigger (`trigger.rs`) append it directly to the `PersistentAuditLog`; the team driver, which holds only an `Arc<dyn AuditHook>`, emits an `AuditTag::HeadlessRefusal` that the bridge maps onto the `TeamMission` surface. Each refusal also logs a one-line operator-readable summary to stderr. The event is queryable via `aivyx audit export --event-type HeadlessRefusal`. Remaining (deferred, not blocking): the `aivyx --headless "<task>"` CLI one-shot, team.run-from-loop per-call headless threading, and policy reporting in `status`.
+
 ---
 
 ## 6. Invariants

@@ -335,6 +335,59 @@ pub enum AuditEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent: Option<String>,
     },
+
+    /// Chapter H — a human-approval gate was *refused* because the run is
+    /// headless (no operator present to answer it). The audit-chain twin of
+    /// the in-memory refusal the run already records (the single-agent turn
+    /// finalizes `Escalated`, the team step → `Rejected`, the trigger
+    /// mission → cancelled). Headless v1 only ever refuses at a gate — it
+    /// never auto-approves — so this event is the canonical, queryable
+    /// "what the operator would have been asked, and we declined on their
+    /// behalf" record. Extends Phase 78's autonomous-action-must-stay-legible
+    /// posture to the unattended path: an operator reviewing the chain later
+    /// sees exactly what was declined and why.
+    ///
+    /// Every field is owned + `Eq` + `Serialize`, so the chain HMAC is
+    /// computed over canonical JSON without surprises (the Phase 117 /
+    /// Phase 119 precedent).
+    HeadlessRefusal {
+        /// Correlation key for the refused run. For an agent turn or a
+        /// trigger fire this is the `SessionId` (string form) recorded on
+        /// the surrounding `TurnStarted` / `TurnEnded`; for a team mission
+        /// it is the mission id. A `String` so the one variant spans all
+        /// three surfaces.
+        run_id: String,
+        /// Which run path hit the gate — the "what kind of run" axis.
+        surface: HeadlessSurfaceSummary,
+        /// The escalation's reason, verbatim — the "why-refused" an operator
+        /// would have been shown to approve.
+        reason: String,
+    },
+}
+
+/// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
+/// Lets a forensic walk tell apart "an interactive turn opted into headless"
+/// from "a team mission step hit a human gate" from "an operator-absent
+/// trigger fired", each of which refuses for a structurally different reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum HeadlessSurfaceSummary {
+    /// The interactive single-agent turn path, run headless — either
+    /// `SubmitInput { headless: true }` (per-run opt-in) or the daemon-wide
+    /// `RejectAndAbort` policy.
+    AgentTurn,
+    /// A Chapter L team mission whose step reached a `GateMode::Human` gate
+    /// with no operator to resolve it.
+    TeamMission {
+        /// The step id that requested the approval gate.
+        step: String,
+    },
+    /// An operator-absent trigger dispatch (loop / cron / webhook /
+    /// file-watch / reflection) — all of which default to headless.
+    Trigger {
+        /// Which trigger kind fired the refused run.
+        trigger_kind: TriggerKindSummary,
+    },
 }
 
 /// Phase 115 — discriminator for what triggered an auto-
@@ -968,6 +1021,15 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 turn_id,
                 session_id,
                 skill_name,
+            },
+            AuditTag::HeadlessRefusal {
+                run_id,
+                step,
+                reason,
+            } => AuditEvent::HeadlessRefusal {
+                run_id,
+                surface: HeadlessSurfaceSummary::TeamMission { step },
+                reason,
             },
         }
     }
@@ -2190,6 +2252,60 @@ mod tests {
                 assert_eq!(extracted_from_text.as_deref(), Some("tool_code"));
             }
             other => panic!("expected ToolCall; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chapter_h_headless_refusal_round_trips_each_surface() {
+        // H.6 — a headless gate refusal must serialize + decode
+        // byte-stably across all three surfaces (the chain HMAC is
+        // computed over canonical JSON). The `surface` is `#[serde(tag
+        // = "kind")]` like the other summary enums.
+        for surface in [
+            HeadlessSurfaceSummary::AgentTurn,
+            HeadlessSurfaceSummary::TeamMission {
+                step: "draft".into(),
+            },
+            HeadlessSurfaceSummary::Trigger {
+                trigger_kind: TriggerKindSummary::Loop,
+            },
+        ] {
+            let event = AuditEvent::HeadlessRefusal {
+                run_id: "sess-42".into(),
+                surface: surface.clone(),
+                reason: "kitchen.order.send would spend money (no operator)".into(),
+            };
+            let json = serde_json::to_value(&event).unwrap();
+            assert_eq!(json["kind"], "HeadlessRefusal");
+            let decoded: AuditEvent = serde_json::from_value(json).expect("decode");
+            assert_eq!(decoded, event, "round-trip must be lossless for {surface:?}");
+        }
+    }
+
+    #[test]
+    fn chapter_h_team_audit_tag_bridges_to_team_mission_surface() {
+        // The team driver only holds an `Arc<dyn AuditHook>`, so it
+        // emits `AuditTag::HeadlessRefusal`; the bridge must land a
+        // `TeamMission { step }` surface on the chain.
+        let event: AuditEvent = aivyx_core::AuditTag::HeadlessRefusal {
+            run_id: "mission-7".into(),
+            step: "review".into(),
+            reason: "human-approval gate at step 'review' (no operator)".into(),
+        }
+        .into();
+        match event {
+            AuditEvent::HeadlessRefusal {
+                run_id, surface, ..
+            } => {
+                assert_eq!(run_id, "mission-7");
+                assert_eq!(
+                    surface,
+                    HeadlessSurfaceSummary::TeamMission {
+                        step: "review".into()
+                    }
+                );
+            }
+            other => panic!("expected HeadlessRefusal, got {other:?}"),
         }
     }
 
