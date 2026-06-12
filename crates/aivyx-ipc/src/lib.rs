@@ -12,8 +12,12 @@
 //!
 //! Deps: `aivyx-team-types` (itself wasm-clean) + `serde` only.
 
+pub mod backlog;
+pub mod loop_state;
 pub mod team_mission;
 
+pub use backlog::{Story, StoryStatus};
+pub use loop_state::LoopRunState;
 pub use team_mission::{
     TeamMissionPhase, TeamMissionRecord, TeamMissionView, TeamStepState, TeamStepView,
 };
