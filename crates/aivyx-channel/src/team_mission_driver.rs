@@ -324,6 +324,23 @@ impl TeamMissionService {
         Ok(id)
     }
 
+    /// Decompose a free-text `goal` into a plan (one LLM planning call over the
+    /// team's roster), then [`start`](Self::start) it. The decomposition is
+    /// awaited (a few seconds) so the returned id belongs to a registered,
+    /// validated mission; the drive then runs in the background.
+    pub async fn start_from_goal(&self, goal: &str) -> Result<String, MissionDriverError> {
+        let cancel = aivyx_core::CancellationToken::new();
+        let plan = aivyx_team::decompose_goal(
+            self.deps.provider.as_ref(),
+            &self.deps.model,
+            goal,
+            &self.config,
+            &cancel,
+        )
+        .await?;
+        self.start(plan).await
+    }
+
     /// Resolve a paused gate, spawning the resume drive on approval. Returns
     /// the immediate phase (`Executing` on approve, `Rejected` on reject).
     pub async fn resolve(

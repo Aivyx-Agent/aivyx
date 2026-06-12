@@ -3079,6 +3079,18 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::TeamRunGoal { goal } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            match svc.start_from_goal(&goal).await {
+                Ok(mission_id) => QueryResponsePayload::TeamRunStarted { mission_id },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "team_run_goal_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
         QueryPayload::TeamMissionList => {
             let Some(svc) = team_missions else {
                 return no_team_missions();

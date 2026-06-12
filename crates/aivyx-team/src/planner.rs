@@ -1,0 +1,247 @@
+//! Chapter L — goal → [`MissionPlan`] decomposition.
+//!
+//! The daemon path (`aivyx team run "<goal>"`) needs a concrete plan to drive
+//! `run_until_pause`. Rather than run the full lead agent (capability stack,
+//! tools, the inline `decompose_task` that also *executes*), this makes one
+//! focused, tool-less LLM call: it asks the model to decompose a free-text
+//! goal into the same friendly `{goal, steps}` spec the `decompose_task` tool
+//! accepts, then parses it via [`parse_plan_spec`](crate::parse_plan_spec) and
+//! validates the DAG. The engine stays pure — planning is a single completion,
+//! execution is the runtime's job.
+
+use aivyx_core::CancellationToken;
+use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStepEnd};
+
+use crate::config::{TeamConfig, TeamError};
+use crate::mission::MissionPlan;
+use crate::orchestration::parse_plan_spec;
+
+/// Token ceiling for the planning completion — a DAG spec is small.
+const PLANNER_MAX_TOKENS: u32 = 1500;
+
+/// Decompose `goal` into a runnable [`MissionPlan`] for `config`'s team via one
+/// tool-less LLM call. The plan delegates only to the team's specialists and
+/// may insert gates (auto reviewer, or `human` for operator approval). Errors
+/// on an LLM failure, output with no JSON object, or an invalid plan (cyclic /
+/// unknown dep / empty / bad id).
+pub async fn decompose_goal(
+    provider: &dyn LlmProvider,
+    model: &str,
+    goal: &str,
+    config: &TeamConfig,
+    cancel: &CancellationToken,
+) -> Result<MissionPlan, TeamError> {
+    let goal = goal.trim();
+    if goal.is_empty() {
+        return Err(TeamError::Config("mission goal is empty".into()));
+    }
+    let system = planner_system_prompt(config);
+    let user = format!("Mission goal:\n{goal}\n\nReturn the plan as JSON now.");
+    let messages = vec![LlmMessage::user_text(user)];
+    let request = LlmRequest {
+        model,
+        system: Some(&system),
+        messages: &messages,
+        tools: &[],
+        max_tokens: PLANNER_MAX_TOKENS,
+        temperature: Some(0.2),
+    };
+
+    let mut stream = provider
+        .chat_stream(request, cancel)
+        .await
+        .map_err(|e| TeamError::Config(format!("planner LLM call failed: {e}")))?;
+    // Drain mid-stream chunks; we only need the final assembled text.
+    while let Ok(Some(_)) = stream.next_event().await {}
+    let text = match stream
+        .finish()
+        .await
+        .map_err(|e| TeamError::Config(format!("planner LLM stream failed: {e}")))?
+    {
+        LlmStepEnd::FinalMessage { text, .. } => text,
+        LlmStepEnd::ToolCalls { .. } => {
+            return Err(TeamError::Config(
+                "planner returned a tool call; expected a JSON plan".into(),
+            ));
+        }
+    };
+
+    let json = extract_json_object(&text).ok_or_else(|| {
+        TeamError::Config(format!("planner output had no JSON object:\n{text}"))
+    })?;
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| TeamError::Config(format!("planner JSON did not parse: {e}")))?;
+    let mut plan = parse_plan_spec(&value).map_err(TeamError::Config)?;
+    // Anchor the plan to the operator's exact goal — the model echoes it, but
+    // we don't want a paraphrase to drift the recorded mission.
+    plan.goal = goal.to_string();
+    plan.validate()?;
+    Ok(plan)
+}
+
+/// The first non-empty line of a specialist's soul, clipped — keeps the roster
+/// in the planning prompt compact.
+fn soul_blurb(soul: &str) -> String {
+    let line = soul.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    if line.chars().count() > 140 {
+        let clipped: String = line.chars().take(140).collect();
+        format!("{clipped}…")
+    } else {
+        line.to_string()
+    }
+}
+
+/// Build the planning system prompt: the team's specialists + the exact JSON
+/// spec the parser accepts.
+fn planner_system_prompt(config: &TeamConfig) -> String {
+    let mut roster = String::new();
+    for m in config.specialists() {
+        roster.push_str(&format!("- {} ({}): {}\n", m.name, m.role, soul_blurb(&m.soul)));
+    }
+    if roster.is_empty() {
+        roster.push_str("- (none)\n");
+    }
+    format!(
+        "You are the planning lead of a multi-agent team. Decompose the operator's \
+mission into a DAG of steps and return ONLY a JSON object — no prose, no markdown \
+fences, nothing before or after the object.\n\n\
+Delegate work only to these specialists (use their exact names):\n{roster}\n\
+JSON shape: {{\"goal\": string, \"steps\": [step, ...]}}\n\
+Each step is one of:\n\
+  - delegate: {{\"id\": string, \"specialist\": <name>, \"prompt\": string, \"deps\": [id, ...]}}\n\
+  - gate:     {{\"id\": string, \"reviewer\": <name>, \"criteria\": string, \"mode\": \"auto\" | \"human\", \"deps\": [id, ...]}}\n\n\
+Rules:\n\
+  - ids are unique and match [a-zA-Z0-9_-].\n\
+  - `deps` lists step ids that must finish first; omit or use [] for none.\n\
+  - Steps with disjoint deps run concurrently — exploit that.\n\
+  - Use a \"human\" gate before irreversible or high-stakes work the operator should \
+approve; an \"auto\" gate when a reviewer specialist should check quality first.\n\
+  - Keep the plan minimal: only the steps the goal actually needs."
+    )
+}
+
+/// Extract the outermost `{...}` object from a model response that may be
+/// wrapped in prose or ```json fences. Returns `None` if there's no object.
+fn extract_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (end > start).then(|| &text[start..=end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::roster::default_nonagon;
+    use crate::testutil::FakeProvider;
+
+    fn plan_json() -> &'static str {
+        r#"{"goal":"close the kitchen","steps":[
+            {"id":"count","specialist":"analyst","prompt":"count closing stock"},
+            {"id":"approve","reviewer":"reviewer","criteria":"ok to order?","mode":"human","deps":["count"]},
+            {"id":"order","specialist":"ops","prompt":"place the PO","deps":["approve"]}
+        ]}"#
+    }
+
+    #[tokio::test]
+    async fn decomposes_a_goal_into_a_validated_plan() {
+        let provider = FakeProvider::says(plan_json());
+        let plan = decompose_goal(
+            provider.as_ref(),
+            "test-model",
+            "close the kitchen",
+            &default_nonagon(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("plan decodes");
+        assert_eq!(plan.goal, "close the kitchen");
+        assert_eq!(plan.steps.len(), 3);
+        assert!(plan.step("approve").unwrap().is_human_gate());
+        // deps survived → the runtime can walk it.
+        assert_eq!(plan.step("order").unwrap().deps, vec!["approve".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tolerates_prose_and_fences_around_the_json() {
+        let wrapped = format!("Here is the plan:\n```json\n{}\n```\nDone.", plan_json());
+        let provider = FakeProvider::says(&wrapped);
+        let plan = decompose_goal(
+            provider.as_ref(),
+            "m",
+            "close the kitchen",
+            &default_nonagon(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("plan decodes despite the wrapping");
+        assert_eq!(plan.steps.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn overrides_the_goal_to_the_operators_exact_text() {
+        // The model paraphrases the goal; we anchor to the operator's.
+        let provider = FakeProvider::says(
+            r#"{"goal":"shut down the kitchen for the night","steps":[
+                {"id":"a","specialist":"ops","prompt":"do it"}
+            ]}"#,
+        );
+        let plan = decompose_goal(
+            provider.as_ref(),
+            "m",
+            "close the kitchen",
+            &default_nonagon(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plan.goal, "close the kitchen");
+    }
+
+    #[tokio::test]
+    async fn rejects_output_without_a_json_object() {
+        let provider = FakeProvider::says("I cannot help with that.");
+        let err = decompose_goal(
+            provider.as_ref(),
+            "m",
+            "goal",
+            &default_nonagon(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("no JSON → error");
+        assert!(format!("{err}").contains("no JSON object"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_cyclic_plan() {
+        let provider = FakeProvider::says(
+            r#"{"goal":"g","steps":[
+                {"id":"a","specialist":"ops","prompt":"p","deps":["b"]},
+                {"id":"b","specialist":"ops","prompt":"p","deps":["a"]}
+            ]}"#,
+        );
+        assert!(decompose_goal(
+            provider.as_ref(),
+            "m",
+            "goal",
+            &default_nonagon(),
+            &CancellationToken::new(),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn empty_goal_is_rejected_before_any_call() {
+        let provider = FakeProvider::says("unused");
+        assert!(decompose_goal(
+            provider.as_ref(),
+            "m",
+            "   ",
+            &default_nonagon(),
+            &CancellationToken::new(),
+        )
+        .await
+        .is_err());
+    }
+}

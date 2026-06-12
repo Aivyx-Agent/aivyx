@@ -849,6 +849,25 @@ pub async fn team_run(
     }
 }
 
+/// Chapter L — start a daemon-run team mission from a free-text goal; the
+/// daemon decomposes it into a plan and runs it. Returns the new mission id.
+pub async fn team_run_goal(
+    socket_path: &Path,
+    goal: String,
+) -> Result<String, DaemonError> {
+    let payload =
+        send_query(socket_path, "team-run-goal", QueryPayload::TeamRunGoal { goal }).await?;
+    match payload {
+        QueryResponsePayload::TeamRunStarted { mission_id } => Ok(mission_id),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamRunStarted, got {other:?}"
+        ))),
+    }
+}
+
 /// Chapter L (L.5) — every team mission's snapshot (the poll feed).
 pub async fn team_mission_list(
     socket_path: &Path,

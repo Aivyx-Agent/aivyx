@@ -16,6 +16,7 @@ use std::path::Path;
 
 use aivyx_channel::daemon_client::{
     daemon_is_running, resolve_team_gate, team_mission_list, team_mission_status, team_run,
+    team_run_goal,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::team_mission::{TeamMissionPhase, TeamMissionRecord};
@@ -32,6 +33,15 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
         TeamSubcommand::Start { plan_path } => {
             let plan = load_plan(&plan_path)?;
             let id = team_run(&socket_path, plan)
+                .await
+                .map_err(|e| format!("team start failed: {e}"))?;
+            println!("started mission {id}");
+            println!("track it with `aivyx team status {id}`");
+            Ok(())
+        }
+        TeamSubcommand::StartGoal { goal } => {
+            println!("decomposing goal into a plan…");
+            let id = team_run_goal(&socket_path, goal)
                 .await
                 .map_err(|e| format!("team start failed: {e}"))?;
             println!("started mission {id}");

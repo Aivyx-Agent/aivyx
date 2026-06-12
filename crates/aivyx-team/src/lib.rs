@@ -27,6 +27,7 @@ pub mod message_bus;
 pub mod message_tools;
 pub mod mission;
 pub mod orchestration;
+pub mod planner;
 pub mod pool;
 pub mod roster;
 pub mod runtime;
@@ -45,6 +46,7 @@ pub use mission::{GateMode, MissionPlan, Step, StepKind};
 pub use orchestration::{
     parse_plan_spec, DecomposeTaskTool, SynthesizeResultsTool, VerifyOutputTool,
 };
+pub use planner::decompose_goal;
 pub use pool::{SpecialistChannel, SpecialistPool};
 pub use roster::default_nonagon;
 pub use runtime::{MissionObserver, MissionReport, MissionStatus, RunYield, TeamRuntime};

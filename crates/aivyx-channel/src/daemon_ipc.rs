@@ -270,11 +270,16 @@ pub enum QueryPayload {
         story_id: String,
     },
     /// Chapter L (L.5) — start a daemon-run Nonagon team mission from an
-    /// explicit [`MissionPlan`] (per the L.4 decision; lead-LLM goal→plan
-    /// decomposition is a later increment). Fails if no team service is
-    /// configured. Responds with [`QueryResponsePayload::TeamRunStarted`].
+    /// explicit [`MissionPlan`]. Fails if no team service is configured.
+    /// Responds with [`QueryResponsePayload::TeamRunStarted`].
     TeamRun {
         plan: aivyx_team::MissionPlan,
+    },
+    /// Chapter L — start a mission from a free-text goal: the daemon decomposes
+    /// it into a plan (one LLM planning call over the team roster) and runs it.
+    /// Responds with [`QueryResponsePayload::TeamRunStarted`].
+    TeamRunGoal {
+        goal: String,
     },
     /// Chapter L (L.5) — every team mission's snapshot (the poll feed the TUI
     /// Missions panel ticks). Responds with

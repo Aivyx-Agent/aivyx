@@ -1539,6 +1539,9 @@ enum TeamSubcommand {
     /// Chapter L — `aivyx team start --plan <file.json>`: submit an explicit
     /// mission plan to the daemon (daemon-run, durable, gate-pausable).
     Start { plan_path: String },
+    /// Chapter L — `aivyx team start "<goal>"`: the daemon decomposes the
+    /// free-text goal into a plan (one LLM planning call) and runs it.
+    StartGoal { goal: String },
     /// Chapter L — `aivyx team list`: the daemon's mission feed.
     List,
     /// Chapter L — `aivyx team status [<id>]`: one mission's detail, or the
@@ -1557,6 +1560,7 @@ impl TeamSubcommand {
         matches!(
             self,
             TeamSubcommand::Start { .. }
+                | TeamSubcommand::StartGoal { .. }
                 | TeamSubcommand::List
                 | TeamSubcommand::Status { .. }
                 | TeamSubcommand::Approve { .. }
@@ -2545,30 +2549,39 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "start" => {
-                // `aivyx team start --plan <file.json>`
-                let tail = args.get(2..).unwrap_or(&[]);
-                let mut plan_path: Option<String> = None;
-                let mut idx = 0;
-                while idx < tail.len() {
-                    match tail[idx].as_str() {
-                        "--plan" => {
-                            let v = tail.get(idx + 1).ok_or_else(|| {
-                                "`--plan` requires a path to a plan JSON file".to_string()
-                            })?;
-                            plan_path = Some(v.clone());
-                            idx += 2;
-                        }
-                        other => {
-                            return Err(format!(
-                                "unrecognized argument to `aivyx team start`: `{other}`"
-                            ));
-                        }
+                // `aivyx team start "<goal>"` — daemon decomposes the goal — or
+                // `aivyx team start --plan <file.json>` — explicit plan.
+                let first = args.get(2).map(|s| s.as_str()).unwrap_or("");
+                if first == "--plan" {
+                    let plan_path = args.get(3).cloned().ok_or_else(|| {
+                        "`--plan` requires a path to a plan JSON file".to_string()
+                    })?;
+                    if args.len() > 4 {
+                        return Err(format!(
+                            "unrecognized argument to `aivyx team start --plan`: `{}`",
+                            args[4]
+                        ));
                     }
+                    TeamSubcommand::Start { plan_path }
+                } else if first.is_empty() {
+                    return Err(
+                        "`aivyx team start` requires a \"<goal>\" or `--plan <file.json>`"
+                            .to_string(),
+                    );
+                } else if first.starts_with('-') {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx team start`: `{first}` \
+                         (expected a \"<goal>\" or `--plan <file.json>`)"
+                    ));
+                } else {
+                    if args.len() > 3 {
+                        return Err(
+                            "`aivyx team start \"<goal>\"` takes a single quoted goal"
+                                .to_string(),
+                        );
+                    }
+                    TeamSubcommand::StartGoal { goal: first.to_string() }
                 }
-                let plan_path = plan_path.ok_or_else(|| {
-                    "`aivyx team start` requires `--plan <file.json>`".to_string()
-                })?;
-                TeamSubcommand::Start { plan_path }
             }
             "list" => {
                 if args.len() > 2 {
@@ -9121,10 +9134,20 @@ mod tests {
     }
 
     #[test]
-    fn team_start_without_plan_flag_is_an_error() {
+    fn team_start_parses_a_positional_goal() {
+        let parsed = parse_cli_args_from(&argv(&["team", "start", "close the kitchen"]))
+            .expect("team start <goal> must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Team(TeamSubcommand::StartGoal { goal: "close the kitchen".into() })
+        );
+    }
+
+    #[test]
+    fn team_start_with_no_args_is_an_error() {
         let err = parse_cli_args_from(&argv(&["team", "start"]))
-            .expect_err("start needs --plan");
-        assert!(err.contains("--plan"), "error: {err}");
+            .expect_err("start needs a goal or --plan");
+        assert!(err.contains("goal") && err.contains("--plan"), "error: {err}");
     }
 
     #[test]
