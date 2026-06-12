@@ -194,11 +194,25 @@ impl OllamaStream {
             return Ok(None);
         }
 
-        // Non-terminal chunk — text delta. Ollama's protocol
-        // doesn't emit tool_calls until done: true, so any
-        // tool_calls field on a non-terminal chunk is ignored
-        // (defensive).
+        // Non-terminal chunk — text delta, AND (newer Ollama /
+        // qwen3) the tool_calls array. Early Ollama only emitted
+        // tool_calls on the `done: true` chunk; current versions
+        // (observed: Ollama 0.30.5 + qwen3.6) deliver the complete
+        // tool_calls on a `done: false` chunk and leave the terminal
+        // chunk's `tool_calls` null. Capture them here so the call
+        // isn't silently dropped — otherwise a tool-using turn ends
+        // with no tool execution and no text (the model spent its
+        // whole response on a call we ignored). The terminal handler
+        // only overwrites `pending_tool_calls` when its own chunk
+        // carries a non-null array, so a later null `done` chunk
+        // can't clear what we set here.
         if let Some(msg) = chunk.message {
+            if let Some(tcs) = &msg.tool_calls {
+                if !tcs.is_empty() {
+                    self.state.pending_tool_calls =
+                        Some(parse_tool_calls(tcs, &self.known_tool_names)?);
+                }
+            }
             if let Some(content) = msg.content {
                 if !content.is_empty() {
                     self.state.accumulated_text.push_str(&content);
@@ -468,6 +482,54 @@ mod tests {
                 ));
                 // The synthesized call_id is stable (tc-0-fs.read).
                 assert_eq!(calls[0].call_id, "tc-0-fs.read");
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_call_arrives_on_non_terminal_chunk_then_null_on_done() {
+        // Observed with Ollama 0.30.5 + qwen3.6: the complete
+        // tool_calls array lands on a `done: false` chunk and the
+        // terminal `done: true` chunk carries `tool_calls: null`.
+        // The reader must capture the non-terminal call rather than
+        // ignore it (the old "tool_calls only on done" assumption
+        // silently dropped the call → a tool-using turn produced no
+        // execution and no text).
+        let call_chunk = json!({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "fs.read",
+                        "arguments": { "path": "foo.txt" }
+                    }
+                }]
+            },
+            "done": false
+        });
+        let done_chunk = json!({
+            "message": { "role": "assistant", "content": "", "tool_calls": null },
+            "done": true,
+            "prompt_eval_count": 65,
+            "eval_count": 12
+        });
+        let lines = format!("{call_chunk}\n{done_chunk}\n");
+        let reader = make_reader(vec![lines.as_bytes()]);
+        let mut stream = OllamaStream::new(reader, known(&["fs.read"]));
+
+        // No text events; the call rides on a non-terminal chunk and
+        // the stream then terminates.
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = Box::new(stream).finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, usage, .. } => {
+                assert_eq!(calls.len(), 1, "the non-terminal tool call must survive");
+                assert_eq!(calls[0].tool_name, "fs.read");
+                assert_eq!(calls[0].input["path"], "foo.txt");
+                // The null tool_calls on the done chunk must not clear it.
+                assert_eq!(usage.output_tokens, 12);
             }
             other => panic!("expected ToolCalls, got {other:?}"),
         }
