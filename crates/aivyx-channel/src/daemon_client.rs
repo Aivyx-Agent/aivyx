@@ -159,6 +159,7 @@ impl DaemonSession {
             text,
             mission_id: Some(mission_id),
             attachments: vec![],
+            headless: false,
         };
         self.send_and_collect(submit).await
     }
@@ -174,6 +175,24 @@ impl DaemonSession {
             text,
             mission_id: None,
             attachments: vec![],
+            headless: false,
+        };
+        self.send_and_collect(submit).await
+    }
+
+    /// Chapter H — submit an **unattended** turn: the daemon refuses (records
+    /// the reason) at any approval gate rather than parking for an operator.
+    /// Used by `aivyx --headless "<task>"`.
+    pub async fn submit_input_headless(
+        &mut self,
+        text: String,
+    ) -> Result<(Vec<StreamEventPayload>, String), DaemonError> {
+        let submit = FrontendMessage::SubmitInput {
+            session_id: self.session_id.clone(),
+            text,
+            mission_id: None,
+            attachments: vec![],
+            headless: true,
         };
         self.send_and_collect(submit).await
     }
@@ -189,6 +208,7 @@ impl DaemonSession {
             text,
             mission_id: None,
             attachments,
+            headless: false,
         };
         self.send_and_collect(submit).await
     }

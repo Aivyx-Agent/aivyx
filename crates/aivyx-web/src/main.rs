@@ -384,6 +384,7 @@ fn submit_query(session_id: String, text: String) -> FrontendMessage {
         text,
         mission_id: None,
         attachments: Vec::new(),
+        headless: false,
     }
 }
 

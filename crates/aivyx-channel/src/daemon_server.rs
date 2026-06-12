@@ -1522,7 +1522,17 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             text,
                             mission_id: mid,
                             attachments,
+                            headless,
                         } => {
+                            // Chapter H — a per-turn `headless: true` opts this
+                            // turn into RejectAndAbort, overriding the daemon's
+                            // default `gate_policy`; otherwise the daemon default
+                            // applies (Interactive unless the daemon is headless).
+                            let effective_policy = if headless {
+                                GatePolicy::RejectAndAbort
+                            } else {
+                                gate_policy
+                            };
                             let ch = match &channel {
                                 Some(c) => Arc::clone(c),
                                 None => {
@@ -1845,7 +1855,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // run (RejectAndAbort) never waits: it skips the gate
                             // + ApprovalGate, and the turn finalizes `Escalated`
                             // (the refusal, recorded on the audit chain).
-                            if escalation_parks(gate_policy)
+                            if escalation_parks(effective_policy)
                                 && let (
                                     TurnOutcome::Escalated { reason, .. },
                                     Some(mission_id),

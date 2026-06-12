@@ -963,6 +963,14 @@ pub enum FrontendMessage {
         /// ensures old clients that omit this field still deserialize.
         #[serde(default)]
         attachments: Vec<IpcAttachment>,
+        /// Chapter H — request an **unattended** turn: at an approval gate the
+        /// daemon refuses (records the reason) rather than parking for an
+        /// operator. `#[serde(default)]` (false ⇒ interactive) keeps old
+        /// clients decoding. The daemon maps this to `GatePolicy::RejectAndAbort`
+        /// (a `bool` because `aivyx-ipc` is wasm-clean and can't name the
+        /// `aivyx-core` enum).
+        #[serde(default)]
+        headless: bool,
     },
     CancelTurn {
         session_id: String,
@@ -1594,6 +1602,7 @@ mod tests {
                 text: "hello world".into(),
                 mission_id: None,
                 attachments: vec![],
+                headless: false,
             },
             FrontendMessage::CancelTurn {
                 session_id: "abc-123".into(),
@@ -2433,6 +2442,7 @@ mod tests {
             text: huge,
             mission_id: None,
             attachments: vec![],
+            headless: false,
         };
         let err = encode_frame(&msg).unwrap_err();
         assert!(matches!(err, FrameError::PayloadTooLarge(_)));
@@ -2688,6 +2698,7 @@ mod tests {
                 data_base64: "iVBORw0KGgo=".into(),
                 filename: Some("screenshot.png".into()),
             }],
+            headless: false,
         };
         let frame = encode_frame(&msg).expect("encode");
         let (decoded, consumed): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
@@ -2702,10 +2713,15 @@ mod tests {
         let msg: FrontendMessage = serde_json::from_str(json).expect("parse");
         match msg {
             FrontendMessage::SubmitInput {
-                text, attachments, ..
+                text,
+                attachments,
+                headless,
+                ..
             } => {
                 assert_eq!(text, "hello");
                 assert!(attachments.is_empty(), "default should be empty vec");
+                // Chapter H — absent `headless` defaults to interactive.
+                assert!(!headless, "headless defaults to false (interactive)");
             }
             other => panic!("expected SubmitInput, got {other:?}"),
         }
