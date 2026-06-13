@@ -91,7 +91,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
 | **Teams** | Nonagon roster / vertical packs | Roadmap |
 | **Agents** | persona / soul / profile editor | Roadmap |
-| **Memory** | knowledge graph + ingestion stream | Roadmap |
+| **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | workspace + fs_root browser | Roadmap |
 | **Settings** | access level, providers, budgets | Roadmap |
 | **Voice** | the voice channel | Roadmap |
@@ -164,8 +164,9 @@ release CI would remove the need to commit the artifact.
 
 ## 7. Out of scope (the follow-ons)
 
-The **Memory graph**, **Teams/Agents/Settings** screens, the **Genesis wizard** +
-**Unlock** screens, the **TUI** Stitch reskin, and a **Tauri/desktop** shell are
-all future work — they build on this foundation. (The **Command-Center dashboard**
-landed in Chapter S.) **Creator** and **Nexus** are separate ecosystem products
-with their own contracts.
+The **Memory graph** *visualization*, **Teams/Agents/Settings** screens, the
+**Genesis wizard** + **Unlock** screens, the **TUI** Stitch reskin, and a
+**Tauri/desktop** shell are all future work — they build on this foundation.
+(The **Command-Center dashboard** landed in Chapter S; the **Memory browser** —
+topics/entries/search — in Chapter T.) **Creator** and **Nexus** are separate
+ecosystem products with their own contracts.
