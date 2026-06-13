@@ -11,20 +11,21 @@ stores everything locally in an encrypted redb file.
 
 ## Current install state
 
-Phase 61 wired the release pipeline (cargo-dist, GitHub Actions
-CI, four-target matrix, install-script generation) but did
-**not** publish a release. Until public hosting is configured
-and Task 7 lands, the only supported install path is
-[build from source](#build-from-source-currently-the-only-path).
+The first public release is **`v0.1.0` (pre-release)**. The
+recommended install path is the [shell installer](#shell-installer-recommended),
+which downloads a prebuilt binary for your platform; you can also
+[build from source](#build-from-source). Both install the same
+single `aivyx` binary.
 
-The shell-installer section below documents the path that will
-become primary once `v0.1.0` is published.
+> `v0.1.0` is an early pre-release — see the [CHANGELOG](../CHANGELOG.md).
+> The shell-installer URL is live only once the `v0.1.0` tag has been
+> pushed and GitHub Actions has finished building the release.
 
 ## Supported targets
 
-When the release pipeline fires, it will cover four targets. All
-Linux builds are musl-static, so a single Linux binary works on
-every distro without glibc version drift.
+The release covers four targets. All Linux builds are musl-static,
+so a single Linux binary works on every distro without glibc
+version drift.
 
 | Target | Binary | Notes |
 |---|---|---|
@@ -39,10 +40,10 @@ port needs a NamedPipe replacement. Until that lands, run Aivyx
 inside [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) — it
 behaves as a regular Linux x86_64 install.
 
-## Build from source (currently the only path)
+## Build from source
 
-This is the supported install path today. Cargo build from a
-clone of the repository:
+An alternative to the shell installer — Cargo build from a clone
+of the repository:
 
 **Prerequisites:**
 - Rust toolchain 1.85+ (`rustup` recommended)
@@ -51,7 +52,7 @@ clone of the repository:
   equivalent
 
 ```sh
-git clone https://github.com/AivyxDev/aivyx
+git clone https://github.com/Aivyx-Agent/aivyx
 cd aivyx
 cargo build --release --bin aivyx
 # binary lands at target/release/aivyx
@@ -60,7 +61,7 @@ cargo build --release --bin aivyx
 Install into `~/.cargo/bin/` (if `cargo install` is preferred):
 
 ```sh
-cargo install --path crates/aivyx-channel --bin aivyx
+cargo install --path crates/aivyx-cli --bin aivyx
 ```
 
 The pre-commit hook (`./scripts/install-hooks.sh`) is optional
@@ -123,21 +124,15 @@ This local-run path is deliberately Ollama-only and leaves no
 CI or remote-build footprint: Phase 99 keeps builds local while
 repo infrastructure is still being decided.
 
-## Shell installer (when published)
+## Shell installer (recommended)
 
-This section documents the path that becomes primary once
-`v0.1.0` is published. **It does not work yet** — the URL
-returns 404. The pipeline is in place to fire on the first tag
-push to a public GitHub remote.
-
-The cargo-dist-generated installer will detect your arch,
-download the right tarball, verify its checksum, and drop
-`aivyx` into `$CARGO_HOME/bin/` (typically `~/.cargo/bin/`).
+The cargo-dist-generated installer detects your arch, downloads
+the right tarball, verifies its checksum, and drops `aivyx` into
+`$CARGO_HOME/bin/` (typically `~/.cargo/bin/`).
 
 ```sh
-# Will work post-publication:
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/AivyxDev/aivyx/releases/latest/download/aivyx-channel-installer.sh \
+  https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
   | sh
 aivyx --version
 # aivyx 0.1.0
@@ -147,9 +142,13 @@ For a specific version, replace `latest` with the tag:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/AivyxDev/aivyx/releases/download/v0.1.0/aivyx-channel-installer.sh \
+  https://github.com/Aivyx-Agent/aivyx/releases/download/v0.1.0/aivyx-cli-installer.sh \
   | sh
 ```
+
+> The URL resolves only once `v0.1.0` has been tagged and the
+> GitHub Actions release build has completed. Until then, use
+> [build from source](#build-from-source).
 
 ### macOS first launch: Gatekeeper
 

@@ -18,7 +18,7 @@ verifiable offline.
 |---|---|
 | Phases shipped | Phase 0 → Chapter P (Local First-Run Reliability), plus 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
+| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; first release is **`v0.1.0` (pre-release)** via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
 | Workspace crates | 32 |
 | Rust tests | 4,582 passing |
 | Python conformance tests | 24 passing |
@@ -158,9 +158,17 @@ The arc to date, by chapter:
 
 ## Five-minute setup
 
-Aivyx ships zero hosted dependencies. Today's path is
-build-from-source; a prebuilt-binary installer is wired and
-waiting on public hosting (see [Release pipeline status](#release-pipeline-status)).
+Aivyx ships zero hosted dependencies. The quickest path is the
+one-line shell installer (a prebuilt binary for your platform):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh | sh
+```
+
+(Resolves once `v0.1.0` is tagged and built — see
+[Release pipeline status](#release-pipeline-status). Prefer to compile?
+The build-from-source steps below work today.)
 
 **Phase 66 onboarding fast-path:** after `cargo build --release
 --bin aivyx`, run `./target/release/aivyx init --template
@@ -171,11 +179,11 @@ template contains. The manual path below is shown for
 reference.
 
 ```sh
-# 1. Install Ollama and pull a model (no API key required)
-ollama pull llama3.1
+# 1. Install Ollama and pull a tool-capable model (no API key required)
+ollama pull qwen3:8b
 
 # 2. Build aivyx
-git clone <repo-url>
+git clone https://github.com/Aivyx-Agent/aivyx
 cd aivyx
 cargo build --release --bin aivyx
 
@@ -183,7 +191,7 @@ cargo build --release --bin aivyx
 cat > aivyx.toml <<'EOF'
 [agent]
 provider = "ollama"
-model = "llama3.1"
+model = "qwen3:8b"
 
 [fs]
 root = "/tmp/aivyx-sandbox"
@@ -231,23 +239,22 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Release pipeline status
 
-Phase 61 wired the release substrate but did not publish a
-release. The pipeline is dormant until public hosting is configured:
+The release pipeline is **active** on the public repo. The first
+release is `v0.1.0` (pre-release):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
   for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
-  `v*.*.*` tag push.
+  `v*.*.*` tag push, then publishes a GitHub Release with the
+  binaries, checksums, and the one-line shell installer.
 - `.github/workflows/ci.yml` runs `cargo clippy --workspace --all-targets
   -- -D warnings` and `cargo test --workspace` on every push to
   main and every PR.
 - `.github/workflows/quality-gate.yml` is the shared reusable
-  workflow both CI and release pipelines call.
+  workflow both CI and release pipelines call — the release
+  short-circuits if the gate fails.
 
-When the project goes public, cutting a release will be: push a
-remote, push a `v0.1.0` tag, the workflow auto-publishes
-prebuilt binaries + a one-line shell installer. That handoff is
-the deferred Task 7 of Phase 61 and reopens as a focused
-micro-phase.
+Cutting a release is a single step: `git tag v0.1.0 && git push
+origin v0.1.0`, and the workflow publishes the binaries + installer.
 
 ## Architecture at a glance
 
