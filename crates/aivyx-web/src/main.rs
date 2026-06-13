@@ -1,18 +1,20 @@
-//! Aivyx — a Dioxus (Rust→WASM) browser client (Chapter M).
+//! Aivyx Studio — a Dioxus (Rust→WASM) browser client (Chapter M; reskinned to
+//! the **Stitch** design system in Chapter R).
 //!
-//! Two views over the daemon's `/ws` bridge, speaking the protocol through the
-//! shared [`aivyx_ipc`] types (the browser sends `serde_json(FrontendMessage)`
+//! Two live views over the daemon's `/ws` bridge, speaking the protocol through
+//! the shared [`aivyx_ipc`] types (the browser sends `serde_json(FrontendMessage)`
 //! and receives `serde_json(DaemonEnvelope)` — what `web_ui.rs` relays):
 //!
-//! - **Missions** (the headline): a live `TeamMissionList` feed, start-a-mission,
-//!   and approve/reject of human gates.
-//! - **Chat** (M.6, for parity with the retired single-file page): submit a
-//!   turn, render the streamed events, and resolve the single-agent gate.
+//! - **Missions**: a live `TeamMissionList` feed, start-a-mission, approve/reject
+//!   of human gates — the Mission-Orchestration look.
+//! - **Chat**: submit a turn, render streamed events, resolve the single-agent
+//!   gate — the Terminal look.
 //!
-//! The WebSocket lives in one [`use_coroutine`] task; the poll loop and every UI
-//! handler `.send()` a `FrontendMessage` to it, and a sibling read task fans the
-//! inbound envelopes into the view signals. Browser behavior is verified when
-//! served (M.5) — the in-repo proof is `cargo build --target wasm32` + clippy.
+//! Chapter R is **presentation-only**: the shell (Sidebar / Topbar / StatusBar),
+//! the Stitch token CSS, self-hosted fonts and brand icons, and a small component
+//! kit. The WebSocket task, the `aivyx_ipc` data flow, and every handler are
+//! unchanged from Chapter M. Stitch tokens are the single source of truth
+//! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
     DaemonEnvelope, FrontendMessage, QueryPayload, QueryResponsePayload, StreamEventPayload,
@@ -25,6 +27,23 @@ use gloo_net::websocket::{futures::WebSocket, Message};
 use gloo_timers::future::TimeoutFuture;
 
 const POLL_INTERVAL_MS: u32 = 1500;
+
+// ── Bundled assets (every asset goes through `asset!()` so it lands in the
+//    bundle and is served offline by the daemon — no CDN). ──────────────────
+const STITCH_CSS: Asset = asset!("/assets/stitch.css");
+const FAVICON: Asset = asset!("/assets/logos/aivyx-favicon.svg");
+const LOGOMARK: Asset = asset!("/assets/logos/aivyx-logomark.svg");
+const FONT_DISPLAY: Asset = asset!("/assets/fonts/space-grotesk-var.woff2");
+const FONT_BODY: Asset = asset!("/assets/fonts/inter-var.woff2");
+const FONT_MONO: Asset = asset!("/assets/fonts/jetbrains-mono-var.woff2");
+const ICON_COMMAND: Asset = asset!("/assets/icons/command-center.svg");
+const ICON_CHAT: Asset = asset!("/assets/icons/chat.svg");
+const ICON_MISSIONS: Asset = asset!("/assets/icons/missions.svg");
+const ICON_TEAMS: Asset = asset!("/assets/icons/teams.svg");
+const ICON_AGENTS: Asset = asset!("/assets/icons/agents.svg");
+const ICON_MEMORY: Asset = asset!("/assets/icons/memory.svg");
+const ICON_SETTINGS: Asset = asset!("/assets/icons/settings.svg");
+const ICON_THEME: Asset = asset!("/assets/icons/theme-toggle.svg");
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -87,10 +106,32 @@ fn main() {
     dioxus::launch(App);
 }
 
+/// Set `data-theme` on `<html>` so the `[data-theme="light"]` token overrides
+/// cascade to `:root` + `body` (dark is the default — no attribute).
+fn apply_theme(light: bool) {
+    if let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element())
+    {
+        let _ = el.set_attribute("data-theme", if light { "light" } else { "dark" });
+    }
+}
+
+/// `@font-face` rules built from the hashed asset paths (so the fonts always
+/// resolve to the bundled, offline woff2 — not a CDN).
+fn font_faces() -> String {
+    format!(
+        "@font-face{{font-family:'Space Grotesk';src:url('{FONT_DISPLAY}') format('woff2');font-weight:300 700;font-display:swap;}}\
+         @font-face{{font-family:'Inter';src:url('{FONT_BODY}') format('woff2');font-weight:100 900;font-display:swap;}}\
+         @font-face{{font-family:'JetBrains Mono';src:url('{FONT_MONO}') format('woff2');font-weight:100 800;font-display:swap;}}"
+    )
+}
+
 #[component]
 fn App() -> Element {
     let view = use_signal(|| View::Missions);
     let connected = use_signal(|| false);
+    let light = use_signal(|| false);
     let missions = use_signal(Vec::<TeamMissionView>::new);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
@@ -106,6 +147,9 @@ fn App() -> Element {
     use_context_provider(|| streaming);
     use_context_provider(|| gate);
 
+    // Reflect the theme signal onto `<html data-theme>`.
+    use_effect(move || apply_theme(light()));
+
     // Poll the mission feed on the interval through the same socket.
     use_future(move || async move {
         loop {
@@ -117,58 +161,130 @@ fn App() -> Element {
         }
     });
 
+    let title = match view() {
+        View::Missions => "Mission Orchestration",
+        View::Chat => "Terminal",
+    };
+
     rsx! {
-        style { {STYLE} }
+        document::Link { rel: "icon", href: FAVICON }
+        document::Stylesheet { href: STITCH_CSS }
+        style { {font_faces()} }
         div { class: "app",
-            Topbar { view, connected: connected() }
-            match view() {
-                View::Missions => rsx! { MissionsPanel { missions: missions() } },
-                View::Chat => rsx! { ChatPanel {} },
+            Sidebar { view }
+            div { class: "main",
+                Topbar { title, connected: connected(), light }
+                div { class: "view fade-in",
+                    match view() {
+                        View::Missions => rsx! { MissionsPanel { missions: missions() } },
+                        View::Chat => rsx! { ChatPanel {} },
+                    }
+                }
+            }
+            StatusBar { connected: connected() }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// App shell — Sidebar / Topbar / StatusBar
+// ---------------------------------------------------------------------------
+
+#[component]
+fn Sidebar(view: Signal<View>) -> Element {
+    rsx! {
+        aside { class: "sidebar",
+            div { class: "brand-lockup",
+                img { src: LOGOMARK, alt: "Aivyx" }
+                span { class: "wordmark", "AIVYX" }
+            }
+            NavItem { icon: ICON_MISSIONS, label: "Missions", active: view() == View::Missions,
+                onclick: move |_| view.set(View::Missions) }
+            NavItem { icon: ICON_CHAT, label: "Chat", active: view() == View::Chat,
+                onclick: move |_| view.set(View::Chat) }
+            div { class: "nav-section label-tech", "Roadmap" }
+            NavItemSoon { icon: ICON_COMMAND, label: "Command" }
+            NavItemSoon { icon: ICON_TEAMS, label: "Teams" }
+            NavItemSoon { icon: ICON_AGENTS, label: "Agents" }
+            NavItemSoon { icon: ICON_MEMORY, label: "Memory" }
+            NavItemSoon { icon: ICON_SETTINGS, label: "Settings" }
+            div { style: "flex:1" }
+            a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
+        }
+    }
+}
+
+#[component]
+fn NavItem(icon: Asset, label: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
+    rsx! {
+        button {
+            class: if active { "nav-item active" } else { "nav-item" },
+            onclick: move |e| onclick.call(e),
+            span { class: "ico", style: "--ico: url({icon})" }
+            "{label}"
+        }
+    }
+}
+
+#[component]
+fn NavItemSoon(icon: Asset, label: &'static str) -> Element {
+    rsx! {
+        div { class: "nav-item disabled",
+            span { class: "ico", style: "--ico: url({icon})" }
+            "{label}"
+            span { class: "soon", "soon" }
+        }
+    }
+}
+
+#[component]
+fn Topbar(title: &'static str, connected: bool, light: Signal<bool>) -> Element {
+    rsx! {
+        header { class: "topbar",
+            span { class: "title", "{title}" }
+            div { class: "spacer" }
+            div { class: if connected { "status-dot live" } else { "status-dot" },
+                span { class: "beacon" }
+                if connected { "daemon online" } else { "connecting…" }
+            }
+            button {
+                class: "icon-btn",
+                title: "Toggle theme",
+                onclick: move |_| light.toggle(),
+                span { class: "ico", style: "--ico: url({ICON_THEME})" }
             }
         }
     }
 }
 
 #[component]
-fn Topbar(view: Signal<View>, connected: bool) -> Element {
-    let tab = move |v: View, label: &'static str| {
-        let active = view() == v;
-        rsx! {
-            button {
-                class: if active { "tab active" } else { "tab" },
-                onclick: move |_| view.set(v),
-                "{label}"
-            }
-        }
-    };
+fn StatusBar(connected: bool) -> Element {
     rsx! {
-        header { class: "topbar",
-            span { class: "brand", "▌ AIVYX" }
-            nav { class: "tabs",
-                {tab(View::Missions, "Missions")}
-                {tab(View::Chat, "Chat")}
-                // Panes not yet ported to WASM (audit / memory / learning / …).
-                a { class: "tab classic", href: "/classic", "Classic ↗" }
+        footer { class: "statusbar label-tech",
+            div { class: if connected { "seg live" } else { "seg" },
+                span { class: "dot" }
+                if connected { "DAEMON · CONNECTED" } else { "DAEMON · OFFLINE" }
             }
-            span {
-                class: if connected { "dot ok" } else { "dot off" },
-                if connected { "● daemon" } else { "○ connecting…" }
-            }
+            div { class: "seg", "AGENT · NONAGON" }
+            div { class: "seg", "STITCH · v0.1.0" }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Missions view
+// Missions view — the orchestration look
 // ---------------------------------------------------------------------------
 
 #[component]
 fn MissionsPanel(missions: Vec<TeamMissionView>) -> Element {
     rsx! {
         NewMissionBar {}
-        main { class: "feed",
+        div { class: "feed",
             if missions.is_empty() {
-                p { class: "empty", "No team missions yet — start one above." }
+                div { class: "empty card",
+                    p { "No team missions yet." }
+                    p { class: "label-tech", "Start one above to dispatch the Nonagon." }
+                }
             } else {
                 for m in missions.iter() {
                     MissionRow { mission: m.clone() }
@@ -185,7 +301,7 @@ fn NewMissionBar() -> Element {
     rsx! {
         div { class: "newbar",
             input {
-                class: "field",
+                class: "input",
                 placeholder: "new mission goal — e.g. \"audit the deps for CVEs\"",
                 value: "{goal}",
                 oninput: move |e| goal.set(e.value()),
@@ -197,12 +313,12 @@ fn NewMissionBar() -> Element {
                 },
             }
             button {
-                class: "primary",
+                class: "btn btn-primary",
                 onclick: move |_| {
                     let g = goal().trim().to_string();
                     if !g.is_empty() { ws.send(start_query(g)); goal.set(String::new()); }
                 },
-                "Start"
+                "Run"
             }
         }
     }
@@ -213,16 +329,16 @@ fn MissionRow(mission: TeamMissionView) -> Element {
     let pct = mission.progress.min(100);
     let awaiting = mission.phase == TeamMissionPhase::AwaitingApproval;
     rsx! {
-        div { class: "mission",
+        div { class: "glass-card mission",
             div { class: "row1",
-                span { class: "phase {phase_class(mission.phase)}", "{phase_label(mission.phase)}" }
+                span { class: "chip {phase_class(mission.phase)}", "{phase_label(mission.phase)}" }
                 span { class: "goal", "{mission.goal}" }
-                span { class: "lead", "{mission.lead}" }
+                span { class: "lead label-tech", "{mission.lead}" }
             }
-            div { class: "bar", div { class: "fill", style: "width: {pct}%;" } }
+            div { class: "progress", div { class: "fill", style: "width: {pct}%;" } }
             div { class: "steps",
                 for step in mission.steps.iter() {
-                    span { class: "step", "{step.label}" }
+                    span { class: "step label-tech", "{step.label}" }
                 }
             }
             if awaiting {
@@ -242,23 +358,23 @@ fn GateControls(mission_id: String, step: String) -> Element {
     let label = step.clone();
     rsx! {
         div { class: "gate",
-            span { class: "gate-label", "⚑ awaiting approval: {label}" }
+            span { class: "gate-label", "⚑ awaiting approval — {label}" }
             button {
-                class: "ok",
+                class: "btn btn-sage",
                 onclick: move |_| ws.send(resolve_team_query(approve.0.clone(), approve.1.clone(), true)),
-                "approve"
+                "Approve Sequence"
             }
             button {
-                class: "danger",
+                class: "btn btn-ghost-danger",
                 onclick: move |_| ws.send(resolve_team_query(reject.0.clone(), reject.1.clone(), false)),
-                "reject"
+                "Reject"
             }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Chat view (M.6)
+// Chat view — the terminal look
 // ---------------------------------------------------------------------------
 
 #[component]
@@ -272,7 +388,7 @@ fn ChatPanel() -> Element {
     let ready = session().is_some();
 
     rsx! {
-        main { class: "chat",
+        div { class: "chat",
             div { class: "transcript",
                 for line in transcript().iter() {
                     div { class: "{line.class()}", "{line.text}" }
@@ -281,7 +397,7 @@ fn ChatPanel() -> Element {
                     div { class: "line asst streaming", "{streaming}" }
                 }
                 if transcript().is_empty() && streaming().is_empty() {
-                    p { class: "empty", "Send a message to start a turn." }
+                    p { class: "empty label-tech", "Send a message to start a turn." }
                 }
             }
             if let Some(g) = gate() {
@@ -289,7 +405,7 @@ fn ChatPanel() -> Element {
             } else {
                 div { class: "composer",
                     input {
-                        class: "field",
+                        class: "input",
                         placeholder: if ready { "message…" } else { "connecting…" },
                         disabled: !ready,
                         value: "{input}",
@@ -307,7 +423,7 @@ fn ChatPanel() -> Element {
                         },
                     }
                     button {
-                        class: "primary",
+                        class: "btn btn-primary",
                         disabled: !ready,
                         onclick: move |_| {
                             if let Some(sid) = session() {
@@ -334,30 +450,30 @@ fn GatePrompt(gate: GateInfo) -> Element {
     let approve = (gate.mission_id.clone(), gate.gate_id.clone());
     let reject = (gate.mission_id.clone(), gate.gate_id.clone());
     rsx! {
-        div { class: "gateprompt",
+        div { class: "glass-card gateprompt",
             span { class: "gate-label", "⚑ approval needed — {gate.reason}" }
             button {
-                class: "ok",
+                class: "btn btn-sage",
                 onclick: move |_| {
                     ws.send(resolve_gate_query(approve.0.clone(), approve.1.clone(), true));
                     gate_sig.set(None);
                 },
-                "approve"
+                "Approve"
             }
             button {
-                class: "danger",
+                class: "btn btn-ghost-danger",
                 onclick: move |_| {
                     ws.send(resolve_gate_query(reject.0.clone(), reject.1.clone(), false));
                     gate_sig.set(None);
                 },
-                "reject"
+                "Reject"
             }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Wire helpers + the WebSocket task
+// Wire helpers + the WebSocket task (unchanged from Chapter M)
 // ---------------------------------------------------------------------------
 
 fn start_query(goal: String) -> FrontendMessage {
@@ -401,9 +517,9 @@ fn phase_label(p: TeamMissionPhase) -> &'static str {
 fn phase_class(p: TeamMissionPhase) -> &'static str {
     match p {
         TeamMissionPhase::AwaitingApproval => "amber",
-        TeamMissionPhase::Done => "ok",
-        TeamMissionPhase::Rejected => "err",
-        _ => "lav",
+        TeamMissionPhase::Done => "sage",
+        TeamMissionPhase::Rejected => "error",
+        _ => "",
     }
 }
 
@@ -493,49 +609,3 @@ fn ws_url() -> String {
     let host = location.host().unwrap_or_else(|_| "127.0.0.1".to_string());
     format!("{scheme}://{host}/ws")
 }
-
-const STYLE: &str = r#"
-:root { --bg:#0d0f12; --fg:#e6e6e6; --dim:#7a8290; --amber:#e0a458; --lav:#9b8cff; --ok:#5fd07a; --err:#e0566a; --border:#222730; --field:#161a21; }
-* { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.app { max-width: 980px; margin: 0 auto; padding: 0 16px; display:flex; flex-direction:column; height:100vh; }
-.topbar { display:flex; align-items:center; gap:14px; padding:14px 0; border-bottom:1px solid var(--border); }
-.brand { color:var(--amber); font-weight:700; }
-.tabs { display:flex; gap:6px; }
-.tab { background:transparent; color:var(--dim); border:0; padding:4px 10px; border-radius:6px; font:inherit; cursor:pointer; }
-.tab.active { color:var(--fg); background:#1a1e26; }
-.dot { margin-left:auto; font-size:12px; }
-.dot.ok { color:var(--ok); } .dot.off { color:var(--dim); }
-.newbar { display:flex; gap:8px; padding:14px 0; }
-.field { flex:1; background:var(--field); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font:inherit; }
-.field:focus { outline:none; border-color:var(--lav); }
-.primary { background:var(--lav); color:#0d0f12; border:0; border-radius:6px; padding:8px 16px; font:inherit; font-weight:700; cursor:pointer; }
-.primary:disabled { opacity:.4; cursor:default; }
-.feed { padding:8px 0 24px; display:flex; flex-direction:column; gap:12px; overflow-y:auto; }
-.empty { color:var(--dim); }
-.mission { border:1px solid var(--border); border-radius:8px; padding:12px; }
-.row1 { display:flex; gap:12px; align-items:baseline; }
-.phase { font-size:12px; text-transform:uppercase; }
-.phase.amber{color:var(--amber);} .phase.ok{color:var(--ok);} .phase.err{color:var(--err);} .phase.lav{color:var(--lav);}
-.goal { flex:1; }
-.lead { color:var(--dim); font-size:12px; }
-.bar { height:6px; background:#1a1e26; border-radius:3px; margin:8px 0; overflow:hidden; }
-.fill { height:100%; background:var(--lav); }
-.steps { display:flex; flex-wrap:wrap; gap:8px; }
-.step { font-size:12px; color:var(--dim); }
-.gate, .gateprompt { margin-top:10px; display:flex; align-items:center; gap:10px; }
-.gateprompt { padding:10px; border:1px solid var(--amber); border-radius:8px; }
-.gate-label { color:var(--amber); font-size:13px; flex:1; }
-.ok { background:var(--ok); color:#0d0f12; border:0; border-radius:6px; padding:5px 14px; font:inherit; cursor:pointer; }
-.danger { background:transparent; color:var(--err); border:1px solid var(--err); border-radius:6px; padding:5px 14px; font:inherit; cursor:pointer; }
-.chat { flex:1; display:flex; flex-direction:column; min-height:0; padding:12px 0; }
-.transcript { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-bottom:12px; }
-.line { white-space:pre-wrap; }
-.line.op { color:var(--fg); }
-.line.op::before { content:"› "; color:var(--lav); }
-.line.asst { color:var(--fg); }
-.line.sys { color:var(--dim); font-size:13px; }
-.line.err { color:var(--err); }
-.line.streaming::after { content:"▌"; color:var(--lav); }
-.composer { display:flex; gap:8px; padding-top:10px; border-top:1px solid var(--border); }
-"#;

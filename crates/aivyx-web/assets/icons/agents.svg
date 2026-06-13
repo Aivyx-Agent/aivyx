@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Agents</title>
+  <!-- Robot/AI face -->
+  <rect x="4" y="6" width="16" height="14" rx="3"/>
+  <line x1="12" y1="2" x2="12" y2="6"/>
+  <circle cx="12" cy="2" r="1" fill="currentColor" stroke="none"/>
+  <circle cx="9" cy="12" r="1.5"/>
+  <circle cx="15" cy="12" r="1.5"/>
+  <path d="M9 16.5c1 1 2 1.5 3 1.5s2-.5 3-1.5"/>
+</svg>

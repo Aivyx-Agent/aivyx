@@ -21,7 +21,7 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 # `sink` brings SinkExt + StreamExt::split for the WebSocket halves.
 futures-util = { version = "0.3", features = ["sink"] }
 serde_json = { workspace = true }
-web-sys = { version = "0.3", features = ["Location", "Window"] }
+web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element"] }
 console_error_panic_hook = "0.1"
 
 # Excluded from `dist` releases. This crate is the browser GUI and compiles
