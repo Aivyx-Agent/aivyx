@@ -12,18 +12,18 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Chapter K exit, 2026-06-12)
+## Status (Chapter O, 2026-06-13)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → Chapter K (Cost Governance), plus 13 contract amendments |
+| Phases shipped | Phase 0 → Chapter O (Agent Personal Workspace), plus 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
-| Workspace crates | 29 |
-| Rust tests | 4,464 passing |
+| Workspace crates | 32 |
+| Rust tests | 4,576 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 81 |
+| Capability scope bases | 83 |
 | Encrypted storage domains | 20 |
 
 The arc to date, by chapter:
@@ -110,6 +110,42 @@ The arc to date, by chapter:
   turn loop** that refuses a turn before any model call when the daily cap
   would be busted. Free core — observability + safety, not customer billing.
   See [`docs/COST_GOVERNANCE.md`](docs/COST_GOVERNANCE.md).
+- **Chapter L — Daemon-side Teams.** Nonagon moves from a one-shot CLI
+  command into the **daemon**: durable team missions (a `SharedMissionState`
+  over a redb-backed store), **checkpoint/resume** around human-approval
+  gates, a **live TUI Missions feed** (approve / reject inline), goal→plan
+  LLM decomposition, per-call vertical-pack `TeamConfig`, and a `team.run`
+  tool that lets the autonomous loop convene a team. Fire-and-forget,
+  durable, on the one HMAC chain. See [`docs/DAEMON_TEAMS.md`](docs/DAEMON_TEAMS.md).
+- **Chapter M — Web Mission-Control.** A browser GUI for the daemon: a
+  **Dioxus (Rust→WASM)** client that speaks the daemon's wire protocol over a
+  `/ws` bridge, sharing a new **wasm-clean `aivyx-ipc`** protocol crate
+  (+ `aivyx-team-types`) extracted from the channel layer. Missions + Chat
+  views; the daemon serves the embedded WASM bundle with an HTML fallback,
+  and the legacy inspection panes live on at `/classic`. See
+  [`docs/WEB_MISSION_CONTROL.md`](docs/WEB_MISSION_CONTROL.md).
+- **Headless Execution Mode.** A per-run opt-in **non-interactive** mode:
+  at any approval gate a headless run **refuses-and-aborts** rather than
+  hanging on an absent operator — never auto-approving, with confirm-first /
+  irreversible tools *always* blocked. Spans the single-agent turn, team
+  missions, and the operator-absent triggers (loop / cron / webhook /
+  file-watch, which default to headless); every refusal lands a legible
+  `HeadlessRefusal` audit event. See [`docs/HEADLESS_MODE.md`](docs/HEADLESS_MODE.md).
+- **Chapter N — Operator Access Levels.** The operator chooses, as an
+  explicit audited **Setting**, how far the agent reaches into their machine —
+  **sandbox** (default) / **workspace** / **home** / **full** — via
+  `[access] level`, the **`aivyx access`** command, and the init wizard.
+  `fs_root` is the single lever; remote channels stay tier-attenuated (full
+  for *you*, sandboxed for a webhook); irreversible fs ops gate behind a
+  confirm-first seatbelt. See [`docs/ACCESS_LEVELS.md`](docs/ACCESS_LEVELS.md).
+- **Chapter O — Agent Personal Workspace.** The agent gets a room of its
+  own: a dedicated, **always-available** `~/.aivyx/workspace` it owns —
+  distinct from memory (recall facts) and the operator's `fs_root` (shared
+  work) — with `workspace.*` tools, prompt awareness, an **`aivyx workspace
+  ls / cat`** visibility command, and **proactive journaling** (the agent
+  periodically reflects on recent activity and writes to its own journal).
+  Independent of the access level; even a sandboxed agent has its notebook.
+  See [`docs/AGENT_WORKSPACE.md`](docs/AGENT_WORKSPACE.md).
 
 ## Five-minute setup
 
