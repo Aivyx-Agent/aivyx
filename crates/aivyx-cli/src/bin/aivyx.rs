@@ -100,6 +100,8 @@
 mod access;
 #[path = "aivyx_modules/workspace.rs"]
 mod workspace;
+#[path = "aivyx_modules/doctor.rs"]
+mod doctor;
 #[path = "aivyx_modules/audit_export.rs"]
 mod audit_export;
 #[path = "aivyx_modules/identity.rs"]
@@ -558,6 +560,17 @@ fn run() -> Result<(), String> {
             WorkspaceSubcommand::Ls(p) => workspace::run_workspace_ls(p.as_deref()),
             WorkspaceSubcommand::Cat(p) => workspace::run_workspace_cat(&p),
         };
+    }
+
+    // ---- Chapter P: first-run health check -----------------------------
+    // Async (it runs a live test generation), but no daemon/passphrase —
+    // a minimal current-thread runtime, like the persona/profile commands.
+    if let CliMode::Doctor = mode {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to start runtime: {e}"))?;
+        return runtime.block_on(doctor::run_doctor());
     }
 
     // ---- Phase 119 Task 5: role import (PRODUCT.md P9 + P13) ---------
@@ -1533,6 +1546,10 @@ enum CliMode {
     /// the agent's personal workspace. `ls [path]` / `cat <path>` / `path`.
     /// Read-only file ops — no daemon, no passphrase.
     Workspace(WorkspaceSubcommand),
+    /// `aivyx doctor`: Chapter P — first-run health check. Confirms the
+    /// configured provider works (for local: Ollama reachable, model present,
+    /// a real non-empty test reply) and prints actionable fixes. No daemon.
+    Doctor,
     /// `aivyx mcp <subcommand>`: Phase 106 curated-recipes
     /// catalog. Currently only `recipes [<name>]` — list or
     /// print MCP server recipes. Distinct from the
@@ -3490,6 +3507,26 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Workspace(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter P — `aivyx doctor` (no subcommands / args).
+    if !args.is_empty() && args[0] == "doctor" {
+        if args.len() > 1 {
+            return Err(format!(
+                "`aivyx doctor` takes no arguments. Got: `{}`",
+                args[1..].join(" ")
+            ));
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Doctor,
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
