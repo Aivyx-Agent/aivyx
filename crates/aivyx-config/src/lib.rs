@@ -95,6 +95,12 @@ use serde::{Deserialize, Serialize};
 use aivyx_capability::{Scope, TrustTier};
 use aivyx_storage::{KeyDomain, Storage};
 
+// Chapter U — section-scoped writes back to `aivyx.toml` (the shared
+// `[access]` / `[budget]` rewriter used by both `aivyx access set` and the
+// daemon's Settings IPC handlers).
+pub mod config_write;
+pub use config_write::{write_access_section, write_budget_section, ConfigWriteError};
+
 // --------------------------------------------------------------------
 // FieldSource & Sourced<T>
 // --------------------------------------------------------------------

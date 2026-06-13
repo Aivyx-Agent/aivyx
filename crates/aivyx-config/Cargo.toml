@@ -31,6 +31,14 @@ serde = { workspace = true }
 # rationale.
 toml = "0.8"
 
+# Chapter U — section-scoped, comment-preserving writes back to
+# `aivyx.toml` (the `config_write` module). `toml`'s `to_string` would
+# reflow the whole file and drop comments; `toml_edit` patches a single
+# key in place. Same version the CLI's `aivyx access set` writer uses —
+# Chapter U factors that writer into this shared module so the daemon and
+# the CLI never diverge.
+toml_edit = "0.22"
+
 # Storage access for the encrypted-store fall-through. Phase 9 Task 3
 # reads `KeyDomain::Secrets` to hydrate secret fields that env+TOML
 # did not populate. The loader owns a shared `Arc<dyn Storage>` rather

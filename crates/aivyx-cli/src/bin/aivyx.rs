@@ -6890,6 +6890,15 @@ async fn run_async(
             pricing: aivyx_cost::Pricing::with_overrides(
                 config_pricing.clone(),
             ),
+            // Chapter U — the config file the daemon loaded from, so the
+            // Settings IPC handlers can re-read + rewrite `[access]`/`[budget]`
+            // sections via the shared `aivyx_config::config_write` helper. Only
+            // threaded when the file actually exists: an env-only launch leaves
+            // it `None`, and the write handlers refuse rather than fabricate one.
+            config_toml_path: {
+                let p = PathBuf::from(DEFAULT_TOML_PATH);
+                p.exists().then_some(p)
+            },
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

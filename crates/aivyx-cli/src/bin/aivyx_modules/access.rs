@@ -10,8 +10,8 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-use aivyx_config::{AccessLevel, AivyxConfig, FieldSource, LoadOptions};
-use toml_edit::{value, DocumentMut};
+use aivyx_config::{write_access_section, AccessLevel, AivyxConfig, FieldSource, LoadOptions};
+use toml_edit::DocumentMut;
 
 /// Module-local copy of the default config path (mirrors
 /// [`crate::DEFAULT_TOML_PATH`] without coupling to it, same as the other
@@ -62,40 +62,17 @@ pub fn run_access_set(
         }
     }
 
+    // The actual `[access]` rewrite is the shared `aivyx-config` writer —
+    // Chapter U factored it out so the daemon's `SetAccessLevel` IPC handler
+    // and this command write the section identically. The CLI keeps its
+    // flag-phrased validation above and the stdin confirm; the helper performs
+    // the structural rewrite at `0600`.
     let path = Path::new(ACCESS_TOML_PATH);
-    let original = if path.exists() {
-        std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?
-    } else {
-        String::new()
-    };
-    let mut doc = original
-        .parse::<DocumentMut>()
-        .map_err(|e| format!("failed to parse {} as TOML: {e}", path.display()))?;
-
-    doc["access"]["level"] = value(level.as_str());
-    match &root {
-        Some(r) => doc["access"]["root"] = value(r.as_str()),
-        // Switching to a level that derives its root: drop any stale
-        // `[access] root` so it doesn't shadow the derivation.
-        None => {
-            if let Some(t) = doc.get_mut("access").and_then(|a| a.as_table_mut()) {
-                t.remove("root");
-            }
-        }
-    }
-    doc["access"]["confirm_destructive"] = value(level.is_expanded());
-
-    write_aivyx_toml(path, &doc.to_string())?;
+    write_access_section(path, level, root.as_deref()).map_err(|e| e.to_string())?;
 
     // A stray `[fs] root` would override the level-derived reach — warn so
     // the operator isn't surprised that `set home` didn't widen anything.
-    if level.is_expanded()
-        && doc
-            .get("fs")
-            .and_then(|f| f.get("root"))
-            .is_some()
-    {
+    if level.is_expanded() && has_explicit_fs_root(path) {
         eprintln!(
             "  \u{26a0} note: an explicit `[fs] root` is still present and \
              overrides the `{level}` level — remove it to use the derived root."
@@ -181,19 +158,16 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         .map_err(|e| format!("failed to load {ACCESS_TOML_PATH}: {e}"))
 }
 
-fn write_aivyx_toml(path: &Path, contents: &str) -> Result<(), String> {
-    std::fs::write(path, contents)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-    // Match the 0600 posture the other config writers use (the file may
-    // carry secrets in other sections).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, perms)
-            .map_err(|e| format!("failed to set permissions on {}: {e}", path.display()))?;
-    }
-    Ok(())
+/// Whether the file at `path` carries an explicit `[fs] root` — which would
+/// shadow a level-derived reach. Best-effort: a missing or unparseable file is
+/// treated as "no explicit root" (the rewrite already succeeded; this only
+/// gates a courtesy warning).
+fn has_explicit_fs_root(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.parse::<DocumentMut>().ok())
+        .map(|doc| doc.get("fs").and_then(|f| f.get("root")).is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

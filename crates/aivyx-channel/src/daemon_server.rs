@@ -438,6 +438,15 @@ pub struct DaemonConfig {
     /// driver built `Pricing::new()` internally, ignoring overrides).
     /// Defaults to an empty table for test fixtures that don't price.
     pub pricing: aivyx_cost::Pricing,
+    /// Chapter U — path to the `aivyx.toml` the daemon was loaded from, so the
+    /// Settings IPC handlers (`GetSettings` / `SetAccessLevel` / `SetBudget`)
+    /// can re-read the on-disk values and write sections back via the shared
+    /// `aivyx_config::config_write` helper. `None` ⇒ the daemon was launched
+    /// without a config file (env-only, or a test fixture); the write handlers
+    /// then refuse with a typed "no config file" error rather than guessing a
+    /// path. Read-only config (the access level itself) is still load-time —
+    /// a write here only updates the file; it takes effect on the next start.
+    pub config_toml_path: Option<PathBuf>,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -530,6 +539,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         gate_policy,
         workspace_journaling_interval,
         pricing,
+        config_toml_path,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -1268,6 +1278,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             loop_config: loop_config.clone(),
             team_missions: team_missions.clone(),
             gate_policy,
+            config_toml_path: config_toml_path.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1432,6 +1443,13 @@ struct ConnectionContext {
     /// `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate` handlers.
     team_missions: Option<crate::team_mission_driver::TeamMissionService>,
     gate_policy: GatePolicy,
+    /// Chapter U — path to the loaded `aivyx.toml` for the Settings IPC
+    /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
+    /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
+    // Threaded in U.1; first read by the U.2/U.3 Settings IPC handlers — the
+    // `allow` comes off once those land.
+    #[allow(dead_code)]
+    config_toml_path: Option<PathBuf>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1473,6 +1491,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_config,
         team_missions,
         gate_policy,
+        // Threaded in U.1; the U.3 Settings IPC handlers rename this to
+        // `config_toml_path` and read it. Underscored until then.
+        config_toml_path: _config_toml_path,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2496,6 +2517,7 @@ async fn run_single_connection_daemon(
         loop_config: None,
         team_missions: None,
         gate_policy: GatePolicy::default(),
+        config_toml_path: None,
     })
     .await
 }
@@ -2571,6 +2593,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         team_missions: None,
         gate_policy: GatePolicy::default(),
         pricing: Default::default(),
+        config_toml_path: None,
     }).await
 }
 
