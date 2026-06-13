@@ -98,6 +98,8 @@
 
 #[path = "aivyx_modules/access.rs"]
 mod access;
+#[path = "aivyx_modules/workspace.rs"]
+mod workspace;
 #[path = "aivyx_modules/audit_export.rs"]
 mod audit_export;
 #[path = "aivyx_modules/identity.rs"]
@@ -546,6 +548,15 @@ fn run() -> Result<(), String> {
             AccessSubcommand::Set { level, root, yes } => {
                 access::run_access_set(level, root, yes)
             }
+        };
+    }
+
+    // ---- Chapter O: agent-workspace visibility command -----------------
+    if let CliMode::Workspace(sub) = mode {
+        return match sub {
+            WorkspaceSubcommand::Path => workspace::run_workspace_path(),
+            WorkspaceSubcommand::Ls(p) => workspace::run_workspace_ls(p.as_deref()),
+            WorkspaceSubcommand::Cat(p) => workspace::run_workspace_cat(&p),
         };
     }
 
@@ -1518,6 +1529,10 @@ enum CliMode {
     /// reach + posture; `set <level>` rewrites the `[access]` section of
     /// `aivyx.toml`. Synchronous file ops — no daemon, no passphrase.
     Access(AccessSubcommand),
+    /// `aivyx workspace <subcommand>`: Chapter O — operator visibility into
+    /// the agent's personal workspace. `ls [path]` / `cat <path>` / `path`.
+    /// Read-only file ops — no daemon, no passphrase.
+    Workspace(WorkspaceSubcommand),
     /// `aivyx mcp <subcommand>`: Phase 106 curated-recipes
     /// catalog. Currently only `recipes [<name>]` — list or
     /// print MCP server recipes. Distinct from the
@@ -1856,6 +1871,17 @@ enum AccessSubcommand {
         root: Option<String>,
         yes: bool,
     },
+}
+
+/// Chapter O — `aivyx workspace` subcommand variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum WorkspaceSubcommand {
+    /// `aivyx workspace path` — print the workspace directory.
+    Path,
+    /// `aivyx workspace ls [path]` — list the workspace (or a sub-path).
+    Ls(Option<String>),
+    /// `aivyx workspace cat <path>` — print a file from the workspace.
+    Cat(String),
 }
 
 /// Parsed CLI arg bundle. The shape is intentionally closed — each
@@ -3426,6 +3452,44 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Access(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter O — `aivyx workspace <path|ls|cat>`.
+    if !args.is_empty() && args[0] == "workspace" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx workspace` requires a subcommand. Supported: path, \
+             ls [path], cat <path>"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "path" => WorkspaceSubcommand::Path,
+            "ls" | "list" => WorkspaceSubcommand::Ls(args.get(2).cloned()),
+            "cat" => {
+                let p = args.get(2).ok_or_else(|| {
+                    "`aivyx workspace cat` needs a path. Usage: \
+                     `aivyx workspace cat <path>`"
+                        .to_string()
+                })?;
+                WorkspaceSubcommand::Cat(p.clone())
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized workspace subcommand: `{other}`. \
+                     Supported: workspace path, workspace ls [path], \
+                     workspace cat <path>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Workspace(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
