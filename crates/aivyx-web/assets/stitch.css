@@ -446,3 +446,44 @@ a { color: var(--color-primary); text-decoration: none; }
 .line.streaming::after { content: "▌"; color: var(--color-primary); animation: streaming-cursor 1s steps(1) infinite; }
 .composer { display: flex; gap: 10px; padding-top: 12px; }
 .composer .input { flex: 1; }
+
+/* ── Settings view (Chapter U — the first write surface) ───────────────────── */
+.settings { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
+.settings-section { display: flex; flex-direction: column; gap: 12px; }
+.settings-section p { margin: 0; }
+.settings-section .label-tech.sub { color: var(--color-text-disabled); }
+.field-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }
+.field-row label { color: var(--color-text-secondary); }
+.field-row .input { width: 100%; }
+select.input { appearance: none; cursor: pointer; }
+.settings-section .actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 2px; }
+.kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }
+.kv-grid > div { display: flex; flex-direction: column; gap: 2px; }
+.kv-grid > div > div { color: var(--color-text-primary); font-family: var(--font-mono); font-size: 13px; }
+
+/* The honest, defining element: config is load-time, so a write needs a restart. */
+.restart-banner {
+  border-left: 3px solid var(--color-primary);
+  background: rgba(255, 183, 125, 0.06);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.restart-banner strong { color: var(--color-primary); }
+.restart-banner code, .settings code {
+  font-family: var(--font-mono); font-size: 12.5px;
+  background: var(--color-bg-void); padding: 1px 6px; border-radius: 4px;
+  color: var(--color-text-primary);
+}
+.notice { padding: 10px 14px; border-radius: 0.5rem; font-size: 13px; }
+.notice.ok  { background: rgba(77, 139, 106, 0.12); color: var(--color-sage); }
+.notice.err { background: rgba(196, 85, 62, 0.15); color: var(--color-error); }
+
+/* Confirm-first modal (expanded access levels). */
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(8, 7, 12, 0.6);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.modal { max-width: 420px; display: flex; flex-direction: column; gap: 12px; }
+.modal h3 { font-size: 17px; }
+.modal p { margin: 0; color: var(--color-text-secondary); }
+.modal .actions { display: flex; justify-content: flex-end; gap: 10px; }

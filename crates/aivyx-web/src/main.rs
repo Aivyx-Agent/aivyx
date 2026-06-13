@@ -18,7 +18,7 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, FrontendMessage, MemoryEntrySummary, QueryPayload,
-    QueryResponsePayload, StreamEventPayload,
+    QueryResponsePayload, SettingsSnapshot, StreamEventPayload,
 };
 use aivyx_ipc::{TeamMissionPhase, TeamMissionView};
 
@@ -61,6 +61,7 @@ enum View {
     Missions,
     Chat,
     Memory,
+    Settings,
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -70,6 +71,19 @@ struct MemoryState {
     entries: Vec<MemoryEntrySummary>,
     /// True when a semantic search was transparently served by the keyword path.
     fell_back: bool,
+}
+
+/// Settings screen state — the on-disk config snapshot + the last write outcome.
+/// Chapter U: the first **write** surface, so it also carries a notice banner
+/// and the "restart to apply" flag (config is load-time).
+#[derive(Clone, Default, PartialEq)]
+struct SettingsState {
+    snapshot: Option<SettingsSnapshot>,
+    /// Last write outcome: `(ok, message)`. `None` until the first write.
+    notice: Option<(bool, String)>,
+    /// True after a successful write — a write updates aivyx.toml but the
+    /// running daemon won't pick it up until it restarts.
+    restart_required: bool,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -161,6 +175,7 @@ fn App() -> Element {
     let missions = use_signal(Vec::<TeamMissionView>::new);
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
+    let settings = use_signal(SettingsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -168,10 +183,14 @@ fn App() -> Element {
     let gate = use_signal(|| None::<GateInfo>);
 
     let ws: Sender = use_coroutine(move |rx| {
-        ws_task(rx, missions, dashboard, memory, connected, session, transcript, streaming, gate)
+        ws_task(
+            rx, missions, dashboard, memory, settings, connected, session, transcript, streaming,
+            gate,
+        )
     });
     use_context_provider(|| ws);
     use_context_provider(|| memory);
+    use_context_provider(|| settings);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
@@ -214,6 +233,7 @@ fn App() -> Element {
         View::Missions => "Mission Orchestration",
         View::Chat => "Terminal",
         View::Memory => "Memory",
+        View::Settings => "Settings",
     };
 
     rsx! {
@@ -233,6 +253,7 @@ fn App() -> Element {
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
                         View::Chat => rsx! { ChatPanel {} },
                         View::Memory => rsx! { MemoryPanel {} },
+                        View::Settings => rsx! { SettingsPanel {} },
                     }
                 }
             }
@@ -261,10 +282,11 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Chat) }
             NavItem { icon: ICON_MEMORY, label: "Memory", active: view() == View::Memory,
                 onclick: move |_| view.set(View::Memory) }
+            NavItem { icon: ICON_SETTINGS, label: "Settings", active: view() == View::Settings,
+                onclick: move |_| view.set(View::Settings) }
             div { class: "nav-section label-tech", "Roadmap" }
             NavItemSoon { icon: ICON_TEAMS, label: "Teams" }
             NavItemSoon { icon: ICON_AGENTS, label: "Agents" }
-            NavItemSoon { icon: ICON_SETTINGS, label: "Settings" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
         }
@@ -860,6 +882,278 @@ fn rel_time_secs(secs: u64) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Settings — the first config write surface (Chapter U)
+// ---------------------------------------------------------------------------
+
+#[component]
+fn SettingsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let settings = use_context::<Signal<SettingsState>>();
+
+    // Editable form state, seeded from the on-disk snapshot.
+    let mut level = use_signal(String::new);
+    let mut root = use_signal(String::new);
+    let mut per_run = use_signal(String::new);
+    let mut per_day = use_signal(String::new);
+    let mut on_exceeded = use_signal(|| "deny".to_string());
+    let mut alert_at = use_signal(String::new);
+    let mut confirm_open = use_signal(|| false);
+    // The snapshot the form was last seeded from — so a write *error* (snapshot
+    // unchanged) doesn't wipe the operator's in-progress edits.
+    let mut last_seed = use_signal(|| None::<SettingsSnapshot>);
+
+    // Load the current settings when the view opens.
+    use_future(move || async move {
+        ws.send(get_settings_query());
+    });
+
+    // Seed the form whenever the snapshot content changes (first load + after a
+    // successful write), but not on a notice-only change.
+    use_effect(move || {
+        let snap = settings().snapshot.clone();
+        if snap != last_seed() {
+            if let Some(s) = snap.as_ref() {
+                level.set(s.access_level.clone());
+                root.set(
+                    if s.access_level == "workspace" || s.access_level == "custom" {
+                        s.fs_root.clone()
+                    } else {
+                        String::new()
+                    },
+                );
+                per_run.set(s.budget.per_run_usd.map(|v| v.to_string()).unwrap_or_default());
+                per_day.set(s.budget.per_day_usd.map(|v| v.to_string()).unwrap_or_default());
+                on_exceeded.set(s.budget.on_exceeded.clone());
+                alert_at.set(s.budget.alert_at.map(|v| v.to_string()).unwrap_or_default());
+            }
+            last_seed.set(snap);
+        }
+    });
+
+    let st = settings();
+    let snap = match st.snapshot.clone() {
+        Some(s) => s,
+        None => {
+            return rsx! {
+                div { class: "settings",
+                    div { class: "glass-card empty",
+                        p { class: "label-tech", "Loading settings…" }
+                    }
+                }
+            }
+        }
+    };
+
+    let needs_root = level() == "workspace" || level() == "custom";
+    let expanded = level() != "sandbox";
+
+    rsx! {
+        div { class: "settings",
+
+            if st.restart_required {
+                div { class: "glass-card restart-banner",
+                    strong { "Saved — restart the daemon to apply." }
+                    p { class: "label-tech",
+                        "Settings are read once at startup. Run  "
+                        code { "aivyx daemon stop && aivyx daemon run" }
+                    }
+                }
+            }
+
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+
+            // ── Access level (editable, confirm-first on expansion) ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "Access level" }
+                    span { class: "chip", "{snap.access_level}" }
+                }
+                p { class: "label-tech",
+                    "How far the agent can reach on disk. Expanding beyond the sandbox is confirmed first."
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Level" }
+                    select {
+                        class: "input",
+                        value: "{level}",
+                        onchange: move |e| level.set(e.value()),
+                        option { value: "sandbox", "sandbox — ~/aivyx-sandbox" }
+                        option { value: "workspace", "workspace — a chosen directory" }
+                        option { value: "home", "home — your home directory" }
+                        option { value: "full", "full — the whole machine" }
+                        option { value: "custom", "custom — a chosen directory" }
+                    }
+                }
+                if needs_root {
+                    div { class: "field-row",
+                        label { class: "label-tech", "Root" }
+                        input {
+                            class: "input",
+                            placeholder: "/path/to/directory",
+                            value: "{root}",
+                            oninput: move |e| root.set(e.value()),
+                        }
+                    }
+                }
+                p { class: "label-tech sub", "Current reach: {snap.fs_root}" }
+                div { class: "actions",
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| {
+                            if expanded {
+                                confirm_open.set(true);
+                            } else {
+                                ws.send(set_access_query(level(), None, false));
+                            }
+                        },
+                        "Apply access level"
+                    }
+                }
+            }
+
+            // ── Budget (editable) ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Budget" } }
+                p { class: "label-tech", "Dollar caps on spend. Leave a cap blank for unlimited." }
+                div { class: "field-row",
+                    label { class: "label-tech", "Per run ($)" }
+                    input {
+                        class: "input", r#type: "number", placeholder: "unlimited",
+                        value: "{per_run}", oninput: move |e| per_run.set(e.value()),
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Per day ($)" }
+                    input {
+                        class: "input", r#type: "number", placeholder: "unlimited",
+                        value: "{per_day}", oninput: move |e| per_day.set(e.value()),
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "On exceeded" }
+                    select {
+                        class: "input", value: "{on_exceeded}",
+                        onchange: move |e| on_exceeded.set(e.value()),
+                        option { value: "deny", "deny — block the call" }
+                        option { value: "alert", "alert — warn, proceed" }
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Alert at (0–1)" }
+                    input {
+                        class: "input", r#type: "number", placeholder: "0.8",
+                        value: "{alert_at}", oninput: move |e| alert_at.set(e.value()),
+                    }
+                }
+                div { class: "actions",
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| ws.send(set_budget_query(
+                            parse_opt_f64(&per_run()),
+                            parse_opt_f64(&per_day()),
+                            Some(on_exceeded()),
+                            parse_opt_f64(&alert_at()),
+                        )),
+                        "Save budget"
+                    }
+                }
+            }
+
+            // ── Provider / model (read-only — change via `aivyx init`) ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Model" } span { class: "chip", "read-only" } }
+                div { class: "kv-grid",
+                    div { span { class: "label-tech", "Provider" } div { "{snap.provider}" } }
+                    div { span { class: "label-tech", "Model" } div { "{snap.model}" } }
+                    div {
+                        span { class: "label-tech", "Context" }
+                        div { {snap.num_ctx.map(|n| n.to_string()).unwrap_or_else(|| "default".to_string())} }
+                    }
+                    div {
+                        span { class: "label-tech", "Embeddings" }
+                        div { {if snap.embeddings_available { "available" } else { "off" }} }
+                    }
+                }
+                p { class: "label-tech sub", "Change the provider, model, or keys with  " code { "aivyx init" } }
+            }
+        }
+
+        // Confirm-first modal for expanded access levels (Chapter N posture).
+        if confirm_open() {
+            div { class: "modal-scrim",
+                div { class: "glass-card modal",
+                    h3 { "Grant '{level()}' access?" }
+                    p { "{confirm_blurb(&level())}" }
+                    div { class: "actions",
+                        button { class: "btn btn-glass", onclick: move |_| confirm_open.set(false), "Cancel" }
+                        button {
+                            class: "btn btn-primary",
+                            onclick: move |_| {
+                                let r = if needs_root { Some(root()) } else { None };
+                                ws.send(set_access_query(level(), r, true));
+                                confirm_open.set(false);
+                            },
+                            "Grant access"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn get_settings_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-get".to_string(),
+        payload: QueryPayload::GetSettings,
+    }
+}
+
+fn set_access_query(level: String, root: Option<String>, confirm: bool) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-access".to_string(),
+        payload: QueryPayload::SetAccessLevel { level, root, confirm },
+    }
+}
+
+fn set_budget_query(
+    per_run_usd: Option<f64>,
+    per_day_usd: Option<f64>,
+    on_exceeded: Option<String>,
+    alert_at: Option<f64>,
+) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-budget".to_string(),
+        payload: QueryPayload::SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at },
+    }
+}
+
+/// Parse a numeric form field: empty ⇒ `None` (clear / unlimited), unparseable
+/// ⇒ `None` (the daemon validates and reports anything truly wrong).
+fn parse_opt_f64(s: &str) -> Option<f64> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse().ok()
+    }
+}
+
+/// The confirm-modal blurb for an expanded access level.
+fn confirm_blurb(level: &str) -> String {
+    match level {
+        "full" => "This grants access to the ENTIRE filesystem, including system files.".to_string(),
+        "home" => "This grants full read / write / shell across your home directory.".to_string(),
+        "workspace" | "custom" => {
+            "This grants full read / write / shell within the chosen directory.".to_string()
+        }
+        _ => "This reaches beyond the default sandbox.".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Wire helpers + the WebSocket task (unchanged from Chapter M)
 // ---------------------------------------------------------------------------
 
@@ -918,6 +1212,7 @@ async fn ws_task(
     mut missions: Signal<Vec<TeamMissionView>>,
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
+    mut settings: Signal<SettingsState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -988,6 +1283,29 @@ async fn ws_task(
                     let mut m = memory.write();
                     m.entries = matches;
                     m.fell_back = fell_back_to_keyword;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetSettings { settings: snap },
+                    ..
+                } => {
+                    settings.write().snapshot = Some(snap);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::SettingsApplied { settings: snap, restart_required },
+                    ..
+                } => {
+                    let mut s = settings.write();
+                    s.snapshot = Some(snap);
+                    s.restart_required = restart_required;
+                    s.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                }
+                // Route a Settings write/read failure to its panel (the query
+                // ids are prefixed so other QueryErrors don't hijack the banner).
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-settings") => {
+                    settings.write().notice = Some((false, message));
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),
