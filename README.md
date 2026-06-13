@@ -12,15 +12,15 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Chapter O, 2026-06-13)
+## Status (Chapter P, 2026-06-13)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → Chapter O (Agent Personal Workspace), plus 13 contract amendments |
+| Phases shipped | Phase 0 → Chapter P (Local First-Run Reliability), plus 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Wired, dormant** — cargo-dist + GitHub Actions ready for Linux x86_64/aarch64 + macOS x86_64/aarch64; first published release pending public hosting |
 | Workspace crates | 32 |
-| Rust tests | 4,576 passing |
+| Rust tests | 4,582 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 83 |
@@ -146,6 +146,15 @@ The arc to date, by chapter:
   periodically reflects on recent activity and writes to its own journal).
   Independent of the access level; even a sandboxed agent has its notebook.
   See [`docs/AGENT_WORKSPACE.md`](docs/AGENT_WORKSPACE.md).
+- **Chapter P — Local First-Run Reliability.** Make the free
+  *"runs-on-your-hardware, no API key"* (Ollama) on-ramp **just work** for a
+  new user. Auto-detects the model's native context window so `num_ctx` no
+  longer starves generation (the bare config used to emit one token);
+  recommends + offers to **pull** a vetted **tool-capable** model (`qwen3:8b`);
+  handles thinking-models and their tool-calls transparently; and adds
+  **`aivyx doctor`** — a first-run health check that confirms a real, non-empty
+  test reply and says exactly what to fix when it can't. Zero-config local
+  path; cloud untouched. See [`docs/LOCAL_FIRST_RUN.md`](docs/LOCAL_FIRST_RUN.md).
 
 ## Five-minute setup
 

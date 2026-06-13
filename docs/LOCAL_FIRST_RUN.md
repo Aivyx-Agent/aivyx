@@ -81,6 +81,14 @@ Observed live while testing local models this build:
 | **P.4** | `aivyx doctor` + end-of-wizard verification. |
 | **P.5** | Docs (`INSTALL.md`), README, memory; tee up the Publish chapter. |
 
+**Status: P.0–P.5 complete and verified live.** A bare `provider=ollama,
+model=qwen3.6:27b` config now returns full responses (was 1 token); the 9B tier
+emits tool calls correctly; `aivyx doctor` reports green (`test reply OK: "OK"`)
+and gives an actionable pull hint on a missing model. The recommended model is
+`qwen3:8b` (tool-capable qwen3, verified family). **Next chapter: Publish** —
+activate the cargo-dist pipeline into downloadable binaries + a one-line
+installer, now that the local on-ramp is solid.
+
 ---
 
 ## 4. Out of scope (the follow-on)

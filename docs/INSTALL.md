@@ -77,7 +77,18 @@ key, no network egress, no per-run cost).
 
 **Prerequisites:**
 - [Ollama](https://ollama.ai) installed and running (`ollama serve`)
-- A model pulled, e.g. `ollama pull llama3.1`
+- A **tool-capable** model pulled — recommended: `ollama pull qwen3:8b`.
+  The agent needs tool-calling, so a small non-tool-caller (e.g.
+  `llama3.2:3b`) won't be useful. `aivyx init` will offer to pull the
+  recommended model for you.
+
+> **Local-model reliability (Chapter P).** Aivyx auto-detects the model's
+> native context window and sizes `num_ctx` for you — no manual
+> `[ollama] num_ctx` needed (the agent prompt would otherwise starve the
+> Ollama default of 4096 down to a single token). Thinking models
+> (qwen3) and their tool-calls are handled transparently. If a first turn
+> ever comes back empty, run **`aivyx doctor`** — it checks Ollama, the
+> model, and a live test reply, and tells you exactly what to fix.
 
 **Interactive session** — `scripts/dev-run.sh` builds `aivyx` and
 drops you into a chat REPL:
