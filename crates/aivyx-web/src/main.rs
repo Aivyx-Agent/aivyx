@@ -167,6 +167,7 @@ fn App() -> Element {
     };
 
     rsx! {
+        document::Title { "Aivyx Studio" }
         document::Link { rel: "icon", href: FAVICON }
         document::Stylesheet { href: STITCH_CSS }
         style { {font_faces()} }

@@ -18,6 +18,9 @@ build-web:
     cd crates/aivyx-web && dx bundle --release --platform web
     rm -rf crates/aivyx-web/dist && mkdir -p crates/aivyx-web/dist
     cp -r target/dx/aivyx-web/release/web/public/. crates/aivyx-web/dist/
+    # Drop the brotli pre-compressed twins — the daemon serves the plain assets
+    # and embeds everything under dist/, so the .br files are dead weight.
+    find crates/aivyx-web/dist -name '*.br' -delete
     @echo "bundle → crates/aivyx-web/dist/; rebuild the daemon to embed it:"
     @echo "  cargo build -p aivyx-cli --bin aivyx --release"
 

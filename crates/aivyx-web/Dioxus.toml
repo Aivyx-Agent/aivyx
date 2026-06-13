@@ -1,0 +1,7 @@
+[application]
+name = "aivyx-web"
+
+[web.app]
+# The static document title (before the WASM mounts and `document::Title`
+# takes over). Keeps the browser tab on-brand from first paint.
+title = "Aivyx Studio"
