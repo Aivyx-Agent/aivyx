@@ -29,6 +29,13 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Build ONLY the packages that ship a release artifact (aivyx-cli → the
+# `aivyx` binary), not the whole workspace. Without this, cargo-dist does a
+# single workspace-wide "fat build" that also compiles default-member crates
+# like `aivyx-voice` (cpal → alsa-sys), which fails on the musl Linux targets
+# (no ALSA, and ALSA doesn't fit a static-musl binary). `aivyx-cli`'s default
+# feature set excludes voice, so a precise per-package build never touches it.
+precise-builds = true
 # Phase 61 Task 4 — make the release pipeline's `plan` job depend
 # on the shared quality-gate reusable workflow at
 # `.github/workflows/quality-gate.yml`. This causes the entire
