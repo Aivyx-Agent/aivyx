@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
 use aivyx_config::AccessLevel;
+use aivyx_llm::ollama::RECOMMENDED_LOCAL_MODEL;
 use aivyx_llm::verify::{verify_provider_credentials, VerifyError, VerifyProvider};
 use aivyx_llm::LlmProvider;
 
@@ -33,15 +34,17 @@ const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 /// 25); current flagship is `gpt-4.1`.
 const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 
-/// Phase 104 — printed when `list_ollama_models` returns an
-/// empty list. Replaces the Phase 44 hint `"Run \`ollama pull
-/// <model>\` first."` (which named no concrete model) with a
-/// single copy-pasteable command per Q4(a). `llama3.2:3b` is
-/// small enough to download in seconds yet capable enough to
-/// drive a real conversation — the right tier for a fresh-
-/// laptop first turn.
-const OLLAMA_EMPTY_HINT: &str =
-    "No local models found.\nTry: ollama pull llama3.2:3b";
+/// Printed when `list_ollama_models` returns an empty list. Chapter P:
+/// names the **tool-capable** recommended model (`RECOMMENDED_LOCAL_MODEL`)
+/// rather than a small non-tool-caller — the agent needs tool-calling to be
+/// useful, so the first-run model must support it.
+fn ollama_empty_hint() -> String {
+    format!(
+        "No local models found.\n\
+         The agent needs a tool-capable model. Recommended: \
+         `ollama pull {RECOMMENDED_LOCAL_MODEL}`",
+    )
+}
 
 /// Connect timeout for Ollama detection — short so the wizard
 /// doesn't hang when Ollama isn't running.
@@ -1300,17 +1303,28 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         Provider::Ollama => {
             let models = list_ollama_models(base_url).await.unwrap_or_default();
             let model = if models.is_empty() {
-                eprintln!("{OLLAMA_EMPTY_HINT}");
-                let m = prompt_line("Model name: ", &mut reader, &mut writer)?;
+                eprintln!("{}", ollama_empty_hint());
+                let m = prompt_line(
+                    &format!("Model name [{RECOMMENDED_LOCAL_MODEL}]: "),
+                    &mut reader,
+                    &mut writer,
+                )?;
                 if m.is_empty() {
-                    return Err("model name cannot be empty".into());
+                    RECOMMENDED_LOCAL_MODEL.to_string()
+                } else {
+                    m
                 }
-                m
             } else {
                 writeln!(writer, "\nAvailable models:")
                     .map_err(|e| format!("write error: {e}"))?;
                 let opts: Vec<&str> = models.iter().map(|s| s.as_str()).collect();
-                let idx = prompt_choice("Model", &opts, 0, &mut reader, &mut writer)?;
+                // Default the cursor to the recommended model if it's already
+                // pulled; otherwise the first listed model.
+                let default_idx = models
+                    .iter()
+                    .position(|m| m == RECOMMENDED_LOCAL_MODEL)
+                    .unwrap_or(0);
+                let idx = prompt_choice("Model", &opts, default_idx, &mut reader, &mut writer)?;
                 models[idx].clone()
             };
             (model, None)
@@ -1998,18 +2012,18 @@ mod tests {
         assert_eq!(DEFAULT_OPENAI_MODEL, "gpt-4.1");
     }
 
-    /// Phase 104 — pin the empty-Ollama-models hint string so the
-    /// `ollama pull llama3.2:3b` suggestion can't silently
-    /// regress to a hint-with-no-model-name future.
+    /// Pin the empty-Ollama-models hint so it always names a concrete,
+    /// tool-capable pull command (Chapter P: the recommended model).
     #[test]
     fn ollama_empty_hint_includes_concrete_pull_command() {
+        let hint = ollama_empty_hint();
         assert!(
-            OLLAMA_EMPTY_HINT.contains("ollama pull llama3.2:3b"),
-            "Ollama empty-list hint should name a concrete model: {OLLAMA_EMPTY_HINT:?}",
+            hint.contains(&format!("ollama pull {RECOMMENDED_LOCAL_MODEL}")),
+            "Ollama empty-list hint should name the recommended model: {hint:?}",
         );
         assert!(
-            OLLAMA_EMPTY_HINT.contains("No local models found"),
-            "hint should still name the condition: {OLLAMA_EMPTY_HINT:?}",
+            hint.contains("No local models found"),
+            "hint should still name the condition: {hint:?}",
         );
     }
 

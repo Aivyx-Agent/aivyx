@@ -63,6 +63,14 @@ pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 /// the model's full (often 128k+) native window, which would waste VRAM.
 pub const AUTO_NUM_CTX_CAP: u32 = 16_384;
 
+/// Chapter P — the recommended local model for a fresh first-run. A
+/// **tool-capable** qwen3 model in the ~8B tier: small enough to download on a
+/// normal laptop (~5 GB), big enough to drive the agent's tool-calling, and in
+/// the family verified live against the thinking + non-terminal-tool-call
+/// fixes and auto-`num_ctx` (qwen3 at 9B and 27B). The wizard defaults to it
+/// and offers to pull it; `aivyx doctor` checks for a usable model against it.
+pub const RECOMMENDED_LOCAL_MODEL: &str = "qwen3:8b";
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------

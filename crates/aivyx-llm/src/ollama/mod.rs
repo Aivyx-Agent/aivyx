@@ -35,6 +35,6 @@ pub mod stream;
 pub use jsonl::JsonlReader;
 pub use provider::{
     build_request_body, OllamaConfig, OllamaOptions, OllamaProvider,
-    DEFAULT_OLLAMA_BASE_URL,
+    AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL, RECOMMENDED_LOCAL_MODEL,
 };
 pub use stream::OllamaStream;
