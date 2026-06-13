@@ -283,6 +283,24 @@ async fn serve_bytes(
     );
     stream.write_all(response.as_bytes()).await?;
     stream.write_all(body).await?;
+    stream.flush().await?;
+    // Graceful close. `handle_connection` only *peeks* the request line, so the
+    // client's request bytes are still unread in the receive buffer. Dropping
+    // the socket now would make the OS send a TCP RST instead of a FIN, and that
+    // RST can race ahead and truncate a large in-flight body (e.g. the ~1.7 MB
+    // wasm — small assets finish before it matters, the wasm did not, which left
+    // the browser with a half-streamed module and a blank page). Half-close the
+    // write side (FIN), then drain the read side to EOF so the close is clean.
+    let _ = stream.shutdown().await;
+    let mut sink = [0u8; 1024];
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Ok(n) = stream.read(&mut sink).await {
+            if n == 0 {
+                break;
+            }
+        }
+    })
+    .await;
     Ok(())
 }
 
