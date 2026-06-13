@@ -23,3 +23,10 @@ futures-util = { version = "0.3", features = ["sink"] }
 serde_json = { workspace = true }
 web-sys = { version = "0.3", features = ["Location", "Window"] }
 console_error_panic_hook = "0.1"
+
+# Excluded from `dist` releases. This crate is the browser GUI and compiles
+# ONLY for wasm32-unknown-unknown (web-sys / wasm-bindgen); cargo-dist would
+# otherwise try to build it natively for the Linux/macOS release targets and
+# fail. Only the top-level `aivyx` binary is published as a release artifact.
+[package.metadata.dist]
+dist = false
