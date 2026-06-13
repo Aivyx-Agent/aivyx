@@ -22,6 +22,8 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 futures-util = { version = "0.3", features = ["sink"] }
 serde_json = { workspace = true }
 web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element"] }
+# `Date::now()` for relative timestamps in the Command Center audit feed.
+js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 # Excluded from `dist` releases. This crate is the browser GUI and compiles

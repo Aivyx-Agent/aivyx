@@ -17,9 +17,13 @@
 //! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
-    DaemonEnvelope, FrontendMessage, QueryPayload, QueryResponsePayload, StreamEventPayload,
+    AuditEntrySummary, DaemonEnvelope, FrontendMessage, QueryPayload, QueryResponsePayload,
+    StreamEventPayload,
 };
 use aivyx_ipc::{TeamMissionPhase, TeamMissionView};
+
+/// How many recent audit entries the Command Center feed shows.
+const AUDIT_FEED_N: u32 = 8;
 
 use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
@@ -51,8 +55,18 @@ type Sender = Coroutine<FrontendMessage>;
 /// Top-level view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
+    Command,
     Missions,
     Chat,
+}
+
+/// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
+#[derive(Clone, Default, PartialEq)]
+struct Dashboard {
+    audit_entries: Vec<AuditEntrySummary>,
+    audit_total: u64,
+    chain_ok: Option<bool>,
+    assistant_name: Option<String>,
 }
 
 /// One rendered chat transcript line.
@@ -129,18 +143,20 @@ fn font_faces() -> String {
 
 #[component]
 fn App() -> Element {
-    let view = use_signal(|| View::Missions);
+    let view = use_signal(|| View::Command);
     let connected = use_signal(|| false);
     let light = use_signal(|| false);
     let missions = use_signal(Vec::<TeamMissionView>::new);
+    let dashboard = use_signal(Dashboard::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
     let streaming = use_signal(String::new);
     let gate = use_signal(|| None::<GateInfo>);
 
-    let ws: Sender =
-        use_coroutine(move |rx| ws_task(rx, missions, connected, session, transcript, streaming, gate));
+    let ws: Sender = use_coroutine(move |rx| {
+        ws_task(rx, missions, dashboard, connected, session, transcript, streaming, gate)
+    });
     use_context_provider(|| ws);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
@@ -150,18 +166,37 @@ fn App() -> Element {
     // Reflect the theme signal onto `<html data-theme>`.
     use_effect(move || apply_theme(light()));
 
-    // Poll the mission feed on the interval through the same socket.
+    // Live poll: mission feed + the newest audit tail, every interval. The audit
+    // window self-corrects to the newest entries once `audit_total` is known.
     use_future(move || async move {
         loop {
             ws.send(FrontendMessage::Query {
                 id: "mc-poll".to_string(),
                 payload: QueryPayload::TeamMissionList,
             });
+            let from_seq = dashboard().audit_total.saturating_sub(AUDIT_FEED_N as u64);
+            ws.send(FrontendMessage::Query {
+                id: "mc-audit".to_string(),
+                payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_FEED_N },
+            });
             TimeoutFuture::new(POLL_INTERVAL_MS).await;
         }
     });
 
+    // One-shot: the agent profile + a chain integrity check for the dashboard.
+    use_future(move || async move {
+        ws.send(FrontendMessage::Query {
+            id: "mc-profile".to_string(),
+            payload: QueryPayload::GetProfile,
+        });
+        ws.send(FrontendMessage::Query {
+            id: "mc-verify".to_string(),
+            payload: QueryPayload::VerifyAuditChain,
+        });
+    });
+
     let title = match view() {
+        View::Command => "Command Center",
         View::Missions => "Mission Orchestration",
         View::Chat => "Terminal",
     };
@@ -177,6 +212,9 @@ fn App() -> Element {
                 Topbar { title, connected: connected(), light }
                 div { class: "view fade-in",
                     match view() {
+                        View::Command => rsx! {
+                            CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected() }
+                        },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
                         View::Chat => rsx! { ChatPanel {} },
                     }
@@ -199,12 +237,13 @@ fn Sidebar(view: Signal<View>) -> Element {
                 img { src: LOGOMARK, alt: "Aivyx" }
                 span { class: "wordmark", "AIVYX" }
             }
+            NavItem { icon: ICON_COMMAND, label: "Command", active: view() == View::Command,
+                onclick: move |_| view.set(View::Command) }
             NavItem { icon: ICON_MISSIONS, label: "Missions", active: view() == View::Missions,
                 onclick: move |_| view.set(View::Missions) }
             NavItem { icon: ICON_CHAT, label: "Chat", active: view() == View::Chat,
                 onclick: move |_| view.set(View::Chat) }
             div { class: "nav-section label-tech", "Roadmap" }
-            NavItemSoon { icon: ICON_COMMAND, label: "Command" }
             NavItemSoon { icon: ICON_TEAMS, label: "Teams" }
             NavItemSoon { icon: ICON_AGENTS, label: "Agents" }
             NavItemSoon { icon: ICON_MEMORY, label: "Memory" }
@@ -269,6 +308,176 @@ fn StatusBar(connected: bool) -> Element {
             div { class: "seg", "AGENT · NONAGON" }
             div { class: "seg", "STITCH · v0.1.0" }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Command Center — the home dashboard (read-only)
+// ---------------------------------------------------------------------------
+
+#[component]
+fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected: bool) -> Element {
+    let active = missions
+        .iter()
+        .filter(|m| {
+            !matches!(m.phase, TeamMissionPhase::Done | TeamMissionPhase::Rejected)
+        })
+        .count();
+    let chain = dashboard.chain_ok;
+    rsx! {
+        div { class: "stat-row",
+            StatCard { icon: ICON_MISSIONS, label: "Missions", value: "{missions.len()}", tone: None }
+            StatCard { icon: ICON_COMMAND, label: "Audit Events", value: "{dashboard.audit_total}", tone: None }
+            StatCard { icon: ICON_AGENTS, label: "Active", value: "{active}", tone: None }
+            StatCard { icon: ICON_MEMORY, label: "Chain", value: chain_label(chain).to_string(), tone: chain_tone(chain) }
+        }
+        div { class: "dash-grid",
+            div { class: "dash-main",
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Active Missions" }
+                        span { class: "label-tech", "{missions.len()} total" }
+                    }
+                    if missions.is_empty() {
+                        div { class: "glass-card empty", p { class: "label-tech", "No missions yet — start one from the Missions tab." } }
+                    } else {
+                        div { class: "feed",
+                            for m in missions.iter().take(4) {
+                                DashMissionRow { mission: m.clone() }
+                            }
+                        }
+                    }
+                }
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Audit Trail" }
+                        span { class: "label-tech", "newest {AUDIT_FEED_N}" }
+                    }
+                    AuditFeed { entries: dashboard.audit_entries.clone() }
+                }
+            }
+            aside { class: "dash-rail",
+                AgentStatus { name: dashboard.assistant_name.clone(), connected, chain_ok: chain }
+            }
+        }
+    }
+}
+
+#[component]
+fn StatCard(icon: Asset, label: &'static str, value: String, tone: Option<&'static str>) -> Element {
+    rsx! {
+        div { class: "glass-card stat-card",
+            div { class: "stat-top",
+                span { class: "ico", style: "--ico: url({icon})" }
+                span { class: "label-tech", "{label}" }
+            }
+            span {
+                class: if let Some(t) = tone { "value {t}" } else { "value" },
+                "{value}"
+            }
+        }
+    }
+}
+
+#[component]
+fn DashMissionRow(mission: TeamMissionView) -> Element {
+    let pct = mission.progress.min(100);
+    rsx! {
+        div { class: "glass-card dash-mission",
+            div { class: "row1",
+                span { class: "chip {phase_class(mission.phase)}", "{phase_label(mission.phase)}" }
+                span { class: "goal", "{mission.goal}" }
+            }
+            div { class: "progress", div { class: "fill", style: "width: {pct}%;" } }
+        }
+    }
+}
+
+#[component]
+fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
+    rsx! {
+        div { class: "audit-feed",
+            if entries.is_empty() {
+                p { class: "label-tech empty", "No audit events yet." }
+            } else {
+                // entries arrive oldest→newest; show newest first.
+                for e in entries.iter().rev() {
+                    div { class: "audit-row",
+                        span { class: "ev", "{e.event_type}" }
+                        span { class: "when label-tech", "{rel_time(e.appended_at_unix_ms)}" }
+                        span { class: "seq label-tech", "#{e.seq}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn AgentStatus(name: Option<String>, connected: bool, chain_ok: Option<bool>) -> Element {
+    let agent = name.unwrap_or_else(|| "—".to_string());
+    let chain_class = match chain_tone(chain_ok) {
+        Some(t) => format!("v {t}"),
+        None => "v".to_string(),
+    };
+    let chain = chain_label(chain_ok);
+    rsx! {
+        section { class: "glass-card agent-status",
+            div { class: "panel-head", h3 { "System" } }
+            div { class: "kv",
+                span { class: "label-tech", "Agent" }
+                span { class: "v", "{agent}" }
+            }
+            div { class: "kv",
+                span { class: "label-tech", "Daemon" }
+                span { class: if connected { "v ok" } else { "v off" },
+                    if connected { "online" } else { "offline" }
+                }
+            }
+            div { class: "kv",
+                span { class: "label-tech", "Chain" }
+                span { class: "{chain_class}", "{chain}" }
+            }
+            div { class: "kv",
+                span { class: "label-tech", "Design" }
+                span { class: "v", "Stitch" }
+            }
+        }
+    }
+}
+
+/// "Secure" / "FAILED" / "…" for the chain status.
+fn chain_label(ok: Option<bool>) -> &'static str {
+    match ok {
+        Some(true) => "Secure",
+        Some(false) => "FAILED",
+        None => "…",
+    }
+}
+
+fn chain_tone(ok: Option<bool>) -> Option<&'static str> {
+    match ok {
+        Some(true) => Some("ok"),
+        Some(false) => Some("off"),
+        None => None,
+    }
+}
+
+/// Relative time from a unix-ms timestamp, using the browser clock.
+fn rel_time(ms: u64) -> String {
+    let now = js_sys::Date::now() as u64;
+    if ms == 0 || ms >= now {
+        return "now".to_string();
+    }
+    let secs = (now - ms) / 1000;
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
     }
 }
 
@@ -530,6 +739,7 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
 async fn ws_task(
     mut rx: UnboundedReceiver<FrontendMessage>,
     mut missions: Signal<Vec<TeamMissionView>>,
+    mut dashboard: Signal<Dashboard>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -558,6 +768,26 @@ async fn ws_task(
                     ..
                 } => {
                     missions.set(records.iter().map(|r| r.to_view()).collect());
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
+                    ..
+                } => {
+                    let mut d = dashboard.write();
+                    d.audit_entries = entries;
+                    d.audit_total = total_len;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::VerifyAuditChain { ok, .. },
+                    ..
+                } => {
+                    dashboard.write().chain_ok = Some(ok);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetProfile { profile },
+                    ..
+                } => {
+                    dashboard.write().assistant_name = Some(profile.assistant_name);
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),
