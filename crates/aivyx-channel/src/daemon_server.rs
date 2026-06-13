@@ -3743,6 +3743,15 @@ async fn handle_query(
                 cadence,
             }
         }
+        // Chapter U — the Settings IPC handlers land in U.3. Stubbed here so
+        // the U.2 protocol additions compile and `main` stays green; replaced
+        // with the real GetSettings / SetAccessLevel / SetBudget handlers next.
+        QueryPayload::GetSettings
+        | QueryPayload::SetAccessLevel { .. }
+        | QueryPayload::SetBudget { .. } => QueryResponsePayload::QueryError {
+            code: "not_implemented".into(),
+            message: "settings IPC not yet implemented (Chapter U.3)".into(),
+        },
     }
 }
 

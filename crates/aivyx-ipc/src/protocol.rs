@@ -303,6 +303,44 @@ pub enum QueryPayload {
         step: String,
         approve: bool,
     },
+    /// Chapter U — read the daemon's effective config snapshot for the
+    /// Settings screen: access level + resolved `fs_root` + confirm posture,
+    /// provider / model / `num_ctx`, the `[budget]` caps, and whether an
+    /// embedding provider is available. Read-only; none of this was queryable
+    /// before. Responds with [`QueryResponsePayload::GetSettings`].
+    GetSettings,
+    /// Chapter U — rewrite the `[access]` section of `aivyx.toml`. `level` is
+    /// one of `sandbox | workspace | home | full | custom`; `root` is required
+    /// for `workspace`/`custom` and rejected for the auto-derived levels.
+    /// `confirm` MUST be `true` for any expanded (non-sandbox) level — the
+    /// Chapter N confirm-first gate, enforced **server-side**, not just in the
+    /// UI. The change is written to disk but takes effect on the next daemon
+    /// start (access level is load-time). Responds with
+    /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError` on a
+    /// validation failure / missing config file).
+    SetAccessLevel {
+        level: String,
+        #[serde(default)]
+        root: Option<String>,
+        #[serde(default)]
+        confirm: bool,
+    },
+    /// Chapter U — rewrite the `[budget]` section of `aivyx.toml`. A `None`
+    /// cap clears that dimension (uncapped). `on_exceeded` is `alert | deny`
+    /// (absent ⇒ the `deny` default); `alert_at` is the early-warning fraction
+    /// in `[0.0, 1.0]` (absent ⇒ no early-warning tier). Takes effect on the
+    /// next daemon start. Responds with
+    /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError`).
+    SetBudget {
+        #[serde(default)]
+        per_run_usd: Option<f64>,
+        #[serde(default)]
+        per_day_usd: Option<f64>,
+        #[serde(default)]
+        on_exceeded: Option<String>,
+        #[serde(default)]
+        alert_at: Option<f64>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -647,6 +685,58 @@ pub enum QueryResponsePayload {
         mission_id: String,
         phase: crate::TeamMissionPhase,
     },
+    /// Response to [`QueryPayload::GetSettings`]. Chapter U — the daemon's
+    /// effective config snapshot for the Settings screen.
+    GetSettings {
+        settings: SettingsSnapshot,
+    },
+    /// Response to [`QueryPayload::SetAccessLevel`] / [`QueryPayload::SetBudget`].
+    /// Chapter U — carries the **fresh** snapshot (re-read from disk so the UI
+    /// re-renders from authoritative state) and `restart_required`: `true`
+    /// whenever the change is load-time and won't apply to the running daemon
+    /// until it restarts (always the case today).
+    SettingsApplied {
+        settings: SettingsSnapshot,
+        restart_required: bool,
+    },
+}
+
+/// Chapter U — the daemon's effective config snapshot for the Settings screen.
+/// Wasm-clean plain-field mirror (no `aivyx-config` / `aivyx-cost` dep): the
+/// access half mirrors `aivyx access show`, the budget half mirrors the
+/// `[budget]` caps, and the provider half is read-only context (changed via
+/// `aivyx init`, not this screen — see `docs/FRONTEND.md` §8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingsSnapshot {
+    /// `sandbox | workspace | home | full | custom` (matches `[access] level`).
+    pub access_level: String,
+    /// The resolved filesystem reach the level derives (display string).
+    pub fs_root: String,
+    /// Whether irreversible fs ops confirm first (the expanded-level posture).
+    pub confirm_destructive: bool,
+    /// Provider label — `anthropic | openai | ollama | …` (read-only here).
+    pub provider: String,
+    /// Active model id (read-only here).
+    pub model: String,
+    /// Context window in tokens when known (`num_ctx`), else `None`.
+    pub num_ctx: Option<u32>,
+    /// The `[budget]` dollar caps + alert posture.
+    pub budget: BudgetSnapshot,
+    /// Whether an embedding provider is configured (drives the Memory
+    /// semantic-search availability the operator sees elsewhere).
+    pub embeddings_available: bool,
+}
+
+/// Chapter U — wire mirror of the `[budget]` caps (a plain-field copy of
+/// `aivyx_cost::BudgetConfig` so `aivyx-ipc` stays wasm-clean). A `None` cap
+/// is uncapped; `on_exceeded` is `alert | deny`; `alert_at` is the
+/// early-warning fraction (`None` ⇒ no early-warning tier).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BudgetSnapshot {
+    pub per_run_usd: Option<f64>,
+    pub per_day_usd: Option<f64>,
+    pub on_exceeded: String,
+    pub alert_at: Option<f64>,
 }
 
 /// Phase 119 Task 6 — wire-format per-row dump entry for
@@ -2404,6 +2494,115 @@ mod tests {
         let frame = encode_frame(&resolved).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resolved);
+    }
+
+    // ---- Chapter U Settings IPC round-trip ----
+
+    fn sample_snapshot() -> SettingsSnapshot {
+        SettingsSnapshot {
+            access_level: "home".into(),
+            fs_root: "/home/op".into(),
+            confirm_destructive: true,
+            provider: "ollama".into(),
+            model: "qwen3:8b".into(),
+            num_ctx: Some(16384),
+            budget: BudgetSnapshot {
+                per_run_usd: Some(5.0),
+                per_day_usd: None,
+                on_exceeded: "deny".into(),
+                alert_at: Some(0.8),
+            },
+            embeddings_available: false,
+        }
+    }
+
+    #[test]
+    fn settings_queries_round_trip() {
+        // Each request variant survives a frame round-trip (incl. the
+        // confirm flag and the per-dimension budget caps).
+        let reqs = vec![
+            QueryPayload::GetSettings,
+            QueryPayload::SetAccessLevel {
+                level: "full".into(),
+                root: None,
+                confirm: true,
+            },
+            QueryPayload::SetAccessLevel {
+                level: "custom".into(),
+                root: Some("/srv/agent".into()),
+                confirm: true,
+            },
+            QueryPayload::SetBudget {
+                per_run_usd: Some(2.5),
+                per_day_usd: Some(20.0),
+                on_exceeded: Some("alert".into()),
+                alert_at: Some(0.9),
+            },
+        ];
+        for payload in reqs {
+            let msg = FrontendMessage::Query {
+                id: "s".into(),
+                payload: payload.clone(),
+            };
+            let frame = encode_frame(&msg).expect("encode");
+            let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(decoded, msg, "settings query round-trips");
+        }
+    }
+
+    #[test]
+    fn settings_responses_round_trip() {
+        let snap = sample_snapshot();
+        let responses = vec![
+            QueryResponsePayload::GetSettings {
+                settings: snap.clone(),
+            },
+            QueryResponsePayload::SettingsApplied {
+                settings: snap.clone(),
+                restart_required: true,
+            },
+        ];
+        for payload in responses {
+            let frame = encode_frame(&payload).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, payload, "settings response round-trips with its snapshot");
+        }
+    }
+
+    #[test]
+    fn set_access_level_defaults_root_and_confirm() {
+        // A pre-Chapter-U-shaped or minimal client may omit `root`/`confirm`;
+        // serde defaults must decode them (root: None, confirm: false) so an
+        // expanded-level request without an explicit confirm is *not* silently
+        // treated as confirmed.
+        let json = r#"{"kind":"SetAccessLevel","level":"home"}"#;
+        let decoded: QueryPayload = serde_json::from_str(json).expect("decode");
+        assert_eq!(
+            decoded,
+            QueryPayload::SetAccessLevel {
+                level: "home".into(),
+                root: None,
+                confirm: false,
+            }
+        );
+    }
+
+    #[test]
+    fn set_budget_defaults_all_fields_absent() {
+        // An empty SetBudget clears every cap (all None) and leaves
+        // on_exceeded to the daemon's default — no field is required on the
+        // wire.
+        let json = r#"{"kind":"SetBudget"}"#;
+        let decoded: QueryPayload = serde_json::from_str(json).expect("decode");
+        assert_eq!(
+            decoded,
+            QueryPayload::SetBudget {
+                per_run_usd: None,
+                per_day_usd: None,
+                on_exceeded: None,
+                alert_at: None,
+            }
+        );
     }
 
     // ---- DaemonLifecycleEvent round-trip ----
