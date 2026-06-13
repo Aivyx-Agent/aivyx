@@ -156,7 +156,7 @@ fn render_mission_list(missions: &[TeamMissionRecord]) -> String {
             .to_string();
     }
     let mut sorted: Vec<&TeamMissionRecord> = missions.iter().collect();
-    sorted.sort_by(|a, b| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms));
+    sorted.sort_by_key(|m| std::cmp::Reverse(m.updated_at_unix_ms));
 
     let mut out = format!("{} team mission(s):\n", sorted.len());
     for m in sorted {
