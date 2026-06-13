@@ -348,6 +348,32 @@ parent_role = "researcher"
 # base_url = "https://api.openai.com"  # default for "openai"
 
 # ----------------------------------------------------------------
+# Agent personal workspace (Chapter O)
+# ----------------------------------------------------------------
+#
+# The agent's OWN space — separate from `[fs] root` (the operator's
+# files, governed by `[access]`) and from memory (recall facts). A
+# real directory the agent owns for its thoughts, ideas, plans, and
+# projects, reached by the `workspace.*` tools. Always available
+# regardless of the access level (even a sandboxed agent gets one),
+# and inspectable by the operator with `aivyx workspace ls / cat`.
+#
+# Defaults (no `[workspace]` section): enabled, at `~/.aivyx/workspace`,
+# with proactive journaling on every 6h. Set `enabled = false` to turn
+# the whole subsystem off.
+#
+# [workspace]
+# enabled = true
+# path = "~/.aivyx/workspace"     # override the default location
+#
+# [workspace.journaling]
+# # Proactive journaling: every `interval_secs`, if there has been
+# # recent activity, the agent reflects and appends to its journal on
+# # its own. Bounded — one fire per interval, nothing on an idle window.
+# enabled = true
+# interval_secs = 21600           # 6 hours
+
+# ----------------------------------------------------------------
 # MCP server entries (Phase 24)
 # ----------------------------------------------------------------
 #

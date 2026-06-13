@@ -127,6 +127,18 @@ Absent `[workspace]` ⇒ defaults (enabled, default path, journaling on).
 | **O.5** | Proactive journaling background task. |
 | **O.6** | Docs, example config, memory note. |
 
+**Status: O.0–O.6 complete and verified live.** At `access level = sandbox` the
+agent reads/writes its workspace (independent of `fs_root`); `aivyx workspace
+ls/cat` shows the contents; and with a short journaling interval the agent
+journaled on its own — *"First session booting up… ready to dig in."*
+
+Two notes from the build: (1) a new scope base must be added to BOTH
+`KNOWN_BASES` (so it parses) AND a tier ceiling (`CEILING_TRUSTED`) — the
+effective grant is `(held ∩ tier_ceiling)`, so a base missing from the ceiling
+is silently dropped. (2) Journaling is Trusted-only (`workspace` is in
+`CEILING_TRUSTED` only), so remote-channel agents don't get the workspace by
+default — consistent with `shell.exec` / `fs.delete`.
+
 ---
 
 ## 7. Invariants
