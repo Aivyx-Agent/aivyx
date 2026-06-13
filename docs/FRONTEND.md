@@ -1,0 +1,159 @@
+# Frontend & Brand — the Stitch design system (Chapter R)
+
+> **Status:** design contract + foundation. This is the spec Chapter R builds
+> from (mirrors `docs/ACCESS_LEVELS.md` / `docs/LOCAL_FIRST_RUN.md`).
+>
+> Aivyx has a mature visual identity — **"Stitch"** (*The Neon Cartographer*) —
+> defined in the brand repo (`aivyx-brand/`: `brand-guidelines.md`,
+> `design-tokens.md`, 23 Stitch mockups). But the shipped web app
+> (`crates/aivyx-web`) was a minimal two-tab page with ad-hoc inline CSS. Chapter
+> R **locks Stitch into the Agent's frontend**: real tokens, self-hosted fonts, a
+> proper app-shell, a reusable component kit, and a reskin of the existing screens
+> to match the mockups — while keeping the data flow and local-first guarantees
+> untouched.
+
+---
+
+## 0. The brand in one paragraph
+
+**The Neon Cartographer.** Intelligence that maps unseen territory with warmth
+and precision. Deep **midnight** surfaces layered into hierarchy (void → base →
+surface → raised → elevated → float), grounded by **warm amber** CTAs and a
+**cyber-purple** interactive core, with a **warm-tan** tertiary. No hard 1px
+section lines — boundaries come from surface-tier shifts and **ghost borders**
+(5–10% opacity). Type is a dialogue between human and machine: **Space Grotesk**
+(display), **Inter** (body), **JetBrains Mono** (logic/labels). The mark is a
+single **candle** — warmth, light, privacy: *a flame in your own kitchen, not a
+searchlight in the cloud.* Voice: authoritative, precise, dry. **Tagline: "Your
+AI. Your Machine. Your Rules."**
+
+The single source of truth for every value is `aivyx-brand/design-tokens.md` and
+`aivyx-brand/brand-guidelines.md`. The frontend transcribes them — it never
+invents colors.
+
+---
+
+## 1. Surface = the Agent (Studio). What's in scope.
+
+The Aivyx ecosystem has several surfaces. This contract — and Chapter R — cover
+**only the Studio (the agent app)**, the Dioxus→WASM client served by the daemon
+at `:7843`.
+
+| Surface | What it is | In this chapter? |
+|---|---|---|
+| **Studio** | The agent app (chat, missions, dashboard, settings) | ✅ Yes |
+| **Genesis** | First-run setup wizard (`aivyx init`) | Roadmap (informs the look) |
+| **Unlock** | Vault passphrase screen | Roadmap |
+| **TUI** | The ratatui terminal interface | ❌ Later pass |
+| **Creator** | Node-based visual flow / agent builder | ❌ Separate product |
+| **Nexus** | The agent social network | ❌ Separate product |
+| **Marketing** | The public website | ❌ Out of scope |
+
+Delivery is **web-first**: the existing `aivyx-web` bundle, embedded into the
+daemon and served on localhost. A Tauri/desktop shell can wrap the *same* app
+later; it is not built here.
+
+---
+
+## 2. App-shell layout
+
+The Studio is a classic command-center shell, driven by the layout tokens
+(`--sidebar-width: 220px`, `--status-height: 36px`, optional `--tray-width: 300px`):
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ Topbar:  ▌AIVYX   title / search        ● daemon   ☼ theme │
+├──────────┬────────────────────────────────────────────────┤
+│ Sidebar  │                                                 │
+│ (220px)  │   Main view                                     │
+│ logomark │   (Missions · Chat · …)                         │
+│  ▸ nav   │                                                 │
+│  items   │                          [optional context tray]│
+├──────────┴────────────────────────────────────────────────┤
+│ StatusBar (36px):  mono daemon/agent status · model · …    │
+└───────────────────────────────────────────────────────────┘
+```
+
+- **Sidebar** — logomark + nav. Items reflect *real* daemon capabilities; roadmap
+  items render **disabled ("soon")**, never as half-built panes.
+- **Topbar** — brand/title, connection status dot (`beacon` pulse when live),
+  light/dark toggle.
+- **StatusBar** — `label-tech` mono line: daemon connection, agent, model.
+
+---
+
+## 3. Studio screen inventory (mapped to daemon capabilities)
+
+| Nav item | Maps to | State |
+|---|---|---|
+| **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
+| **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
+| **Command** | dashboard: stat cards + active missions + audit trail | Roadmap |
+| **Teams** | Nonagon roster / vertical packs | Roadmap |
+| **Agents** | persona / soul / profile editor | Roadmap |
+| **Memory** | knowledge graph + ingestion stream | Roadmap |
+| **Documents** | workspace + fs_root browser | Roadmap |
+| **Settings** | access level, providers, budgets | Roadmap |
+| **Voice** | the voice channel | Roadmap |
+
+The reference mockups for the locked look: `aivyx-brand/assets/stitch/`
+`aivyx_command_center`, `aivyx_missions_orchestration`, `the_terminal`.
+
+---
+
+## 4. The mechanisms (how Stitch lands in the bundle)
+
+1. **Token layer.** `crates/aivyx-web/assets/stitch.css` — the full token set as
+   `:root` custom properties (dark default) + `[data-theme="light"]` overrides,
+   transcribed verbatim from `design-tokens.md`, plus base styles: the `bg-depth`
+   gradient canvas, `.label-tech`, glass panel/card/header, ghost separators, and
+   the animation keyframes — all gated behind `prefers-reduced-motion`.
+2. **Self-hosted fonts.** `assets/fonts/*.woff2` (Space Grotesk, Inter, JetBrains
+   Mono — all OFL) with local `@font-face`. **No Google-Fonts CDN** (the mockups'
+   CDN `<link>`s are prototype-only and break offline use).
+3. **Brand icons + logos.** The `aivyx-brand/icons/` stroke SVG set + `icons.css`,
+   and the logomark/wordmark/favicon, bundled as assets. **No Material Symbols
+   CDN.**
+4. **Wiring.** Dioxus `asset!()` + `document::Stylesheet`/`Link` in the rsx head;
+   the inline `STYLE` const is deleted. `just build-web` (`dx bundle`) emits these
+   into `dist/`, `aivyx-channel/build.rs` embeds them, `web_ui.rs` serves them —
+   so everything is offline and local-first.
+
+---
+
+## 5. Invariants
+
+- **Local-first / offline.** Fonts, icons, CSS are all self-hosted in the bundle;
+  the served app makes **zero external requests**.
+- **Stitch is the single source of truth.** Every color/space/shadow comes from
+  `design-tokens.md`; no ad-hoc values. The inline `STYLE` const is gone.
+- **Presentation-only.** The reskin never touches the `aivyx_ipc` data flow, the
+  WebSocket task, or daemon behavior. `/classic` stays intact.
+- **Studio only.** Creator, Nexus, marketing, the TUI reskin, and any
+  Tauri/desktop shell are out of scope; roadmap screens are disabled nav, not
+  stubs.
+- **No hard lines.** Section boundaries use surface-tier shifts or ghost borders,
+  never 100%-opaque 1px rules.
+
+---
+
+## 6. Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **R.0** | This design contract. |
+| **R.1** | Stitch asset layer — `stitch.css` tokens, self-hosted fonts, brand icons/logos, wired via `asset!()`. |
+| **R.2** | App-shell — Sidebar + Topbar + StatusBar from the layout tokens. |
+| **R.3** | Component kit — Button / Card / Input / Chip / LabelTech / StatCard / StatusDot. |
+| **R.4** | Reskin Missions (orchestration look) + Chat (terminal look). |
+| **R.5** | Build the bundle, live-verify at `:7843`, docs/screens, memory. |
+
+---
+
+## 7. Out of scope (the follow-ons)
+
+The **Command-Center dashboard**, **Memory graph**, **Teams/Agents/Settings**
+screens, the **Genesis wizard** + **Unlock** screens, the **TUI** Stitch reskin,
+and a **Tauri/desktop** shell are all future work — they build on this foundation
+once the token layer, shell, and component kit are locked. **Creator** and
+**Nexus** are separate ecosystem products with their own contracts.
