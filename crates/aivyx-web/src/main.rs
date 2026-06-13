@@ -17,13 +17,15 @@
 //! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
-    AuditEntrySummary, DaemonEnvelope, FrontendMessage, QueryPayload, QueryResponsePayload,
-    StreamEventPayload,
+    AuditEntrySummary, DaemonEnvelope, FrontendMessage, MemoryEntrySummary, QueryPayload,
+    QueryResponsePayload, StreamEventPayload,
 };
 use aivyx_ipc::{TeamMissionPhase, TeamMissionView};
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
+/// Page size for memory topic-entry and search queries.
+const MEMORY_LIMIT: u32 = 50;
 
 use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
@@ -58,6 +60,16 @@ enum View {
     Command,
     Missions,
     Chat,
+    Memory,
+}
+
+/// Memory browser state — read-only snapshots fanned in by `ws_task`.
+#[derive(Clone, Default, PartialEq)]
+struct MemoryState {
+    topics: Vec<String>,
+    entries: Vec<MemoryEntrySummary>,
+    /// True when a semantic search was transparently served by the keyword path.
+    fell_back: bool,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -148,6 +160,7 @@ fn App() -> Element {
     let light = use_signal(|| false);
     let missions = use_signal(Vec::<TeamMissionView>::new);
     let dashboard = use_signal(Dashboard::default);
+    let memory = use_signal(MemoryState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -155,9 +168,10 @@ fn App() -> Element {
     let gate = use_signal(|| None::<GateInfo>);
 
     let ws: Sender = use_coroutine(move |rx| {
-        ws_task(rx, missions, dashboard, connected, session, transcript, streaming, gate)
+        ws_task(rx, missions, dashboard, memory, connected, session, transcript, streaming, gate)
     });
     use_context_provider(|| ws);
+    use_context_provider(|| memory);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
@@ -199,6 +213,7 @@ fn App() -> Element {
         View::Command => "Command Center",
         View::Missions => "Mission Orchestration",
         View::Chat => "Terminal",
+        View::Memory => "Memory",
     };
 
     rsx! {
@@ -217,6 +232,7 @@ fn App() -> Element {
                         },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
                         View::Chat => rsx! { ChatPanel {} },
+                        View::Memory => rsx! { MemoryPanel {} },
                     }
                 }
             }
@@ -243,10 +259,11 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Missions) }
             NavItem { icon: ICON_CHAT, label: "Chat", active: view() == View::Chat,
                 onclick: move |_| view.set(View::Chat) }
+            NavItem { icon: ICON_MEMORY, label: "Memory", active: view() == View::Memory,
+                onclick: move |_| view.set(View::Memory) }
             div { class: "nav-section label-tech", "Roadmap" }
             NavItemSoon { icon: ICON_TEAMS, label: "Teams" }
             NavItemSoon { icon: ICON_AGENTS, label: "Agents" }
-            NavItemSoon { icon: ICON_MEMORY, label: "Memory" }
             NavItemSoon { icon: ICON_SETTINGS, label: "Settings" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
@@ -683,6 +700,166 @@ fn GatePrompt(gate: GateInfo) -> Element {
 }
 
 // ---------------------------------------------------------------------------
+// Memory view — the self-learning knowledge browser (read-only)
+// ---------------------------------------------------------------------------
+
+#[component]
+fn MemoryPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let memory = use_context::<Signal<MemoryState>>();
+    let mut query = use_signal(String::new);
+    let mut semantic = use_signal(|| false);
+    // Active scope label: "recent" | "topic:<t>" | "search:<q>".
+    let mut scope = use_signal(|| "recent".to_string());
+
+    // Load topics + the recent-across-all default each time the view opens.
+    use_future(move || async move {
+        ws.send(mem_topics_query());
+        ws.send(mem_search_query(String::new(), false));
+    });
+
+    let m = memory();
+    rsx! {
+        div { class: "mem",
+            aside { class: "mem-rail",
+                div { class: "panel-head", h3 { "Topics" } span { class: "label-tech", "{m.topics.len()}" } }
+                button {
+                    class: if scope() == "recent" { "mem-topic active" } else { "mem-topic" },
+                    onclick: move |_| {
+                        scope.set("recent".to_string());
+                        ws.send(mem_search_query(String::new(), semantic()));
+                    },
+                    "Recent · all"
+                }
+                for t in m.topics.iter() {
+                    {
+                        let topic = t.clone();
+                        let label = t.clone();
+                        let sel = scope() == format!("topic:{t}");
+                        rsx! {
+                            button {
+                                class: if sel { "mem-topic active" } else { "mem-topic" },
+                                onclick: move |_| {
+                                    scope.set(format!("topic:{topic}"));
+                                    ws.send(mem_topic_query(topic.clone()));
+                                },
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "mem-main",
+                div { class: "mem-search",
+                    input {
+                        class: "input",
+                        placeholder: "search memory…",
+                        value: "{query}",
+                        oninput: move |e| query.set(e.value()),
+                        onkeydown: move |e| {
+                            if e.key() == Key::Enter {
+                                let q = query();
+                                scope.set(format!("search:{q}"));
+                                ws.send(mem_search_query(q, semantic()));
+                            }
+                        },
+                    }
+                    button {
+                        class: if semantic() { "btn btn-glass on" } else { "btn btn-glass" },
+                        title: "Toggle keyword / semantic search",
+                        onclick: move |_| semantic.toggle(),
+                        if semantic() { "semantic" } else { "keyword" }
+                    }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| {
+                            let q = query();
+                            scope.set(format!("search:{q}"));
+                            ws.send(mem_search_query(q, semantic()));
+                        },
+                        "Search"
+                    }
+                }
+                div { class: "panel-head",
+                    h3 { "{scope_label(&scope())}" }
+                    if m.fell_back {
+                        span { class: "chip amber", "keyword fallback" }
+                    }
+                }
+                if m.entries.is_empty() {
+                    div { class: "glass-card empty",
+                        p { class: "label-tech", "No memory here yet — the agent writes memories as it learns what matters to you." }
+                    }
+                } else {
+                    div { class: "mem-entries",
+                        for e in m.entries.iter() {
+                            MemoryEntry { entry: e.clone() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MemoryEntry(entry: MemoryEntrySummary) -> Element {
+    rsx! {
+        div { class: "glass-card mem-entry",
+            div { class: "mem-entry-head",
+                span { class: "chip", "{entry.topic}" }
+                span { class: "when label-tech", "{rel_time_secs(entry.created_at_secs)}" }
+                span { class: "seq label-tech", "#{entry.seq}" }
+            }
+            p { class: "mem-body", "{entry.body}" }
+        }
+    }
+}
+
+fn mem_topics_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mem-topics".to_string(),
+        payload: QueryPayload::ListMemoryTopics,
+    }
+}
+
+fn mem_topic_query(topic: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mem-topic".to_string(),
+        payload: QueryPayload::GetMemoryTopicEntries { topic, limit: MEMORY_LIMIT },
+    }
+}
+
+fn mem_search_query(query: String, semantic: bool) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mem-search".to_string(),
+        payload: QueryPayload::SearchMemory { query, limit: MEMORY_LIMIT, semantic },
+    }
+}
+
+/// Human label for the active memory scope.
+fn scope_label(scope: &str) -> String {
+    if scope == "recent" {
+        "Recent · all topics".to_string()
+    } else if let Some(t) = scope.strip_prefix("topic:") {
+        format!("Topic · {t}")
+    } else if let Some(q) = scope.strip_prefix("search:") {
+        if q.is_empty() {
+            "Recent · all topics".to_string()
+        } else {
+            format!("Search · \"{q}\"")
+        }
+    } else {
+        scope.to_string()
+    }
+}
+
+/// `rel_time` for a unix-**seconds** timestamp (memory entries store seconds).
+fn rel_time_secs(secs: u64) -> String {
+    rel_time(secs.saturating_mul(1000))
+}
+
+// ---------------------------------------------------------------------------
 // Wire helpers + the WebSocket task (unchanged from Chapter M)
 // ---------------------------------------------------------------------------
 
@@ -740,6 +917,7 @@ async fn ws_task(
     mut rx: UnboundedReceiver<FrontendMessage>,
     mut missions: Signal<Vec<TeamMissionView>>,
     mut dashboard: Signal<Dashboard>,
+    mut memory: Signal<MemoryState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -788,6 +966,28 @@ async fn ws_task(
                     ..
                 } => {
                     dashboard.write().assistant_name = Some(profile.assistant_name);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListMemoryTopics { topics },
+                    ..
+                } => {
+                    memory.write().topics = topics;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetMemoryTopicEntries { entries },
+                    ..
+                } => {
+                    let mut m = memory.write();
+                    m.entries = entries;
+                    m.fell_back = false;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::SearchMemory { matches, fell_back_to_keyword },
+                    ..
+                } => {
+                    let mut m = memory.write();
+                    m.entries = matches;
+                    m.fell_back = fell_back_to_keyword;
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),

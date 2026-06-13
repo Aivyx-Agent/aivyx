@@ -403,6 +403,32 @@ a { color: var(--color-primary); text-decoration: none; }
 .agent-status .kv .v.ok { color: var(--color-sage); }
 .agent-status .kv .v.off { color: var(--color-text-disabled); }
 
+/* ── Memory view ───────────────────────────────────────────────────────────── */
+.mem { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
+@media (max-width: 860px) { .mem { grid-template-columns: 1fr; } }
+.mem-rail { display: flex; flex-direction: column; gap: 4px; }
+.mem-topic {
+  text-align: left; font: inherit; font-size: 13px; cursor: pointer;
+  background: transparent; border: 0; border-radius: 8px;
+  padding: 8px 11px; color: var(--color-text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+}
+.mem-topic:hover { background: var(--color-bg-elevated); color: var(--color-text-primary); }
+.mem-topic.active { background: var(--color-bg-elevated); color: var(--color-primary); box-shadow: inset 2px 0 0 var(--color-primary); }
+
+.mem-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mem-search { display: flex; gap: 10px; }
+.mem-search .input { flex: 1; }
+.btn-glass.on { border-color: var(--color-secondary); color: var(--color-secondary); }
+
+.mem-entries { display: flex; flex-direction: column; gap: 12px; }
+.mem-entry { display: flex; flex-direction: column; gap: 8px; }
+.mem-entry-head { display: flex; align-items: center; gap: 10px; }
+.mem-entry-head .when { margin-left: auto; }
+.mem-entry-head .seq { color: var(--color-text-disabled); }
+.mem-body { margin: 0; color: var(--color-text-primary); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+
 /* ── Chat / Terminal view ──────────────────────────────────────────────────── */
 .chat { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .transcript {
