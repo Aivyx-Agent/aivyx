@@ -55,6 +55,14 @@ use crate::transport::{HttpTransport, ReqwestTransport};
 /// independently auditable.
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
+/// Chapter P — cap on auto-detected `num_ctx`. The agent's prompt (system +
+/// tool defs + few-shot examples) runs ~4–11k tokens, which starves Ollama's
+/// default `num_ctx` of 4096 down to a single generated token. We auto-set
+/// `num_ctx = min(native_context, this cap)` when the operator hasn't: 16k
+/// clears the prompt with comfortable generation headroom without allocating
+/// the model's full (often 128k+) native window, which would waste VRAM.
+pub const AUTO_NUM_CTX_CAP: u32 = 16_384;
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -201,6 +209,14 @@ pub struct OllamaProvider {
     /// `bool` value: `true` = supports thinking (so disable it);
     /// caching both outcomes avoids re-querying `/api/show`.
     thinking_cache: Mutex<HashMap<String, bool>>,
+    /// Chapter P — per-model auto-`num_ctx` cache. The agent's prompt
+    /// (system + tools + few-shot) runs ~4–11k tokens, which starves the
+    /// Ollama default `num_ctx` of 4096 down to a single generated token.
+    /// When the operator hasn't set `num_ctx`, we read the model's native
+    /// context length from `/api/show` and default to `min(native, cap)`.
+    /// `Some(n)` = use `n`; `None` = `/api/show` gave nothing, fall back to
+    /// Ollama's own default. Cached to avoid re-querying.
+    num_ctx_cache: Mutex<HashMap<String, Option<u32>>>,
 }
 
 impl OllamaProvider {
@@ -210,6 +226,7 @@ impl OllamaProvider {
             transport: Box::new(ReqwestTransport::new()?),
             family_cache: Mutex::new(HashMap::new()),
             thinking_cache: Mutex::new(HashMap::new()),
+            num_ctx_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -222,6 +239,7 @@ impl OllamaProvider {
             transport,
             family_cache: Mutex::new(HashMap::new()),
             thinking_cache: Mutex::new(HashMap::new()),
+            num_ctx_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -315,6 +333,51 @@ impl OllamaProvider {
         supports
     }
 
+    /// Chapter P — query `/api/show` for the model's native context length
+    /// (`model_info["<arch>.context_length"]`, e.g. `qwen35.context_length`).
+    /// Best-effort: any failure returns `None`, and the caller falls back to
+    /// Ollama's own `num_ctx` default.
+    async fn query_model_context_length(&self, model: &str) -> Option<u32> {
+        let url = format!("{}/api/show", self.base_url());
+        let body = serde_json::to_vec(&json!({ "name": model })).ok()?;
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let bytes = self
+            .transport
+            .post_json(&url, &[("content-type", "application/json")], body, &cancellation)
+            .await
+            .ok()?;
+        let value: Value = serde_json::from_slice(&bytes).ok()?;
+        let model_info = value.get("model_info")?.as_object()?;
+        // The key is architecture-prefixed (`llama.context_length`,
+        // `qwen35.context_length`, …); match by suffix.
+        model_info
+            .iter()
+            .find(|(k, _)| k.ends_with(".context_length"))
+            .and_then(|(_, v)| v.as_u64())
+            .and_then(|n| u32::try_from(n).ok())
+    }
+
+    /// Cached auto-`num_ctx`: the model's native context length capped at
+    /// [`AUTO_NUM_CTX_CAP`]. `None` when `/api/show` yields nothing (→ Ollama's
+    /// own default applies). Queried once per model, then served from cache.
+    async fn auto_num_ctx_for(&self, model: &str) -> Option<u32> {
+        {
+            if let Ok(cache) = self.num_ctx_cache.lock() {
+                if let Some(cached) = cache.get(model) {
+                    return *cached;
+                }
+            }
+        }
+        let resolved = self
+            .query_model_context_length(model)
+            .await
+            .map(|native| native.min(AUTO_NUM_CTX_CAP));
+        if let Ok(mut cache) = self.num_ctx_cache.lock() {
+            cache.insert(model.to_string(), resolved);
+        }
+        resolved
+    }
+
     /// Lightweight health check against the Ollama base URL.
     /// Same shape as `OpenAiProvider::health_check`; Ollama
     /// answers GET / with the plain-text body
@@ -355,8 +418,20 @@ impl crate::LlmProvider for OllamaProvider {
         // (cached `/api/show`) and turn thinking off so the answer
         // lands in `content`.
         let disable_thinking = self.disable_thinking_for(request.model).await;
-        let body =
-            build_request_body(&request, &self.config.options, disable_thinking)?;
+        // Chapter P — auto-`num_ctx`: only when the operator hasn't set one,
+        // size the context window to the model's native length (capped) so the
+        // agent prompt doesn't starve generation. An explicit `num_ctx` wins.
+        let auto_num_ctx = if self.config.options.num_ctx.is_none() {
+            self.auto_num_ctx_for(request.model).await
+        } else {
+            None
+        };
+        let body = build_request_body(
+            &request,
+            &self.config.options,
+            disable_thinking,
+            auto_num_ctx,
+        )?;
         let body_bytes = serde_json::to_vec(&body).map_err(|e| {
             LlmError::Parse(format!("request serialization: {e}"))
         })?;
@@ -450,6 +525,7 @@ pub fn build_request_body(
     request: &LlmRequest<'_>,
     options: &OllamaOptions,
     disable_thinking: bool,
+    auto_num_ctx: Option<u32>,
 ) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
@@ -507,6 +583,15 @@ pub fn build_request_body(
     if let Some(temp) = request.temperature {
         if let Some(obj) = options_value.as_object_mut() {
             obj.insert("temperature".into(), json!(temp));
+        }
+    }
+    // Chapter P — inject the auto-detected `num_ctx` only when the operator
+    // didn't configure one (the serialized `options` omits `num_ctx` then).
+    if options.num_ctx.is_none() {
+        if let Some(n) = auto_num_ctx {
+            if let Some(obj) = options_value.as_object_mut() {
+                obj.insert("num_ctx".into(), json!(n));
+            }
         }
     }
     let emit_options = match &options_value {
@@ -729,7 +814,7 @@ mod tests {
         let msgs = vec![LlmMessage::user_text("hello")];
         let req = simple_request(&msgs, &[]);
         let options = OllamaOptions::default();
-        let body = build_request_body(&req, &options, false).unwrap();
+        let body = build_request_body(&req, &options, false, None).unwrap();
         assert_eq!(body["model"], "qwen3.6:27b");
         assert_eq!(body["stream"], true);
         // No options block when both operator and request
@@ -751,7 +836,7 @@ mod tests {
         let msgs = vec![LlmMessage::user_text("hello")];
         let req = simple_request(&msgs, &[]);
         let body =
-            build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+            build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         assert!(body.get("think").is_none());
     }
 
@@ -763,8 +848,40 @@ mod tests {
         let msgs = vec![LlmMessage::user_text("hello")];
         let req = simple_request(&msgs, &[]);
         let body =
-            build_request_body(&req, &OllamaOptions::default(), true).unwrap();
+            build_request_body(&req, &OllamaOptions::default(), true, None).unwrap();
         assert_eq!(body["think"], false);
+    }
+
+    #[test]
+    fn request_body_injects_auto_num_ctx_when_unset() {
+        // Chapter P — with no operator `num_ctx`, the auto-detected value
+        // lands in the options block so generation isn't starved.
+        let msgs = vec![LlmMessage::user_text("hello")];
+        let req = simple_request(&msgs, &[]);
+        let body =
+            build_request_body(&req, &OllamaOptions::default(), false, Some(16_384)).unwrap();
+        assert_eq!(body["options"]["num_ctx"], 16_384);
+    }
+
+    #[test]
+    fn request_body_explicit_num_ctx_wins_over_auto() {
+        // An operator-set `num_ctx` is never overridden by auto-detection.
+        let msgs = vec![LlmMessage::user_text("hello")];
+        let req = simple_request(&msgs, &[]);
+        let options = OllamaOptions { num_ctx: Some(8_192), ..Default::default() };
+        let body = build_request_body(&req, &options, false, Some(16_384)).unwrap();
+        assert_eq!(body["options"]["num_ctx"], 8_192);
+    }
+
+    #[test]
+    fn request_body_no_num_ctx_when_auto_unavailable() {
+        // `/api/show` gave nothing (auto = None) and no operator value →
+        // omit `num_ctx` entirely so Ollama's own default applies.
+        let msgs = vec![LlmMessage::user_text("hello")];
+        let req = simple_request(&msgs, &[]);
+        let body =
+            build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
+        assert!(body.get("options").is_none() || body["options"].get("num_ctx").is_none());
     }
 
     #[test]
@@ -778,7 +895,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         };
-        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "system");
@@ -795,7 +912,7 @@ mod tests {
             input_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
         }];
         let req = simple_request(&msgs, &tools);
-        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let tools_array = body["tools"].as_array().unwrap();
         assert_eq!(tools_array.len(), 1);
         assert_eq!(tools_array[0]["type"], "function");
@@ -815,7 +932,7 @@ mod tests {
             mirostat: Some(2),
             ..OllamaOptions::default()
         };
-        let body = build_request_body(&req, &options, false).unwrap();
+        let body = build_request_body(&req, &options, false, None).unwrap();
         let opts = body["options"].as_object().unwrap();
         assert_eq!(opts["num_ctx"], 16384);
         assert_eq!(opts["mirostat"], 2);
@@ -838,7 +955,7 @@ mod tests {
             max_tokens: 1024,
             temperature: Some(0.7),
         };
-        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let opts = body["options"].as_object().unwrap();
         // The request's temperature carried through.
         assert!((opts["temperature"].as_f64().unwrap() - 0.7).abs() < 1e-6);
@@ -861,7 +978,7 @@ mod tests {
             num_ctx: Some(8192),
             ..OllamaOptions::default()
         };
-        let body = build_request_body(&req, &options, false).unwrap();
+        let body = build_request_body(&req, &options, false, None).unwrap();
         let opts = body["options"].as_object().unwrap();
         // Both fields carried through.
         assert_eq!(opts["num_ctx"], 8192);
@@ -880,7 +997,7 @@ mod tests {
             temperature: None,
         };
         let err =
-            build_request_body(&req, &OllamaOptions::default(), false).unwrap_err();
+            build_request_body(&req, &OllamaOptions::default(), false, None).unwrap_err();
         assert!(matches!(err, LlmError::UnknownModel(_)));
     }
 
@@ -901,7 +1018,7 @@ mod tests {
             }],
         }];
         let req = simple_request(&msgs, &[]);
-        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let messages = body["messages"].as_array().unwrap();
         let asst = &messages[0];
         assert_eq!(asst["role"], "assistant");
@@ -923,7 +1040,7 @@ mod tests {
             is_error: false,
         }];
         let req = simple_request(&msgs, &[]);
-        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "tool");
         assert_eq!(messages[0]["tool_call_id"], "c1");
@@ -945,7 +1062,7 @@ mod tests {
             ],
         }];
         let req = simple_request(&msgs, &[]);
-        let body = build_request_body(&req, &OllamaOptions::default(), false).unwrap();
+        let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let user = &body["messages"].as_array().unwrap()[0];
         assert_eq!(user["role"], "user");
         assert_eq!(user["content"], "describe this");
