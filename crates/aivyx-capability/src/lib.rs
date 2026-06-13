@@ -849,6 +849,10 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "fs.write",
         "fs.delete",
         "fs.metadata",
+        // Chapter O — the agent's own workspace. Trusted-only (like
+        // shell.exec / fs.delete): a Local-operator-driven agent gets its
+        // private notebook; remote-channel agents do not by default.
+        "workspace",
         "net.fetch",
         "net.post",
         "net.dns",
