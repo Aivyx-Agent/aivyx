@@ -148,6 +148,18 @@ The reference mockups for the locked look: `aivyx-brand/assets/stitch/`
 | **R.4** | Reskin Missions (orchestration look) + Chat (terminal look). |
 | **R.5** | Build the bundle, live-verify at `:7843`, docs/screens, memory. |
 
+**Status: R.0–R.5 complete and verified served.** The Studio app renders the
+Stitch shell (Sidebar + Topbar + StatusBar), the reskinned Missions + Chat
+views, self-hosted fonts and brand icons — all from the daemon's embedded
+bundle with **zero external requests** (verified: the WASM requests the hashed
+asset paths, the daemon serves each `200`, the served CSS carries the full token
+set in both themes). The built bundle is committed at `crates/aivyx-web/dist/`
+so a plain `cargo build` and the release embed it without a wasm toolchain;
+**regenerate it with `just build-web` after any frontend change** (needs a
+prebuilt `dx` 0.6.x binary — building dioxus-cli from source currently fails on
+a pinned `swc`/`serde::__private` conflict). A future `dx bundle` step in the
+release CI would remove the need to commit the artifact.
+
 ---
 
 ## 7. Out of scope (the follow-ons)

@@ -124,6 +124,13 @@ The arc to date, by chapter:
   views; the daemon serves the embedded WASM bundle with an HTML fallback,
   and the legacy inspection panes live on at `/classic`. See
   [`docs/WEB_MISSION_CONTROL.md`](docs/WEB_MISSION_CONTROL.md).
+- **Chapter R — Stitch frontend.** The agent's web UI adopts the **Stitch**
+  design system (*The Neon Cartographer*: layered midnight, warm amber + cyber
+  purple, Space Grotesk / Inter / JetBrains Mono, the candle mark): a real token
+  layer, self-hosted fonts + brand icons (no CDN — fully offline), an app-shell
+  (sidebar + topbar + status bar) and component kit, and a reskin of Missions
+  (orchestration look) + Chat (terminal look). Studio surface only; Creator and
+  Nexus are separate. See [`docs/FRONTEND.md`](docs/FRONTEND.md).
 - **Headless Execution Mode.** A per-run opt-in **non-interactive** mode:
   at any approval gate a headless run **refuses-and-aborts** rather than
   hanging on an absent operator — never auto-approving, with confirm-first /
