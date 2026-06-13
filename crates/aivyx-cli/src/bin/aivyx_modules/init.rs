@@ -100,6 +100,75 @@ async fn list_ollama_models(base_url: &str) -> Result<Vec<String>, String> {
     parse_model_names(&body)
 }
 
+/// Chapter P — pull a model via Ollama's `POST /api/pull` (streaming), printing
+/// coarse download progress so a multi-GB pull doesn't look hung. Best-effort
+/// progress; the return value is what matters (`Ok` = the model is now local).
+async fn pull_ollama_model(
+    base_url: &str,
+    model: &str,
+    writer: &mut dyn IoWrite,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(DETECT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+    let url = format!("{}/api/pull", base_url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "model": model, "stream": true }))
+        .send()
+        .await
+        .map_err(|e| format!("failed to reach {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "{url} returned HTTP {} pulling {model}",
+            resp.status()
+        ));
+    }
+
+    writeln!(writer, "Downloading {model} …").map_err(|e| format!("write error: {e}"))?;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut last_pct: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("pull stream error: {e}"))?;
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                return Err(format!("pull failed: {err}"));
+            }
+            let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+            match (
+                v.get("completed").and_then(|x| x.as_u64()),
+                v.get("total").and_then(|x| x.as_u64()),
+            ) {
+                (Some(c), Some(t)) if t > 0 => {
+                    let pct = c * 100 / t;
+                    if pct >= last_pct + 5 || pct == 100 {
+                        let _ = write!(writer, "\r  {status}: {pct}%        ");
+                        let _ = writer.flush();
+                        last_pct = pct;
+                    }
+                }
+                _ if !status.is_empty() => {
+                    let _ = write!(writer, "\r  {status}                    ");
+                    let _ = writer.flush();
+                }
+                _ => {}
+            }
+        }
+    }
+    writeln!(writer, "\r  {model} ready.                    ")
+        .map_err(|e| format!("write error: {e}"))?;
+    Ok(())
+}
+
 /// Extract model names from the Ollama `/api/tags` JSON response.
 /// The expected shape is `{ "models": [{ "name": "...", ... }, ...] }`.
 fn parse_model_names(json_body: &str) -> Result<Vec<String>, String> {
@@ -1303,16 +1372,29 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         Provider::Ollama => {
             let models = list_ollama_models(base_url).await.unwrap_or_default();
             let model = if models.is_empty() {
-                eprintln!("{}", ollama_empty_hint());
-                let m = prompt_line(
-                    &format!("Model name [{RECOMMENDED_LOCAL_MODEL}]: "),
+                writeln!(writer, "{}", ollama_empty_hint())
+                    .map_err(|e| format!("write error: {e}"))?;
+                // Chapter P — offer to pull the recommended model right here,
+                // instead of leaving the user to a copy-paste command.
+                if prompt_yes_no(
+                    &format!("Download {RECOMMENDED_LOCAL_MODEL} now?"),
+                    true,
                     &mut reader,
                     &mut writer,
-                )?;
-                if m.is_empty() {
+                )? {
+                    pull_ollama_model(base_url, RECOMMENDED_LOCAL_MODEL, &mut writer).await?;
                     RECOMMENDED_LOCAL_MODEL.to_string()
                 } else {
-                    m
+                    let m = prompt_line(
+                        &format!("Model name [{RECOMMENDED_LOCAL_MODEL}]: "),
+                        &mut reader,
+                        &mut writer,
+                    )?;
+                    if m.is_empty() {
+                        RECOMMENDED_LOCAL_MODEL.to_string()
+                    } else {
+                        m
+                    }
                 }
             } else {
                 writeln!(writer, "\nAvailable models:")
@@ -2025,6 +2107,15 @@ mod tests {
             hint.contains("No local models found"),
             "hint should still name the condition: {hint:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn pull_ollama_model_unreachable_is_error() {
+        // Chapter P — a pull against an unreachable Ollama returns a clear
+        // Err (surfaced by the wizard / `doctor`), not a panic or a hang.
+        let mut writer: Vec<u8> = Vec::new();
+        let res = pull_ollama_model("http://127.0.0.1:1", RECOMMENDED_LOCAL_MODEL, &mut writer).await;
+        assert!(res.is_err(), "unreachable base_url must error");
     }
 
     #[test]
