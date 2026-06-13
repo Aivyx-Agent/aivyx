@@ -91,10 +91,13 @@ installer, now that the local on-ramp is solid.
 
 ---
 
-## 4. Out of scope (the follow-on)
+## 4. Out of scope (the follow-on — now done)
 
-Publishing downloadable binaries — activating the wired-but-dormant cargo-dist /
-GitHub-Actions release pipeline (`dist-workspace.toml`) into real installable
-releases + a one-line installer — is the **next chapter**. It belongs on top of
-a local on-ramp that already works; shipping a binary whose free path produces
-empty replies would defeat the point.
+Publishing downloadable binaries — activating the cargo-dist / GitHub-Actions
+release pipeline (`dist-workspace.toml`) into real installable releases + a
+one-line installer — was the **next chapter (Chapter Q — Publish)** and is now
+prepared: the release ships only the `aivyx` binary, the install docs resolve,
+and `v0.1.0` (pre-release) is ready to tag. It deliberately landed *on top of* a
+local on-ramp that already works; shipping a binary whose free path produces
+empty replies would have defeated the point. See
+[`docs/INSTALL.md`](INSTALL.md#shell-installer-recommended).

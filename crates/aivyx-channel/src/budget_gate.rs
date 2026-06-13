@@ -225,7 +225,7 @@ mod tests {
             log.append(AuditEvent::LlmCost {
                 turn_id: aivyx_core::TurnId::new(),
                 model: (*model).to_string(),
-                usage: usage.clone(),
+                usage: *usage,
             })
             .expect("append");
         }
