@@ -138,6 +138,7 @@ pub mod proposal_grouping;
 pub mod recall_fusion;
 pub mod reflection_scheduler;
 pub mod token_budget;
+pub mod workspace_journal;
 mod render;
 mod role_envelope;
 mod role_render;

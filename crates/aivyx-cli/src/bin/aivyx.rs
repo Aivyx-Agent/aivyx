@@ -4036,8 +4036,8 @@ async fn run_async(
         // proactive-journaling task (O.5).
         workspace_enabled,
         workspace_path,
-        workspace_journaling_enabled: _workspace_journaling_enabled,
-        workspace_journaling_interval_secs: _workspace_journaling_interval_secs,
+        workspace_journaling_enabled,
+        workspace_journaling_interval_secs,
         storage_path: _,
         memory_max_per_topic,
         passphrase: _,
@@ -6836,6 +6836,17 @@ async fn run_async(
             // now; the `--headless` flag + operator-absent drivers (H.4/H.5)
             // set RejectAndAbort per run.
             gate_policy: aivyx_core::GatePolicy::default(),
+            // Chapter O.5 — proactive journaling cadence: armed only when the
+            // workspace AND journaling are both enabled.
+            workspace_journaling_interval: if workspace_enabled.value
+                && workspace_journaling_enabled.value
+            {
+                Some(std::time::Duration::from_secs(
+                    workspace_journaling_interval_secs.value,
+                ))
+            } else {
+                None
+            },
             // K.4.2 — the override-aware rate table the autonomous loop's
             // dollar cap prices with. Built once from the built-in defaults
             // plus any `[pricing.<model>]` overrides the operator declared.

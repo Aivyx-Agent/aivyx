@@ -426,6 +426,11 @@ pub struct DaemonConfig {
     /// `RejectAndAbort` (headless) records the refusal and finalizes without a
     /// gate. Per-run/per-driver overrides come later (H.4/H.5).
     pub gate_policy: GatePolicy,
+    /// Chapter O — proactive journaling cadence. `Some(interval)` (and an
+    /// audit log present) spawns the workspace-journal driver, which on each
+    /// tick checks for recent activity and, if any, fires a journaling turn
+    /// that appends to the agent's workspace journal. `None` ⇒ disabled.
+    pub workspace_journaling_interval: Option<std::time::Duration>,
     /// Chapter K (K.4.2) — the priced rate table, built from the
     /// built-in defaults plus any `[pricing.<model>]` overrides.
     /// Threaded into the autonomous-loop driver so the per-run
@@ -523,6 +528,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         loop_config,
         team_missions,
         gate_policy,
+        workspace_journaling_interval,
         pricing,
     } = config;
     // Phase 102 — shared once into every per-connection
@@ -727,6 +733,27 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // build outcome summaries). If either prerequisite is
     // missing the task is simply not spawned; the config block
     // sits idle.
+    // Chapter O.5 — proactive journaling. Spawn the re-arming journaling
+    // driver when an interval is configured AND an audit log is present (the
+    // driver reads the chain to decide whether there was recent activity).
+    let _workspace_journal_handle = match (workspace_journaling_interval, audit_log.as_ref()) {
+        (Some(interval), Some(al)) => {
+            let wj_dispatch = trigger_dispatch.clone();
+            let wj_audit = Arc::clone(al);
+            let wj_shutdown = shutdown.clone();
+            Some(tokio::spawn(async move {
+                crate::workspace_journal::run_workspace_journal_driver(
+                    wj_dispatch,
+                    wj_audit,
+                    interval,
+                    wj_shutdown,
+                )
+                .await;
+            }))
+        }
+        _ => None,
+    };
+
     let _reflection_scheduler_handle = match (audit_log.as_ref(), reflection_schedules.is_empty()) {
         (Some(al), false) => {
             let rs_dispatch = trigger_dispatch.clone();
@@ -2505,6 +2532,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         web_ui_broadcaster: None,
         persona_proposal_log: None,
         reflection_schedules: Vec::new(),
+        workspace_journaling_interval: None,
         target_policies: std::collections::HashMap::new(),
         embedding_provider: None,
         recall_log: None,
