@@ -154,7 +154,7 @@ impl FsReadTool {
 /// root (e.g., more `..` segments than there are components below
 /// the root). The caller uses this signal to produce a deny-by-
 /// construction scope.
-fn lexical_resolve(sandbox_root: &Path, input_path: &Path) -> Option<PathBuf> {
+pub(crate) fn lexical_resolve(sandbox_root: &Path, input_path: &Path) -> Option<PathBuf> {
     // Join semantics: if `input_path` is absolute, `PathBuf::push`
     // *replaces* the current path. That's the right thing for an
     // agent that tries to pass an absolute path: it lands

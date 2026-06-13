@@ -38,6 +38,13 @@ const KNOWN_BASES: &[&str] = &[
     "fs.write",
     "fs.delete",
     "fs.metadata",
+    // workspace — Chapter O. The agent's own private workspace dir
+    // (separate from `fs.*` / `fs_root`). One base shared by all the
+    // `workspace.*` tools (read/write/list/delete/note): it is the
+    // agent's own contained notebook, so per-op granularity isn't
+    // needed — you grant the workspace or you don't. Qualifier is the
+    // canonical path under the workspace root.
+    "workspace",
     // net
     "net.fetch",
     "net.post",
@@ -1813,11 +1820,13 @@ mod tests {
         // adds kitchen.read, kitchen.write + kitchen.order.send for
         // the gated write surface, and kitchen.haccp.log for the
         // append-only food-safety (HACCP) compliance log.
+        // Chapter O adds `workspace` (one base for the agent's own
+        // workspace.* tools).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            82,
+            83,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

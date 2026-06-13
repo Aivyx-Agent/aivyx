@@ -10,7 +10,16 @@
 //! This module provides [`provision_workspace`] (idempotent startup seeding).
 //! The `workspace.*` tools that operate within it land in O.2.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use aivyx_capability::Scope;
+
+use crate::tools::fs::lexical_resolve;
+use crate::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
 /// Seed README written into a fresh workspace (only when absent — the agent's
 /// own edits are never clobbered). Addressed to the agent itself.
@@ -52,6 +61,375 @@ pub fn provision_workspace(root: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// workspace.* tools (Chapter O.2)
+//
+// All workspace tools share one capability base — `workspace` — granted at
+// the workspace root. The tools are namespaced `workspace.read/write/...` for
+// the model's clarity, but the agent's own contained notebook doesn't need
+// per-op capability granularity (you grant the agent its workspace, or you
+// don't). Containment is the same lexical fence `fs.*` uses (`lexical_resolve`).
+// ---------------------------------------------------------------------------
+
+/// Max bytes returned by `workspace.read` / written by `workspace.write`.
+const MAX_WORKSPACE_BYTES: usize = 256 * 1024;
+
+/// The capability base every workspace tool requires.
+const WORKSPACE_SCOPE_BASE: &str = "workspace";
+
+fn deny_scope() -> Scope {
+    Scope::parse("workspace:/aivyx/__deny__/invalid-input")
+        .expect("static deny scope parses")
+}
+
+/// Resolve `path` (relative to the workspace root) inside the root, or `None`
+/// if it escapes — the same lexical containment `fs.*` uses.
+fn resolve_in_workspace(root: &Path, path: &str) -> Option<PathBuf> {
+    lexical_resolve(root, Path::new(path))
+}
+
+/// `workspace:<abs>` scope for a resolved path, or the deny scope.
+fn scope_for(abs: &Path) -> Scope {
+    Scope::parse(&format!("{WORKSPACE_SCOPE_BASE}:{}", abs.display()))
+        .unwrap_or_else(deny_scope)
+}
+
+fn tool_fail(id: ToolId, detail: impl Into<String>) -> ToolOutcome {
+    ToolOutcome::Failed(AivyxError::Tool {
+        tool: id,
+        detail: detail.into(),
+    })
+}
+
+/// Pull a string field from the input, or fail.
+fn str_field(input: &Value, key: &str) -> Result<String, String> {
+    input
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("input must have a string `{key}` field"))
+}
+
+/// Build all workspace tools rooted at `root` (canonicalized). Returns the
+/// tools plus the canonical root so the binary can mint the operator-held
+/// `workspace:<root>/**` + bare-root grant. Fails if the root isn't a dir.
+pub fn build_workspace_tools(
+    root: &Path,
+) -> Result<(Vec<Arc<dyn Tool>>, PathBuf), AivyxError> {
+    let canonical = std::fs::canonicalize(root).map_err(|e| {
+        AivyxError::Config(format!("workspace root {root:?} cannot be canonicalized: {e}"))
+    })?;
+    if !canonical.is_dir() {
+        return Err(AivyxError::Config(format!(
+            "workspace root {canonical:?} is not a directory"
+        )));
+    }
+    let root: Arc<Path> = Arc::from(canonical.as_path());
+    let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(WorkspaceReadTool::new(root.clone())),
+        Arc::new(WorkspaceWriteTool::new(root.clone())),
+        Arc::new(WorkspaceListTool::new(root.clone())),
+        Arc::new(WorkspaceDeleteTool::new(root.clone())),
+        Arc::new(WorkspaceNoteTool::new(root.clone())),
+    ];
+    Ok((tools, canonical))
+}
+
+macro_rules! ws_tool {
+    ($name:ident, $tool_name:literal, $desc:literal, $schema:expr) => {
+        #[derive(Debug)]
+        pub struct $name {
+            id: ToolId,
+            root: Arc<Path>,
+            schema: Value,
+        }
+        impl $name {
+            pub fn new(root: Arc<Path>) -> Self {
+                Self { id: ToolId::new(), root, schema: $schema }
+            }
+        }
+    };
+}
+
+ws_tool!(WorkspaceReadTool, "workspace.read", "", read_schema());
+ws_tool!(WorkspaceWriteTool, "workspace.write", "", write_schema());
+ws_tool!(WorkspaceListTool, "workspace.list", "", list_schema());
+ws_tool!(WorkspaceDeleteTool, "workspace.delete", "", delete_schema());
+ws_tool!(WorkspaceNoteTool, "workspace.note", "", note_schema());
+
+fn path_schema(desc: &str) -> Value {
+    json!({ "type": "string", "description": desc })
+}
+fn read_schema() -> Value {
+    json!({"type":"object","properties":{"path":path_schema("Path within your workspace to read.")},"required":["path"]})
+}
+fn write_schema() -> Value {
+    json!({"type":"object","properties":{
+        "path":path_schema("Path within your workspace to write (parent dirs are created)."),
+        "content":{"type":"string","description":"UTF-8 content to write."}},"required":["path","content"]})
+}
+fn list_schema() -> Value {
+    json!({"type":"object","properties":{"path":path_schema("Optional sub-path to list; omit for the workspace root.")}})
+}
+fn delete_schema() -> Value {
+    json!({"type":"object","properties":{"path":path_schema("Path within your workspace to delete (file or empty dir).")},"required":["path"]})
+}
+fn note_schema() -> Value {
+    json!({"type":"object","properties":{
+        "content":{"type":"string","description":"The note/thought to append."},
+        "category":{"type":"string","description":"Optional bucket: 'journal' (default), 'ideas', or 'plans'."}},
+        "required":["content"]})
+}
+
+#[async_trait]
+impl Tool for WorkspaceReadTool {
+    fn id(&self) -> ToolId { self.id }
+    fn name(&self) -> &str { "workspace.read" }
+    fn description(&self) -> &str {
+        "Read a file from YOUR workspace (your own private space for notes, \
+         ideas, plans, and projects). Input: `{ path }`."
+    }
+    fn input_schema(&self) -> &Value { &self.schema }
+    fn required_scope(&self, input: &Value) -> Scope {
+        match input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => match resolve_in_workspace(&self.root, p) {
+                Some(abs) => scope_for(&abs),
+                None => deny_scope(),
+            },
+            None => deny_scope(),
+        }
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let path = match str_field(&input, "path") {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        let Some(abs) = resolve_in_workspace(&self.root, &path) else {
+            return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
+        };
+        match std::fs::read(&abs) {
+            Ok(bytes) => {
+                let truncated = bytes.len() > MAX_WORKSPACE_BYTES;
+                let slice = &bytes[..bytes.len().min(MAX_WORKSPACE_BYTES)];
+                let content = String::from_utf8_lossy(slice).to_string();
+                ToolOutcome::Completed {
+                    output: json!({ "content": content, "truncated": truncated }),
+                    verified: Verification::NotApplicable,
+                }
+            }
+            Err(e) => tool_fail(self.id, format!("cannot read {path:?}: {e}")),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceWriteTool {
+    fn id(&self) -> ToolId { self.id }
+    fn name(&self) -> &str { "workspace.write" }
+    fn description(&self) -> &str {
+        "Write (create or overwrite) a file in YOUR workspace. Parent dirs are \
+         created as needed. Input: `{ path, content }`."
+    }
+    fn input_schema(&self) -> &Value { &self.schema }
+    fn required_scope(&self, input: &Value) -> Scope {
+        match input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => match resolve_in_workspace(&self.root, p) {
+                Some(abs) => scope_for(&abs),
+                None => deny_scope(),
+            },
+            None => deny_scope(),
+        }
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let path = match str_field(&input, "path") {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        let content = match str_field(&input, "content") {
+            Ok(c) => c,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        if content.len() > MAX_WORKSPACE_BYTES {
+            return tool_fail(self.id, format!("content exceeds {MAX_WORKSPACE_BYTES} bytes"));
+        }
+        let Some(abs) = resolve_in_workspace(&self.root, &path) else {
+            return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
+        };
+        if let Some(parent) = abs.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return tool_fail(self.id, format!("cannot create parent of {path:?}: {e}"));
+            }
+        }
+        match std::fs::write(&abs, content.as_bytes()) {
+            Ok(()) => ToolOutcome::Completed {
+                output: json!({ "written": true, "bytes": content.len() }),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => tool_fail(self.id, format!("cannot write {path:?}: {e}")),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceListTool {
+    fn id(&self) -> ToolId { self.id }
+    fn name(&self) -> &str { "workspace.list" }
+    fn description(&self) -> &str {
+        "List YOUR workspace (or a sub-path). Input: `{ path? }` — omit `path` \
+         for the workspace root."
+    }
+    fn input_schema(&self) -> &Value { &self.schema }
+    fn required_scope(&self, input: &Value) -> Scope {
+        let p = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        match resolve_in_workspace(&self.root, p) {
+            Some(abs) => scope_for(&abs),
+            None => deny_scope(),
+        }
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let Some(abs) = resolve_in_workspace(&self.root, path) else {
+            return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
+        };
+        match std::fs::read_dir(&abs) {
+            Ok(rd) => {
+                let mut entries: Vec<Value> = Vec::new();
+                for e in rd.flatten() {
+                    let kind = match e.file_type() {
+                        Ok(ft) if ft.is_dir() => "directory",
+                        Ok(ft) if ft.is_symlink() => "symlink",
+                        _ => "file",
+                    };
+                    entries.push(json!({ "name": e.file_name().to_string_lossy(), "kind": kind }));
+                }
+                entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+                ToolOutcome::Completed {
+                    output: json!({ "entries": entries }),
+                    verified: Verification::NotApplicable,
+                }
+            }
+            Err(e) => tool_fail(self.id, format!("cannot list {path:?}: {e}")),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceDeleteTool {
+    fn id(&self) -> ToolId { self.id }
+    fn name(&self) -> &str { "workspace.delete" }
+    fn description(&self) -> &str {
+        "Delete a file or empty directory from YOUR workspace. Input: `{ path }`."
+    }
+    fn input_schema(&self) -> &Value { &self.schema }
+    fn required_scope(&self, input: &Value) -> Scope {
+        match input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => match resolve_in_workspace(&self.root, p) {
+                Some(abs) => scope_for(&abs),
+                None => deny_scope(),
+            },
+            None => deny_scope(),
+        }
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let path = match str_field(&input, "path") {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        let Some(abs) = resolve_in_workspace(&self.root, &path) else {
+            return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
+        };
+        if abs.as_path() == &*self.root {
+            return tool_fail(self.id, "cannot delete the workspace root itself");
+        }
+        let md = match std::fs::symlink_metadata(&abs) {
+            Ok(m) => m,
+            Err(e) => return tool_fail(self.id, format!("cannot stat {path:?}: {e}")),
+        };
+        let res = if md.is_dir() {
+            std::fs::remove_dir(&abs)
+        } else {
+            std::fs::remove_file(&abs)
+        };
+        match res {
+            Ok(()) => ToolOutcome::Completed {
+                output: json!({ "deleted": true }),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => tool_fail(self.id, format!("cannot delete {path:?}: {e}")),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceNoteTool {
+    fn id(&self) -> ToolId { self.id }
+    fn name(&self) -> &str { "workspace.note" }
+    fn description(&self) -> &str {
+        "Append a timestamped entry to your journal (or another bucket) — the \
+         quick way to jot a thought, idea, or plan. Input: `{ content, \
+         category? }` (category: 'journal' default, 'ideas', 'plans')."
+    }
+    fn input_schema(&self) -> &Value { &self.schema }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        // Always writes under the workspace root; the bare-root grant covers it.
+        scope_for(&self.root)
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let content = match str_field(&input, "content") {
+            Ok(c) => c,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        let category = input.get("category").and_then(|v| v.as_str()).unwrap_or("journal");
+        // Sanitize category to a single path component.
+        let category = category.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+        let category = if category.is_empty() { "journal" } else { category };
+        let (date, secs) = current_date_and_unix();
+        let rel = format!("{category}/{date}.md");
+        let Some(abs) = resolve_in_workspace(&self.root, &rel) else {
+            return tool_fail(self.id, "internal: journal path escaped workspace");
+        };
+        if let Some(parent) = abs.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let entry = format!("\n## {date} (t={secs})\n\n{content}\n");
+        use std::io::Write as _;
+        let res = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&abs)
+            .and_then(|mut f| f.write_all(entry.as_bytes()));
+        match res {
+            Ok(()) => ToolOutcome::Completed {
+                output: json!({ "appended_to": rel }),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => tool_fail(self.id, format!("cannot append note: {e}")),
+        }
+    }
+}
+
+/// `(YYYY-MM-DD, unix_seconds)` from the system clock — dep-free civil date
+/// (Howard Hinnant's `civil_from_days`), good for any date after 1970.
+fn current_date_and_unix() -> (String, u64) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    // civil_from_days: days since 1970-01-01 → (y, m, d).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (format!("{y:04}-{m:02}-{d:02}"), secs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +466,123 @@ mod tests {
             "my own notes"
         );
         assert!(root.join("journal").join("day1.md").is_file());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ---- workspace.* tools ------------------------------------------
+
+    fn run_execute(tool: &dyn Tool, input: Value) -> ToolOutcome {
+        use crate::{AgentId, CancellationToken, NullAuditHook, SessionId, TurnId};
+        struct NoopChannel {
+            session: SessionId,
+            token: CancellationToken,
+        }
+        #[async_trait]
+        impl crate::ChannelContext for NoopChannel {
+            fn channel_name(&self) -> &str { "test" }
+            fn platform(&self) -> crate::ChannelPlatform { crate::ChannelPlatform::Local }
+            fn trust_tier(&self) -> aivyx_capability::TrustTier {
+                aivyx_capability::TrustTier::Trusted
+            }
+            fn session_id(&self) -> SessionId { self.session }
+            async fn stream_event(&self, _e: crate::StreamEvent<'_>) -> Result<(), crate::ChannelError> { Ok(()) }
+            async fn finalize(&self, _o: &crate::TurnOutcome) -> Result<(), crate::ChannelError> { Ok(()) }
+            fn cancellation_token(&self) -> CancellationToken { self.token.clone() }
+        }
+        let channel = NoopChannel { session: SessionId::new(), token: CancellationToken::new() };
+        let audit = NullAuditHook;
+        let ctx = ToolContext {
+            agent_id: AgentId::new(),
+            session_id: channel.session,
+            turn_id: TurnId::new(),
+            channel: &channel,
+            audit: &audit,
+            cancellation: &channel.token,
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all().build().unwrap()
+            .block_on(tool.execute(input, &ctx))
+    }
+
+    fn tools_at(tag: &str) -> (std::path::PathBuf, Vec<Arc<dyn Tool>>) {
+        let root = tmp(tag);
+        provision_workspace(&root).unwrap();
+        let (tools, _) = build_workspace_tools(&root).unwrap();
+        (root, tools)
+    }
+    fn named<'a>(tools: &'a [Arc<dyn Tool>], name: &str) -> &'a dyn Tool {
+        tools.iter().find(|t| t.name() == name).expect("tool present").as_ref()
+    }
+
+    #[test]
+    fn write_then_read_roundtrips() {
+        let (root, tools) = tools_at("rw");
+        let w = run_execute(named(&tools, "workspace.write"),
+            json!({"path":"ideas/spark.md","content":"a bright idea"}));
+        assert!(matches!(w, ToolOutcome::Completed { .. }));
+        assert!(root.join("ideas/spark.md").is_file());
+        let r = run_execute(named(&tools, "workspace.read"), json!({"path":"ideas/spark.md"}));
+        match r {
+            ToolOutcome::Completed { output, .. } => assert_eq!(output["content"], "a bright idea"),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn note_appends_to_a_dated_journal_file() {
+        let (root, tools) = tools_at("note");
+        let n = run_execute(named(&tools, "workspace.note"),
+            json!({"content":"today I learned X"}));
+        let appended = match n {
+            ToolOutcome::Completed { output, .. } => output["appended_to"].as_str().unwrap().to_string(),
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        assert!(appended.starts_with("journal/") && appended.ends_with(".md"));
+        let body = std::fs::read_to_string(root.join(&appended)).unwrap();
+        assert!(body.contains("today I learned X"));
+        // A second note appends rather than clobbers.
+        run_execute(named(&tools, "workspace.note"), json!({"content":"second thought"}));
+        let body2 = std::fs::read_to_string(root.join(&appended)).unwrap();
+        assert!(body2.contains("today I learned X") && body2.contains("second thought"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_shows_seeded_structure() {
+        let (root, tools) = tools_at("list");
+        let l = run_execute(named(&tools, "workspace.list"), json!({}));
+        match l {
+            ToolOutcome::Completed { output, .. } => {
+                let names: Vec<&str> = output["entries"].as_array().unwrap()
+                    .iter().map(|e| e["name"].as_str().unwrap()).collect();
+                assert!(names.contains(&"journal") && names.contains(&"README.md"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_removes_a_file() {
+        let (root, tools) = tools_at("del");
+        std::fs::write(root.join("ideas/tmp.md"), "x").unwrap();
+        let d = run_execute(named(&tools, "workspace.delete"), json!({"path":"ideas/tmp.md"}));
+        assert!(matches!(d, ToolOutcome::Completed { .. }));
+        assert!(!root.join("ideas/tmp.md").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn traversal_outside_workspace_is_denied_by_scope() {
+        let (root, tools) = tools_at("traverse");
+        let read = named(&tools, "workspace.read");
+        // A `..` escape must yield the deny scope (not a real workspace path).
+        let scope = read.required_scope(&json!({"path":"../../etc/passwd"}));
+        assert!(scope.as_str().contains("__deny__"), "got: {}", scope.as_str());
+        // And an in-workspace path yields a real workspace scope.
+        let ok = read.required_scope(&json!({"path":"journal/x.md"}));
+        assert!(ok.as_str().starts_with("workspace:") && !ok.as_str().contains("__deny__"));
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -4511,7 +4511,7 @@ async fn run_async(
     // Idempotent: creates `~/.aivyx/workspace` + seed structure if absent.
     // Independent of fs_root / the access level. `workspace_root` is then
     // the root for the `workspace.*` tools (O.2). `enabled = false` ⇒ None.
-    let _workspace_root: Option<std::path::PathBuf> = if workspace_enabled.value {
+    let workspace_root: Option<std::path::PathBuf> = if workspace_enabled.value {
         let root = workspace_path.value;
         match aivyx_core::tools::workspace::provision_workspace(&root) {
             Ok(()) => {
@@ -5060,6 +5060,29 @@ async fn run_async(
             }
             None => None,
         };
+    // Chapter O — the agent's personal workspace tools (read/write/list/
+    // delete/note), rooted at `workspace_root` and always-on (independent of
+    // fs_root / the access level). The held `workspace:<root>/**` + bare-root
+    // grant goes into the backcompat floor below.
+    let workspace_scopes: Vec<Scope> = match &workspace_root {
+        Some(root) => match aivyx_core::tools::workspace::build_workspace_tools(root) {
+            Ok((tools, canonical)) => {
+                for t in tools {
+                    tool_list.push(t);
+                }
+                let r = canonical.display();
+                [format!("workspace:{r}/**"), format!("workspace:{r}")]
+                    .iter()
+                    .filter_map(|s| Scope::parse(s))
+                    .collect()
+            }
+            Err(e) => {
+                eprintln!("aivyx workspace: failed to build tools: {e} (workspace tools disabled)");
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
     // Phase 12 Task 2 — `web.fetch` is registered for both
     // channel kinds (Trusted and SemiTrusted). Unlike
     // `shell.exec`, no operator-scoped capability is appended
@@ -5904,6 +5927,11 @@ async fn run_async(
     if let Some(s) = fs_delete_scope {
         backcompat_floor.push(s);
         backcompat_floor.push(Scope::parse(&format!("fs.delete:{root_str}")).unwrap());
+    }
+    // Chapter O — grant the agent its workspace (`workspace:<wsroot>/**` +
+    // bare root). Always-on for the default role, independent of fs_root.
+    for s in workspace_scopes {
+        backcompat_floor.push(s);
     }
     // Phase 36 — grant ollama model management scopes in the
     // backcompat floor when provider is Ollama, so the default
