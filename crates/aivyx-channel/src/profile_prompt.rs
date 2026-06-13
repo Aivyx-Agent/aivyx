@@ -491,6 +491,25 @@ pub fn append_tool_catalog(
         }
     }
 
+    // Chapter O — the agent's own personal workspace. Distinct from the
+    // `fs.*` tools above (the operator's files) and from `memory.*` (recall
+    // facts): this is the agent's OWN space for free-form thinking. Path-
+    // free — the `workspace.*` tools resolve paths relative to the root —
+    // gated on a `workspace.*` tool being registered.
+    if tools.iter().any(|t| t.name.starts_with("workspace.")) {
+        out.push_str(
+            "\n\nYou have your OWN personal workspace — the `workspace.*` \
+             tools — separate from the operator's files (`fs.*`) and from \
+             your memory (`memory.*`). It is yours: use it freely for your \
+             own thoughts, ideas, plans, and multi-file projects. Jot a \
+             thought or journal with `workspace.note`; draft and revise \
+             longer work with `workspace.write` / `workspace.read` / \
+             `workspace.list`. Suggested buckets: `journal/`, `ideas/`, \
+             `plans/`, `projects/`. Paths are relative to your workspace \
+             root. The operator can see this space, so keep it legible.\n",
+        );
+    }
+
     out.trim_end().to_string()
 }
 
@@ -1198,6 +1217,23 @@ mod tests {
         .to_lowercase();
         assert!(!out.contains("sandbox"), "no fs tools → no sandbox note: {out}");
         assert!(!out.contains("/home/julian"), "no fs tools → no root note: {out}");
+    }
+
+    #[test]
+    fn append_tool_catalog_adds_workspace_note_when_workspace_tools_present() {
+        // Chapter O — the agent is told it has its OWN workspace, distinct
+        // from fs.* and memory.*.
+        let tools = vec![tool("workspace.note", "Append a journal entry")];
+        let out = append_tool_catalog("role", &tools, None).to_lowercase();
+        assert!(out.contains("own personal workspace"), "got: {out}");
+        assert!(out.contains("workspace.note"));
+    }
+
+    #[test]
+    fn append_tool_catalog_omits_workspace_note_without_workspace_tools() {
+        let tools = vec![tool("memory.write", "Store a memory")];
+        let out = append_tool_catalog("role", &tools, None).to_lowercase();
+        assert!(!out.contains("personal workspace"), "got: {out}");
     }
 
     #[test]
