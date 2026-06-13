@@ -32,6 +32,7 @@ pub mod role_switch;
 pub mod shell;
 pub mod skills;
 pub mod web_fetch;
+pub mod workspace;
 
 pub use fs::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,

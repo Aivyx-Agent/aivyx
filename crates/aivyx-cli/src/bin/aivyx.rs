@@ -3967,6 +3967,13 @@ async fn run_async(
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
         confirm_destructive,
+        // Chapter O — the agent's personal workspace. Provisioned + its
+        // tools registered below; the journaling fields are consumed by the
+        // proactive-journaling task (O.5).
+        workspace_enabled,
+        workspace_path,
+        workspace_journaling_enabled: _workspace_journaling_enabled,
+        workspace_journaling_interval_secs: _workspace_journaling_interval_secs,
         storage_path: _,
         memory_max_per_topic,
         passphrase: _,
@@ -4499,6 +4506,29 @@ async fn run_async(
     // `AuditWriter` / `AuditLog` traits).
     let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
+
+    // ---- Chapter O: provision the agent's personal workspace ----------
+    // Idempotent: creates `~/.aivyx/workspace` + seed structure if absent.
+    // Independent of fs_root / the access level. `workspace_root` is then
+    // the root for the `workspace.*` tools (O.2). `enabled = false` ⇒ None.
+    let _workspace_root: Option<std::path::PathBuf> = if workspace_enabled.value {
+        let root = workspace_path.value;
+        match aivyx_core::tools::workspace::provision_workspace(&root) {
+            Ok(()) => {
+                eprintln!("aivyx workspace: {}", root.display());
+                Some(root)
+            }
+            Err(e) => {
+                eprintln!(
+                    "aivyx workspace: failed to provision {}: {e} (workspace disabled)",
+                    root.display()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // ---- Tools --------------------------------------------------------
     // Build the Phase 4 filesystem tools. `FsReadToolConfig::build()`

@@ -72,6 +72,7 @@ impl EnvScope {
             "AIVYX_MODEL",
             "AIVYX_SYSTEM_PROMPT",
             "AIVYX_FS_ROOT",
+            "AIVYX_WORKSPACE",
             "AIVYX_STORAGE_PATH",
             "XDG_DATA_HOME",
             "HOME",
@@ -9669,5 +9670,63 @@ fn access_confirm_destructive_explicit_override() {
     assert_eq!(cfg.access_level.value, AccessLevel::Home);
     assert!(!cfg.confirm_destructive.value, "explicit override wins");
     assert_eq!(cfg.confirm_destructive.source, FieldSource::Toml);
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// Chapter O — agent workspace ([workspace] section)
+// ------------------------------------------------------------------
+
+/// Absent `[workspace]` ⇒ enabled, default path `$HOME/.aivyx/workspace`,
+/// journaling on at the default interval.
+#[test]
+fn workspace_absent_section_defaults_enabled() {
+    let env = EnvScope::new();
+    let home = std::env::var("HOME").expect("EnvScope sets HOME");
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+        .expect("load");
+    assert!(cfg.workspace_enabled.value);
+    assert_eq!(cfg.workspace_enabled.source, FieldSource::Default);
+    assert_eq!(
+        cfg.workspace_path.value,
+        PathBuf::from(home).join(".aivyx").join("workspace")
+    );
+    assert!(cfg.workspace_journaling_enabled.value);
+    assert_eq!(
+        cfg.workspace_journaling_interval_secs.value,
+        crate::DEFAULT_WORKSPACE_JOURNALING_INTERVAL_SECS
+    );
+    drop(env);
+}
+
+/// `[workspace]` overrides: disabled, custom path, journaling off + interval.
+#[test]
+fn workspace_explicit_overrides() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[workspace]\nenabled = false\npath = \"/tmp/ws\"\n\
+         [workspace.journaling]\nenabled = false\ninterval_secs = 300\n",
+        "ws-override",
+    );
+    assert!(!cfg.workspace_enabled.value);
+    assert_eq!(cfg.workspace_path.value, PathBuf::from("/tmp/ws"));
+    assert_eq!(cfg.workspace_path.source, FieldSource::Toml);
+    assert!(!cfg.workspace_journaling_enabled.value);
+    assert_eq!(cfg.workspace_journaling_interval_secs.value, 300);
+    assert_eq!(
+        cfg.workspace_journaling_interval_secs.source,
+        FieldSource::Toml
+    );
+    drop(env);
+}
+
+/// `AIVYX_WORKSPACE` env beats the TOML path.
+#[test]
+fn workspace_env_beats_toml_path() {
+    let env = EnvScope::new();
+    env.set("AIVYX_WORKSPACE", "/tmp/env-ws");
+    let cfg = load_with_toml("\n[workspace]\npath = \"/tmp/toml-ws\"\n", "ws-env");
+    assert_eq!(cfg.workspace_path.value, PathBuf::from("/tmp/env-ws"));
+    assert_eq!(cfg.workspace_path.source, FieldSource::Env);
     drop(env);
 }

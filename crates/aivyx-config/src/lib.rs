@@ -191,6 +191,11 @@ pub const DEFAULT_SYSTEM_PROMPT: &str =
 /// exposes the drift.
 pub const DEFAULT_MEMORY_MAX_PER_TOPIC: usize = 10_000;
 
+/// Chapter O — default proactive-journaling cadence: 6 hours. Bounded so the
+/// agent journals periodically without per-turn cost; only fires when there
+/// has been activity in the lookback window.
+pub const DEFAULT_WORKSPACE_JOURNALING_INTERVAL_SECS: u64 = 21_600;
+
 /// Name of the implicit role synthesized when a loaded config has no
 /// explicit `[[role]]` entries. Task 1 of Phase 11 introduced the
 /// [`Role`] primitive; the backwards-compatibility bridge synthesizes
@@ -651,6 +656,20 @@ pub struct AivyxConfig {
     /// gate for an operator confirmation (N.5). Defaults on for any level
     /// other than `sandbox`; `[access] confirm_destructive` overrides.
     pub confirm_destructive: Sourced<bool>,
+    /// Chapter O — whether the agent's personal workspace subsystem is on
+    /// (`workspace.*` tools, provisioning, journaling). Default true; absent
+    /// `[workspace]` ⇒ enabled. `enabled = false` ⇒ no workspace at all.
+    pub workspace_enabled: Sourced<bool>,
+    /// Chapter O — the agent's workspace directory. Resolution order:
+    /// `AIVYX_WORKSPACE` → `[workspace] path` → `$HOME/.aivyx/workspace`.
+    /// Independent of `fs_root` / the access level.
+    pub workspace_path: Sourced<PathBuf>,
+    /// Chapter O — whether proactive journaling fires on a cadence.
+    /// Default true. `[workspace.journaling] enabled` overrides.
+    pub workspace_journaling_enabled: Sourced<bool>,
+    /// Chapter O — proactive journaling cadence in seconds. Default
+    /// [`DEFAULT_WORKSPACE_JOURNALING_INTERVAL_SECS`].
+    pub workspace_journaling_interval_secs: Sourced<u64>,
     /// Encrypted-store path (redb file). Resolution order:
     /// `AIVYX_STORAGE_PATH` → TOML `storage.path` →
     /// `$XDG_DATA_HOME/aivyx/store.redb` → `$HOME/.local/share/aivyx/store.redb`.
@@ -3004,6 +3023,9 @@ struct RawToml {
     /// `[access]` section. Chapter N — operator-selectable access level.
     #[serde(default)]
     access: RawAccess,
+    /// `[workspace]` section. Chapter O — the agent's own workspace.
+    #[serde(default)]
+    workspace: RawWorkspace,
     #[serde(default)]
     storage: RawStorage,
     #[serde(default)]
@@ -3638,6 +3660,28 @@ struct RawAccess {
     root: Option<PathBuf>,
     #[serde(default)]
     confirm_destructive: Option<bool>,
+}
+
+/// `[workspace]` section. Chapter O — the agent's own always-available
+/// workspace directory (separate from `fs_root`). Absent section ⇒ enabled
+/// at the default path with journaling on.
+#[derive(Debug, Default, Deserialize)]
+struct RawWorkspace {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    journaling: RawWorkspaceJournaling,
+}
+
+/// `[workspace.journaling]` sub-section — the proactive journaling cadence.
+#[derive(Debug, Default, Deserialize)]
+struct RawWorkspaceJournaling {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -4284,6 +4328,8 @@ const ENV_ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 const ENV_MODEL: &str = "AIVYX_MODEL";
 const ENV_SYSTEM_PROMPT: &str = "AIVYX_SYSTEM_PROMPT";
 const ENV_FS_ROOT: &str = "AIVYX_FS_ROOT";
+/// Chapter O — env override for the agent workspace directory.
+const ENV_WORKSPACE: &str = "AIVYX_WORKSPACE";
 const ENV_STORAGE_PATH: &str = "AIVYX_STORAGE_PATH";
 const ENV_XDG_DATA_HOME: &str = "XDG_DATA_HOME";
 const ENV_HOME: &str = "HOME";
@@ -4471,6 +4517,38 @@ impl AivyxConfig {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(access_level.value.is_expanded(), FieldSource::Default),
         };
+
+        // --- workspace (Chapter O) ----------------------------------
+        // The agent's own always-available workspace, independent of
+        // `fs_root`. Path: AIVYX_WORKSPACE → `[workspace] path` →
+        // `$HOME/.aivyx/workspace`. Absent section ⇒ enabled at default.
+        let workspace_enabled = match toml.workspace.enabled {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(true, FieldSource::Default),
+        };
+        let workspace_path = match env_path(ENV_WORKSPACE) {
+            Some(p) => Sourced::new(p, FieldSource::Env),
+            None => match toml.workspace.path.clone() {
+                Some(p) => Sourced::new(p, FieldSource::Toml),
+                None => {
+                    let home = env_path(ENV_HOME)
+                        .ok_or(ConfigError::NoHome { field: "workspace_path" })?;
+                    Sourced::new(home.join(".aivyx").join("workspace"), FieldSource::Default)
+                }
+            },
+        };
+        let workspace_journaling_enabled = match toml.workspace.journaling.enabled {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(true, FieldSource::Default),
+        };
+        let workspace_journaling_interval_secs =
+            match toml.workspace.journaling.interval_secs {
+                Some(s) => Sourced::new(s, FieldSource::Toml),
+                None => Sourced::new(
+                    DEFAULT_WORKSPACE_JOURNALING_INTERVAL_SECS,
+                    FieldSource::Default,
+                ),
+            };
 
         // --- storage_path -------------------------------------------
         // Phase 8 logic: env → $XDG_DATA_HOME/aivyx/store.redb →
@@ -5863,6 +5941,10 @@ impl AivyxConfig {
             fs_root,
             access_level,
             confirm_destructive,
+            workspace_enabled,
+            workspace_path,
+            workspace_journaling_enabled,
+            workspace_journaling_interval_secs,
             storage_path,
             memory_max_per_topic,
             memory_ttl_secs,
