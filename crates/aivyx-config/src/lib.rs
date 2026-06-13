@@ -377,6 +377,21 @@ impl AccessLevel {
             AccessLevel::Custom => "custom",
         }
     }
+
+    /// Parse the lowercase wire/display name back into a level — the inverse
+    /// of [`as_str`](Self::as_str). `None` for an unknown token. The single
+    /// source of truth for the string⇄level mapping, shared by the CLI's
+    /// `aivyx access set` parser and the daemon's `SetAccessLevel` IPC handler.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "sandbox" => Some(AccessLevel::Sandbox),
+            "workspace" => Some(AccessLevel::Workspace),
+            "home" => Some(AccessLevel::Home),
+            "full" => Some(AccessLevel::Full),
+            "custom" => Some(AccessLevel::Custom),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for AccessLevel {

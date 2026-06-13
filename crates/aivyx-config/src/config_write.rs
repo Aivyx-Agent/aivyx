@@ -260,6 +260,20 @@ mod tests {
     }
 
     #[test]
+    fn access_level_from_wire_round_trips_as_str() {
+        for lvl in [
+            AccessLevel::Sandbox,
+            AccessLevel::Workspace,
+            AccessLevel::Home,
+            AccessLevel::Full,
+            AccessLevel::Custom,
+        ] {
+            assert_eq!(AccessLevel::from_wire(lvl.as_str()), Some(lvl));
+        }
+        assert_eq!(AccessLevel::from_wire("bogus"), None);
+    }
+
+    #[test]
     fn access_workspace_requires_root() {
         let path = temp_toml("ws");
         let err = write_access_section(&path, AccessLevel::Workspace, None).unwrap_err();

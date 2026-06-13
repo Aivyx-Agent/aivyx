@@ -89,17 +89,14 @@ pub fn run_access_set(
 
 /// Parse the `<level>` token of `aivyx access set`.
 pub fn parse_level(s: &str) -> Result<AccessLevel, String> {
-    match s {
-        "sandbox" => Ok(AccessLevel::Sandbox),
-        "workspace" => Ok(AccessLevel::Workspace),
-        "home" => Ok(AccessLevel::Home),
-        "full" => Ok(AccessLevel::Full),
-        "custom" => Ok(AccessLevel::Custom),
-        other => Err(format!(
-            "unknown access level `{other}`. \
+    // The string⇄level mapping lives once in `aivyx_config::AccessLevel`; this
+    // wraps it with the CLI's operator-facing error text.
+    AccessLevel::from_wire(s).ok_or_else(|| {
+        format!(
+            "unknown access level `{s}`. \
              Supported: sandbox, workspace, home, full, custom"
-        )),
-    }
+        )
+    })
 }
 
 fn render_access_for_show(cfg: &AivyxConfig) -> String {

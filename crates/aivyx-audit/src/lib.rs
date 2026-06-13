@@ -363,6 +363,25 @@ pub enum AuditEvent {
         /// would have been shown to approve.
         reason: String,
     },
+
+    /// Chapter U — an operator changed a config section via the Settings IPC
+    /// (`SetAccessLevel` / `SetBudget`) — the daemon's first config-**write**
+    /// path. The audit-chain record of a settings mutation: which `aivyx.toml`
+    /// section was rewritten and a human-readable summary of the new value(s).
+    ///
+    /// Self-contained per D4 (readable without joining siblings). The change is
+    /// written to disk but is load-time — it takes effect on the next daemon
+    /// start, so this records *what was set*, not a runtime state transition.
+    /// Every field is owned + `Eq` + `Serialize`, so the chain HMAC is computed
+    /// over canonical JSON without surprises (the HeadlessRefusal precedent).
+    ConfigChanged {
+        /// The `aivyx.toml` section rewritten: `"access"` or `"budget"`.
+        section: String,
+        /// Human-readable summary of the new value(s), e.g.
+        /// `"access level = home"` or
+        /// `"per_run_usd = 5, per_day_usd = none, on_exceeded = deny"`.
+        summary: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].

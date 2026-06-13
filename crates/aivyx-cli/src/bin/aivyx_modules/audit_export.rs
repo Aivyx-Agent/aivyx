@@ -226,6 +226,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::ProfileHintApplied { .. } => "ProfileHintApplied",
         AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
         AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
+        AuditEvent::ConfigChanged { .. } => "ConfigChanged",
     }
 }
 

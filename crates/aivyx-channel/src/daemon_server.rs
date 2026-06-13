@@ -1446,9 +1446,6 @@ struct ConnectionContext {
     /// Chapter U — path to the loaded `aivyx.toml` for the Settings IPC
     /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
     /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
-    // Threaded in U.1; first read by the U.2/U.3 Settings IPC handlers — the
-    // `allow` comes off once those land.
-    #[allow(dead_code)]
     config_toml_path: Option<PathBuf>,
 }
 
@@ -1491,9 +1488,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_config,
         team_missions,
         gate_policy,
-        // Threaded in U.1; the U.3 Settings IPC handlers rename this to
-        // `config_toml_path` and read it. Underscored until then.
-        config_toml_path: _config_toml_path,
+        config_toml_path,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2160,6 +2155,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 loop_state.as_ref(),
                                 loop_config.as_ref(),
                                 team_missions.as_ref(),
+                                config_toml_path.as_deref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2806,6 +2802,9 @@ async fn handle_query(
     loop_state: Option<&crate::loop_driver::SharedLoopState>,
     loop_config: Option<&aivyx_config::LoopConfig>,
     team_missions: Option<&crate::team_mission_driver::TeamMissionService>,
+    // Chapter U — the loaded `aivyx.toml` path for the Settings write
+    // handlers. `None` ⇒ env-only launch; the write handlers refuse.
+    config_toml_path: Option<&Path>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -3743,16 +3742,240 @@ async fn handle_query(
                 cadence,
             }
         }
-        // Chapter U — the Settings IPC handlers land in U.3. Stubbed here so
-        // the U.2 protocol additions compile and `main` stays green; replaced
-        // with the real GetSettings / SetAccessLevel / SetBudget handlers next.
-        QueryPayload::GetSettings
-        | QueryPayload::SetAccessLevel { .. }
-        | QueryPayload::SetBudget { .. } => QueryResponsePayload::QueryError {
-            code: "not_implemented".into(),
-            message: "settings IPC not yet implemented (Chapter U.3)".into(),
+        // Chapter U — the Settings screen's read + write handlers. Read-only
+        // `GetSettings` re-reads the on-disk config (the source of truth the
+        // operator edits); the two writers validate, rewrite the section via
+        // the shared `aivyx_config::config_write` helper, audit the change, and
+        // re-read so the response carries authoritative state.
+        QueryPayload::GetSettings => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match load_settings_config(path) {
+                Ok(cfg) => QueryResponsePayload::GetSettings {
+                    settings: settings_snapshot(&cfg, embedding_provider.is_some()),
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "config_load_failed".into(),
+                    message: e,
+                },
+            }
+        }
+        QueryPayload::SetAccessLevel { level, root, confirm } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let lvl = match aivyx_config::AccessLevel::from_wire(&level) {
+                Some(l) => l,
+                None => {
+                    return QueryResponsePayload::QueryError {
+                        code: "invalid_level".into(),
+                        message: format!(
+                            "unknown access level `{level}` \
+                             (sandbox | workspace | home | full | custom)"
+                        ),
+                    }
+                }
+            };
+            // Confirm-first gate (Chapter N) — enforced SERVER-SIDE, not just
+            // in the UI. Any expanded (non-sandbox) level needs confirm = true.
+            if lvl.is_expanded() && !confirm {
+                return QueryResponsePayload::QueryError {
+                    code: "confirm_required".into(),
+                    message: format!(
+                        "granting `{}` access reaches beyond the sandbox; \
+                         resend with confirm = true",
+                        lvl.as_str()
+                    ),
+                };
+            }
+            match aivyx_config::write_access_section(path, lvl, root.as_deref()) {
+                Ok(()) => {
+                    let summary = match root.as_deref() {
+                        Some(r) => format!("access level = {} (root = {r})", lvl.as_str()),
+                        None => format!("access level = {}", lvl.as_str()),
+                    };
+                    audit_config_change(audit_log, "access", &summary);
+                    settings_applied(path, embedding_provider.is_some())
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let action = match on_exceeded.as_deref() {
+                None | Some("deny") => aivyx_cost::BudgetAction::Deny,
+                Some("alert") => aivyx_cost::BudgetAction::Alert,
+                Some(other) => {
+                    return QueryResponsePayload::QueryError {
+                        code: "invalid_budget".into(),
+                        message: format!(
+                            "unknown on_exceeded `{other}` (expected alert | deny)"
+                        ),
+                    }
+                }
+            };
+            let budget = aivyx_cost::BudgetConfig {
+                per_run_usd,
+                per_day_usd,
+                on_exceeded: action,
+                alert_at,
+            };
+            match aivyx_config::write_budget_section(path, &budget) {
+                Ok(()) => {
+                    let summary = format!(
+                        "per_run_usd = {}, per_day_usd = {}, on_exceeded = {}, alert_at = {}",
+                        opt_usd(per_run_usd),
+                        opt_usd(per_day_usd),
+                        budget_action_label(action),
+                        opt_frac(alert_at),
+                    );
+                    audit_config_change(audit_log, "budget", &summary);
+                    settings_applied(path, embedding_provider.is_some())
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+    }
+}
+
+/// Chapter U — `QueryError` for a Settings write/read when the daemon was
+/// launched without an `aivyx.toml` (env-only). The handler refuses rather
+/// than fabricate a config path.
+fn no_config_file_error() -> QueryResponsePayload {
+    QueryResponsePayload::QueryError {
+        code: "no_config_file".into(),
+        message: "the daemon was launched without an aivyx.toml; settings are \
+                  not editable from here"
+            .into(),
+    }
+}
+
+/// Chapter U — load the on-disk config for the Settings snapshot. Inspection
+/// posture (no required secrets), same as `aivyx access show`.
+fn load_settings_config(toml_path: &Path) -> Result<aivyx_config::AivyxConfig, String> {
+    let opts = aivyx_config::LoadOptions {
+        toml_path: Some(toml_path.to_path_buf()),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    aivyx_config::AivyxConfig::load_from_env_and_toml(&opts)
+        .map_err(|e| format!("failed to load {}: {e}", toml_path.display()))
+}
+
+/// Chapter U — re-read the config from disk and return a `SettingsApplied`
+/// response. `restart_required` is always `true`: config is load-time, so a
+/// write updates the file but never the running daemon.
+fn settings_applied(toml_path: &Path, embeddings_available: bool) -> QueryResponsePayload {
+    match load_settings_config(toml_path) {
+        Ok(cfg) => QueryResponsePayload::SettingsApplied {
+            settings: settings_snapshot(&cfg, embeddings_available),
+            restart_required: true,
+        },
+        // The write succeeded but the re-read failed — surface it rather than
+        // claim a clean apply.
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("settings written, but reloading them failed: {e}"),
         },
     }
+}
+
+/// Chapter U — build the wire snapshot from a loaded config.
+fn settings_snapshot(
+    cfg: &aivyx_config::AivyxConfig,
+    embeddings_available: bool,
+) -> aivyx_ipc::protocol::SettingsSnapshot {
+    let b = &cfg.budget;
+    aivyx_ipc::protocol::SettingsSnapshot {
+        access_level: cfg.access_level.value.as_str().to_string(),
+        fs_root: cfg.fs_root.value.display().to_string(),
+        confirm_destructive: cfg.confirm_destructive.value,
+        provider: provider_label(cfg.provider.value).to_string(),
+        model: cfg.model.value.clone(),
+        num_ctx: cfg.ollama_options.num_ctx,
+        budget: aivyx_ipc::protocol::BudgetSnapshot {
+            per_run_usd: b.per_run_usd,
+            per_day_usd: b.per_day_usd,
+            on_exceeded: budget_action_label(b.on_exceeded).to_string(),
+            alert_at: b.alert_at,
+        },
+        embeddings_available,
+    }
+}
+
+/// Chapter U — append a `ConfigChanged` audit entry for a settings write.
+/// Best-effort: a write with no audit log (test fixture) is silently
+/// unaudited; an append failure is logged but does not fail the write (the
+/// file change already landed).
+fn audit_config_change(
+    audit_log: Option<&PersistentAuditLog>,
+    section: &str,
+    summary: &str,
+) {
+    if let Some(log) = audit_log {
+        if let Err(e) = log.append(aivyx_audit::AuditEvent::ConfigChanged {
+            section: section.to_string(),
+            summary: summary.to_string(),
+        }) {
+            eprintln!("aivyx daemon: failed to audit config change: {e}");
+        }
+    }
+}
+
+/// Chapter U — map a `ConfigWriteError` to a `QueryError` with a stable code.
+fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePayload {
+    use aivyx_config::ConfigWriteError as E;
+    let code = match &e {
+        E::RootRequired { .. } => "root_required",
+        E::RootNotAllowed { .. } => "root_not_allowed",
+        E::InvalidBudget { .. } => "invalid_budget",
+        E::Parse { .. } => "config_parse_failed",
+        E::Io { .. } => "config_write_failed",
+    };
+    QueryResponsePayload::QueryError {
+        code: code.into(),
+        message: e.to_string(),
+    }
+}
+
+/// Chapter U — display label for a provider in the read-only Settings card.
+fn provider_label(p: aivyx_config::ProviderKind) -> &'static str {
+    use aivyx_config::ProviderKind::*;
+    match p {
+        Anthropic => "anthropic",
+        OpenAi => "openai",
+        Ollama => "ollama",
+        LlamaCpp => "llamacpp",
+        Jan => "jan",
+        MistralRs => "mistralrs",
+    }
+}
+
+/// Chapter U — stable `[budget] on_exceeded` label (matches the toml repr).
+fn budget_action_label(a: aivyx_cost::BudgetAction) -> &'static str {
+    match a {
+        aivyx_cost::BudgetAction::Alert => "alert",
+        aivyx_cost::BudgetAction::Deny => "deny",
+    }
+}
+
+/// Chapter U — render an optional dollar cap for an audit summary.
+fn opt_usd(v: Option<f64>) -> String {
+    v.map(|n| format!("{n}")).unwrap_or_else(|| "none".to_string())
+}
+
+/// Chapter U — render an optional alert fraction for an audit summary.
+fn opt_frac(v: Option<f64>) -> String {
+    v.map(|n| format!("{n}")).unwrap_or_else(|| "none".to_string())
 }
 
 /// Phase 74 — convert an `aivyx_memory::MemoryEntry` into the
@@ -4089,6 +4312,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ProfileHintApplied { .. } => "ProfileHintApplied",
         aivyx_audit::AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
         aivyx_audit::AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
+        aivyx_audit::AuditEvent::ConfigChanged { .. } => "ConfigChanged",
     }
     .to_string();
 
@@ -5026,5 +5250,93 @@ mod tests {
             .expect("a called base with no descriptor must still get a row");
         assert!(!shell.registered);
         assert_eq!(shell.calls, 1);
+    }
+
+    // -- Chapter U Settings handlers --------------------------------------
+
+    fn settings_toml(name: &str, body: &str) -> PathBuf {
+        let dir = test_dir(name);
+        let path = dir.join("aivyx.toml");
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn settings_snapshot_reflects_the_loaded_config() {
+        // A populated config loads into a faithful snapshot. (Ollama needs no
+        // api key, so inspection-mode load succeeds offline.)
+        let path = settings_toml(
+            "settings-snapshot",
+            "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\n\
+             [access]\nlevel = \"home\"\n\
+             [budget]\nper_run_usd = 5.0\non_exceeded = \"deny\"\nalert_at = 0.8\n\
+             [ollama]\nnum_ctx = 16384\n",
+        );
+        let cfg = load_settings_config(&path).expect("load");
+        let snap = settings_snapshot(&cfg, true);
+        assert_eq!(snap.access_level, "home");
+        assert_eq!(snap.provider, "ollama");
+        assert_eq!(snap.model, "qwen3:8b");
+        assert_eq!(snap.num_ctx, Some(16384));
+        assert!(snap.confirm_destructive, "home is an expanded level");
+        assert_eq!(snap.budget.per_run_usd, Some(5.0));
+        assert_eq!(snap.budget.on_exceeded, "deny");
+        assert!(snap.embeddings_available);
+    }
+
+    #[test]
+    fn config_write_errors_map_to_stable_codes() {
+        let cases = [
+            (
+                aivyx_config::ConfigWriteError::RootRequired {
+                    level: aivyx_config::AccessLevel::Workspace,
+                },
+                "root_required",
+            ),
+            (
+                aivyx_config::ConfigWriteError::InvalidBudget {
+                    reason: "x".into(),
+                },
+                "invalid_budget",
+            ),
+            (
+                aivyx_config::ConfigWriteError::Io { reason: "x".into() },
+                "config_write_failed",
+            ),
+        ];
+        for (err, want) in cases {
+            match map_config_write_error(err) {
+                QueryResponsePayload::QueryError { code, .. } => assert_eq!(code, want),
+                other => panic!("expected QueryError, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn provider_and_budget_labels_match_the_wire_repr() {
+        use aivyx_config::ProviderKind;
+        assert_eq!(provider_label(ProviderKind::Anthropic), "anthropic");
+        assert_eq!(provider_label(ProviderKind::Ollama), "ollama");
+        assert_eq!(provider_label(ProviderKind::MistralRs), "mistralrs");
+        assert_eq!(budget_action_label(aivyx_cost::BudgetAction::Deny), "deny");
+        assert_eq!(budget_action_label(aivyx_cost::BudgetAction::Alert), "alert");
+    }
+
+    #[test]
+    fn no_config_file_error_is_typed() {
+        match no_config_file_error() {
+            QueryResponsePayload::QueryError { code, .. } => {
+                assert_eq!(code, "no_config_file")
+            }
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opt_renderers_handle_none() {
+        assert_eq!(opt_usd(None), "none");
+        assert_eq!(opt_usd(Some(5.0)), "5");
+        assert_eq!(opt_frac(None), "none");
+        assert_eq!(opt_frac(Some(0.8)), "0.8");
     }
 }
