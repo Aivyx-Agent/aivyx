@@ -17,10 +17,11 @@
 //! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
-    AuditEntrySummary, DaemonEnvelope, FrontendMessage, MemoryEntrySummary, ProfileSummary,
+    AuditEntrySummary, DaemonEnvelope, EffectivePersonaSummary, FrontendMessage, MemoryEntrySummary,
+    PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary, ProfileSummary,
     QueryPayload, QueryResponsePayload, SettingsSnapshot, StreamEventPayload,
 };
-use aivyx_ipc::{TeamMissionPhase, TeamMissionView};
+use aivyx_ipc::{ProposedPersonaDelta, TeamMissionPhase, TeamMissionView};
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
@@ -87,17 +88,29 @@ struct SettingsState {
     restart_required: bool,
 }
 
-/// Agents screen state — Chapter V. The on-disk Profile snapshot (the operator-
-/// declared identity layer) plus the last write outcome + the load-time
-/// "restart to apply" flag. V.4 extends this with the persona-governance data.
+/// Agents screen state — Chapter V. The operator-declared Profile half (V.3)
+/// plus the self-learned Persona-governance half (V.4): the folded effective
+/// persona, the pending proposals the operator gates, and the approved delta
+/// chain the operator can revert.
 #[derive(Clone, Default, PartialEq)]
 struct AgentsState {
     profile: Option<ProfileSummary>,
-    /// Last write outcome: `(ok, message)`. `None` until the first write.
+    /// The folded effective persona (read-only viewer). `None` until first load.
+    persona: Option<EffectivePersonaSummary>,
+    /// Pending persona proposals awaiting the operator's gate.
+    proposals: Vec<PersonaProposalSummary>,
+    /// The approved persona delta chain (newest first), each revertable.
+    deltas: Vec<PersonaDeltaSummary>,
+    /// Last write/action outcome: `(ok, message)`. `None` until the first one.
     notice: Option<(bool, String)>,
-    /// True after a successful Profile write — `aivyx.toml` is updated but the
-    /// running daemon won't pick it up until it restarts (Profile is load-time).
+    /// True after a successful **Profile** write — `aivyx.toml` is updated but
+    /// the running daemon won't pick it up until restart (Profile is load-time).
+    /// Persona actions are live (the daemon recomputes runtime state), so they
+    /// never set this.
     restart_required: bool,
+    /// Bumped on each persona resolve/revert ack so the panel re-queries the
+    /// proposals + deltas + effective persona (the live-refresh signal).
+    refresh_tick: u64,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -1206,6 +1219,18 @@ fn AgentsPanel() -> Element {
         ws.send(get_profile_query());
     });
 
+    // Persona governance load + live-refresh. The memo isolates the refresh tick
+    // so this effect re-runs ONLY on mount (tick 0) and after a resolve/revert
+    // ack bumps it — not on every unrelated AgentsState write (which would loop,
+    // since the queries below feed AgentsState).
+    let tick = use_memo(move || agents().refresh_tick);
+    use_effect(move || {
+        let _ = tick();
+        ws.send(get_effective_persona_query());
+        ws.send(list_proposals_query());
+        ws.send(list_deltas_query());
+    });
+
     // Seed the form whenever the snapshot content changes (first load + after a
     // successful write), but not on a notice-only change.
     let mut use_cases_s = use_cases;
@@ -1331,6 +1356,236 @@ fn AgentsPanel() -> Element {
                     "Save profile"
                 }
             }
+
+            // ── Self-learned persona (governance — never hand-edited) ──
+            div { class: "section-divider label-tech", "Self-learned persona" }
+            p { class: "label-tech persona-blurb",
+                "The agent proposes these from reflection; you approve or revert. \
+                 Changes apply on the next turn — no restart needed."
+            }
+
+            // Pending proposals — the operator's gate.
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "Pending proposals" }
+                    span { class: if st.proposals.is_empty() { "chip muted" } else { "chip amber" },
+                        "{st.proposals.len()}"
+                    }
+                }
+                if st.proposals.is_empty() {
+                    p { class: "label-tech sub", "Nothing awaiting review." }
+                } else {
+                    div { class: "proposal-list",
+                        for p in st.proposals.clone() {
+                            ProposalCard { key: "{p.id}", p }
+                        }
+                    }
+                }
+            }
+
+            // Effective persona — the folded, read-only view.
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Effective persona" } span { class: "chip", "read-only" } }
+                match st.persona.clone() {
+                    Some(p) if p.is_non_empty => rsx! {
+                        div { class: "persona-facets",
+                            PersonaFacet { label: "Learned context", items: p.learned_context }
+                            PersonaFacet { label: "Communication adaptations", items: p.communication_adaptations }
+                            PersonaFacet { label: "Character traits", items: p.character_traits }
+                            PersonaFacet { label: "Relationship milestones", items: p.relationship_milestones }
+                            PersonaFacet { label: "Behavioral preferences", items: p.behavioral_preferences }
+                            PersonaFacet { label: "Behavioral constraints", items: p.behavioral_constraints }
+                        }
+                    },
+                    _ => rsx! {
+                        p { class: "label-tech sub", "The agent hasn't learned anything yet." }
+                    },
+                }
+            }
+
+            // Change history — the approved delta chain, each revertable.
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Change history" } span { class: "chip", "{st.deltas.len()}" } }
+                if st.deltas.is_empty() {
+                    p { class: "label-tech sub", "No approved changes yet." }
+                } else {
+                    div { class: "delta-list",
+                        for d in st.deltas.clone() {
+                            DeltaRow { key: "{d.delta_id}", d }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One folded persona facet — a labeled list, rendered only when non-empty.
+#[component]
+fn PersonaFacet(label: String, items: Vec<String>) -> Element {
+    if items.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "facet",
+            span { class: "label-tech", "{label}" }
+            ul { class: "facet-list",
+                for item in items {
+                    li { "{item}" }
+                }
+            }
+        }
+    }
+}
+
+/// The three review modes a proposal card can be in.
+#[derive(Clone, Copy, PartialEq)]
+enum ProposalMode {
+    View,
+    Editing,
+    Rejecting,
+}
+
+/// One pending persona proposal with the operator's gate actions: approve,
+/// approve-with-edit (reword the proposed value), or reject with a reason.
+/// Chapter V — the self-learning human gate, in the Studio.
+#[component]
+fn ProposalCard(p: PersonaProposalSummary) -> Element {
+    let ws = use_context::<Sender>();
+    let mut mode = use_signal(|| ProposalMode::View);
+    let mut draft = use_signal(String::new);
+
+    let op_desc = render_op(&p.category, &p.proposed_op);
+    let editable = op_value(&p.proposed_op);
+    let pid = p.id.clone();
+    let category = p.category.clone();
+    let op = p.proposed_op.clone();
+
+    rsx! {
+        div { class: "glass-card proposal-card",
+            div { class: "panel-head",
+                h4 { "{p.category}" }
+                span { class: "chip amber", "pending" }
+            }
+            p { class: "op-desc", "{op_desc}" }
+            if let Some(reason) = p.proposed_reason.clone() {
+                p { class: "label-tech reason", "“{reason}”" }
+            }
+
+            match mode() {
+                ProposalMode::View => rsx! {
+                    div { class: "actions",
+                        {
+                            let pid_a = pid.clone();
+                            rsx! {
+                                button {
+                                    class: "btn btn-primary",
+                                    onclick: move |_| ws.send(resolve_proposal_query(
+                                        &pid_a, PersonaProposalResolution::Approve,
+                                    )),
+                                    "Approve"
+                                }
+                            }
+                        }
+                        if let Some(v) = editable.clone() {
+                            button {
+                                class: "btn btn-glass",
+                                onclick: move |_| { draft.set(v.clone()); mode.set(ProposalMode::Editing); },
+                                "Edit & approve"
+                            }
+                        }
+                        button {
+                            class: "btn btn-glass danger",
+                            onclick: move |_| { draft.set(String::new()); mode.set(ProposalMode::Rejecting); },
+                            "Reject"
+                        }
+                    }
+                },
+                ProposalMode::Editing => rsx! {
+                    div { class: "field-row",
+                        label { class: "label-tech", "Edited value" }
+                        input { class: "input", value: "{draft}", oninput: move |e| draft.set(e.value()) }
+                    }
+                    div { class: "actions",
+                        button { class: "btn btn-glass", onclick: move |_| mode.set(ProposalMode::View), "Cancel" }
+                        {
+                            let (pid_e, cat_e, op_e) = (pid.clone(), category.clone(), op.clone());
+                            rsx! {
+                                button {
+                                    class: "btn btn-primary",
+                                    onclick: move |_| {
+                                        if let Some(res) = approve_with_edited_value(&cat_e, &op_e, &draft()) {
+                                            ws.send(resolve_proposal_query(&pid_e, res));
+                                            mode.set(ProposalMode::View);
+                                        }
+                                    },
+                                    "Approve edit"
+                                }
+                            }
+                        }
+                    }
+                },
+                ProposalMode::Rejecting => rsx! {
+                    div { class: "field-row",
+                        label { class: "label-tech", "Reason (optional)" }
+                        input {
+                            class: "input", placeholder: "why you're rejecting…",
+                            value: "{draft}", oninput: move |e| draft.set(e.value()),
+                        }
+                    }
+                    div { class: "actions",
+                        button { class: "btn btn-glass", onclick: move |_| mode.set(ProposalMode::View), "Cancel" }
+                        {
+                            let pid_r = pid.clone();
+                            rsx! {
+                                button {
+                                    class: "btn btn-primary",
+                                    onclick: move |_| {
+                                        ws.send(resolve_proposal_query(
+                                            &pid_r,
+                                            PersonaProposalResolution::Reject { reason: opt_str(&draft()) },
+                                        ));
+                                        mode.set(ProposalMode::View);
+                                    },
+                                    "Confirm reject"
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// One approved persona delta with a two-click inline revert (reverting appends
+/// an inverse delta — the chain stays append-only). Chapter V.
+#[component]
+fn DeltaRow(d: PersonaDeltaSummary) -> Element {
+    let ws = use_context::<Sender>();
+    let mut confirming = use_signal(|| false);
+    let desc = render_op(&d.category, &d.op);
+    let did = d.delta_id.clone();
+
+    rsx! {
+        div { class: "delta-row",
+            div { class: "delta-main",
+                span { class: "chip", "#{d.seq}" }
+                span { class: "delta-cat label-tech", "{d.category}" }
+                span { class: "op-desc", "{desc}" }
+            }
+            if confirming() {
+                div { class: "actions",
+                    button { class: "btn btn-glass", onclick: move |_| confirming.set(false), "Cancel" }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| { ws.send(revert_delta_query(&did)); confirming.set(false); },
+                        "Confirm revert"
+                    }
+                }
+            } else {
+                button { class: "btn btn-glass", onclick: move |_| confirming.set(true), "Revert" }
+            }
         }
     }
 }
@@ -1438,6 +1693,99 @@ fn opt_list(v: &[String]) -> Option<Vec<String>> {
     } else {
         Some(cleaned)
     }
+}
+
+// ── Persona governance queries (Chapter V.4) — all over existing IPC. ──
+
+fn get_effective_persona_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-agents-persona".to_string(),
+        payload: QueryPayload::GetEffectivePersona,
+    }
+}
+
+fn list_proposals_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-agents-proposals".to_string(),
+        payload: QueryPayload::ListPersonaProposals { status_filter: "pending".to_string(), limit: 50 },
+    }
+}
+
+fn list_deltas_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-agents-deltas".to_string(),
+        payload: QueryPayload::ListPersonaDeltas { from_seq: 0, limit: 50 },
+    }
+}
+
+fn resolve_proposal_query(
+    proposal_id: &str,
+    resolution: PersonaProposalResolution,
+) -> FrontendMessage {
+    FrontendMessage::ResolvePersonaProposal {
+        id: format!("mc-agents-resolve-{proposal_id}"),
+        proposal_id: proposal_id.to_string(),
+        resolution,
+    }
+}
+
+fn revert_delta_query(target_delta_id: &str) -> FrontendMessage {
+    FrontendMessage::RevertPersonaDelta {
+        id: format!("mc-agents-revert-{target_delta_id}"),
+        target_delta_id: target_delta_id.to_string(),
+    }
+}
+
+/// Render a persona delta `op` JSON (`{kind, value}`) into a human sentence for
+/// the proposal/delta cards. Mirrors `PersonaDeltaOp`'s serde repr.
+fn render_op(category: &str, op: &serde_json::Value) -> String {
+    let kind = op.get("kind").and_then(|k| k.as_str()).unwrap_or("?");
+    let value = op
+        .get("value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    match kind {
+        "SetScalar" => format!("set {category} → “{value}”"),
+        "AppendList" => format!("add to {category}: “{value}”"),
+        "RemoveList" => format!("remove from {category}: “{value}”"),
+        "Revert" => format!("revert a prior {category} change"),
+        other => format!("{category}: {other}"),
+    }
+}
+
+/// The single editable string value of an op, for `SetScalar`/`AppendList`/
+/// `RemoveList` — the kinds the operator can reword on approve. `None` for ops
+/// with no editable string (so the "Edit & approve" affordance is hidden).
+fn op_value(op: &serde_json::Value) -> Option<String> {
+    match op.get("kind").and_then(|k| k.as_str()) {
+        Some("SetScalar") | Some("AppendList") | Some("RemoveList") => op
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Build an `ApproveWithEdit` resolution from a proposal's category + op with
+/// the operator's reworded value. Reconstructs a typed `ProposedPersonaDelta`
+/// by deserialization (the summary's category label equals the serde repr; the
+/// op JSON is `PersonaDeltaOp`'s own serde shape), so the daemon re-validates
+/// and re-signs the edited op exactly as it would a fresh proposal. Returns
+/// `None` if the edited op fails to reconstruct (then the caller does nothing).
+fn approve_with_edited_value(
+    category: &str,
+    op: &serde_json::Value,
+    new_value: &str,
+) -> Option<PersonaProposalResolution> {
+    let mut edited_op = op.clone();
+    if let Some(obj) = edited_op.as_object_mut() {
+        obj.insert("value".to_string(), serde_json::Value::String(new_value.to_string()));
+    }
+    let pd_json = serde_json::json!({ "category": category, "op": edited_op });
+    serde_json::from_value::<ProposedPersonaDelta>(pd_json)
+        .ok()
+        .map(|edited_op| PersonaProposalResolution::ApproveWithEdit { edited_op })
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,6 +1946,50 @@ async fn ws_task(
                     a.profile = Some(profile);
                     a.restart_required = restart_required;
                     a.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetEffectivePersona { persona },
+                    ..
+                } => {
+                    agents.write().persona = Some(persona);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListPersonaProposals { proposals, .. },
+                    ..
+                } => {
+                    agents.write().proposals = proposals;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListPersonaDeltas { mut entries, .. },
+                    ..
+                } => {
+                    // Newest first for the change-history view.
+                    entries.reverse();
+                    agents.write().deltas = entries;
+                }
+                // Persona governance acks (live — the daemon has already
+                // recomputed runtime state). Bump the refresh tick so the panel
+                // re-queries proposals + deltas + the folded persona.
+                DaemonEnvelope::PersonaProposalResolved { ok, success, error, .. } => {
+                    let mut a = agents.write();
+                    a.refresh_tick += 1;
+                    a.notice = Some(if ok {
+                        let status = success
+                            .map(|s| s.proposal_status.to_lowercase())
+                            .unwrap_or_else(|| "resolved".to_string());
+                        (true, format!("Proposal {status} — effective next turn."))
+                    } else {
+                        (false, error.unwrap_or_else(|| "resolve failed".to_string()))
+                    });
+                }
+                DaemonEnvelope::PersonaRevertResolved { ok, error, .. } => {
+                    let mut a = agents.write();
+                    a.refresh_tick += 1;
+                    a.notice = Some(if ok {
+                        (true, "Delta reverted — effective next turn.".to_string())
+                    } else {
+                        (false, error.unwrap_or_else(|| "revert failed".to_string()))
+                    });
                 }
                 // Route a Settings write/read failure to its panel (the query
                 // ids are prefixed so other QueryErrors don't hijack the banner).

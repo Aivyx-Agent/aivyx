@@ -514,3 +514,38 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 
 /* Save action pinned to the bottom of the Agents column. */
 .sticky-save { justify-content: flex-end; padding-top: 4px; }
+
+/* ── Persona governance (V.4) — proposals, effective viewer, change history. ── */
+.section-divider {
+  margin-top: 12px; padding-top: 16px;
+  border-top: 1px solid var(--color-border-ghost);
+  color: var(--color-primary);
+}
+.persona-blurb { margin: -4px 0 0; color: var(--color-text-secondary); }
+
+.proposal-list { display: flex; flex-direction: column; gap: 12px; }
+.proposal-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
+.proposal-card h4 { font-size: 14px; font-family: var(--font-mono); }
+.op-desc { margin: 0; font-size: 14px; color: var(--color-text-primary); }
+.reason { margin: 0; font-style: italic; color: var(--color-text-secondary); }
+.proposal-card .actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.proposal-card .field-row { grid-template-columns: 120px 1fr; }
+.btn-glass.danger { color: var(--color-error); }
+
+/* Effective-persona folded viewer. */
+.persona-facets { display: flex; flex-direction: column; gap: 14px; }
+.facet { display: flex; flex-direction: column; gap: 6px; }
+.facet-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.facet-list li { font-size: 13px; color: var(--color-text-primary); }
+
+/* Change-history delta rows. */
+.delta-list { display: flex; flex-direction: column; gap: 8px; }
+.delta-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border-radius: 0.375rem;
+  background: var(--color-bg-raised); border: 1px solid var(--color-border-ghost);
+}
+.delta-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.delta-cat { color: var(--color-text-secondary); }
+.delta-row .op-desc { font-size: 13px; }
+.delta-row .actions { display: flex; gap: 8px; flex: none; }
