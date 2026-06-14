@@ -1126,6 +1126,37 @@ pub struct SeedSkillWire {
     pub procedure: String,
 }
 
+/// Chapter Z — one entry in a `ListDir` response. Read-only directory listing
+/// for the Studio's Documents browser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocEntry {
+    /// File / directory name (no path — relative to the listed directory).
+    pub name: String,
+    /// `"dir" | "file" | "symlink" | "other"`.
+    pub kind: String,
+    /// Size in bytes (`0` for directories).
+    pub size_bytes: u64,
+}
+
+/// Chapter Z — a file's contents for the Documents viewer. `content` is `None`
+/// when the file is binary or larger than the read cap (the UI then shows a
+/// "not shown" note from `size_bytes` / `binary`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocFile {
+    /// The requested relative path (echoed for the viewer header).
+    pub path: String,
+    /// Full size on disk in bytes.
+    pub size_bytes: u64,
+    /// UTF-8 text contents, capped at the read limit; `None` when binary or
+    /// over the cap.
+    pub content: Option<String>,
+    /// `true` when `content` holds only the first `cap` bytes of a larger file.
+    pub truncated: bool,
+    /// `true` when the file looked binary (NUL byte / invalid UTF-8) — `content`
+    /// is then `None`.
+    pub binary: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------

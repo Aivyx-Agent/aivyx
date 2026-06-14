@@ -32,6 +32,7 @@ pub mod daemon_client;
 pub mod daemon_ipc;
 pub mod daemon_scheduler;
 pub mod daemon_server;
+pub mod document_browse;
 pub mod mission;
 pub mod mission_tool;
 pub mod schedule;
