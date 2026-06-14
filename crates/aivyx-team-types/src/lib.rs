@@ -19,3 +19,6 @@ pub mod mission;
 
 pub use config::{DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALISTS};
 pub use mission::{GateMode, MissionPlan, Step, StepKind};
+// Re-exported so consumers (the Teams screen, IPC round-trip tests) can name
+// `TeamMember::trust_ceiling`'s type without depending on `aivyx-capability`.
+pub use aivyx_capability::TrustTier;

@@ -3300,6 +3300,15 @@ async fn handle_query(
                 mission: svc.snapshot(&mission_id),
             }
         }
+        QueryPayload::GetTeamRoster => {
+            // Chapter Y — the active team roster for the Studio's Teams screen.
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            QueryResponsePayload::GetTeamRoster {
+                roster: svc.team_config(),
+            }
+        }
         QueryPayload::ResolveTeamGate { mission_id, step, approve } => {
             let Some(svc) = team_missions else {
                 return no_team_missions();

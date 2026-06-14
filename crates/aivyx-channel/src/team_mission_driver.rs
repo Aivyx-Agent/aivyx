@@ -344,6 +344,12 @@ impl TeamMissionService {
         self.state.list()
     }
 
+    /// Chapter Y — the active team roster (the `TeamConfig` this service
+    /// assembles per run). The Studio's `GetTeamRoster` handler renders it.
+    pub fn team_config(&self) -> TeamConfig {
+        self.config.clone()
+    }
+
     /// Register a mission from an explicit plan and **spawn** its drive,
     /// returning the new id immediately. `config` pins a vertical pack (`None`
     /// ⇒ the daemon default team). The drive runs to the first human gate or
@@ -1043,6 +1049,23 @@ mod tests {
         let rec = svc.snapshot(&id).unwrap();
         assert!(rec.config.is_none(), "no pack → no pinned config");
         assert_eq!(rec.to_view().lead, "coordinator", "feed falls back to the Nonagon lead");
+    }
+
+    #[tokio::test]
+    async fn team_config_accessor_returns_the_active_roster() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps("ok"),
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let cfg = svc.team_config();
+        assert_eq!(cfg, default_nonagon(), "accessor returns the assembled roster");
+        assert!(!cfg.members.is_empty());
+        assert!(
+            cfg.members.iter().any(|m| m.name == cfg.lead),
+            "the lead is one of the members",
+        );
     }
 
     #[tokio::test]

@@ -312,6 +312,12 @@ pub enum QueryPayload {
     TeamMissionStatus {
         mission_id: String,
     },
+    /// Chapter Y — fetch the daemon's active team roster (the Nonagon
+    /// `TeamConfig`: lead + specialists, each with role / trust / scopes /
+    /// tools / soul). Read-only; the Studio's Teams screen renders it. Responds
+    /// with [`QueryResponsePayload::GetTeamRoster`] (or `QueryError` `no_team`
+    /// when the daemon has no team service).
+    GetTeamRoster,
     /// Chapter L (L.5) — approve or reject a mission paused at a human-approval
     /// gate. Responds with [`QueryResponsePayload::TeamGateResolved`].
     ResolveTeamGate {
@@ -730,6 +736,11 @@ pub enum QueryResponsePayload {
     TeamGateResolved {
         mission_id: String,
         phase: crate::TeamMissionPhase,
+    },
+    /// Chapter Y — response to [`QueryPayload::GetTeamRoster`]. The daemon's
+    /// active team configuration, rendered as-is by the Studio's Teams screen.
+    GetTeamRoster {
+        roster: aivyx_team_types::TeamConfig,
     },
     /// Response to [`QueryPayload::GetSettings`]. Chapter U — the daemon's
     /// effective config snapshot for the Settings screen.
@@ -2632,6 +2643,50 @@ mod tests {
         let frame = encode_frame(&resolved).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resolved);
+    }
+
+    #[test]
+    fn get_team_roster_round_trips_the_full_config() {
+        use aivyx_team_types::{DialogueConfig, TeamConfig, TeamMember, TrustTier};
+
+        let roster = TeamConfig {
+            name: "Nonagon".into(),
+            description: "the default nine".into(),
+            lead: "orchestrator".into(),
+            members: vec![
+                TeamMember {
+                    name: "orchestrator".into(),
+                    role: "Lead / Orchestrator".into(),
+                    soul: "You coordinate the team.".into(),
+                    tool_allowlist: vec!["team.message".into()],
+                    capability_scopes: vec!["fs.read".into()],
+                    trust_ceiling: TrustTier::Trusted,
+                },
+                TeamMember {
+                    name: "researcher".into(),
+                    role: "Research".into(),
+                    soul: "You gather facts.".into(),
+                    tool_allowlist: vec![],
+                    capability_scopes: vec![],
+                    trust_ceiling: TrustTier::SemiTrusted,
+                },
+            ],
+            dialogue: DialogueConfig::default(),
+        };
+        let req = FrontendMessage::Query {
+            id: "mc-teams".into(),
+            payload: QueryPayload::GetTeamRoster,
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        let resp = QueryResponsePayload::GetTeamRoster {
+            roster: roster.clone(),
+        };
+        let frame = encode_frame(&resp).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resp, "the full TeamConfig survives the frame");
     }
 
     // ---- Chapter U Settings IPC round-trip ----
