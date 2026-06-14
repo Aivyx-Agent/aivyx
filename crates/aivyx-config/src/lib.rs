@@ -99,7 +99,10 @@ use aivyx_storage::{KeyDomain, Storage};
 // `[access]` / `[budget]` rewriter used by both `aivyx access set` and the
 // daemon's Settings IPC handlers).
 pub mod config_write;
-pub use config_write::{write_access_section, write_budget_section, ConfigWriteError};
+pub use config_write::{
+    write_access_section, write_budget_section, write_profile_section, ConfigWriteError,
+    ProfileWrite,
+};
 
 // --------------------------------------------------------------------
 // FieldSource & Sourced<T>

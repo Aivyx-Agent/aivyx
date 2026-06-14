@@ -161,6 +161,96 @@ pub fn write_budget_section(path: &Path, budget: &BudgetConfig) -> Result<(), Co
     write_toml_0600(path, &doc.to_string())
 }
 
+/// The six operator-declared `[profile]` fields, in the carrier the daemon's
+/// `SetProfile` handler fills from IPC. Mirrors the loader's `RawProfile`
+/// shape (Chapter V §9.1): all fields optional, with **clear-on-`None`**
+/// semantics — a `None` removes the key (the loader falls back to its default,
+/// e.g. `assistant_name` → `"Aivyx"`), a `Some` writes it.
+///
+/// Values are normalized on write: scalars are trimmed (an all-whitespace
+/// scalar clears the key), and list entries are trimmed with empties dropped —
+/// so the form's blank rows never reach disk.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileWrite {
+    pub assistant_name: Option<String>,
+    pub operator_profile: Option<String>,
+    pub communication_style: Option<String>,
+    pub primary_use_cases: Option<Vec<String>>,
+    pub behavioral_preferences: Option<Vec<String>>,
+    pub behavioral_constraints: Option<Vec<String>>,
+}
+
+/// Rewrite the `[profile]` section of the TOML file at `path`, preserving every
+/// other section and the operator's comments — the surgical-splice posture of
+/// `aivyx profile edit`, but driven by structured fields instead of an editor
+/// round-trip.
+///
+/// Each field follows clear-on-`None` (see [`ProfileWrite`]): a present value
+/// is normalized and written; an absent one removes the key so the loader's
+/// default applies. There is nothing to *validate* here — Profile fields are
+/// free-form declarations — so this never fails on content, only on I/O or a
+/// malformed existing file.
+pub fn write_profile_section(path: &Path, profile: &ProfileWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+
+    set_or_clear_profile_str(&mut doc, "assistant_name", profile.assistant_name.as_deref());
+    set_or_clear_profile_str(&mut doc, "operator_profile", profile.operator_profile.as_deref());
+    set_or_clear_profile_str(
+        &mut doc,
+        "communication_style",
+        profile.communication_style.as_deref(),
+    );
+    set_or_clear_profile_list(&mut doc, "primary_use_cases", profile.primary_use_cases.as_deref());
+    set_or_clear_profile_list(
+        &mut doc,
+        "behavioral_preferences",
+        profile.behavioral_preferences.as_deref(),
+    );
+    set_or_clear_profile_list(
+        &mut doc,
+        "behavioral_constraints",
+        profile.behavioral_constraints.as_deref(),
+    );
+
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Set `[profile].<key>` to the trimmed scalar, or remove the key when the
+/// value is `None` or trims to empty (the loader's default then applies).
+fn set_or_clear_profile_str(doc: &mut DocumentMut, key: &str, v: Option<&str>) {
+    match v.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => doc["profile"][key] = value(s),
+        None => remove_profile_key(doc, key),
+    }
+}
+
+/// Set `[profile].<key>` to a TOML array of the trimmed, non-empty entries, or
+/// remove the key when the list is `None`. An explicit `Some(vec![])` (or a
+/// list of only blanks) writes an empty array — "declared, but empty" — which
+/// is distinct from the key being absent.
+fn set_or_clear_profile_list(doc: &mut DocumentMut, key: &str, v: Option<&[String]>) {
+    match v {
+        Some(items) => {
+            let mut arr = toml_edit::Array::new();
+            for item in items {
+                let t = item.trim();
+                if !t.is_empty() {
+                    arr.push(t);
+                }
+            }
+            doc["profile"][key] = value(arr);
+        }
+        None => remove_profile_key(doc, key),
+    }
+}
+
+/// Remove `key` from the `[profile]` table if the table exists.
+fn remove_profile_key(doc: &mut DocumentMut, key: &str) {
+    if let Some(t) = doc.get_mut("profile").and_then(|p| p.as_table_mut()) {
+        t.remove(key);
+    }
+}
+
 /// Stable `[budget] on_exceeded` token — matches `BudgetAction`'s
 /// `#[serde(rename_all = "snake_case")]` repr so a written file round-trips
 /// through the loader unchanged.
@@ -372,6 +462,106 @@ mod tests {
         };
         let err = write_budget_section(&path, &b).unwrap_err();
         assert!(matches!(err, ConfigWriteError::InvalidBudget { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn profile_writes_scalars_and_lists() {
+        let path = temp_toml("profile");
+        let p = ProfileWrite {
+            assistant_name: Some("Aria".to_string()),
+            operator_profile: Some("Indie game dev".to_string()),
+            communication_style: Some("terse".to_string()),
+            primary_use_cases: Some(vec!["coding".to_string(), "research".to_string()]),
+            behavioral_preferences: Some(vec!["cite sources".to_string()]),
+            behavioral_constraints: Some(vec!["no secrets in logs".to_string()]),
+        };
+        write_profile_section(&path, &p).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("assistant_name = \"Aria\""), "{out}");
+        assert!(out.contains("operator_profile = \"Indie game dev\""), "{out}");
+        assert!(out.contains("communication_style = \"terse\""), "{out}");
+        assert!(out.contains(r#"primary_use_cases = ["coding", "research"]"#), "{out}");
+        assert!(out.contains(r#"behavioral_preferences = ["cite sources"]"#), "{out}");
+        assert!(out.contains(r#"behavioral_constraints = ["no secrets in logs"]"#), "{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn profile_clears_none_fields() {
+        let path = temp_toml("profile-clear");
+        std::fs::write(
+            &path,
+            "[profile]\nassistant_name = \"Old\"\noperator_profile = \"gone\"\nprimary_use_cases = [\"a\"]\n",
+        )
+        .unwrap();
+        let p = ProfileWrite {
+            assistant_name: Some("New".to_string()),
+            // operator_profile + primary_use_cases left None → cleared
+            ..Default::default()
+        };
+        write_profile_section(&path, &p).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("assistant_name = \"New\""), "{out}");
+        assert!(!out.contains("operator_profile"), "None scalar must be cleared: {out}");
+        assert!(!out.contains("primary_use_cases"), "None list must be cleared: {out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn profile_normalizes_blanks() {
+        let path = temp_toml("profile-blank");
+        let p = ProfileWrite {
+            // all-whitespace scalar → cleared (treated as None)
+            assistant_name: Some("   ".to_string()),
+            // list with blanks → trimmed, empties dropped
+            primary_use_cases: Some(vec![
+                "  coding  ".to_string(),
+                "".to_string(),
+                "   ".to_string(),
+                "ops".to_string(),
+            ]),
+            ..Default::default()
+        };
+        write_profile_section(&path, &p).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(!out.contains("assistant_name"), "blank scalar must clear: {out}");
+        assert!(out.contains(r#"primary_use_cases = ["coding", "ops"]"#), "{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn profile_explicit_empty_list_is_declared_empty() {
+        let path = temp_toml("profile-empty-list");
+        let p = ProfileWrite {
+            behavioral_preferences: Some(vec![]),
+            ..Default::default()
+        };
+        write_profile_section(&path, &p).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        // Some(vec![]) is "declared but empty" — distinct from absent.
+        assert!(out.contains("behavioral_preferences = []"), "{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn profile_preserves_other_sections_and_comments() {
+        let path = temp_toml("profile-preserve");
+        std::fs::write(
+            &path,
+            "# top comment\n[agent]\nprovider = \"ollama\"\n\n[access]\nlevel = \"home\"\n",
+        )
+        .unwrap();
+        let p = ProfileWrite {
+            assistant_name: Some("Aivyx".to_string()),
+            ..Default::default()
+        };
+        write_profile_section(&path, &p).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# top comment"), "comment preserved: {out}");
+        assert!(out.contains("provider = \"ollama\""), "[agent] preserved: {out}");
+        assert!(out.contains("level = \"home\""), "[access] preserved: {out}");
+        assert!(out.contains("assistant_name = \"Aivyx\""), "{out}");
+        std::fs::remove_file(&path).ok();
     }
 
     #[cfg(unix)]
