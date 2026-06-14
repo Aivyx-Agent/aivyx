@@ -110,6 +110,17 @@ Parsed into a `PersonaSeed` (all fields optional/empty-default). Absent section 
 | **W.4** | `aivyx init` wizard capture → writes `[persona_seed]` via the config writer; optionally badge seeded deltas in the Agents Change History. |
 | **W.5** | Finalize: e2e, docs, memory, push. |
 
+**Status: W.0–W.5 COMPLETE + live-verified.** `aivyx init` captures an optional
+seed → `[persona_seed]` → the daemon plants it on the signed chain at first boot
+(iff empty) → the agent adopts it turn-one. Live run: a 4-delta seed (traits +
+context + skill) appeared on `ListPersonaDeltas` all stamped `genesis-seed`,
+folded into `GetEffectivePersona` (`is_non_empty = true`), recorded one
+`PersonaSeeded` audit entry, and **did not re-seed on restart**. The Agents
+Change-History view badges `genesis-seed` deltas with a `seed` chip. The
+generated `[persona_seed]` round-trips through the config loader (a wizard test
+asserts it). Deferred (still): a **web** onboarding surface that authors the
+seed, LLM-assisted seed drafting, and promoting `genesis.rs` into production.
+
 ## Out of scope (follow-ons)
 
 - A **web** onboarding surface that authors the seed (the config-driven mechanism

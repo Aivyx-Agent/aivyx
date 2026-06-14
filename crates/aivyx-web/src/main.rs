@@ -1572,6 +1572,11 @@ fn DeltaRow(d: PersonaDeltaSummary) -> Element {
         div { class: "delta-row",
             div { class: "delta-main",
                 span { class: "chip", "#{d.seq}" }
+                // Mark deltas planted by the onboarding seed (W.2 sentinel) so
+                // they're visibly distinct from the agent's learned deltas.
+                if d.proposal_id == "genesis-seed" {
+                    span { class: "chip sage", title: "Planted at first launch from [persona_seed]", "seed" }
+                }
                 span { class: "delta-cat label-tech", "{d.category}" }
                 span { class: "op-desc", "{desc}" }
             }
