@@ -130,11 +130,27 @@ pub enum QueryPayload {
     VerifyAuditChain,
     /// Phase 58 — fetch the daemon's loaded `Profile`
     /// (PRODUCT.md P13). Read-only inspection. Returns a
-    /// [`ProfileSummary`] snapshot of the in-memory state; same
-    /// values the daemon is using for system-prompt assembly. The
-    /// CLI `aivyx profile show` reads from disk directly; this
-    /// query is the Web UI counterpart.
-    GetProfile,
+    /// [`ProfileSummary`].
+    ///
+    /// `from_disk` (Chapter V) selects which Profile:
+    /// - `false` (default) — the **running** snapshot the daemon is
+    ///   actually using for system-prompt assembly (the boot-time
+    ///   `Arc<Profile>`). This is the Command-Center / status meaning.
+    /// - `true` — re-read the **on-disk** `[profile]` from `aivyx.toml`
+    ///   (the same source the Agents editor *writes*, and what the next
+    ///   restart will load). The two diverge after a `SetProfile` write
+    ///   that hasn't been applied by a restart yet; the editor seeds from
+    ///   `from_disk = true` so what you load equals what you edit.
+    ///   Falls back to the running snapshot when the daemon was launched
+    ///   without an `aivyx.toml`.
+    ///
+    /// `#[serde(default)]` keeps the field absent on the wire for
+    /// pre-Chapter-V clients (`{"kind":"GetProfile"}` decodes to
+    /// `from_disk = false`), so the running-state meaning is unchanged.
+    GetProfile {
+        #[serde(default)]
+        from_disk: bool,
+    },
     /// Phase 60 — fetch the daemon's current effective Persona
     /// (PRODUCT.md P14). Read-only inspection. Returns the
     /// folded state — same values the assemble_session_prompt
@@ -1779,7 +1795,7 @@ mod tests {
             // Phase 58 — Profile inspection query.
             FrontendMessage::Query {
                 id: "q-006".into(),
-                payload: QueryPayload::GetProfile,
+                payload: QueryPayload::GetProfile { from_disk: false },
             },
             // Phase 60 — Persona inspection queries.
             FrontendMessage::Query {
@@ -2673,6 +2689,26 @@ mod tests {
             let frame = encode_frame(&msg).expect("encode");
             let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
             assert_eq!(decoded, msg, "set-profile query round-trips");
+        }
+    }
+
+    #[test]
+    fn get_profile_from_disk_defaults_false_and_round_trips() {
+        // Wire-compat: a pre-Chapter-V client sends `{"kind":"GetProfile"}`
+        // with no `from_disk` field; it must decode to the running-state
+        // meaning (`false`), never silently re-reading disk.
+        let legacy: QueryPayload = serde_json::from_str(r#"{"kind":"GetProfile"}"#).expect("decode");
+        assert_eq!(legacy, QueryPayload::GetProfile { from_disk: false });
+
+        // And the explicit editor form (`true`) survives a frame round-trip.
+        for from_disk in [false, true] {
+            let msg = FrontendMessage::Query {
+                id: "gp".into(),
+                payload: QueryPayload::GetProfile { from_disk },
+            };
+            let frame = encode_frame(&msg).expect("encode");
+            let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(decoded, msg);
         }
     }
 

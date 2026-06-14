@@ -3223,9 +3223,23 @@ async fn handle_query(
                 },
             }
         }
-        QueryPayload::GetProfile => QueryResponsePayload::GetProfile {
-            profile: profile_summary_from_profile(profile),
-        },
+        QueryPayload::GetProfile { from_disk } => {
+            // `from_disk = false` (default): the running snapshot the daemon
+            // is using (the Command-Center / status meaning). `true`: re-read
+            // the on-disk `[profile]` so the Agents editor seeds from what it
+            // writes (they diverge after a SetProfile that hasn't been applied
+            // by a restart). Fall back to the running snapshot when there is no
+            // config file or the re-read fails.
+            let summary = if from_disk {
+                match config_toml_path.and_then(|p| load_settings_config(p).ok()) {
+                    Some(cfg) => profile_summary_from_profile(&cfg.profile),
+                    None => profile_summary_from_profile(profile),
+                }
+            } else {
+                profile_summary_from_profile(profile)
+            };
+            QueryResponsePayload::GetProfile { profile: summary }
+        }
         QueryPayload::GetEffectivePersona => {
             let summary = match shared_persona.read() {
                 Ok(state) => effective_persona_summary_from_state(&state),

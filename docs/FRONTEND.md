@@ -304,6 +304,15 @@ turn loop.
   `QueryError` codes (`map_config_write_error`).
 - Writes append an `AuditEvent::ConfigChanged { section: "profile", summary }`
   (the U.3 variant — no new audit variant, no new count-assertion churn).
+- **Active vs on-disk (post-V audit).** The daemon holds the Profile as an
+  immutable boot-time `Arc<Profile>` — it is **load-time**, so the running agent
+  keeps using the boot values until a restart (the Persona, by contrast, is a
+  live `Arc<RwLock>` and updates next-turn). `GetProfile` therefore carries a
+  `from_disk` flag: the editor seeds with `from_disk = true` (the on-disk
+  `[profile]`, i.e. *what it writes*) so a save-before-restart then reload shows
+  the pending values and never clobbers them; the Command-Center name chip uses
+  `from_disk = false` (the running snapshot). The flag is `#[serde(default)]`
+  (false), so the running-state meaning is wire-unchanged for older clients.
 
 ### 9.4 Invariants
 

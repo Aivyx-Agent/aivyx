@@ -249,7 +249,8 @@ fn App() -> Element {
     use_future(move || async move {
         ws.send(FrontendMessage::Query {
             id: "mc-profile".to_string(),
-            payload: QueryPayload::GetProfile,
+            // Dashboard shows the *running* agent's name — the active snapshot.
+            payload: QueryPayload::GetProfile { from_disk: false },
         });
         ws.send(FrontendMessage::Query {
             id: "mc-verify".to_string(),
@@ -1644,7 +1645,10 @@ fn ListEditor(title: String, hint: String, items: Signal<Vec<String>>) -> Elemen
 fn get_profile_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-agents-get".to_string(),
-        payload: QueryPayload::GetProfile,
+        // The editor seeds from the **on-disk** profile (what it writes), so a
+        // save-before-restart followed by a reload shows the pending values —
+        // not the stale running snapshot — and never clobbers a pending edit.
+        payload: QueryPayload::GetProfile { from_disk: true },
     }
 }
 
@@ -1893,13 +1897,19 @@ async fn ws_task(
                     dashboard.write().chain_ok = Some(ok);
                 }
                 DaemonEnvelope::QueryResponse {
+                    id,
                     payload: QueryResponsePayload::GetProfile { profile },
-                    ..
                 } => {
-                    // Feeds both the Command-Center name chip and the Agents
-                    // editor (the latter seeds its form from the full summary).
-                    dashboard.write().assistant_name = Some(profile.assistant_name.clone());
-                    agents.write().profile = Some(profile);
+                    // Route by query id: the editor's request (`mc-agents-get`,
+                    // from_disk) seeds the editor's on-disk view; every other
+                    // GetProfile is the dashboard's active/running snapshot for
+                    // the name chip. They carry different data now, so they must
+                    // not cross-populate.
+                    if id == "mc-agents-get" {
+                        agents.write().profile = Some(profile);
+                    } else {
+                        dashboard.write().assistant_name = Some(profile.assistant_name);
+                    }
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListMemoryTopics { topics },
