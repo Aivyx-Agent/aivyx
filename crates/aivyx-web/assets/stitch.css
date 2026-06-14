@@ -554,3 +554,26 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .delta-cat { color: var(--color-text-secondary); }
 .delta-row .op-desc { font-size: 13px; }
 .delta-row .actions { display: flex; gap: 8px; flex: none; }
+
+/* ── Teams — the Nonagon roster (Chapter Y). ── */
+.teams { display: flex; flex-direction: column; gap: 16px; max-width: 860px; }
+.roster-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
+}
+.member-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
+.member-card.lead { border-left: 3px solid var(--color-primary); }
+.member-card h4 { font-size: 14px; font-family: var(--font-mono); }
+.member-role { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
+.member-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.member-meta .label-tech { color: var(--color-text-disabled); }
+.chip.muted { background: var(--color-secondary-dim); color: var(--color-text-disabled); }
+.btn-xs { align-self: flex-start; padding: 3px 8px; font-size: 11px; }
+.member-detail { display: flex; flex-direction: column; gap: 8px; }
+.tool-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.soul {
+  margin: 0; padding: 10px 12px; border-radius: 0.375rem;
+  background: var(--color-bg-code); border: 1px solid var(--color-border-ghost);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+  color: var(--color-text-secondary); white-space: pre-wrap; word-break: break-word;
+  max-height: 240px; overflow-y: auto;
+}

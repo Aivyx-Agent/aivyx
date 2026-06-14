@@ -42,3 +42,5 @@ pub use persona::{
 pub use team_mission::{
     TeamMissionPhase, TeamMissionRecord, TeamMissionView, TeamStepState, TeamStepView,
 };
+// Chapter Y — the team roster types, for the Studio's Teams screen.
+pub use aivyx_team_types::{TeamConfig, TeamMember, TrustTier};

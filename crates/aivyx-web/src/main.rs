@@ -22,7 +22,9 @@ use aivyx_ipc::protocol::{
     ProfileSummary, QueryPayload, QueryResponsePayload, SeedSkillWire, SettingsSnapshot,
     StreamEventPayload,
 };
-use aivyx_ipc::{ProposedPersonaDelta, TeamMissionPhase, TeamMissionView};
+use aivyx_ipc::{
+    ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView, TrustTier,
+};
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
@@ -65,6 +67,7 @@ enum View {
     Memory,
     Settings,
     Agents,
+    Teams,
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -211,6 +214,7 @@ fn App() -> Element {
     let memory = use_signal(MemoryState::default);
     let settings = use_signal(SettingsState::default);
     let agents = use_signal(AgentsState::default);
+    let roster = use_signal(|| None::<TeamConfig>);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -219,14 +223,16 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, settings, agents, connected, session, transcript,
-            streaming, gate,
+            rx, missions, dashboard, memory, settings, agents, roster, connected, session,
+            transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
     use_context_provider(|| memory);
     use_context_provider(|| settings);
     use_context_provider(|| agents);
+    use_context_provider(|| roster);
+    use_context_provider(|| missions);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
@@ -272,6 +278,7 @@ fn App() -> Element {
         View::Memory => "Memory",
         View::Settings => "Settings",
         View::Agents => "Agents",
+        View::Teams => "Teams",
     };
 
     rsx! {
@@ -293,6 +300,7 @@ fn App() -> Element {
                         View::Memory => rsx! { MemoryPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
+                        View::Teams => rsx! { TeamsPanel {} },
                     }
                 }
             }
@@ -325,8 +333,9 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Settings) }
             NavItem { icon: ICON_AGENTS, label: "Agents", active: view() == View::Agents,
                 onclick: move |_| view.set(View::Agents) }
+            NavItem { icon: ICON_TEAMS, label: "Teams", active: view() == View::Teams,
+                onclick: move |_| view.set(View::Teams) }
             div { class: "nav-section label-tech", "Roadmap" }
-            NavItemSoon { icon: ICON_TEAMS, label: "Teams" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
         }
@@ -2052,6 +2061,138 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Teams — the Nonagon roster (Chapter Y). Read-only; renders the daemon's
+// active TeamConfig (lead + specialists, role / trust / scopes / tools / soul).
+// ---------------------------------------------------------------------------
+
+#[component]
+fn TeamsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let roster = use_context::<Signal<Option<TeamConfig>>>();
+    let missions = use_context::<Signal<Vec<TeamMissionView>>>();
+
+    use_future(move || async move {
+        ws.send(get_team_roster_query());
+    });
+
+    let team = match roster() {
+        Some(t) => t,
+        None => {
+            return rsx! {
+                div { class: "teams",
+                    div { class: "glass-card empty", p { class: "label-tech", "Loading team…" } }
+                }
+            }
+        }
+    };
+
+    let specialists = team.members.iter().filter(|m| m.name != team.lead).count();
+    let active = missions()
+        .iter()
+        .filter(|m| !matches!(m.phase, TeamMissionPhase::Done | TeamMissionPhase::Rejected))
+        .count();
+    let lead = team.lead.clone();
+
+    rsx! {
+        div { class: "teams",
+            // Team header.
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "{team.name}" }
+                    span { class: "chip", "{team.members.len()} members" }
+                }
+                if !team.description.is_empty() {
+                    p { class: "label-tech", "{team.description}" }
+                }
+                div { class: "kv-grid",
+                    div { span { class: "label-tech", "Lead" } div { "{team.lead}" } }
+                    div { span { class: "label-tech", "Specialists" } div { "{specialists}" } }
+                    div { span { class: "label-tech", "Active missions" } div { "{active}" } }
+                }
+            }
+
+            // Roster — one card per member, lead first.
+            div { class: "roster-grid",
+                for m in team.members.clone() {
+                    MemberCard { key: "{m.name}", is_lead: m.name == lead, m }
+                }
+            }
+        }
+    }
+}
+
+/// One team member — role + trust + scopes + tool count, expandable to the full
+/// tool allowlist + the member's soul (system prompt).
+#[component]
+fn MemberCard(m: TeamMember, is_lead: bool) -> Element {
+    let mut expanded = use_signal(|| false);
+    let scopes = if m.capability_scopes.is_empty() {
+        "—".to_string()
+    } else {
+        m.capability_scopes.join(", ")
+    };
+
+    rsx! {
+        div { class: if is_lead { "glass-card member-card lead" } else { "glass-card member-card" },
+            div { class: "panel-head",
+                h4 { "{m.name}" }
+                if is_lead {
+                    span { class: "chip amber", "lead" }
+                }
+                span { class: "chip {trust_class(m.trust_ceiling)}", "{trust_label(m.trust_ceiling)}" }
+            }
+            p { class: "member-role", "{m.role}" }
+            div { class: "member-meta",
+                span { class: "label-tech", "scopes: {scopes}" }
+                span { class: "label-tech", "tools: {m.tool_allowlist.len()}" }
+            }
+            button {
+                class: "btn btn-glass btn-xs",
+                onclick: move |_| expanded.toggle(),
+                {if expanded() { "Hide soul ▴" } else { "Show soul ▾" }}
+            }
+            if expanded() {
+                div { class: "member-detail",
+                    if !m.tool_allowlist.is_empty() {
+                        div { class: "tool-chips",
+                            for t in m.tool_allowlist.clone() {
+                                span { class: "chip", "{t}" }
+                            }
+                        }
+                    }
+                    pre { class: "soul", "{m.soul}" }
+                }
+            }
+        }
+    }
+}
+
+fn get_team_roster_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-teams".to_string(),
+        payload: QueryPayload::GetTeamRoster,
+    }
+}
+
+fn trust_label(t: TrustTier) -> &'static str {
+    match t {
+        TrustTier::Untrusted => "untrusted",
+        TrustTier::SemiTrusted => "semi-trusted",
+        TrustTier::Trusted => "trusted",
+        TrustTier::Kernel => "kernel",
+    }
+}
+
+/// Chip accent for a trust tier — higher trust reads sage (calm), lower amber.
+fn trust_class(t: TrustTier) -> &'static str {
+    match t {
+        TrustTier::Trusted | TrustTier::Kernel => "sage",
+        TrustTier::SemiTrusted => "amber",
+        TrustTier::Untrusted => "muted",
+    }
+}
+
 /// The single WebSocket task: open `/ws`, run the read loop (fans inbound
 /// envelopes into the view signals), and drain outbound `FrontendMessage`s.
 #[allow(clippy::too_many_arguments)]
@@ -2062,6 +2203,7 @@ async fn ws_task(
     mut memory: Signal<MemoryState>,
     mut settings: Signal<SettingsState>,
     mut agents: Signal<AgentsState>,
+    mut roster: Signal<Option<TeamConfig>>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -2090,6 +2232,12 @@ async fn ws_task(
                     ..
                 } => {
                     missions.set(records.iter().map(|r| r.to_view()).collect());
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetTeamRoster { roster: cfg },
+                    ..
+                } => {
+                    roster.set(Some(cfg));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
