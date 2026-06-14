@@ -17,10 +17,10 @@
 //! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
-    AuditEntrySummary, DaemonEnvelope, EffectivePersonaSummary, FrontendMessage, MemoryEntrySummary,
-    PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary, PersonaSeedWire,
-    ProfileSummary, QueryPayload, QueryResponsePayload, SeedSkillWire, SettingsSnapshot,
-    StreamEventPayload,
+    AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
+    MemoryEntrySummary, PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary,
+    PersonaSeedWire, ProfileSummary, QueryPayload, QueryResponsePayload, SeedSkillWire,
+    SettingsSnapshot, StreamEventPayload,
 };
 use aivyx_ipc::{
     ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView, TrustTier,
@@ -52,6 +52,7 @@ const ICON_MISSIONS: Asset = asset!("/assets/icons/missions.svg");
 const ICON_TEAMS: Asset = asset!("/assets/icons/teams.svg");
 const ICON_AGENTS: Asset = asset!("/assets/icons/agents.svg");
 const ICON_MEMORY: Asset = asset!("/assets/icons/memory.svg");
+const ICON_DOCUMENTS: Asset = asset!("/assets/icons/documents.svg");
 const ICON_SETTINGS: Asset = asset!("/assets/icons/settings.svg");
 const ICON_THEME: Asset = asset!("/assets/icons/theme-toggle.svg");
 
@@ -68,6 +69,7 @@ enum View {
     Settings,
     Agents,
     Teams,
+    Documents,
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -121,6 +123,23 @@ struct AgentsState {
     /// X.3 — bumped on every `DraftPersonaSeed` response (success or failure) so
     /// the onboarding card can clear its "Drafting…" state and re-seed its form.
     seed_draft_resp: u64,
+}
+
+/// Documents browser state — Chapter Z. The active root + path + the current
+/// directory listing, the open file (if any), and the last error notice. All
+/// read-only; the data is fanned in by `ws_task`.
+#[derive(Clone, Default, PartialEq)]
+struct DocumentsState {
+    /// `"workspace"` | `"fs"` — empty until the first load (then `"workspace"`).
+    root: String,
+    /// Current directory, relative to `root`.
+    path: String,
+    /// The current directory's listing (dirs first).
+    entries: Vec<DocEntry>,
+    /// The open file in the viewer, or `None` when showing the listing.
+    file: Option<DocFile>,
+    /// Last error (e.g. a denied path / read failure).
+    notice: Option<String>,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -215,6 +234,7 @@ fn App() -> Element {
     let settings = use_signal(SettingsState::default);
     let agents = use_signal(AgentsState::default);
     let roster = use_signal(|| None::<TeamConfig>);
+    let documents = use_signal(DocumentsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -223,8 +243,8 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, settings, agents, roster, connected, session,
-            transcript, streaming, gate,
+            rx, missions, dashboard, memory, settings, agents, roster, documents, connected,
+            session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -232,6 +252,7 @@ fn App() -> Element {
     use_context_provider(|| settings);
     use_context_provider(|| agents);
     use_context_provider(|| roster);
+    use_context_provider(|| documents);
     use_context_provider(|| missions);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
@@ -279,6 +300,7 @@ fn App() -> Element {
         View::Settings => "Settings",
         View::Agents => "Agents",
         View::Teams => "Teams",
+        View::Documents => "Documents",
     };
 
     rsx! {
@@ -301,6 +323,7 @@ fn App() -> Element {
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
+                        View::Documents => rsx! { DocumentsPanel {} },
                     }
                 }
             }
@@ -335,6 +358,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Agents) }
             NavItem { icon: ICON_TEAMS, label: "Teams", active: view() == View::Teams,
                 onclick: move |_| view.set(View::Teams) }
+            NavItem { icon: ICON_DOCUMENTS, label: "Documents", active: view() == View::Documents,
+                onclick: move |_| view.set(View::Documents) }
             div { class: "nav-section label-tech", "Roadmap" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
@@ -2193,6 +2218,206 @@ fn trust_class(t: TrustTier) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Documents — the read-only file browser (Chapter Z). Two roots (workspace +
+// the access-scoped fs_root); list + read, escape-guarded daemon-side.
+// ---------------------------------------------------------------------------
+
+#[component]
+fn DocumentsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let mut documents = use_context::<Signal<DocumentsState>>();
+
+    // First entry → default to the workspace root.
+    use_future(move || async move {
+        if documents.read().root.is_empty() {
+            documents.write().root = "workspace".to_string();
+            ws.send(list_dir_query("workspace", ""));
+        }
+    });
+
+    let d = documents();
+    let root = if d.root.is_empty() { "workspace".to_string() } else { d.root.clone() };
+
+    rsx! {
+        div { class: "documents",
+            // Root switcher.
+            div { class: "doc-toolbar",
+                button {
+                    class: if root == "workspace" { "btn btn-primary btn-xs" } else { "btn btn-glass btn-xs" },
+                    onclick: move |_| switch_doc_root(documents, ws, "workspace"),
+                    "Workspace"
+                }
+                button {
+                    class: if root == "fs" { "btn btn-primary btn-xs" } else { "btn btn-glass btn-xs" },
+                    onclick: move |_| switch_doc_root(documents, ws, "fs"),
+                    "Files"
+                }
+            }
+
+            // Breadcrumb: root + each ancestor segment, clickable to ascend.
+            div { class: "breadcrumb",
+                {
+                    let r = root.clone();
+                    rsx! {
+                        button { class: "crumb", onclick: move |_| ws.send(list_dir_query(&r, "")),
+                            {if root == "fs" { "fs_root" } else { "workspace" }} }
+                    }
+                }
+                for (label, prefix) in breadcrumb_segments(&d.path) {
+                    {
+                        let (r, p) = (root.clone(), prefix.clone());
+                        rsx! {
+                            span { class: "crumb-sep", "/" }
+                            button { class: "crumb", onclick: move |_| ws.send(list_dir_query(&r, &p)), "{label}" }
+                        }
+                    }
+                }
+            }
+
+            if let Some(msg) = d.notice.clone() {
+                div { class: "notice err", "{msg}" }
+            }
+
+            // File viewer (when one is open) else the directory listing.
+            if let Some(file) = d.file.clone() {
+                FileViewer { file }
+            } else {
+                div { class: "glass-card doc-listing",
+                    if d.entries.is_empty() {
+                        p { class: "label-tech sub", "Empty directory." }
+                    } else {
+                        for e in d.entries.clone() {
+                            {
+                                let target = join_doc_path(&d.path, &e.name);
+                                let (r, is_dir) = (root.clone(), e.kind == "dir");
+                                rsx! {
+                                    button {
+                                        class: "doc-row",
+                                        onclick: move |_| {
+                                            if is_dir {
+                                                ws.send(list_dir_query(&r, &target));
+                                            } else {
+                                                ws.send(read_file_query(&r, &target));
+                                            }
+                                        },
+                                        span { class: "doc-ico", {kind_glyph(&e.kind)} }
+                                        span { class: "doc-name", "{e.name}" }
+                                        span { class: "doc-size label-tech",
+                                            {if e.kind == "file" { fmt_size(e.size_bytes) } else { String::new() }} }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The file content pane — text in a mono `<pre>`, or a "not shown" note for
+/// binary / over-cap files. A back action returns to the listing.
+#[component]
+fn FileViewer(file: DocFile) -> Element {
+    let mut documents = use_context::<Signal<DocumentsState>>();
+    rsx! {
+        div { class: "glass-card doc-viewer",
+            div { class: "panel-head",
+                h4 { "{file.path}" }
+                span { class: "chip", {fmt_size(file.size_bytes)} }
+                button { class: "btn btn-glass btn-xs", onclick: move |_| documents.write().file = None, "Close" }
+            }
+            if file.truncated {
+                div { class: "notice err", "Showing the first 256 KB of a larger file." }
+            }
+            match &file.content {
+                Some(text) => rsx! { pre { class: "doc-text", "{text}" } },
+                None => rsx! {
+                    p { class: "label-tech sub",
+                        {if file.binary {
+                            format!("Binary file — {} not shown.", fmt_size(file.size_bytes))
+                        } else {
+                            "File too large to display.".to_string()
+                        }}
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// Switch the Documents browser to `to` ("workspace" | "fs"), reset to that
+/// root's top, and re-list. A free fn so both toolbar buttons can call it
+/// (a shared closure can't be moved into two handlers).
+fn switch_doc_root(mut documents: Signal<DocumentsState>, ws: Sender, to: &'static str) {
+    {
+        let mut st = documents.write();
+        st.root = to.to_string();
+        st.file = None;
+        st.path = String::new();
+    }
+    ws.send(list_dir_query(to, ""));
+}
+
+fn list_dir_query(root: &str, path: &str) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-list".to_string(),
+        payload: QueryPayload::ListDir { root: root.to_string(), path: path.to_string() },
+    }
+}
+
+fn read_file_query(root: &str, path: &str) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-read".to_string(),
+        payload: QueryPayload::ReadFile { root: root.to_string(), path: path.to_string() },
+    }
+}
+
+/// Join a relative dir `base` with an entry `name` (slash-separated).
+fn join_doc_path(base: &str, name: &str) -> String {
+    if base.is_empty() {
+        name.to_string()
+    } else {
+        format!("{base}/{name}")
+    }
+}
+
+/// `(label, cumulative-prefix)` for each segment of `path`, for the breadcrumb.
+fn breadcrumb_segments(path: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut prefix = String::new();
+    for seg in path.split('/').filter(|s| !s.is_empty()) {
+        if prefix.is_empty() {
+            prefix = seg.to_string();
+        } else {
+            prefix = format!("{prefix}/{seg}");
+        }
+        out.push((seg.to_string(), prefix.clone()));
+    }
+    out
+}
+
+fn kind_glyph(kind: &str) -> &'static str {
+    match kind {
+        "dir" => "📁",
+        "symlink" => "🔗",
+        "file" => "📄",
+        _ => "•",
+    }
+}
+
+/// Human-readable byte size (B / KB / MB).
+fn fmt_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// The single WebSocket task: open `/ws`, run the read loop (fans inbound
 /// envelopes into the view signals), and drain outbound `FrontendMessage`s.
 #[allow(clippy::too_many_arguments)]
@@ -2204,6 +2429,7 @@ async fn ws_task(
     mut settings: Signal<SettingsState>,
     mut agents: Signal<AgentsState>,
     mut roster: Signal<Option<TeamConfig>>,
+    mut documents: Signal<DocumentsState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -2238,6 +2464,35 @@ async fn ws_task(
                     ..
                 } => {
                     roster.set(Some(cfg));
+                }
+                // Chapter Z — Documents browser: a directory listing arrived;
+                // the echoed `path` is authoritative. Re-listing closes any open
+                // file and clears the notice.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListDir { entries, path },
+                    ..
+                } => {
+                    let mut d = documents.write();
+                    d.entries = entries;
+                    d.path = path;
+                    d.file = None;
+                    d.notice = None;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ReadFile { file },
+                    ..
+                } => {
+                    let mut d = documents.write();
+                    d.file = Some(file);
+                    d.notice = None;
+                }
+                // A denied path / read failure on the Documents screen (ids
+                // prefixed `mc-docs`) → a notice, leaving the listing intact.
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-docs") => {
+                    documents.write().notice = Some(message);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
