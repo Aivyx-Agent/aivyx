@@ -444,6 +444,7 @@ enum Provider {
 #[derive(Default)]
 struct PersonaSeedFields {
     learned_context: Vec<String>,
+    communication_adaptations: Vec<String>,
     character_traits: Vec<String>,
     relationship_milestones: Vec<String>,
     skills: Vec<SeedSkillFields>,
@@ -460,6 +461,7 @@ impl PersonaSeedFields {
     /// `true` when the operator declared any seed content.
     fn has_content(&self) -> bool {
         !self.learned_context.is_empty()
+            || !self.communication_adaptations.is_empty()
             || !self.character_traits.is_empty()
             || !self.relationship_milestones.is_empty()
             || !self.skills.is_empty()
@@ -630,6 +632,12 @@ fn render_toml(cfg: &InitConfig) -> String {
             out.push_str(&format!(
                 "learned_context = {}\n",
                 toml_string_array(&seed.learned_context),
+            ));
+        }
+        if !seed.communication_adaptations.is_empty() {
+            out.push_str(&format!(
+                "communication_adaptations = {}\n",
+                toml_string_array(&seed.communication_adaptations),
             ));
         }
         if !seed.character_traits.is_empty() {
@@ -1348,9 +1356,11 @@ fn render_with_template(
 /// quick, and skippable: the Persona grows from use regardless. Returns an
 /// empty `PersonaSeedFields` when the operator declines (no `[persona_seed]`
 /// section is then emitted).
-fn collect_persona_seed(
+async fn collect_persona_seed(
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
+    provider: Option<&Arc<dyn LlmProvider>>,
+    model: &str,
 ) -> Result<PersonaSeedFields, String> {
     let mut seed = PersonaSeedFields::default();
 
@@ -1367,36 +1377,91 @@ fn collect_persona_seed(
         return Ok(seed);
     }
 
-    let traits = prompt_line(
-        "  Character traits (comma-separated, e.g. pragmatic, witty): ",
-        reader,
-        writer,
-    )?;
-    seed.character_traits = split_comma_list(&traits);
-
-    let ctx = prompt_line(
-        "  Anything it should know about you / your work from day one? (optional): ",
-        reader,
-        writer,
-    )?;
-    if !ctx.is_empty() {
-        seed.learned_context.push(ctx);
-    }
-
-    if prompt_yes_no("  Add a starter skill?", false, reader, writer)? {
-        let name = prompt_line(
-            "    Skill name (kebab-case, e.g. rust-review): ",
+    // X.4 — LLM-assisted draft (only when a model is available + opted in).
+    // The operator is always the author of record: the draft pre-fills, then
+    // they review and confirm (or fall back to entering it by hand).
+    let mut from_draft = false;
+    let assisted = provider.is_some()
+        && prompt_yes_no(
+            "  Want help? Describe it and I'll draft a starting set",
+            true,
             reader,
             writer,
         )?;
-        if !name.is_empty() {
-            let trigger = prompt_line("    When does it apply? (trigger): ", reader, writer)?;
-            let procedure = prompt_line("    What should it do? (procedure): ", reader, writer)?;
-            seed.skills.push(SeedSkillFields {
-                name,
-                trigger,
-                procedure,
-            });
+    if assisted {
+        let desc = prompt_line(
+            "  In a sentence or two, what should it be like?\n  > ",
+            reader,
+            writer,
+        )?;
+        writeln!(writer, "  Drafting…").map_err(|e| format!("write error: {e}"))?;
+        match aivyx_channel::persona_seed_draft::draft_persona_seed(provider.unwrap(), model, &desc)
+            .await
+        {
+            Some(draft) => {
+                seed.character_traits = draft.character_traits;
+                seed.communication_adaptations = draft.communication_adaptations;
+                seed.learned_context = draft.learned_context;
+                seed.skills = draft
+                    .skills
+                    .into_iter()
+                    .map(|s| SeedSkillFields {
+                        name: s.name,
+                        trigger: s.trigger,
+                        procedure: s.procedure,
+                    })
+                    .collect();
+                render_seed_summary(writer, &seed)?;
+                if prompt_yes_no(
+                    "  Use this? (you can refine it any time in aivyx.toml)",
+                    true,
+                    reader,
+                    writer,
+                )? {
+                    from_draft = true;
+                } else {
+                    seed = PersonaSeedFields::default();
+                }
+            }
+            None => {
+                writeln!(writer, "  (Couldn't draft — let's do it together instead.)")
+                    .map_err(|e| format!("write error: {e}"))?;
+            }
+        }
+    }
+
+    if !from_draft {
+        let traits = prompt_line(
+            "  Character traits (comma-separated, e.g. pragmatic, witty): ",
+            reader,
+            writer,
+        )?;
+        seed.character_traits = split_comma_list(&traits);
+
+        let ctx = prompt_line(
+            "  Anything it should know about you / your work from day one? (optional): ",
+            reader,
+            writer,
+        )?;
+        if !ctx.is_empty() {
+            seed.learned_context.push(ctx);
+        }
+
+        if prompt_yes_no("  Add a starter skill?", false, reader, writer)? {
+            let name = prompt_line(
+                "    Skill name (kebab-case, e.g. rust-review): ",
+                reader,
+                writer,
+            )?;
+            if !name.is_empty() {
+                let trigger = prompt_line("    When does it apply? (trigger): ", reader, writer)?;
+                let procedure = prompt_line("    What should it do? (procedure): ", reader, writer)?;
+                seed.skills.push(SeedSkillFields {
+                    name,
+                    trigger,
+                    procedure,
+                });
+            }
         }
     }
 
@@ -1408,6 +1473,31 @@ fn collect_persona_seed(
     }
 
     Ok(seed)
+}
+
+/// Print a compact summary of a drafted seed so the operator sees exactly what
+/// they're about to plant before confirming.
+fn render_seed_summary(
+    writer: &mut dyn IoWrite,
+    seed: &PersonaSeedFields,
+) -> Result<(), String> {
+    let w = |writer: &mut dyn IoWrite, s: &str| -> Result<(), String> {
+        writeln!(writer, "{s}").map_err(|e| format!("write error: {e}"))
+    };
+    w(writer, "")?;
+    if !seed.character_traits.is_empty() {
+        w(writer, &format!("    traits:      {}", seed.character_traits.join(", ")))?;
+    }
+    if !seed.communication_adaptations.is_empty() {
+        w(writer, &format!("    voice:       {}", seed.communication_adaptations.join(", ")))?;
+    }
+    if let Some(ctx) = seed.learned_context.first() {
+        w(writer, &format!("    context:     {ctx}"))?;
+    }
+    if let Some(sk) = seed.skills.first() {
+        w(writer, &format!("    skill:       {} — {}", sk.name, sk.trigger))?;
+    }
+    Ok(())
 }
 
 /// Split a comma-separated line into trimmed, non-empty entries.
@@ -1711,8 +1801,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     )
     .await?;
 
-    // Chapter W — optionally seed a starting Persona/Skills set.
-    let persona_seed = collect_persona_seed(&mut reader, &mut writer)?;
+    // Chapter W — optionally seed a starting Persona/Skills set. X.4 — the same
+    // wizard provider that drafts the identity can draft the seed.
+    let persona_seed =
+        collect_persona_seed(&mut reader, &mut writer, draft_provider.as_ref(), &model).await?;
 
     // 6. Render + write.
     let cfg = InitConfig {
@@ -2080,22 +2172,23 @@ mod tests {
 
     use std::io::Cursor;
 
-    #[test]
-    fn collect_persona_seed_declined_is_empty() {
+    #[tokio::test]
+    async fn collect_persona_seed_declined_is_empty() {
         // First prompt ("Seed a starting personality now?") → default No.
         let mut input = Cursor::new(b"\n" as &[u8]);
         let mut output = Vec::new();
-        let seed = collect_persona_seed(&mut input, &mut output).unwrap();
+        let seed = collect_persona_seed(&mut input, &mut output, None, "m").await.unwrap();
         assert!(!seed.has_content());
     }
 
-    #[test]
-    fn collect_persona_seed_full_path_captures_traits_context_skill_and_genesis() {
+    #[tokio::test]
+    async fn collect_persona_seed_full_path_captures_traits_context_skill_and_genesis() {
+        // No provider → no assisted prompt; straight to the manual flow:
         // y → seed; traits; context; y → skill; name; trigger; procedure.
         let script = "y\npragmatic, precise\noperator builds Aivyx\ny\nrust-review\nwhen reviewing Rust\ncheck unwraps\n";
         let mut input = Cursor::new(script.as_bytes());
         let mut output = Vec::new();
-        let seed = collect_persona_seed(&mut input, &mut output).unwrap();
+        let seed = collect_persona_seed(&mut input, &mut output, None, "m").await.unwrap();
         assert_eq!(seed.character_traits, vec!["pragmatic", "precise"]);
         assert_eq!(seed.learned_context, vec!["operator builds Aivyx"]);
         assert_eq!(seed.skills.len(), 1);
@@ -2105,14 +2198,61 @@ mod tests {
         assert_eq!(seed.relationship_milestones, vec!["genesis: first launch"]);
     }
 
-    #[test]
-    fn collect_persona_seed_yes_but_all_blank_stays_empty() {
+    #[tokio::test]
+    async fn collect_persona_seed_yes_but_all_blank_stays_empty() {
         // y → seed, but every field left blank, and decline the skill.
         let mut input = Cursor::new(b"y\n\n\nn\n" as &[u8]);
         let mut output = Vec::new();
-        let seed = collect_persona_seed(&mut input, &mut output).unwrap();
+        let seed = collect_persona_seed(&mut input, &mut output, None, "m").await.unwrap();
         // No content → no genesis milestone → no [persona_seed] section emitted.
         assert!(!seed.has_content());
+    }
+
+    #[tokio::test]
+    async fn collect_persona_seed_assisted_draft_prefills_and_confirms() {
+        // A fake provider returns a labeled seed draft; the operator opts into
+        // help, describes, and accepts the draft.
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeDraftProvider {
+            reply: Some(
+                "CHARACTER_TRAITS: pragmatic, witty\n\
+                 COMMUNICATION_ADAPTATIONS: leads with code\n\
+                 LEARNED_CONTEXT: builds a Rust agent platform\n\
+                 SKILL_NAME: rust-review\n\
+                 SKILL_TRIGGER: when reviewing Rust\n\
+                 SKILL_PROCEDURE: check unwraps"
+                    .to_string(),
+            ),
+        });
+        // y → seed; y → want help; description; y → use this.
+        let script = "y\ny\na witty pragmatic pair-programmer\ny\n";
+        let mut input = Cursor::new(script.as_bytes());
+        let mut output = Vec::new();
+        let seed = collect_persona_seed(&mut input, &mut output, Some(&provider), "m")
+            .await
+            .unwrap();
+        assert_eq!(seed.character_traits, vec!["pragmatic", "witty"]);
+        assert_eq!(seed.communication_adaptations, vec!["leads with code"]);
+        assert_eq!(seed.learned_context, vec!["builds a Rust agent platform"]);
+        assert_eq!(seed.skills.len(), 1);
+        assert_eq!(seed.skills[0].name, "rust-review");
+        assert_eq!(seed.relationship_milestones, vec!["genesis: first launch"]);
+    }
+
+    #[tokio::test]
+    async fn collect_persona_seed_assisted_decline_falls_back_to_manual() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeDraftProvider {
+            reply: Some("CHARACTER_TRAITS: drafted-trait".to_string()),
+        });
+        // y → seed; y → want help; description; n → don't use draft; then
+        // manual: traits; blank context; n → no skill.
+        let script = "y\ny\ndescribe\nn\nmy-trait\n\nn\n";
+        let mut input = Cursor::new(script.as_bytes());
+        let mut output = Vec::new();
+        let seed = collect_persona_seed(&mut input, &mut output, Some(&provider), "m")
+            .await
+            .unwrap();
+        // The declined draft is discarded; the manual entry wins.
+        assert_eq!(seed.character_traits, vec!["my-trait"]);
     }
 
     #[test]
@@ -2252,6 +2392,7 @@ mod tests {
         );
         cfg.persona_seed = PersonaSeedFields {
             learned_context: vec!["operator builds Aivyx".into()],
+            communication_adaptations: vec!["leads with code".into()],
             character_traits: vec!["pragmatic".into(), "precise".into()],
             relationship_milestones: vec!["genesis: first launch".into()],
             skills: vec![SeedSkillFields {
@@ -2262,6 +2403,7 @@ mod tests {
         };
         let toml = render_toml(&cfg);
         assert!(toml.contains("[persona_seed]"), "{toml}");
+        assert!(toml.contains("communication_adaptations = [\"leads with code\"]"), "{toml}");
         assert!(toml.contains("character_traits = [\"pragmatic\", \"precise\"]"), "{toml}");
         assert!(toml.contains("learned_context = [\"operator builds Aivyx\"]"), "{toml}");
         assert!(toml.contains("[[persona_seed.skill]]"), "{toml}");
