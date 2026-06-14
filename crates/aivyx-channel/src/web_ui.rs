@@ -602,11 +602,21 @@ mod tests {
     }
 
     #[test]
-    fn web_asset_lookup_misses_when_bundle_absent() {
-        // In a plain `cargo build` (no dist/), the table is empty → `/` falls
-        // back to the legacy page and assets 404.
-        assert!(bundle_index().is_none());
-        assert!(web_asset("/aivyx-web_bg.wasm").is_none());
+    fn web_asset_lookup_finds_index_and_misses_unknown_paths() {
+        // Since Chapter R the `aivyx-web/dist/` bundle is committed and embedded
+        // by build.rs, so the table is populated: `/index.html` resolves (the
+        // SPA entry the daemon serves at `/`), while an unknown path misses
+        // (→ 404). `WEB_ASSETS` is `&[]` only in the degenerate build where
+        // dist/ was deleted — not the shipped configuration.
+        assert!(
+            bundle_index().is_some(),
+            "the committed dist/ bundle must embed index.html",
+        );
+        assert!(web_asset("/index.html").is_some());
+        assert!(
+            web_asset("/definitely-not-an-asset.js").is_none(),
+            "unknown asset paths miss",
+        );
     }
 
     #[test]
