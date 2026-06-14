@@ -89,7 +89,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Command** | dashboard: stat cards + active missions + live audit-trail feed + agent status | ✅ Live (Ch. S — the default landing view) |
 | **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
-| **Teams** | Nonagon roster / vertical packs | Roadmap |
+| **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | 🔨 In progress (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | workspace + fs_root browser | Roadmap |
@@ -338,3 +338,56 @@ turn loop.
 | **V.3** | Web UI part 1 — `View::Agents` + the **Profile editor** (form over the six `[profile]` fields, list add/remove, save → confirm → `ProfileApplied`, restart banner); `ws_task` arms; `stitch.css`. |
 | **V.4** | Web UI part 2 — the **Persona governance** panel: Effective Persona viewer + pending **proposals** (approve / edit / reject) + **delta chain** with revert, over the existing IPC. "Effective next turn" notices. |
 | **V.5** | Build the bundle, live-verify in a real browser (edit Profile → restart banner + toml rewritten + audit; resolve a seeded proposal → persona updates live; revert a delta), docs + memory, push. **Done:** wasm serves byte-identical/untruncated; IPC probe proved `GetProfile`→`SetProfile`→`ProfileApplied` (six fields, `restart_required`), `[profile]` rewritten **in-place** preserving all sections, a shape-only `ConfigChanged` audit entry, the persona read path (effective/proposals/deltas) returns well-formed empty states on a fresh daemon, and the resolve/revert write path is wired (typed `ok:false` on bogus ids). Seeding a real proposal needs LLM reflection turns, so the resolve/revert *UI* actions are verified against the live error path rather than an approved delta. |
+
+---
+
+## 10. Teams — the Nonagon roster (Chapter Y)
+
+The Studio's window into **who the agent's team is**: the daemon's active
+`TeamConfig` (the 9-role Nonagon today; a vertical pack's roster later) — the
+lead + specialists, each with their role, trust ceiling, capability scopes,
+tool allowlist, and soul (system prompt). The live team *missions* already live
+on the Command Center + Missions screens; **Teams is the composition view**, the
+read-only counterpart to `aivyx team roster`.
+
+### 10.1 What's reused (almost everything)
+
+- **`TeamConfig` / `TeamMember`** already live in the **wasm-clean**
+  `aivyx-team-types` crate and `aivyx-ipc` already depends on it (it carries
+  `Option<TeamConfig>` on `TeamRun`/`TeamRunGoal`). So the web renders the **real
+  type** — no mirror struct, no new daemon data. The daemon already holds the
+  active roster in `TeamMissionService` (`default_nonagon()`).
+- The render mirrors the CLI `team::render_roster`: lead vs specialist, the
+  `TrustTier` label, scopes-or-`(none)`.
+
+### 10.2 The one new IPC
+
+- **`GetTeamRoster`** → `QueryResponsePayload::GetTeamRoster { roster: TeamConfig }`.
+  Read-only. The daemon answers from `TeamMissionService`'s config via a new
+  `team_config()` accessor; `None` service ⇒ a `QueryError` (`no_team`).
+
+### 10.3 Web
+
+`View::Teams` (the sidebar item leaves the roadmap). `TeamsPanel`: a header
+(team name + description + lead + specialist count + a small "N active team
+missions" stat reusing the already-polled `missions` signal), then a roster grid
+of **member cards** — lead badged, role, `TrustTier` chip, scopes, tool count —
+each expandable to show the full tool allowlist + the member's soul. Empty/loading
+states for a daemon without a team service.
+
+### 10.4 Invariants
+
+- **Read-only / no behavior change** — Teams only *renders* the active roster;
+  swapping teams (vertical packs) + per-member editing are later, separate work.
+  The daemon's `default_nonagon()` is unchanged.
+- **Real shared type** — `TeamConfig` over the wire, not a re-mirrored struct.
+- **Studio only / local-first / Stitch** — same rules as R–X.
+
+### 10.5 Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **Y.0** | This contract. |
+| **Y.1** | `GetTeamRoster` IPC + `TeamMissionService::team_config()` accessor + daemon handler; round-trip + handler tests. |
+| **Y.2** | Web: `View::Teams` + `TeamsPanel` (header + member cards + expand-to-soul); `ws_task` arm; `stitch.css`. |
+| **Y.3** | Finalize: bundle, live-verify (roster renders, member detail, offline), docs, memory, push. |
