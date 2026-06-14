@@ -89,7 +89,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Command** | dashboard: stat cards + active missions + live audit-trail feed + agent status | ✅ Live (Ch. S — the default landing view) |
 | **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
-| **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | 🔨 In progress (Ch. Y) |
+| **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | workspace + fs_root browser | Roadmap |
@@ -391,3 +391,11 @@ states for a daemon without a team service.
 | **Y.1** | `GetTeamRoster` IPC + `TeamMissionService::team_config()` accessor + daemon handler; round-trip + handler tests. |
 | **Y.2** | Web: `View::Teams` + `TeamsPanel` (header + member cards + expand-to-soul); `ws_task` arm; `stitch.css`. |
 | **Y.3** | Finalize: bundle, live-verify (roster renders, member detail, offline), docs, memory, push. |
+
+**Status: Y.0–Y.3 COMPLETE + live-verified.** `GetTeamRoster` returns the
+daemon's active `TeamConfig`; the Studio's Teams screen renders the **9-member
+Nonagon** (lead `coordinator` + 8 specialists), each with role, trust tier, tool
+count, and an expand-to-soul. Live run: served wasm byte-identical/untruncated;
+the IPC probe returned all 9 members with their souls. No mirror type — the web
+renders the real `aivyx_team_types::TeamConfig`. Deferred: vertical-pack swapping
++ per-member editing.

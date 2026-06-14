@@ -2115,7 +2115,7 @@ fn TeamsPanel() -> Element {
             // Roster — one card per member, lead first.
             div { class: "roster-grid",
                 for m in team.members.clone() {
-                    MemberCard { key: "{m.name}", is_lead: m.name == lead, m }
+                    MemberCard { key: "{m.name}", is_lead: m.name == lead, m: m.clone() }
                 }
             }
         }
