@@ -2197,6 +2197,36 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::SeedPersona { id, seed } => {
+                            // Chapter X — live persona seed (web onboarding).
+                            // Plants the seed iff the chain is empty, via the
+                            // same signed + audited primitive the boot-seed
+                            // uses, then recomputes shared state for next-turn
+                            // adoption.
+                            let resp = match seed_persona_live(
+                                persona_log.as_deref(),
+                                &shared_persona,
+                                audit_log.as_deref(),
+                                seed,
+                            )
+                            .await
+                            {
+                                Ok(appended) => DaemonMessage::PersonaSeedResolved {
+                                    id,
+                                    ok: true,
+                                    appended,
+                                    error: None,
+                                },
+                                Err(reason) => DaemonMessage::PersonaSeedResolved {
+                                    id,
+                                    ok: false,
+                                    appended: 0,
+                                    error: Some(reason),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ResolvePersonaProposal {
                             id,
                             proposal_id,
@@ -4303,6 +4333,53 @@ async fn resolve_persona_revert(
     Ok(seq)
 }
 
+/// Chapter X — daemon-side **live** persona seed (the web onboarding path).
+/// Maps the wire seed to `aivyx_config::PersonaSeed` and plants it via the same
+/// `seed_persona_chain_if_empty` primitive the boot-seed uses — so a grown
+/// persona is never overwritten and the seed is signed + audited. The chain-
+/// empty check is surfaced as a friendly operator error before the primitive.
+async fn seed_persona_live(
+    persona_log: Option<&crate::persona::PersistentPersonaLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    audit: Option<&PersistentAuditLog>,
+    wire: aivyx_ipc::protocol::PersonaSeedWire,
+) -> Result<u64, String> {
+    let log = persona_log.ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    if !log.entries().is_empty() {
+        return Err(
+            "the persona already has content; seeding is only available for a fresh agent".into(),
+        );
+    }
+    let seed = wire_to_persona_seed(wire);
+    let appended = crate::persona::seed_persona_chain_if_empty(log, shared_persona, audit, &seed)
+        .await
+        .map_err(|e| format!("persona seed failed: {e}"))?;
+    if appended == 0 {
+        return Err("nothing to seed — add at least one trait, note, or skill".into());
+    }
+    Ok(appended)
+}
+
+/// Chapter X — map the wasm-clean wire seed to the config seed the primitive
+/// consumes.
+fn wire_to_persona_seed(wire: aivyx_ipc::protocol::PersonaSeedWire) -> aivyx_config::PersonaSeed {
+    aivyx_config::PersonaSeed {
+        learned_context: wire.learned_context,
+        communication_adaptations: wire.communication_adaptations,
+        character_traits: wire.character_traits,
+        relationship_milestones: wire.relationship_milestones,
+        skills: wire
+            .skills
+            .into_iter()
+            .map(|s| aivyx_config::SeedSkill {
+                name: s.name,
+                trigger: s.trigger,
+                procedure: s.procedure,
+            })
+            .collect(),
+    }
+}
+
 /// Phase 65 — daemon-side import handler. Validates → conflict
 /// checks → optionally wipes → replays → recomputes shared state.
 /// Best-effort per Q1(a): no atomic-tx wrapping. Returns
@@ -5452,5 +5529,99 @@ mod tests {
         // The declared value must never leak into the audit summary.
         assert!(!s.contains("Aria"), "summary must not carry profile prose: {s}");
         assert!(!s.contains("coding"), "summary must not carry list values: {s}");
+    }
+
+    #[test]
+    fn wire_to_persona_seed_maps_fields_and_skills() {
+        let wire = aivyx_ipc::protocol::PersonaSeedWire {
+            learned_context: vec!["ctx".into()],
+            communication_adaptations: vec!["adapt".into()],
+            character_traits: vec!["pragmatic".into()],
+            relationship_milestones: vec!["genesis".into()],
+            skills: vec![aivyx_ipc::protocol::SeedSkillWire {
+                name: "rust-review".into(),
+                trigger: "t".into(),
+                procedure: "p".into(),
+            }],
+        };
+        let seed = wire_to_persona_seed(wire);
+        assert_eq!(seed.learned_context, vec!["ctx"]);
+        assert_eq!(seed.communication_adaptations, vec!["adapt"]);
+        assert_eq!(seed.character_traits, vec!["pragmatic"]);
+        assert_eq!(seed.relationship_milestones, vec!["genesis"]);
+        assert_eq!(seed.skills.len(), 1);
+        assert_eq!(seed.skills[0].name, "rust-review");
+    }
+
+    #[tokio::test]
+    async fn seed_persona_live_seeds_then_refuses_and_rejects_empty() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = test_dir(&format!(
+            "x1-seed-live-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let store: Arc<dyn Storage> =
+            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([9u8; 32]))
+                .await
+                .expect("storage");
+        let log = crate::persona::PersistentPersonaLog::open(
+            store.domain(KeyDomain::Persona),
+            b"persona-key".to_vec(),
+        )
+        .await
+        .expect("persona log");
+        let shared = crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona::default(),
+        );
+
+        let wire = aivyx_ipc::protocol::PersonaSeedWire {
+            character_traits: vec!["pragmatic".into(), "precise".into()],
+            ..Default::default()
+        };
+
+        // Empty seed on a fresh chain → "nothing to seed".
+        let empty = seed_persona_live(
+            Some(&log),
+            &shared,
+            None,
+            aivyx_ipc::protocol::PersonaSeedWire::default(),
+        )
+        .await;
+        assert!(empty.is_err(), "empty seed must error");
+
+        // First real seed → plants 2 deltas + adopts.
+        let n = seed_persona_live(Some(&log), &shared, None, wire.clone())
+            .await
+            .expect("seed ok");
+        assert_eq!(n, 2);
+        assert!(shared.read().unwrap().character_traits.contains(&"precise".to_string()));
+
+        // Second seed on the now-non-empty chain → refused.
+        let again = seed_persona_live(Some(&log), &shared, None, wire).await;
+        assert!(again.is_err(), "must refuse seeding a non-empty chain");
+        assert_eq!(log.len(), 2, "chain unchanged after refusal");
+    }
+
+    #[tokio::test]
+    async fn seed_persona_live_without_log_errors() {
+        let shared = crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona::default(),
+        );
+        let r = seed_persona_live(
+            None,
+            &shared,
+            None,
+            aivyx_ipc::protocol::PersonaSeedWire {
+                character_traits: vec!["x".into()],
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(r.is_err());
     }
 }

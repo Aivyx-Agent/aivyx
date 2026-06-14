@@ -1086,6 +1086,35 @@ pub struct EffectivePersonaSummary {
     pub is_non_empty: bool,
 }
 
+/// Chapter X — wire mirror of `aivyx_config::PersonaSeed`: the operator's
+/// onboarding Persona/Skills seed, carried by `SeedPersona` (the live web seed)
+/// and returned by `DraftPersonaSeed` (the LLM draft). Plain fields only — no
+/// `aivyx-config` / `aivyx-llm` dep — so the crate stays wasm-clean. Seeds only
+/// the *learned* persona categories; the Profile-mirror scalars stay declared
+/// in `[profile]`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PersonaSeedWire {
+    #[serde(default)]
+    pub learned_context: Vec<String>,
+    #[serde(default)]
+    pub communication_adaptations: Vec<String>,
+    #[serde(default)]
+    pub character_traits: Vec<String>,
+    #[serde(default)]
+    pub relationship_milestones: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<SeedSkillWire>,
+}
+
+/// Chapter X — one starter skill in a [`PersonaSeedWire`]. Mirrors
+/// `aivyx_config::SeedSkill`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SeedSkillWire {
+    pub name: String,
+    pub trigger: String,
+    pub procedure: String,
+}
+
 // ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
@@ -1150,6 +1179,18 @@ pub enum FrontendMessage {
     RevertPersonaDelta {
         id: String,
         target_delta_id: String,
+    },
+    /// Chapter X — operator-initiated **live** persona seed (the web onboarding
+    /// path). Plants the `seed` on the persona chain as operator-authored
+    /// approved deltas, **iff the chain is empty** (a fresh agent) — the same
+    /// `seed_persona_chain_if_empty` primitive the boot-seed (Chapter W) uses,
+    /// so a grown persona is never overwritten. Adopted next-turn (the daemon
+    /// recomputes the shared state). LLM-free.
+    ///
+    /// Reply: [`DaemonMessage::PersonaSeedResolved`] with the same `id`.
+    SeedPersona {
+        id: String,
+        seed: PersonaSeedWire,
     },
     /// Phase 65 — operator-driven Persona chain import (Phase 60
     /// identity-deferral closer). Replays a parsed export bundle
@@ -1347,6 +1388,16 @@ pub enum DaemonMessage {
         /// Sequence number of the appended revert delta on success;
         /// `None` on failure.
         seq: Option<u64>,
+        error: Option<String>,
+    },
+    /// Chapter X — response to [`FrontendMessage::SeedPersona`]. `ok = true`
+    /// with `appended` (the number of seed deltas planted) on success;
+    /// `ok = false` with `error` when the chain is non-empty (already seeded /
+    /// grown), the seed is empty, or a storage error occurred.
+    PersonaSeedResolved {
+        id: String,
+        ok: bool,
+        appended: u64,
         error: Option<String>,
     },
     /// Phase 65 — response to [`FrontendMessage::ImportPersonaChain`].
@@ -1671,6 +1722,13 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         seq: Option<u64>,
+        error: Option<String>,
+    },
+    // Chapter X — live persona seed resolution.
+    PersonaSeedResolved {
+        id: String,
+        ok: bool,
+        appended: u64,
         error: Option<String>,
     },
     // Phase 65 — Persona import resolution.
@@ -2657,6 +2715,56 @@ mod tests {
                 alert_at: None,
             }
         );
+    }
+
+    #[test]
+    fn seed_persona_request_round_trips() {
+        let seed = PersonaSeedWire {
+            learned_context: vec!["operator builds Aivyx".into()],
+            communication_adaptations: vec![],
+            character_traits: vec!["pragmatic".into(), "precise".into()],
+            relationship_milestones: vec!["genesis: first launch".into()],
+            skills: vec![SeedSkillWire {
+                name: "rust-review".into(),
+                trigger: "when reviewing Rust".into(),
+                procedure: "check unwraps".into(),
+            }],
+        };
+        let msg = FrontendMessage::SeedPersona {
+            id: "mc-agents-seed".into(),
+            seed,
+        };
+        let frame = encode_frame(&msg).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn persona_seed_resolved_round_trips() {
+        for (ok, appended, error) in [
+            (true, 5u64, None),
+            (false, 0u64, Some("the persona already has content".to_string())),
+        ] {
+            let env = DaemonEnvelope::PersonaSeedResolved {
+                id: "mc-agents-seed".into(),
+                ok,
+                appended,
+                error,
+            };
+            let frame = encode_frame(&env).expect("encode");
+            let (back, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, env);
+        }
+    }
+
+    #[test]
+    fn persona_seed_wire_defaults_absent_lists() {
+        // A minimal seed (only traits) decodes with the other lists empty.
+        let json = r#"{"character_traits":["witty"]}"#;
+        let seed: PersonaSeedWire = serde_json::from_str(json).expect("decode");
+        assert_eq!(seed.character_traits, vec!["witty"]);
+        assert!(seed.learned_context.is_empty());
+        assert!(seed.skills.is_empty());
     }
 
     #[test]
