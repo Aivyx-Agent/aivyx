@@ -210,6 +210,18 @@ skill, and **Plant seed** (→ `SeedPersona`). On success the existing
 | **X.4** | CLI: an LLM-assisted draft option in `collect_persona_seed` reusing the shared drafter. |
 | **X.5** | Finalize: bundle, e2e, live-verify, docs, memory, push. |
 
+**Status: X.0–X.5 COMPLETE + live-verified.** Both W follow-ons shipped: a
+fresh agent can be seeded live from the Studio (`SeedPersona`) and from a
+free-text description the model drafts (`DraftPersonaSeed`), in both Studio and
+CLI. Live run (Ollama up): the model **drafted** traits + a communication
+adaptation + a `code-review-summary` skill from a one-line description;
+`SeedPersona` planted 4 deltas (LLM-free); `GetEffectivePersona` flipped to
+`is_non_empty = true` (the web swaps the Seed card for the governance view); a
+second seed was **refused** ("already has content"). Boot-seed (W) and live-seed
+(X) share the one `seed_persona_chain_if_empty` primitive — same integrity both
+ways. Remaining deferred: promoting `genesis.rs` into the production first-run
+flow.
+
 ## Invariants (carried from W)
 
 - **One primitive** — boot-seed and live-seed both go through
