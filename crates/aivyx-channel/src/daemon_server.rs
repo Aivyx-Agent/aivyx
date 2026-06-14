@@ -3841,6 +3841,34 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::SetProfile {
+            assistant_name,
+            operator_profile,
+            communication_style,
+            primary_use_cases,
+            behavioral_preferences,
+            behavioral_constraints,
+        } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let write = aivyx_config::ProfileWrite {
+                assistant_name,
+                operator_profile,
+                communication_style,
+                primary_use_cases,
+                behavioral_preferences,
+                behavioral_constraints,
+            };
+            match aivyx_config::write_profile_section(path, &write) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "profile", &profile_change_summary(&write));
+                    profile_applied(path)
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
     }
 }
 
@@ -3887,6 +3915,55 @@ fn settings_applied(toml_path: &Path, embeddings_available: bool) -> QueryRespon
             message: format!("settings written, but reloading them failed: {e}"),
         },
     }
+}
+
+/// Chapter V — re-read the config from disk and return a `ProfileApplied`
+/// response. `restart_required` is always `true`: Profile shapes the system
+/// prompt at load time, so a write updates `aivyx.toml` but not the running
+/// daemon.
+fn profile_applied(toml_path: &Path) -> QueryResponsePayload {
+    match load_settings_config(toml_path) {
+        Ok(cfg) => QueryResponsePayload::ProfileApplied {
+            profile: profile_summary_from_profile(&cfg.profile),
+            restart_required: true,
+        },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("profile written, but reloading it failed: {e}"),
+        },
+    }
+}
+
+/// Chapter V — a compact, forensic-friendly summary of which Profile fields a
+/// `SetProfile` write set vs. cleared, for the `ConfigChanged` audit entry.
+/// Records the *shape* of the change (set/cleared, list lengths), never the
+/// declared values themselves — the audit chain is not the place for the
+/// operator's profile prose.
+fn profile_change_summary(w: &aivyx_config::ProfileWrite) -> String {
+    fn scalar(label: &str, v: &Option<String>) -> String {
+        match v.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(_) => format!("{label} = set"),
+            None => format!("{label} = cleared"),
+        }
+    }
+    fn list(label: &str, v: &Option<Vec<String>>) -> String {
+        match v {
+            Some(items) => {
+                let n = items.iter().filter(|s| !s.trim().is_empty()).count();
+                format!("{label} = {n}")
+            }
+            None => format!("{label} = cleared"),
+        }
+    }
+    [
+        scalar("assistant_name", &w.assistant_name),
+        scalar("operator_profile", &w.operator_profile),
+        scalar("communication_style", &w.communication_style),
+        list("primary_use_cases", &w.primary_use_cases),
+        list("behavioral_preferences", &w.behavioral_preferences),
+        list("behavioral_constraints", &w.behavioral_constraints),
+    ]
+    .join(", ")
 }
 
 /// Chapter U — build the wire snapshot from a loaded config.
@@ -5338,5 +5415,27 @@ mod tests {
         assert_eq!(opt_usd(Some(5.0)), "5");
         assert_eq!(opt_frac(None), "none");
         assert_eq!(opt_frac(Some(0.8)), "0.8");
+    }
+
+    #[test]
+    fn profile_change_summary_records_shape_not_values() {
+        let w = aivyx_config::ProfileWrite {
+            assistant_name: Some("Aria".into()),
+            operator_profile: Some("  ".into()), // whitespace → cleared
+            communication_style: None,
+            primary_use_cases: Some(vec!["coding".into(), "  ".into(), "ops".into()]),
+            behavioral_preferences: Some(vec![]),
+            behavioral_constraints: None,
+        };
+        let s = profile_change_summary(&w);
+        assert_eq!(
+            s,
+            "assistant_name = set, operator_profile = cleared, \
+             communication_style = cleared, primary_use_cases = 2, \
+             behavioral_preferences = 0, behavioral_constraints = cleared"
+        );
+        // The declared value must never leak into the audit summary.
+        assert!(!s.contains("Aria"), "summary must not carry profile prose: {s}");
+        assert!(!s.contains("coding"), "summary must not carry list values: {s}");
     }
 }

@@ -341,6 +341,36 @@ pub enum QueryPayload {
         #[serde(default)]
         alert_at: Option<f64>,
     },
+    /// Chapter V — rewrite the `[profile]` section of `aivyx.toml` (the
+    /// operator-declared identity layer, PRODUCT.md P13). Every field carries
+    /// **clear-on-`None`** semantics matching `aivyx_config::ProfileWrite`: an
+    /// absent field removes that key (the loader's default then applies — e.g.
+    /// `assistant_name` falls back to `"Aivyx"`), a present one writes it. An
+    /// explicit empty list (`Some([])`) is "declared but empty", distinct from
+    /// absent. The Settings screen's confirm-first gate does **not** apply here
+    /// — Profile is free-form declaration, not an access-expansion. Takes
+    /// effect on the next daemon start (Profile shapes `assemble_session_prompt`
+    /// at load time). Responds with [`QueryResponsePayload::ProfileApplied`]
+    /// (or `QueryError` on a malformed config file / write failure).
+    ///
+    /// The agent's *self-learned* Persona is **not** writable here — it is
+    /// governed only through the existing proposal/revert IPC
+    /// ([`FrontendMessage::ResolvePersonaProposal`] /
+    /// [`FrontendMessage::RevertPersonaDelta`]).
+    SetProfile {
+        #[serde(default)]
+        assistant_name: Option<String>,
+        #[serde(default)]
+        operator_profile: Option<String>,
+        #[serde(default)]
+        communication_style: Option<String>,
+        #[serde(default)]
+        primary_use_cases: Option<Vec<String>>,
+        #[serde(default)]
+        behavioral_preferences: Option<Vec<String>>,
+        #[serde(default)]
+        behavioral_constraints: Option<Vec<String>>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -697,6 +727,14 @@ pub enum QueryResponsePayload {
     /// until it restarts (always the case today).
     SettingsApplied {
         settings: SettingsSnapshot,
+        restart_required: bool,
+    },
+    /// Response to [`QueryPayload::SetProfile`]. Chapter V — carries the
+    /// **fresh** `ProfileSummary` (re-read from disk so the editor re-renders
+    /// from authoritative state) and `restart_required` (always `true` today —
+    /// Profile is load-time, like the Settings writes).
+    ProfileApplied {
+        profile: ProfileSummary,
         restart_required: bool,
     },
 }
@@ -2603,6 +2641,97 @@ mod tests {
                 alert_at: None,
             }
         );
+    }
+
+    #[test]
+    fn set_profile_round_trips_full_and_empty() {
+        // Chapter V — every Profile field survives a frame round-trip, both
+        // fully-populated and fully-absent (the "clear everything" shape).
+        let reqs = vec![
+            QueryPayload::SetProfile {
+                assistant_name: Some("Aria".into()),
+                operator_profile: Some("Indie dev".into()),
+                communication_style: Some("terse".into()),
+                primary_use_cases: Some(vec!["coding".into(), "research".into()]),
+                behavioral_preferences: Some(vec!["cite sources".into()]),
+                behavioral_constraints: Some(vec!["no secrets in logs".into()]),
+            },
+            QueryPayload::SetProfile {
+                assistant_name: None,
+                operator_profile: None,
+                communication_style: None,
+                primary_use_cases: None,
+                behavioral_preferences: None,
+                behavioral_constraints: None,
+            },
+        ];
+        for payload in reqs {
+            let msg = FrontendMessage::Query {
+                id: "p".into(),
+                payload: payload.clone(),
+            };
+            let frame = encode_frame(&msg).expect("encode");
+            let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(decoded, msg, "set-profile query round-trips");
+        }
+    }
+
+    #[test]
+    fn set_profile_defaults_all_fields_absent() {
+        // A minimal SetProfile clears every declared field (all None) — no
+        // field is required on the wire, matching SetBudget's posture.
+        let json = r#"{"kind":"SetProfile"}"#;
+        let decoded: QueryPayload = serde_json::from_str(json).expect("decode");
+        assert_eq!(
+            decoded,
+            QueryPayload::SetProfile {
+                assistant_name: None,
+                operator_profile: None,
+                communication_style: None,
+                primary_use_cases: None,
+                behavioral_preferences: None,
+                behavioral_constraints: None,
+            }
+        );
+    }
+
+    #[test]
+    fn set_profile_explicit_empty_list_decodes_as_some() {
+        // An explicit `[]` is "declared but empty" — Some(vec![]) — distinct
+        // from absent (None). The web editor relies on this to clear-vs-declare.
+        let json = r#"{"kind":"SetProfile","primary_use_cases":[]}"#;
+        let decoded: QueryPayload = serde_json::from_str(json).expect("decode");
+        assert_eq!(
+            decoded,
+            QueryPayload::SetProfile {
+                assistant_name: None,
+                operator_profile: None,
+                communication_style: None,
+                primary_use_cases: Some(vec![]),
+                behavioral_preferences: None,
+                behavioral_constraints: None,
+            }
+        );
+    }
+
+    #[test]
+    fn profile_applied_response_round_trips() {
+        let payload = QueryResponsePayload::ProfileApplied {
+            profile: ProfileSummary {
+                assistant_name: "Aria".into(),
+                assistant_name_source: "Toml".into(),
+                operator_profile: Some("Indie dev".into()),
+                communication_style: Some("terse".into()),
+                primary_use_cases: vec!["coding".into()],
+                behavioral_preferences: vec!["cite sources".into()],
+                behavioral_constraints: vec![],
+                injection_enabled: true,
+            },
+            restart_required: true,
+        };
+        let frame = encode_frame(&payload).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, payload, "profile-applied response round-trips");
     }
 
     // ---- DaemonLifecycleEvent round-trip ----
