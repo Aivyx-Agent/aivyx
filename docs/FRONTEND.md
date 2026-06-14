@@ -90,7 +90,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
 | **Teams** | Nonagon roster / vertical packs | Roadmap |
-| **Agents** | persona / soul / profile editor | Roadmap |
+| **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | 🔨 In progress (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | workspace + fs_root browser | Roadmap |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
@@ -250,3 +250,82 @@ while holding every safety invariant Aivyx already guarantees.
 | **U.3** | Daemon handlers: snapshot read; validate → rewrite → **`ConfigChanged`** audit → respond with `restart_required`. (Adds an `AuditEvent` variant → updates the e2e event-count assertions; full suite.) |
 | **U.4** | Web UI: `View::Settings` live — access selector + confirm modal, budget inputs, read-only provider/model card, restart banner; `ws_task` arms; `stitch.css`. |
 | **U.5** | Build the bundle, live-verify in a real browser (read settings, set a budget, change access via the modal, see the restart banner, confirm the toml is rewritten with other sections preserved + an audit entry), docs + memory, push. **Done:** wasm serves byte-identical/untruncated; IPC probe proved `GetSettings`→`SetBudget`→`SetAccessLevel` (confirm-first refusal then apply), toml rewritten preserving all sections, two `ConfigChanged` audit entries, chain intact. |
+
+---
+
+## 9. Agents — the identity editor (Chapter V)
+
+Settings (Ch. U) opened the first config-write surface. **Agents** is the
+second, and the one that touches the product's core identity: the operator's
+**Profile** and the agent's self-learned **Persona**. It is deliberately *two
+different write models stitched into one screen*, because the two halves are
+governed differently and that difference is a feature, not an accident.
+
+### 9.1 The three layers (what is editable, and how)
+
+| Layer | What it is | Edit model | Liveness |
+|---|---|---|---|
+| **Profile** | operator-**declared** identity — the `[profile]` table in `aivyx.toml` (`assistant_name`, `operator_profile`, `communication_style`, `primary_use_cases[]`, `behavioral_preferences[]`, `behavioral_constraints[]`) | **direct write** — surgical `toml_edit` rewrite of `[profile]`, exactly the Ch. U pattern (`aivyx profile edit` is the CLI twin) | **load-time** → `restart_required` (same as Settings; Profile shapes `assemble_session_prompt` at startup) |
+| **Persona** | the agent's **self-learned** adaptations — an append-only, HMAC-signed **delta chain** (behavioral prefs, learned context, communication adaptations, character traits, relationship milestones) | **never free-edited.** The operator *governs* it: resolve agent **proposals** (approve / approve-with-edit / reject) and **revert** deltas. The chain's integrity is the point. | **live** — the daemon recomputes shared runtime state on resolve/revert, so the next turn picks it up (no restart) |
+| **Soul / Identity** | the combined Profile+Persona **export bundle** (`aivyx identity export`) | portability, not editing | n/a — **deferred** (a later read-only export button) |
+
+The screen never lets the operator hand-write persona deltas. That asymmetry —
+**you declare your Profile; the agent proposes its Persona and you gate it** — is
+the self-learning contract (PRODUCT.md P13/P14) made visible.
+
+### 9.2 What already exists (reuse, do not rebuild)
+
+Persona is a mature, gated subsystem; **almost all of its write IPC already
+ships** and is daemon-tested (the `aivyx persona` CLI + `/classic` use it):
+
+- **Read:** `GetProfile` → `ProfileSummary`; `GetEffectivePersona` →
+  `EffectivePersonaSummary`; `ListPersonaDeltas` → `[PersonaDeltaSummary]`;
+  `ListPersonaProposals` / `GetPersonaProposal` → `[PersonaProposalSummary]`.
+- **Write (existing `FrontendMessage`):** `ResolvePersonaProposal { proposal_id,
+  resolution: Approve | ApproveWithEdit { edited_op } | Reject { reason } }` →
+  `PersonaProposalResolved`; `RevertPersonaDelta { target_delta_id }` →
+  `PersonaRevertResolved`. Both recompute runtime state (live).
+
+So the **only new daemon API this chapter adds is the Profile direct-write
+path** — `SetProfile` + a `write_profile_section` helper in `config_write.rs`
+(joining `write_access_section` / `write_budget_section` from U.1). Everything
+persona is wiring existing IPC into the Studio, the way Chat wired the existing
+turn loop.
+
+### 9.3 New IPC (the Profile half only)
+
+- **`SetProfile`** `{ assistant_name?, operator_profile?, communication_style?,
+  primary_use_cases?: Vec<String>, behavioral_preferences?: Vec<String>,
+  behavioral_constraints?: Vec<String> }` → `ProfileApplied { profile:
+  ProfileSummary, restart_required: true }`. Absent scalars clear the key;
+  absent lists leave them untouched vs. an explicit `[]` that clears — TBD in
+  V.2, matched to `write_budget_section`'s clear-on-None convention.
+- Reuses `config_toml_path` (added in U.1) and `ConfigWriteError` → stable
+  `QueryError` codes (`map_config_write_error`).
+- Writes append an `AuditEvent::ConfigChanged { section: "profile", summary }`
+  (the U.3 variant — no new audit variant, no new count-assertion churn).
+
+### 9.4 Invariants
+
+- **Profile writes preserve the file.** Section-scoped `toml_edit` at `0600`;
+  `[agent]`/`[fs]`/`[access]`/`[budget]`/secrets untouched — same guarantee as U.
+- **Persona integrity is never bypassed.** The web UI cannot append a raw delta;
+  it can only resolve a proposal or revert via the existing signed-chain paths.
+  Approve-with-edit carries an `edited_op` the daemon re-validates and re-signs.
+- **Honest liveness.** Profile edits show the restart banner; persona
+  resolve/revert show "applied — effective next turn" (no banner).
+- **Every change is audited.** Profile → `ConfigChanged`; persona → the existing
+  `PersonaProposalResolved` / `PersonaRevertResolved` audit entries.
+- **Studio only / local-first / Stitch.** Same scope + offline + token rules as
+  R–U; `/classic` intact.
+
+### 9.5 Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **V.0** | This contract (§9). |
+| **V.1** | `write_profile_section` in `aivyx-config/config_write.rs` (validate + `[profile]` toml_edit rewrite, 0600); unit tests alongside the U.1 helpers. |
+| **V.2** | `aivyx-ipc`: `SetProfile` + `ProfileApplied` (round-trip tests); daemon handler (validate → rewrite → `ConfigChanged` audit → `restart_required`). Confirm the existing persona read+resolve+revert handlers cover what the web screen needs. |
+| **V.3** | Web UI part 1 — `View::Agents` + the **Profile editor** (form over the six `[profile]` fields, list add/remove, save → confirm → `ProfileApplied`, restart banner); `ws_task` arms; `stitch.css`. |
+| **V.4** | Web UI part 2 — the **Persona governance** panel: Effective Persona viewer + pending **proposals** (approve / edit / reject) + **delta chain** with revert, over the existing IPC. "Effective next turn" notices. |
+| **V.5** | Build the bundle, live-verify in a real browser (edit Profile → restart banner + toml rewritten + audit; resolve a seeded proposal → persona updates live; revert a delta), docs + memory, push. |
