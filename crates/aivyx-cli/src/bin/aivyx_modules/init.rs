@@ -437,6 +437,35 @@ enum Provider {
     OpenAi,
 }
 
+/// Chapter W — the optional onboarding Persona/Skills seed collected by the
+/// wizard. Renders a `[persona_seed]` section the daemon plants on the persona
+/// chain at first boot (iff empty). All-empty ⇒ no section emitted, and the
+/// agent's Persona simply starts empty and grows from use as before.
+#[derive(Default)]
+struct PersonaSeedFields {
+    learned_context: Vec<String>,
+    character_traits: Vec<String>,
+    relationship_milestones: Vec<String>,
+    skills: Vec<SeedSkillFields>,
+}
+
+/// One starter skill captured by the wizard (`[[persona_seed.skill]]`).
+struct SeedSkillFields {
+    name: String,
+    trigger: String,
+    procedure: String,
+}
+
+impl PersonaSeedFields {
+    /// `true` when the operator declared any seed content.
+    fn has_content(&self) -> bool {
+        !self.learned_context.is_empty()
+            || !self.character_traits.is_empty()
+            || !self.relationship_milestones.is_empty()
+            || !self.skills.is_empty()
+    }
+}
+
 /// Captures all wizard answers needed to render `aivyx.toml`.
 struct InitConfig {
     provider: Provider,
@@ -468,6 +497,8 @@ struct InitConfig {
     profile_behavioral_preferences: Vec<String>,
     /// The lines it must never cross — the trust boundaries.
     profile_behavioral_constraints: Vec<String>,
+    /// Chapter W — the optional onboarding Persona/Skills seed.
+    persona_seed: PersonaSeedFields,
 }
 
 /// Render a ready-to-use `aivyx.toml` from the wizard answers.
@@ -584,6 +615,41 @@ fn render_toml(cfg: &InitConfig) -> String {
             out.push_str(&format!(
                 "behavioral_constraints = {}\n",
                 toml_string_array(&cfg.profile_behavioral_constraints),
+            ));
+        }
+    }
+
+    // Chapter W — the onboarding Persona/Skills seed. The daemon plants this
+    // on the persona chain at first boot (iff empty); editing it later has no
+    // effect (the chain is authoritative once seeded). Only emitted when the
+    // operator declared something — otherwise the Persona starts empty.
+    let seed = &cfg.persona_seed;
+    if seed.has_content() {
+        out.push_str("\n[persona_seed]\n");
+        if !seed.learned_context.is_empty() {
+            out.push_str(&format!(
+                "learned_context = {}\n",
+                toml_string_array(&seed.learned_context),
+            ));
+        }
+        if !seed.character_traits.is_empty() {
+            out.push_str(&format!(
+                "character_traits = {}\n",
+                toml_string_array(&seed.character_traits),
+            ));
+        }
+        if !seed.relationship_milestones.is_empty() {
+            out.push_str(&format!(
+                "relationship_milestones = {}\n",
+                toml_string_array(&seed.relationship_milestones),
+            ));
+        }
+        for sk in &seed.skills {
+            out.push_str(&format!(
+                "\n[[persona_seed.skill]]\nname = \"{}\"\ntrigger = \"{}\"\nprocedure = \"{}\"\n",
+                escape_toml_string(&sk.name),
+                escape_toml_string(&sk.trigger),
+                escape_toml_string(&sk.procedure),
             ));
         }
     }
@@ -1278,6 +1344,80 @@ fn render_with_template(
 /// servers + commented sections all survive. When `None`, the
 /// wizard runs the existing Phase 44 path with hardcoded defaults
 /// and the minimal `render_toml` output.
+/// Chapter W — optionally capture an onboarding Persona/Skills seed. Local,
+/// quick, and skippable: the Persona grows from use regardless. Returns an
+/// empty `PersonaSeedFields` when the operator declines (no `[persona_seed]`
+/// section is then emitted).
+fn collect_persona_seed(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<PersonaSeedFields, String> {
+    let mut seed = PersonaSeedFields::default();
+
+    writeln!(writer, "\n— Starting personality (optional) —")
+        .map_err(|e| format!("write error: {e}"))?;
+    writeln!(
+        writer,
+        "Your assistant learns and grows from use. You can also give it a head\n\
+         start: a few traits, a note about your work, even a first skill."
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+
+    if !prompt_yes_no("Seed a starting personality now?", false, reader, writer)? {
+        return Ok(seed);
+    }
+
+    let traits = prompt_line(
+        "  Character traits (comma-separated, e.g. pragmatic, witty): ",
+        reader,
+        writer,
+    )?;
+    seed.character_traits = split_comma_list(&traits);
+
+    let ctx = prompt_line(
+        "  Anything it should know about you / your work from day one? (optional): ",
+        reader,
+        writer,
+    )?;
+    if !ctx.is_empty() {
+        seed.learned_context.push(ctx);
+    }
+
+    if prompt_yes_no("  Add a starter skill?", false, reader, writer)? {
+        let name = prompt_line(
+            "    Skill name (kebab-case, e.g. rust-review): ",
+            reader,
+            writer,
+        )?;
+        if !name.is_empty() {
+            let trigger = prompt_line("    When does it apply? (trigger): ", reader, writer)?;
+            let procedure = prompt_line("    What should it do? (procedure): ", reader, writer)?;
+            seed.skills.push(SeedSkillFields {
+                name,
+                trigger,
+                procedure,
+            });
+        }
+    }
+
+    // Mark the genesis moment when the operator seeded anything — the persona
+    // chain then records day one as its first relationship milestone.
+    if seed.has_content() {
+        seed.relationship_milestones
+            .push("genesis: first launch".to_string());
+    }
+
+    Ok(seed)
+}
+
+/// Split a comma-separated line into trimmed, non-empty entries.
+fn split_comma_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
 pub async fn run_init_wizard(
     template: Option<&super::init_templates::Template>,
 ) -> Result<(), String> {
@@ -1571,6 +1711,9 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     )
     .await?;
 
+    // Chapter W — optionally seed a starting Persona/Skills set.
+    let persona_seed = collect_persona_seed(&mut reader, &mut writer)?;
+
     // 6. Render + write.
     let cfg = InitConfig {
         provider,
@@ -1587,6 +1730,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         profile_primary_use_cases: identity.primary_use_cases,
         profile_behavioral_preferences: identity.behavioral_preferences,
         profile_behavioral_constraints: identity.behavioral_constraints,
+        persona_seed,
     };
     // Phase 66 — when a template was supplied, splice wizard
     // answers into the template document so the role declarations,
@@ -1937,6 +2081,41 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn collect_persona_seed_declined_is_empty() {
+        // First prompt ("Seed a starting personality now?") → default No.
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let seed = collect_persona_seed(&mut input, &mut output).unwrap();
+        assert!(!seed.has_content());
+    }
+
+    #[test]
+    fn collect_persona_seed_full_path_captures_traits_context_skill_and_genesis() {
+        // y → seed; traits; context; y → skill; name; trigger; procedure.
+        let script = "y\npragmatic, precise\noperator builds Aivyx\ny\nrust-review\nwhen reviewing Rust\ncheck unwraps\n";
+        let mut input = Cursor::new(script.as_bytes());
+        let mut output = Vec::new();
+        let seed = collect_persona_seed(&mut input, &mut output).unwrap();
+        assert_eq!(seed.character_traits, vec!["pragmatic", "precise"]);
+        assert_eq!(seed.learned_context, vec!["operator builds Aivyx"]);
+        assert_eq!(seed.skills.len(), 1);
+        assert_eq!(seed.skills[0].name, "rust-review");
+        assert_eq!(seed.skills[0].trigger, "when reviewing Rust");
+        // Seeding anything records the genesis milestone.
+        assert_eq!(seed.relationship_milestones, vec!["genesis: first launch"]);
+    }
+
+    #[test]
+    fn collect_persona_seed_yes_but_all_blank_stays_empty() {
+        // y → seed, but every field left blank, and decline the skill.
+        let mut input = Cursor::new(b"y\n\n\nn\n" as &[u8]);
+        let mut output = Vec::new();
+        let seed = collect_persona_seed(&mut input, &mut output).unwrap();
+        // No content → no genesis milestone → no [persona_seed] section emitted.
+        assert!(!seed.has_content());
+    }
+
+    #[test]
     fn prompt_line_trims_whitespace() {
         let mut input = Cursor::new(b"  hello world  \n" as &[u8]);
         let mut output = Vec::new();
@@ -2031,6 +2210,7 @@ mod tests {
             profile_primary_use_cases: Vec::new(),
             profile_behavioral_preferences: Vec::new(),
             profile_behavioral_constraints: Vec::new(),
+            persona_seed: PersonaSeedFields::default(),
         }
     }
 
@@ -2056,6 +2236,66 @@ mod tests {
         assert!(!toml.contains("[[mcp_server]]"));
         // No [profile] section unless operator customized.
         assert!(!toml.contains("[profile]"));
+        // No [persona_seed] section unless the operator seeded one.
+        assert!(!toml.contains("[persona_seed]"));
+    }
+
+    #[test]
+    fn render_toml_emits_persona_seed_section() {
+        let mut cfg = init_config_no_profile(
+            Provider::Ollama,
+            "llama3.2:latest",
+            None,
+            "data/aivyx.redb",
+            "/home/user/workspace",
+            false,
+        );
+        cfg.persona_seed = PersonaSeedFields {
+            learned_context: vec!["operator builds Aivyx".into()],
+            character_traits: vec!["pragmatic".into(), "precise".into()],
+            relationship_milestones: vec!["genesis: first launch".into()],
+            skills: vec![SeedSkillFields {
+                name: "rust-review".into(),
+                trigger: "when reviewing Rust".into(),
+                procedure: "check unwraps; cite file:line".into(),
+            }],
+        };
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[persona_seed]"), "{toml}");
+        assert!(toml.contains("character_traits = [\"pragmatic\", \"precise\"]"), "{toml}");
+        assert!(toml.contains("learned_context = [\"operator builds Aivyx\"]"), "{toml}");
+        assert!(toml.contains("[[persona_seed.skill]]"), "{toml}");
+        assert!(toml.contains("name = \"rust-review\""), "{toml}");
+
+        // The wizard's output must parse back through the W.1 config loader.
+        let cfg = aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
+            toml_path: Some(write_temp_toml(&toml, "init-seed")),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        })
+        .expect("generated toml loads");
+        let seed = cfg.persona_seed.expect("[persona_seed] parsed");
+        assert_eq!(seed.character_traits, vec!["pragmatic", "precise"]);
+        assert_eq!(seed.skills.len(), 1);
+        assert_eq!(seed.skills[0].name, "rust-review");
+    }
+
+    /// Write `toml` to a unique temp file and return its path (no tempfile dep).
+    fn write_temp_toml(toml: &str, tag: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "aivyx-init-{}-{}-{tag}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, toml).expect("write temp toml");
+        p
     }
 
     #[test]
