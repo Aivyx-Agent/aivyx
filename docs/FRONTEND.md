@@ -92,7 +92,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
-| **Documents** | read-only file browser over the agent workspace + the access-scoped fs_root — see §11 | 🔨 In progress (Ch. Z) |
+| **Documents** | read-only file browser over the agent workspace + the access-scoped fs_root — see §11 | ✅ Live (Ch. Z) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | the voice channel | Roadmap |
 
@@ -474,3 +474,12 @@ mono `<pre>`; binary/oversize → a "N KB — not shown" note). Empty/loading st
 | **Z.2** | `ListDir`/`ReadFile` IPC + thread `DocumentRoots` into the daemon + handlers (resolve root → primitive → typed errors); round-trip + handler tests. |
 | **Z.3** | Web: `View::Documents` + `DocumentsPanel` (root switcher + breadcrumb + listing + file viewer); `ws_task` arms; `stitch.css`. |
 | **Z.4** | Finalize: bundle, live-verify (browse workspace + fs_root, read a file, escape blocked, offline), docs, memory, push. |
+
+**Status: Z.0–Z.4 COMPLETE + live-verified.** `ListDir`/`ReadFile` browse the
+two roots; the Studio's Documents screen renders the listing + a file viewer.
+Live run: served wasm byte-identical/untruncated; `ListDir fs` returned the
+seeded sandbox (dirs first), descended into a subdir, `ReadFile` returned text
+for `plan.md` and **withheld** the binary `data.bin` (`binary: true`), `ListDir
+workspace` returned the agent's own dir, and **`../../../etc` was rejected**
+(`path_escape`) — the canonicalize-`starts_with` guard holds over IPC. Deferred:
+write/rename, a tree pane, syntax highlighting.
