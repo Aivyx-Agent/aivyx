@@ -17,8 +17,8 @@
 //! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
-    AuditEntrySummary, DaemonEnvelope, FrontendMessage, MemoryEntrySummary, QueryPayload,
-    QueryResponsePayload, SettingsSnapshot, StreamEventPayload,
+    AuditEntrySummary, DaemonEnvelope, FrontendMessage, MemoryEntrySummary, ProfileSummary,
+    QueryPayload, QueryResponsePayload, SettingsSnapshot, StreamEventPayload,
 };
 use aivyx_ipc::{TeamMissionPhase, TeamMissionView};
 
@@ -62,6 +62,7 @@ enum View {
     Chat,
     Memory,
     Settings,
+    Agents,
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -83,6 +84,19 @@ struct SettingsState {
     notice: Option<(bool, String)>,
     /// True after a successful write — a write updates aivyx.toml but the
     /// running daemon won't pick it up until it restarts.
+    restart_required: bool,
+}
+
+/// Agents screen state — Chapter V. The on-disk Profile snapshot (the operator-
+/// declared identity layer) plus the last write outcome + the load-time
+/// "restart to apply" flag. V.4 extends this with the persona-governance data.
+#[derive(Clone, Default, PartialEq)]
+struct AgentsState {
+    profile: Option<ProfileSummary>,
+    /// Last write outcome: `(ok, message)`. `None` until the first write.
+    notice: Option<(bool, String)>,
+    /// True after a successful Profile write — `aivyx.toml` is updated but the
+    /// running daemon won't pick it up until it restarts (Profile is load-time).
     restart_required: bool,
 }
 
@@ -176,6 +190,7 @@ fn App() -> Element {
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
     let settings = use_signal(SettingsState::default);
+    let agents = use_signal(AgentsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -184,13 +199,14 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, settings, connected, session, transcript, streaming,
-            gate,
+            rx, missions, dashboard, memory, settings, agents, connected, session, transcript,
+            streaming, gate,
         )
     });
     use_context_provider(|| ws);
     use_context_provider(|| memory);
     use_context_provider(|| settings);
+    use_context_provider(|| agents);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
@@ -234,6 +250,7 @@ fn App() -> Element {
         View::Chat => "Terminal",
         View::Memory => "Memory",
         View::Settings => "Settings",
+        View::Agents => "Agents",
     };
 
     rsx! {
@@ -254,6 +271,7 @@ fn App() -> Element {
                         View::Chat => rsx! { ChatPanel {} },
                         View::Memory => rsx! { MemoryPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
+                        View::Agents => rsx! { AgentsPanel {} },
                     }
                 }
             }
@@ -284,9 +302,10 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Memory) }
             NavItem { icon: ICON_SETTINGS, label: "Settings", active: view() == View::Settings,
                 onclick: move |_| view.set(View::Settings) }
+            NavItem { icon: ICON_AGENTS, label: "Agents", active: view() == View::Agents,
+                onclick: move |_| view.set(View::Agents) }
             div { class: "nav-section label-tech", "Roadmap" }
             NavItemSoon { icon: ICON_TEAMS, label: "Teams" }
-            NavItemSoon { icon: ICON_AGENTS, label: "Agents" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
         }
@@ -1154,6 +1173,274 @@ fn confirm_blurb(level: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Agents — the identity editor (Chapter V)
+//
+// V.3 ships the **Profile editor** half: the operator-declared `[profile]`
+// layer (assistant name, operator context, communication style, and three
+// declared lists). A save round-trips through `SetProfile`, the daemon rewrites
+// `[profile]` in `aivyx.toml`, and — because Profile is read at startup — the
+// screen shows the same "restart to apply" banner the Settings writes do. The
+// agent's self-learned *Persona* governance panel is V.4.
+// ---------------------------------------------------------------------------
+
+#[component]
+fn AgentsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let agents = use_context::<Signal<AgentsState>>();
+
+    // Editable form state, seeded from the on-disk Profile snapshot.
+    let mut name = use_signal(String::new);
+    let mut operator = use_signal(String::new);
+    let mut comm_style = use_signal(String::new);
+    let use_cases = use_signal(Vec::<String>::new);
+    let prefs = use_signal(Vec::<String>::new);
+    let constraints = use_signal(Vec::<String>::new);
+    // The snapshot the form was last seeded from — so a write *error* (snapshot
+    // unchanged) doesn't wipe the operator's in-progress edits.
+    let mut last_seed = use_signal(|| None::<ProfileSummary>);
+
+    // Load the current Profile when the view opens. (The Command-Center one-shot
+    // may already have populated it; re-asking is cheap and keeps this panel
+    // self-contained.)
+    use_future(move || async move {
+        ws.send(get_profile_query());
+    });
+
+    // Seed the form whenever the snapshot content changes (first load + after a
+    // successful write), but not on a notice-only change.
+    let mut use_cases_s = use_cases;
+    let mut prefs_s = prefs;
+    let mut constraints_s = constraints;
+    use_effect(move || {
+        let snap = agents().profile.clone();
+        if snap != last_seed() {
+            if let Some(p) = snap.as_ref() {
+                // Only seed the name when it is operator-declared; a `default`
+                // source means "Aivyx" is the fallback, so leave the field blank
+                // (saving blank keeps it at the default rather than re-declaring).
+                name.set(if p.assistant_name_source == "toml" {
+                    p.assistant_name.clone()
+                } else {
+                    String::new()
+                });
+                operator.set(p.operator_profile.clone().unwrap_or_default());
+                comm_style.set(p.communication_style.clone().unwrap_or_default());
+                use_cases_s.set(p.primary_use_cases.clone());
+                prefs_s.set(p.behavioral_preferences.clone());
+                constraints_s.set(p.behavioral_constraints.clone());
+            }
+            last_seed.set(snap);
+        }
+    });
+
+    let st = agents();
+    let profile = match st.profile.clone() {
+        Some(p) => p,
+        None => {
+            return rsx! {
+                div { class: "settings agents",
+                    div { class: "glass-card empty",
+                        p { class: "label-tech", "Loading profile…" }
+                    }
+                }
+            }
+        }
+    };
+
+    rsx! {
+        div { class: "settings agents",
+
+            if st.restart_required {
+                div { class: "glass-card restart-banner",
+                    strong { "Saved — restart the daemon to apply." }
+                    p { class: "label-tech",
+                        "The Profile shapes every turn's system prompt at startup. Run  "
+                        code { "aivyx daemon stop && aivyx daemon run" }
+                    }
+                }
+            }
+
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+
+            // ── Declared identity (Profile scalars) ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "Declared identity" }
+                    span { class: if profile.injection_enabled { "chip" } else { "chip muted" },
+                        {if profile.injection_enabled { "shaping prompts" } else { "passthrough" }}
+                    }
+                }
+                p { class: "label-tech",
+                    "What you declare about your assistant and yourself. The agent reads this at startup; leave a field blank to clear it."
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Assistant name" }
+                    input {
+                        class: "input", placeholder: "Aivyx (default)",
+                        value: "{name}", oninput: move |e| name.set(e.value()),
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "About you" }
+                    textarea {
+                        class: "input", rows: "2",
+                        placeholder: "e.g. Indie game developer; prefers concise, technical answers",
+                        value: "{operator}", oninput: move |e| operator.set(e.value()),
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Communication style" }
+                    textarea {
+                        class: "input", rows: "2",
+                        placeholder: "e.g. Terse, no preamble, code-first",
+                        value: "{comm_style}", oninput: move |e| comm_style.set(e.value()),
+                    }
+                }
+            }
+
+            // ── Declared lists ──
+            ListEditor {
+                title: "Primary use cases",
+                hint: "What you mostly use the agent for.",
+                items: use_cases,
+            }
+            ListEditor {
+                title: "Behavioral preferences",
+                hint: "How you'd like the agent to behave (soft guidance).",
+                items: prefs,
+            }
+            ListEditor {
+                title: "Behavioral constraints",
+                hint: "Lines the agent should not cross.",
+                items: constraints,
+            }
+
+            div { class: "actions sticky-save",
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| ws.send(set_profile_query(
+                        opt_str(&name()),
+                        opt_str(&operator()),
+                        opt_str(&comm_style()),
+                        opt_list(&use_cases()),
+                        opt_list(&prefs()),
+                        opt_list(&constraints()),
+                    )),
+                    "Save profile"
+                }
+            }
+        }
+    }
+}
+
+/// A small add/remove list editor over a shared `Signal<Vec<String>>`. Owns its
+/// own draft-entry input; mutations flow straight back to the parent's signal
+/// so the Save handler reads the live list. Chapter V.
+#[component]
+fn ListEditor(title: String, hint: String, items: Signal<Vec<String>>) -> Element {
+    let mut items = items;
+    let mut draft = use_signal(String::new);
+    let add = move |_: MouseEvent| {
+        let v = draft().trim().to_string();
+        if !v.is_empty() {
+            items.write().push(v);
+            draft.set(String::new());
+        }
+    };
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head",
+                h3 { "{title}" }
+                span { class: "chip", "{items().len()}" }
+            }
+            p { class: "label-tech", "{hint}" }
+            if items().is_empty() {
+                p { class: "label-tech sub", "None declared." }
+            } else {
+                div { class: "list-editor",
+                    for (i, entry) in items().into_iter().enumerate() {
+                        div { class: "chip-removable", key: "{i}",
+                            span { "{entry}" }
+                            button {
+                                class: "chip-x",
+                                title: "Remove",
+                                onclick: move |_| { items.write().remove(i); },
+                                "×"
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "add-row",
+                input {
+                    class: "input",
+                    placeholder: "Add an entry…",
+                    value: "{draft}",
+                    oninput: move |e| draft.set(e.value()),
+                }
+                button { class: "btn btn-glass", onclick: add, "Add" }
+            }
+        }
+    }
+}
+
+fn get_profile_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-agents-get".to_string(),
+        payload: QueryPayload::GetProfile,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_profile_query(
+    assistant_name: Option<String>,
+    operator_profile: Option<String>,
+    communication_style: Option<String>,
+    primary_use_cases: Option<Vec<String>>,
+    behavioral_preferences: Option<Vec<String>>,
+    behavioral_constraints: Option<Vec<String>>,
+) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-agents-profile".to_string(),
+        payload: QueryPayload::SetProfile {
+            assistant_name,
+            operator_profile,
+            communication_style,
+            primary_use_cases,
+            behavioral_preferences,
+            behavioral_constraints,
+        },
+    }
+}
+
+/// A scalar form field → `Some(trimmed)` or `None` when blank (clear the key).
+fn opt_str(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// A list field → `Some(cleaned)` of trimmed non-empty entries, or `None` when
+/// empty (clear the key — "no declared entries", distinct from `[]`).
+fn opt_list(v: &[String]) -> Option<Vec<String>> {
+    let cleaned: Vec<String> = v
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Wire helpers + the WebSocket task (unchanged from Chapter M)
 // ---------------------------------------------------------------------------
 
@@ -1213,6 +1500,7 @@ async fn ws_task(
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
     mut settings: Signal<SettingsState>,
+    mut agents: Signal<AgentsState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -1260,7 +1548,10 @@ async fn ws_task(
                     payload: QueryResponsePayload::GetProfile { profile },
                     ..
                 } => {
-                    dashboard.write().assistant_name = Some(profile.assistant_name);
+                    // Feeds both the Command-Center name chip and the Agents
+                    // editor (the latter seeds its form from the full summary).
+                    dashboard.write().assistant_name = Some(profile.assistant_name.clone());
+                    agents.write().profile = Some(profile);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListMemoryTopics { topics },
@@ -1299,6 +1590,15 @@ async fn ws_task(
                     s.restart_required = restart_required;
                     s.notice = Some((true, "Saved to aivyx.toml.".to_string()));
                 }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ProfileApplied { profile, restart_required },
+                    ..
+                } => {
+                    let mut a = agents.write();
+                    a.profile = Some(profile);
+                    a.restart_required = restart_required;
+                    a.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                }
                 // Route a Settings write/read failure to its panel (the query
                 // ids are prefixed so other QueryErrors don't hijack the banner).
                 DaemonEnvelope::QueryResponse {
@@ -1306,6 +1606,14 @@ async fn ws_task(
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-settings") => {
                     settings.write().notice = Some((false, message));
+                }
+                // Same routing for a Profile write/read failure on the Agents
+                // screen (ids prefixed `mc-agents`).
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-agents") => {
+                    agents.write().notice = Some((false, message));
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),

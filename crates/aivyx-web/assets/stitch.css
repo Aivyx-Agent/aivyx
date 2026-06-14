@@ -487,3 +487,30 @@ select.input { appearance: none; cursor: pointer; }
 .modal h3 { font-size: 17px; }
 .modal p { margin: 0; color: var(--color-text-secondary); }
 .modal .actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ── Agents — the identity editor (Chapter V). Reuses the .settings layout. ── */
+.agents { max-width: 680px; }
+.agents .field-row { grid-template-columns: 150px 1fr; align-items: start; }
+.agents .field-row label { padding-top: 8px; }
+textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: inherit; }
+.chip.muted { background: var(--color-secondary-dim); color: var(--color-text-disabled); }
+
+/* The add/remove list editor (primary use cases, preferences, constraints). */
+.list-editor { display: flex; flex-direction: column; gap: 8px; }
+.chip-removable {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; border-radius: 0.375rem;
+  background: var(--color-bg-raised); border: 1px solid var(--color-border-ghost);
+}
+.chip-removable span { font-size: 13px; color: var(--color-text-primary); word-break: break-word; }
+.chip-x {
+  flex: none; cursor: pointer; border: 0; background: transparent;
+  color: var(--color-text-disabled); font-size: 18px; line-height: 1;
+  padding: 0 4px; transition: color 0.15s;
+}
+.chip-x:hover { color: var(--color-error); }
+.add-row { display: flex; gap: 8px; }
+.add-row .input { flex: 1; }
+
+/* Save action pinned to the bottom of the Agents column. */
+.sticky-save { justify-content: flex-end; padding-top: 4px; }
