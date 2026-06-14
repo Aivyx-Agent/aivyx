@@ -138,3 +138,85 @@ seed, LLM-assisted seed drafting, and promoting `genesis.rs` into production.
 - **Declared vs learned stays clean** — Profile in `[profile]`; Persona/Skills
   seed in `[persona_seed]`, adopted onto the *learned* chain.
 - **Every seed is audited** — one `PersonaSeeded` entry on the HMAC audit chain.
+
+---
+
+# Chapter X — Persona seed: web authoring + LLM-assisted drafting
+
+Closes the two Chapter-W follow-ons: a **web onboarding surface** that authors
+the seed live (no restart), and **LLM-assisted drafting** ("describe your
+assistant in words and Aivyx drafts the seed"), in both the Studio and the CLI.
+
+## What's new vs. W
+
+W was config-driven + boot-time (`[persona_seed]` → seed at boot iff empty). X
+adds the **live runtime path**: a fresh agent (empty persona chain) can be seeded
+from the Studio while the daemon runs, with **immediate adoption** (the daemon
+recomputes `shared_persona` — same next-turn liveness as the persona governance
+writes). The boot-seed (W) and the live-seed (X) share **one primitive**,
+`seed_persona_chain_if_empty`, so both honor "never overwrite a grown persona."
+
+## New IPC (wasm-clean `aivyx-ipc`)
+
+Modeled on the persona-governance writes (`ResolvePersonaProposal` /
+`RevertPersonaDelta`): `FrontendMessage` requests with `DaemonEnvelope` acks.
+
+- **`SeedPersona { id, seed: PersonaSeedWire }`** → `PersonaSeedResolved { id,
+  ok, appended, error }`. The daemon maps `PersonaSeedWire` → `aivyx_config::
+  PersonaSeed`, calls the W.2 primitive **with the (now-open) audit log**, and
+  recomputes shared state. Refuses (`ok = false`) when the chain is non-empty.
+- **`DraftPersonaSeed { id, description }`** → `PersonaSeedDrafted { id, draft:
+  Option<PersonaSeedWire>, error }`. The daemon runs a **one-shot LLM draft** of
+  a seed from the operator's free-text description.
+- `PersonaSeedWire { learned_context, communication_adaptations,
+  character_traits, relationship_milestones, skills: Vec<SeedSkillWire> }`;
+  `SeedSkillWire { name, trigger, procedure }` — plain-field mirror of
+  `aivyx_config::PersonaSeed`, no config/llm dep.
+
+## Shared drafting (`aivyx-channel`)
+
+One implementation both the daemon handler and the CLI wizard call:
+`persona_seed_draft::draft_persona_seed(provider, model, description) ->
+Option<aivyx_config::PersonaSeed>`. Reuses the Phase-181 identity-draft pattern
+(`chat_stream` → `finish` → parse labeled `KEY: value` lines, lists
+comma-split). The **operator is always the author of record** — the draft only
+pre-fills an editable form; nothing is planted until they confirm.
+
+## Threading the LLM into the query handler
+
+The daemon's query path has the `agent` but no plain `LlmProvider`. X threads
+`Option<Arc<dyn LlmProvider>>` through `DaemonConfig → ConnectionContext →
+handle_query` (the Chapter-U `config_toml_path` pattern), sourced from the
+provider `aivyx.rs` already builds. `None` (no model) → `DraftPersonaSeed` returns
+a typed "no model available" error; seeding still works (it's LLM-free).
+
+## Web (Studio)
+
+The Agents screen gains a **"Seed your assistant"** onboarding card, shown only
+when the persona is empty (`is_non_empty == false` **and** the delta chain is
+empty — a fresh agent). It offers: a description box + **Draft with AI**
+(→ `DraftPersonaSeed`, fills the form), editable traits / context / one starter
+skill, and **Plant seed** (→ `SeedPersona`). On success the existing
+`refresh_tick` re-queries and the normal governance view replaces the card.
+
+## Phases
+
+| Phase | Deliverable |
+|---|---|
+| **X.0** | This contract. |
+| **X.1** | `SeedPersona` IPC + `PersonaSeedWire` + daemon handler (live seed via the W.2 primitive, audited, refuse-on-non-empty); round-trip + handler tests. |
+| **X.2** | `persona_seed_draft` shared drafter + `DraftPersonaSeed` IPC + thread `LlmProvider` into the query handler + daemon handler; tests. |
+| **X.3** | Web: the Agents "Seed your assistant" card (describe → draft → edit → plant); `ws_task` arms; `stitch.css`. |
+| **X.4** | CLI: an LLM-assisted draft option in `collect_persona_seed` reusing the shared drafter. |
+| **X.5** | Finalize: bundle, e2e, live-verify, docs, memory, push. |
+
+## Invariants (carried from W)
+
+- **One primitive** — boot-seed and live-seed both go through
+  `seed_persona_chain_if_empty`: signed append, never overwrite a grown persona,
+  always audited.
+- **Operator is the author** — the LLM only drafts a form; the operator edits and
+  confirms before anything is planted.
+- **LLM-optional** — drafting degrades to a typed error with no model; seeding is
+  LLM-free and always available.
+- **Studio only / local-first** — same scope + offline rules as R–W.
