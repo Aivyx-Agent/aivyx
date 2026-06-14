@@ -93,7 +93,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Agents** | persona / soul / profile editor | Roadmap |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | workspace + fs_root browser | Roadmap |
-| **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | 🔨 In progress (Ch. U) |
+| **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | the voice channel | Roadmap |
 
 The reference mockups for the locked look: `aivyx-brand/assets/stitch/`
@@ -249,4 +249,4 @@ while holding every safety invariant Aivyx already guarantees.
 | **U.2** | `aivyx-ipc`: `GetSettings` + `SetAccessLevel` + `SetBudget` + `SettingsSnapshot`, with wire-compat round-trip tests. |
 | **U.3** | Daemon handlers: snapshot read; validate → rewrite → **`ConfigChanged`** audit → respond with `restart_required`. (Adds an `AuditEvent` variant → updates the e2e event-count assertions; full suite.) |
 | **U.4** | Web UI: `View::Settings` live — access selector + confirm modal, budget inputs, read-only provider/model card, restart banner; `ws_task` arms; `stitch.css`. |
-| **U.5** | Build the bundle, live-verify in a real browser (read settings, set a budget, change access via the modal, see the restart banner, confirm the toml is rewritten with other sections preserved + an audit entry), docs + memory, push. |
+| **U.5** | Build the bundle, live-verify in a real browser (read settings, set a budget, change access via the modal, see the restart banner, confirm the toml is rewritten with other sections preserved + an audit entry), docs + memory, push. **Done:** wasm serves byte-identical/untruncated; IPC probe proved `GetSettings`→`SetBudget`→`SetAccessLevel` (confirm-first refusal then apply), toml rewritten preserving all sections, two `ConfigChanged` audit entries, chain intact. |
