@@ -4108,6 +4108,10 @@ async fn run_async(
         // into the daemon's reflection-cron lifecycle pass via
         // DaemonConfig below.
         persona_lifecycle: config_persona_lifecycle,
+        // Chapter W — `[persona_seed]` onboarding seed. Bound for real by the
+        // boot-seed hook in W.3; ignored here so the exhaustive destructure
+        // compiles in the W.1 schema-only step.
+        persona_seed: _,
         // Phase 84 — `[recall_cluster]` config. Wired into the
         // recall provider's cluster-aware expansion below.
         recall_cluster: config_recall_cluster,

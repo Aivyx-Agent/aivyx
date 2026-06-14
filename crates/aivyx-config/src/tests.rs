@@ -6894,6 +6894,84 @@ fn proactive_enabled_all_signals_off_is_invalid() {
 }
 
 // ------------------------------------------------------------------
+// Chapter W — [persona_seed] section
+// ------------------------------------------------------------------
+
+/// No `[persona_seed]` section → `persona_seed: None` (no onboarding seed).
+#[test]
+fn persona_seed_absent_section_is_none() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).expect("load");
+    assert!(cfg.persona_seed.is_none());
+    drop(env);
+}
+
+/// A populated `[persona_seed]` parses every facet list + the
+/// `[[persona_seed.skill]]` array-of-tables.
+#[test]
+fn persona_seed_parses_facets_and_skills() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_seed]\n\
+         learned_context = [\"operator builds Aivyx\"]\n\
+         communication_adaptations = [\"leads with code\"]\n\
+         character_traits = [\"pragmatic\", \"precise\"]\n\
+         relationship_milestones = [\"genesis: first launch\"]\n\
+         \n[[persona_seed.skill]]\n\
+         name = \"rust-review\"\n\
+         trigger = \"when asked to review Rust\"\n\
+         procedure = \"check unwraps + lifetimes; cite file:line\"\n",
+        "seed-full",
+    );
+    let s = cfg.persona_seed.expect("section present");
+    assert_eq!(s.learned_context, vec!["operator builds Aivyx"]);
+    assert_eq!(s.communication_adaptations, vec!["leads with code"]);
+    assert_eq!(s.character_traits, vec!["pragmatic", "precise"]);
+    assert_eq!(s.relationship_milestones, vec!["genesis: first launch"]);
+    assert_eq!(s.skills.len(), 1);
+    assert_eq!(s.skills[0].name, "rust-review");
+    assert_eq!(s.skills[0].trigger, "when asked to review Rust");
+    assert!(s.skills[0].procedure.contains("unwraps"));
+    drop(env);
+}
+
+/// Normalization: blank/whitespace facets are dropped, and a skill with no
+/// `name` (its identifier) is dropped.
+#[test]
+fn persona_seed_normalizes_blanks_and_drops_nameless_skills() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_seed]\n\
+         character_traits = [\"  pragmatic  \", \"\", \"   \"]\n\
+         \n[[persona_seed.skill]]\n\
+         name = \"\"\n\
+         procedure = \"orphan — no name, dropped\"\n\
+         \n[[persona_seed.skill]]\n\
+         name = \"kept\"\n\
+         trigger = \"t\"\n\
+         procedure = \"p\"\n",
+        "seed-norm",
+    );
+    let s = cfg.persona_seed.expect("section present");
+    assert_eq!(s.character_traits, vec!["pragmatic"], "blanks trimmed/dropped");
+    assert_eq!(s.skills.len(), 1, "nameless skill dropped");
+    assert_eq!(s.skills[0].name, "kept");
+    drop(env);
+}
+
+/// An all-empty section (only blank entries) collapses to `None` — nothing to
+/// seed.
+#[test]
+fn persona_seed_all_blank_is_none() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[persona_seed]\nlearned_context = [\"\", \"  \"]\ncharacter_traits = []\n",
+        "seed-empty",
+    );
+    assert!(cfg.persona_seed.is_none());
+    drop(env);
+}
+
 // Phase 81 — [persona_lifecycle] section
 // ------------------------------------------------------------------
 

@@ -775,6 +775,14 @@ pub struct AivyxConfig {
     /// only arms the pass; it still no-ops unless
     /// `enabled = true`.
     pub persona_lifecycle: Option<PersonaLifecycleConfig>,
+    /// Chapter W — `[persona_seed]` section. The end user's
+    /// onboarding-authored initial Persona + starter Skills.
+    /// `None` when absent (the common case post-onboarding). The
+    /// daemon seeds the persona chain from this **once**, at boot,
+    /// iff the chain is still empty — so editing or removing the
+    /// section after first launch has no effect (the chain is
+    /// authoritative once seeded). See `docs/PERSONA_SEED.md`.
+    pub persona_seed: Option<PersonaSeed>,
     /// Phase 84 — `[recall_cluster]` section. `None` when
     /// absent: Phase 76 recall is unchanged (pre-Phase-84
     /// behaviour — only literal keyword/semantic hits). `Some`
@@ -2012,6 +2020,42 @@ impl Default for PersonaLifecycleSignals {
 
 /// Phase 81 — operator-facing config for Persona lifecycle
 /// (consolidation + decay of the learned soft-list facets).
+/// Chapter W — the operator's onboarding-authored Persona/Skills seed
+/// (`[persona_seed]`). These are the **learned** persona categories (not the
+/// Profile-mirror scalars, which stay declared in `[profile]`) plus starter
+/// skills. The daemon appends them to the persona chain as operator-authored
+/// approved deltas **once**, at boot, iff the chain is empty. All fields are
+/// optional; an empty seed parses to `None`. See `docs/PERSONA_SEED.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PersonaSeed {
+    /// Seed `learned_context` facets — facts about the operator/domain the
+    /// agent should start with.
+    pub learned_context: Vec<String>,
+    /// Seed `communication_adaptations` — voice refinements beyond the
+    /// Profile's declared `communication_style`.
+    pub communication_adaptations: Vec<String>,
+    /// Seed `character_traits` — emergent voice properties to start with.
+    pub character_traits: Vec<String>,
+    /// Seed `relationship_milestones` — continuity anchors ("genesis: first
+    /// launch").
+    pub relationship_milestones: Vec<String>,
+    /// Starter skills (`[[persona_seed.skill]]`).
+    pub skills: Vec<SeedSkill>,
+}
+
+/// One starter skill in a `[persona_seed]` (`[[persona_seed.skill]]`). Mirrors
+/// the runtime `LearnedSkill` shape; the daemon serializes it into a
+/// `LearnedSkill`-category `AppendList` delta at seed time.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SeedSkill {
+    /// Stable kebab-case identifier (`rust-review`).
+    pub name: String,
+    /// When the skill applies — the trigger the agent reads each turn.
+    pub trigger: String,
+    /// The skill body — instructions / a tool sequence / an example.
+    pub procedure: String,
+}
+
 /// **Off unless a `[persona_lifecycle]` section is present
 /// *and* `enabled = true`.** The pass only ever *proposes*
 /// (the operator approves/rejects and every action is
@@ -3074,6 +3118,10 @@ struct RawToml {
     /// consolidation + decay.
     #[serde(default)]
     persona_lifecycle: RawPersonaLifecycle,
+    /// `[persona_seed]` section. Chapter W — the onboarding
+    /// Persona/Skills seed.
+    #[serde(default)]
+    persona_seed: RawPersonaSeed,
     /// `[recall_cluster]` section. Phase 84 — cluster-aware
     /// co-recall.
     #[serde(default)]
@@ -3866,6 +3914,83 @@ struct RawProactive {
     signal_recall_cluster: Option<bool>,
     #[serde(default)]
     signal_due_reminder: Option<bool>,
+}
+
+/// Chapter W — `[persona_seed]` deserialize target. Absent section →
+/// all-empty via `Default` → the loader maps to `persona_seed: None`.
+/// The array-of-tables `[[persona_seed.skill]]` deserializes into `skill`.
+#[derive(Debug, Default, Deserialize)]
+struct RawPersonaSeed {
+    #[serde(default)]
+    learned_context: Vec<String>,
+    #[serde(default)]
+    communication_adaptations: Vec<String>,
+    #[serde(default)]
+    character_traits: Vec<String>,
+    #[serde(default)]
+    relationship_milestones: Vec<String>,
+    #[serde(default)]
+    skill: Vec<RawSeedSkill>,
+}
+
+/// Chapter W — one `[[persona_seed.skill]]` entry.
+#[derive(Debug, Default, Deserialize)]
+struct RawSeedSkill {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    trigger: String,
+    #[serde(default)]
+    procedure: String,
+}
+
+/// Chapter W — map the raw `[persona_seed]` to `Option<PersonaSeed>`.
+/// Normalizes each list (trim, drop empties); a skill is kept only when it has
+/// a non-empty `name` (its identifier). An entirely-empty seed → `None` (no
+/// seeding). Pure data shaping — never fails.
+fn build_persona_seed(raw: &RawPersonaSeed) -> Option<PersonaSeed> {
+    fn clean(v: &[String]) -> Vec<String> {
+        v.iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+    let learned_context = clean(&raw.learned_context);
+    let communication_adaptations = clean(&raw.communication_adaptations);
+    let character_traits = clean(&raw.character_traits);
+    let relationship_milestones = clean(&raw.relationship_milestones);
+    let skills: Vec<SeedSkill> = raw
+        .skill
+        .iter()
+        .filter_map(|s| {
+            let name = s.name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some(SeedSkill {
+                name: name.to_string(),
+                trigger: s.trigger.trim().to_string(),
+                procedure: s.procedure.trim().to_string(),
+            })
+        })
+        .collect();
+
+    if learned_context.is_empty()
+        && communication_adaptations.is_empty()
+        && character_traits.is_empty()
+        && relationship_milestones.is_empty()
+        && skills.is_empty()
+    {
+        None
+    } else {
+        Some(PersonaSeed {
+            learned_context,
+            communication_adaptations,
+            character_traits,
+            relationship_milestones,
+            skills,
+        })
+    }
 }
 
 /// Phase 81 — `[persona_lifecycle]` deserialize target. Absent
@@ -4902,6 +5027,7 @@ impl AivyxConfig {
         let persona_lifecycle = build_persona_lifecycle_config(
             &toml.persona_lifecycle,
         )?;
+        let persona_seed = build_persona_seed(&toml.persona_seed);
         let recall_cluster = build_recall_cluster_config(
             &toml.recall_cluster,
         )?;
@@ -5983,6 +6109,7 @@ impl AivyxConfig {
             embedding,
             proactive,
             persona_lifecycle,
+            persona_seed,
             recall_cluster,
             persona_consolidation,
             correction_consolidation,
