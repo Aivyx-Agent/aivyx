@@ -617,6 +617,133 @@ pub fn synthesize_delta_id(
     out
 }
 
+/// Chapter W — `proposal_id` sentinel stamped on every onboarding-seed delta,
+/// so the operator can tell a genesis-seeded delta from a learned one (the V.4
+/// Change-History viewer carries `proposal_id`).
+pub const SEED_PROPOSAL_ID: &str = "genesis-seed";
+
+/// Chapter W — plant the operator's onboarding `[persona_seed]` onto the persona
+/// chain, **once**, iff the chain is empty.
+///
+/// The seed is the operator's first *authored* content on the chain, so it is
+/// appended directly as approved [`PersonaDelta`]s (one per facet / skill) via
+/// the signed [`PersistentPersonaLog::append`] — exactly like the import-replay
+/// path, **not** routed through the proposal/approval gate. After appending, the
+/// shared effective persona is recomputed so the very next turn's system prompt
+/// includes the seed (live adoption). One [`AuditEvent::PersonaSeeded`] entry
+/// records the shape.
+///
+/// Returns the number of seed deltas appended. Returns `Ok(0)` (a no-op) when:
+/// - the chain already has any entry (never overwrite a grown persona), or
+/// - the seed is empty after normalization.
+///
+/// Only the **learned** categories are seeded (`LearnedContext`,
+/// `CommunicationAdaptations`, `CharacterTraits`, `RelationshipMilestones`) plus
+/// starter [`LearnedSkill`]s — the Profile-mirror scalars stay declared in
+/// `[profile]`.
+pub async fn seed_persona_chain_if_empty(
+    log: &PersistentPersonaLog,
+    shared: &SharedEffectivePersona,
+    audit: Option<&aivyx_audit::PersistentAuditLog>,
+    seed: &aivyx_config::PersonaSeed,
+) -> Result<u64, PersonaChainError> {
+    // Never overwrite a grown persona — the seed is a one-time genesis.
+    if !log.entries().is_empty() {
+        return Ok(0);
+    }
+
+    // Build the (category, op) seed list in a stable order; `categories` tracks
+    // which labels were actually seeded, for the audit summary.
+    let mut ops: Vec<(PersonaDeltaCategory, PersonaDeltaOp)> = Vec::new();
+    let mut categories: Vec<&'static str> = Vec::new();
+
+    for (cat, label, values) in [
+        (
+            PersonaDeltaCategory::LearnedContext,
+            "learned_context",
+            &seed.learned_context,
+        ),
+        (
+            PersonaDeltaCategory::CommunicationAdaptations,
+            "communication_adaptations",
+            &seed.communication_adaptations,
+        ),
+        (
+            PersonaDeltaCategory::CharacterTraits,
+            "character_traits",
+            &seed.character_traits,
+        ),
+        (
+            PersonaDeltaCategory::RelationshipMilestones,
+            "relationship_milestones",
+            &seed.relationship_milestones,
+        ),
+    ] {
+        if !values.is_empty() {
+            categories.push(label);
+        }
+        for v in values {
+            ops.push((cat, PersonaDeltaOp::AppendList { value: v.clone() }));
+        }
+    }
+
+    // Starter skills → a `LearnedSkill`-category AppendList of the JSON payload.
+    if !seed.skills.is_empty() {
+        categories.push("skill");
+    }
+    for sk in &seed.skills {
+        let learned = LearnedSkill {
+            name: sk.name.clone(),
+            trigger: sk.trigger.clone(),
+            procedure: sk.procedure.clone(),
+        };
+        ops.push((
+            PersonaDeltaCategory::LearnedSkill,
+            PersonaDeltaOp::AppendList {
+                value: learned.to_json_value(),
+            },
+        ));
+    }
+
+    if ops.is_empty() {
+        return Ok(0);
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let mut count: u64 = 0;
+    for (i, (category, op)) in ops.into_iter().enumerate() {
+        let delta = PersonaDelta {
+            delta_id: synthesize_delta_id(SEED_PROPOSAL_ID, category, &op, i as u32),
+            proposed_at_unix_ms: now,
+            approved_at_unix_ms: now,
+            proposal_id: SEED_PROPOSAL_ID.to_string(),
+            category,
+            op,
+        };
+        log.append(delta).await?;
+        count += 1;
+    }
+
+    // Live adoption — recompute the shared effective persona from the chain so
+    // the next turn picks the seed up (no restart).
+    recompute_shared_from_entries(shared, &log.entries());
+
+    // Best-effort audit: one PersonaSeeded entry recording the shape.
+    if let Some(a) = audit {
+        use aivyx_audit::AuditWriter;
+        let _ = a.append(aivyx_audit::AuditEvent::PersonaSeeded {
+            entries: count,
+            categories: categories.join(", "),
+        });
+    }
+
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,6 +1316,99 @@ mod tests {
             vec!["prefer terse".to_string()]
         );
         assert_eq!(snap.assistant_name.as_deref(), Some("Codex"));
+    }
+
+    /// Open a fresh empty persona log backed by a scratch redb store. Returns
+    /// the log + the `TempDir` (which must outlive the log — it owns the file).
+    async fn fresh_seed_log() -> (PersistentPersonaLog, TempDir) {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        use std::sync::Arc;
+        let dir = tempdir();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.path().join("store.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .expect("scratch storage opens");
+        let log = PersistentPersonaLog::open(store.domain(KeyDomain::Persona), test_key())
+            .await
+            .expect("empty log opens");
+        (log, dir)
+    }
+
+    fn sample_seed() -> aivyx_config::PersonaSeed {
+        aivyx_config::PersonaSeed {
+            learned_context: vec!["operator builds Aivyx".into()],
+            communication_adaptations: vec![],
+            character_traits: vec!["precise".into(), "pragmatic".into()],
+            relationship_milestones: vec!["genesis: first launch".into()],
+            skills: vec![aivyx_config::SeedSkill {
+                name: "rust-review".into(),
+                trigger: "when reviewing Rust".into(),
+                procedure: "check unwraps + lifetimes".into(),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_appends_facets_and_skills_and_adopts() {
+        let (log, _dir) = fresh_seed_log().await;
+        let shared = shared_effective_persona(EffectivePersona::default());
+
+        let n = seed_persona_chain_if_empty(&log, &shared, None, &sample_seed())
+            .await
+            .expect("seed ok");
+        // 1 learned_context + 2 character_traits + 1 milestone + 1 skill = 5.
+        assert_eq!(n, 5);
+        assert_eq!(log.len(), 5);
+        log.verify().expect("seeded chain verifies");
+
+        // Live adoption — the shared effective persona reflects the seed.
+        let snap = shared.read().unwrap();
+        assert_eq!(snap.learned_context, vec!["operator builds Aivyx".to_string()]);
+        assert!(snap.character_traits.contains(&"precise".to_string()));
+        assert!(snap.character_traits.contains(&"pragmatic".to_string()));
+        assert_eq!(snap.learned_skills.len(), 1);
+        let skill = LearnedSkill::from_json_value(&snap.learned_skills[0]).expect("skill parses");
+        assert_eq!(skill.name, "rust-review");
+
+        // Every seed delta carries the genesis-seed sentinel.
+        for e in log.entries() {
+            assert_eq!(e.delta.proposal_id, SEED_PROPOSAL_ID);
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_is_noop_on_non_empty_chain() {
+        let (log, _dir) = fresh_seed_log().await;
+        // Pre-seed the chain with one learned delta — simulating a grown persona.
+        log.append(list_delta(PersonaDeltaCategory::CharacterTraits, "curious"))
+            .await
+            .expect("pre-append");
+        let shared = shared_effective_persona(EffectivePersona::default());
+
+        let n = seed_persona_chain_if_empty(&log, &shared, None, &sample_seed())
+            .await
+            .expect("seed ok");
+        assert_eq!(n, 0, "must never overwrite a grown persona");
+        assert_eq!(log.len(), 1, "chain unchanged");
+    }
+
+    #[tokio::test]
+    async fn seed_empty_is_noop() {
+        let (log, _dir) = fresh_seed_log().await;
+        let shared = shared_effective_persona(EffectivePersona::default());
+        let n = seed_persona_chain_if_empty(
+            &log,
+            &shared,
+            None,
+            &aivyx_config::PersonaSeed::default(),
+        )
+        .await
+        .expect("seed ok");
+        assert_eq!(n, 0);
+        assert!(log.is_empty());
     }
 
     #[tokio::test]

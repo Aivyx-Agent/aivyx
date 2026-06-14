@@ -4404,6 +4404,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
         aivyx_audit::AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
         aivyx_audit::AuditEvent::ConfigChanged { .. } => "ConfigChanged",
+        aivyx_audit::AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
     }
     .to_string();
 

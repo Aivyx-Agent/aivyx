@@ -382,6 +382,23 @@ pub enum AuditEvent {
         /// `"per_run_usd = 5, per_day_usd = none, on_exceeded = deny"`.
         summary: String,
     },
+
+    /// Chapter W — the operator's onboarding Persona/Skills seed
+    /// (`[persona_seed]`) was planted on the persona chain at first boot. The
+    /// audit-chain record that the agent's *learned* identity started from an
+    /// operator-authored seed rather than an empty chain — fires once (the
+    /// seed only applies to an empty chain). Records the shape, not the seeded
+    /// content (the deltas themselves are on the persona chain).
+    ///
+    /// Self-contained per D4; every field is owned + `Eq` + `Serialize`, so the
+    /// chain HMAC is computed over canonical JSON without surprises.
+    PersonaSeeded {
+        /// Number of seed deltas appended to the persona chain.
+        entries: u64,
+        /// Comma-joined category labels seeded, e.g.
+        /// `"learned_context, character_traits, skill"`.
+        categories: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
