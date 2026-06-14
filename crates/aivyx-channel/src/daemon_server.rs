@@ -452,6 +452,9 @@ pub struct DaemonConfig {
     /// model is available for drafting, and the handler returns a typed "no
     /// model" error; live seeding (`SeedPersona`) is LLM-free and unaffected.
     pub seed_draft_llm: Option<SeedDraftLlm>,
+    /// Chapter Z — the canonical roots the read-only Documents browser may reach
+    /// (`fs` = the access-scoped `fs_root`, `workspace` = the agent's workspace).
+    pub document_roots: DocumentRoots,
 }
 
 /// Chapter X — the provider + model the daemon uses for one-shot persona-seed
@@ -460,6 +463,17 @@ pub struct DaemonConfig {
 pub struct SeedDraftLlm {
     pub provider: Arc<dyn aivyx_llm::LlmProvider>,
     pub model: String,
+}
+
+/// Chapter Z — the **pre-canonicalized** roots the Documents browser may list /
+/// read. Each is `None` when unavailable (env-only launch / workspace disabled);
+/// the handler then returns a typed error. The only reach Documents has.
+#[derive(Clone, Default)]
+pub struct DocumentRoots {
+    /// The operator's `fs_root` (the access level's reach). The `"fs"` root.
+    pub fs_root: Option<PathBuf>,
+    /// The agent's workspace root. The `"workspace"` root.
+    pub workspace_root: Option<PathBuf>,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -554,6 +568,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         pricing,
         config_toml_path,
         seed_draft_llm,
+        document_roots,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -1294,6 +1309,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             gate_policy,
             config_toml_path: config_toml_path.clone(),
             seed_draft_llm: seed_draft_llm.clone(),
+            document_roots: document_roots.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1464,6 +1480,8 @@ struct ConnectionContext {
     config_toml_path: Option<PathBuf>,
     /// Chapter X — provider + model for the `DraftPersonaSeed` handler.
     seed_draft_llm: Option<SeedDraftLlm>,
+    /// Chapter Z — the canonical roots the Documents browser may reach.
+    document_roots: DocumentRoots,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1507,6 +1525,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         gate_policy,
         config_toml_path,
         seed_draft_llm,
+        document_roots,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2174,6 +2193,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 loop_config.as_ref(),
                                 team_missions.as_ref(),
                                 config_toml_path.as_deref(),
+                                &document_roots,
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2602,6 +2622,7 @@ async fn run_single_connection_daemon(
         gate_policy: GatePolicy::default(),
         config_toml_path: None,
         seed_draft_llm: None,
+        document_roots: Default::default(),
     })
     .await
 }
@@ -2679,6 +2700,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         pricing: Default::default(),
         config_toml_path: None,
         seed_draft_llm: None,
+        document_roots: Default::default(),
     }).await
 }
 
@@ -2894,6 +2916,8 @@ async fn handle_query(
     // Chapter U — the loaded `aivyx.toml` path for the Settings write
     // handlers. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<&Path>,
+    // Chapter Z — the canonical roots for the Documents browser handlers.
+    document_roots: &DocumentRoots,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -3307,6 +3331,27 @@ async fn handle_query(
             };
             QueryResponsePayload::GetTeamRoster {
                 roster: svc.team_config(),
+            }
+        }
+        QueryPayload::ListDir { root, path } => {
+            // Chapter Z — read-only directory listing, scoped + escape-guarded.
+            let dir = match resolve_document_root(document_roots, &root) {
+                Ok(d) => d,
+                Err(resp) => return resp,
+            };
+            match crate::document_browse::list_dir(dir, &path) {
+                Ok(entries) => QueryResponsePayload::ListDir { entries, path },
+                Err(e) => map_browse_error(e),
+            }
+        }
+        QueryPayload::ReadFile { root, path } => {
+            let dir = match resolve_document_root(document_roots, &root) {
+                Ok(d) => d,
+                Err(resp) => return resp,
+            };
+            match crate::document_browse::read_file(dir, &path) {
+                Ok(file) => QueryResponsePayload::ReadFile { file },
+                Err(e) => map_browse_error(e),
             }
         }
         QueryPayload::ResolveTeamGate { mission_id, step, approve } => {
@@ -4805,6 +4850,50 @@ fn no_team_missions() -> QueryResponsePayload {
     }
 }
 
+/// Chapter Z — resolve a Documents `root` string to its canonical path, or a
+/// typed `QueryError` (`bad_root` for an unknown name, `no_filesystem` /
+/// `no_workspace` when that root is unavailable).
+// The `QueryResponsePayload` Err is large, but returning it by value is the
+// file-wide convention for handler results — boxing here would be inconsistent.
+#[allow(clippy::result_large_err)]
+fn resolve_document_root<'a>(
+    roots: &'a DocumentRoots,
+    root: &str,
+) -> Result<&'a Path, QueryResponsePayload> {
+    let err = |code: &str, msg: &str| QueryResponsePayload::QueryError {
+        code: code.to_string(),
+        message: msg.to_string(),
+    };
+    match root {
+        "fs" => roots
+            .fs_root
+            .as_deref()
+            .ok_or_else(|| err("no_filesystem", "filesystem browsing is unavailable")),
+        "workspace" => roots
+            .workspace_root
+            .as_deref()
+            .ok_or_else(|| err("no_workspace", "the agent workspace is disabled")),
+        other => Err(err("bad_root", &format!("unknown document root `{other}`"))),
+    }
+}
+
+/// Chapter Z — map a [`crate::document_browse::BrowseError`] to a stable
+/// `QueryError` code for the Documents browser.
+fn map_browse_error(e: crate::document_browse::BrowseError) -> QueryResponsePayload {
+    use crate::document_browse::BrowseError as E;
+    let (code, message) = match e {
+        E::PathEscape => ("path_escape", "path is outside the allowed root".to_string()),
+        E::NotFound => ("not_found", "no such file or directory".to_string()),
+        E::NotADir => ("not_a_dir", "not a directory".to_string()),
+        E::NotAFile => ("not_a_file", "not a file".to_string()),
+        E::Io(s) => ("io_error", s),
+    };
+    QueryResponsePayload::QueryError {
+        code: code.to_string(),
+        message,
+    }
+}
+
 fn mission_summary_from_record(record: mission::MissionRecord) -> MissionSummary {
     let has_pending_gate = record.pending_gate().is_some();
     MissionSummary {
@@ -5717,5 +5806,42 @@ mod tests {
         )
         .await;
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn resolve_document_root_picks_the_right_root_or_errors() {
+        let roots = DocumentRoots {
+            fs_root: Some(PathBuf::from("/srv/work")),
+            workspace_root: None,
+        };
+        assert_eq!(resolve_document_root(&roots, "fs").unwrap(), Path::new("/srv/work"));
+        // workspace unavailable → typed no_workspace.
+        match resolve_document_root(&roots, "workspace") {
+            Err(QueryResponsePayload::QueryError { code, .. }) => assert_eq!(code, "no_workspace"),
+            other => panic!("expected no_workspace error, got {other:?}"),
+        }
+        // unknown root → bad_root.
+        match resolve_document_root(&roots, "etc") {
+            Err(QueryResponsePayload::QueryError { code, .. }) => assert_eq!(code, "bad_root"),
+            other => panic!("expected bad_root error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_browse_error_uses_stable_codes() {
+        use crate::document_browse::BrowseError as E;
+        let cases = [
+            (E::PathEscape, "path_escape"),
+            (E::NotFound, "not_found"),
+            (E::NotADir, "not_a_dir"),
+            (E::NotAFile, "not_a_file"),
+            (E::Io("x".into()), "io_error"),
+        ];
+        for (err, want) in cases {
+            match map_browse_error(err) {
+                QueryResponsePayload::QueryError { code, .. } => assert_eq!(code, want),
+                other => panic!("expected QueryError, got {other:?}"),
+            }
+        }
     }
 }

@@ -6951,6 +6951,16 @@ async fn run_async(
                 provider: Arc::clone(&provider),
                 model: model.clone(),
             }),
+            // Chapter Z — the canonical roots the read-only Documents browser
+            // may reach: the access-scoped fs_root + the agent's workspace.
+            // Canonicalize once here (both dirs already exist by now);
+            // canonicalization failure ⇒ that root is reported unavailable.
+            document_roots: aivyx_channel::daemon_server::DocumentRoots {
+                fs_root: std::fs::canonicalize(&fs_root).ok(),
+                workspace_root: workspace_root
+                    .as_ref()
+                    .and_then(|w| std::fs::canonicalize(w).ok()),
+            },
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

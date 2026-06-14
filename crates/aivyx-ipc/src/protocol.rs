@@ -318,6 +318,25 @@ pub enum QueryPayload {
     /// with [`QueryResponsePayload::GetTeamRoster`] (or `QueryError` `no_team`
     /// when the daemon has no team service).
     GetTeamRoster,
+    /// Chapter Z — list a directory for the Documents browser. `root` is
+    /// `"workspace"` (the agent's `~/.aivyx/workspace`) or `"fs"` (the operator's
+    /// access-scoped `fs_root`); `path` is relative to that root. Read-only;
+    /// `..`/symlink escapes are rejected daemon-side. Responds with
+    /// [`QueryResponsePayload::ListDir`] (or `QueryError` `bad_root` /
+    /// `no_workspace` / `path_escape` / `not_found` / `not_a_dir` / `io_error`).
+    ListDir {
+        root: String,
+        #[serde(default)]
+        path: String,
+    },
+    /// Chapter Z — read a file for the Documents viewer. Same `root` / `path`
+    /// rules as [`ListDir`]; binary or over-cap files come back with
+    /// `content = None`. Responds with [`QueryResponsePayload::ReadFile`] (or the
+    /// same `QueryError` codes as `ListDir`, plus `not_a_file`).
+    ReadFile {
+        root: String,
+        path: String,
+    },
     /// Chapter L (L.5) — approve or reject a mission paused at a human-approval
     /// gate. Responds with [`QueryResponsePayload::TeamGateResolved`].
     ResolveTeamGate {
@@ -741,6 +760,17 @@ pub enum QueryResponsePayload {
     /// active team configuration, rendered as-is by the Studio's Teams screen.
     GetTeamRoster {
         roster: aivyx_team_types::TeamConfig,
+    },
+    /// Chapter Z — response to [`QueryPayload::ListDir`]. `entries` is the
+    /// directory's contents (dirs first); `path` echoes the listed relative path
+    /// so the browser can confirm/render the breadcrumb.
+    ListDir {
+        entries: Vec<DocEntry>,
+        path: String,
+    },
+    /// Chapter Z — response to [`QueryPayload::ReadFile`].
+    ReadFile {
+        file: DocFile,
     },
     /// Response to [`QueryPayload::GetSettings`]. Chapter U — the daemon's
     /// effective config snapshot for the Settings screen.
@@ -2718,6 +2748,45 @@ mod tests {
         let frame = encode_frame(&resp).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resp, "the full TeamConfig survives the frame");
+    }
+
+    #[test]
+    fn document_browse_queries_and_responses_round_trip() {
+        // Requests — `ListDir.path` defaults absent (root listing).
+        let absent: QueryPayload = serde_json::from_str(r#"{"kind":"ListDir","root":"fs"}"#).unwrap();
+        assert_eq!(absent, QueryPayload::ListDir { root: "fs".into(), path: String::new() });
+        for req in [
+            QueryPayload::ListDir { root: "workspace".into(), path: "projects".into() },
+            QueryPayload::ReadFile { root: "fs".into(), path: "notes/todo.md".into() },
+        ] {
+            let msg = FrontendMessage::Query { id: "d".into(), payload: req.clone() };
+            let frame = encode_frame(&msg).expect("encode");
+            let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, msg);
+        }
+
+        // Responses.
+        let list = QueryResponsePayload::ListDir {
+            entries: vec![
+                DocEntry { name: "sub".into(), kind: "dir".into(), size_bytes: 0 },
+                DocEntry { name: "a.txt".into(), kind: "file".into(), size_bytes: 12 },
+            ],
+            path: "projects".into(),
+        };
+        let read = QueryResponsePayload::ReadFile {
+            file: DocFile {
+                path: "a.txt".into(),
+                size_bytes: 12,
+                content: Some("hello".into()),
+                truncated: false,
+                binary: false,
+            },
+        };
+        for resp in [list, read] {
+            let frame = encode_frame(&resp).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, resp);
+        }
     }
 
     // ---- Chapter U Settings IPC round-trip ----
