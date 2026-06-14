@@ -131,6 +131,7 @@ pub mod persona_consolidation;
 pub mod persona_context;
 pub mod persona_lifecycle;
 pub mod persona_proposal;
+pub mod persona_seed_draft;
 pub mod proactive_detect;
 pub mod proactive_log;
 pub mod profile_prompt;

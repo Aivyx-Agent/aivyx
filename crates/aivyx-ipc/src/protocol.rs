@@ -1192,6 +1192,18 @@ pub enum FrontendMessage {
         id: String,
         seed: PersonaSeedWire,
     },
+    /// Chapter X — ask the daemon to **draft** a persona seed from the
+    /// operator's free-text `description` using the configured model. Read-only
+    /// (drafts nothing onto the chain) — it only pre-fills the editable seed
+    /// form; the operator confirms via [`SeedPersona`]. LLM-assisted, so it can
+    /// fail (no model configured / model error) — the UI falls back to manual
+    /// entry.
+    ///
+    /// Reply: [`DaemonMessage::PersonaSeedDrafted`] with the same `id`.
+    DraftPersonaSeed {
+        id: String,
+        description: String,
+    },
     /// Phase 65 — operator-driven Persona chain import (Phase 60
     /// identity-deferral closer). Replays a parsed export bundle
     /// onto the local chain. Without `force` the daemon refuses if
@@ -1398,6 +1410,14 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         appended: u64,
+        error: Option<String>,
+    },
+    /// Chapter X — response to [`FrontendMessage::DraftPersonaSeed`]. `draft` is
+    /// `Some` with the LLM-drafted seed (the operator edits + confirms); `None`
+    /// with `error` when no model is configured or the draft failed.
+    PersonaSeedDrafted {
+        id: String,
+        draft: Option<PersonaSeedWire>,
         error: Option<String>,
     },
     /// Phase 65 — response to [`FrontendMessage::ImportPersonaChain`].
@@ -1729,6 +1749,12 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         appended: u64,
+        error: Option<String>,
+    },
+    // Chapter X — LLM-drafted persona seed.
+    PersonaSeedDrafted {
+        id: String,
+        draft: Option<PersonaSeedWire>,
         error: Option<String>,
     },
     // Phase 65 — Persona import resolution.
@@ -2754,6 +2780,37 @@ mod tests {
             let frame = encode_frame(&env).expect("encode");
             let (back, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
             assert_eq!(back, env);
+        }
+    }
+
+    #[test]
+    fn draft_persona_seed_request_and_response_round_trip() {
+        let req = FrontendMessage::DraftPersonaSeed {
+            id: "mc-agents-draft".into(),
+            description: "a witty, terse pair-programmer".into(),
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        for resp in [
+            DaemonEnvelope::PersonaSeedDrafted {
+                id: "mc-agents-draft".into(),
+                draft: Some(PersonaSeedWire {
+                    character_traits: vec!["witty".into()],
+                    ..Default::default()
+                }),
+                error: None,
+            },
+            DaemonEnvelope::PersonaSeedDrafted {
+                id: "mc-agents-draft".into(),
+                draft: None,
+                error: Some("no model configured".into()),
+            },
+        ] {
+            let frame = encode_frame(&resp).expect("encode");
+            let (back, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, resp);
         }
     }
 

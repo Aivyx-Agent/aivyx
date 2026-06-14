@@ -6945,6 +6945,12 @@ async fn run_async(
                 let p = PathBuf::from(DEFAULT_TOML_PATH);
                 p.exists().then_some(p)
             },
+            // Chapter X — the same provider + model the agent's turns use,
+            // for the Studio's `DraftPersonaSeed` one-shot LLM draft.
+            seed_draft_llm: Some(aivyx_channel::daemon_server::SeedDraftLlm {
+                provider: Arc::clone(&provider),
+                model: model.clone(),
+            }),
             mission_store: Some(storage.domain(KeyDomain::Missions)),
             // Phase 63 Task 3 — pass the same NotifyDispatcher
             // the NotifySendTool got (Task 8 / Phase 62) so the

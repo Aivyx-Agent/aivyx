@@ -447,6 +447,19 @@ pub struct DaemonConfig {
     /// path. Read-only config (the access level itself) is still load-time —
     /// a write here only updates the file; it takes effect on the next start.
     pub config_toml_path: Option<PathBuf>,
+    /// Chapter X — the model used to **draft** a persona seed from the
+    /// operator's description (the Studio's `DraftPersonaSeed` IPC). `None` ⇒ no
+    /// model is available for drafting, and the handler returns a typed "no
+    /// model" error; live seeding (`SeedPersona`) is LLM-free and unaffected.
+    pub seed_draft_llm: Option<SeedDraftLlm>,
+}
+
+/// Chapter X — the provider + model the daemon uses for one-shot persona-seed
+/// drafting. Cloned from the same provider the agent's turns use.
+#[derive(Clone)]
+pub struct SeedDraftLlm {
+    pub provider: Arc<dyn aivyx_llm::LlmProvider>,
+    pub model: String,
 }
 
 /// Phase 102 — a registered tool's listing fields, snapshotted
@@ -540,6 +553,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         workspace_journaling_interval,
         pricing,
         config_toml_path,
+        seed_draft_llm,
     } = config;
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
@@ -1279,6 +1293,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             team_missions: team_missions.clone(),
             gate_policy,
             config_toml_path: config_toml_path.clone(),
+            seed_draft_llm: seed_draft_llm.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1447,6 +1462,8 @@ struct ConnectionContext {
     /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
     /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<PathBuf>,
+    /// Chapter X — provider + model for the `DraftPersonaSeed` handler.
+    seed_draft_llm: Option<SeedDraftLlm>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1489,6 +1506,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         team_missions,
         gate_policy,
         config_toml_path,
+        seed_draft_llm,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2227,6 +2245,45 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::DraftPersonaSeed { id, description } => {
+                            // Chapter X — one-shot LLM draft of a persona seed
+                            // from the operator's description. Read-only (drafts
+                            // nothing onto the chain); the operator edits +
+                            // confirms via SeedPersona. No model ⇒ typed error.
+                            let resp = match seed_draft_llm.as_ref() {
+                                Some(llm) => {
+                                    match crate::persona_seed_draft::draft_persona_seed(
+                                        &llm.provider,
+                                        &llm.model,
+                                        &description,
+                                    )
+                                    .await
+                                    {
+                                        Some(seed) => DaemonMessage::PersonaSeedDrafted {
+                                            id,
+                                            draft: Some(persona_seed_to_wire(seed)),
+                                            error: None,
+                                        },
+                                        None => DaemonMessage::PersonaSeedDrafted {
+                                            id,
+                                            draft: None,
+                                            error: Some(
+                                                "the model couldn't draft a seed — \
+                                                 fill it in manually instead"
+                                                    .to_string(),
+                                            ),
+                                        },
+                                    }
+                                }
+                                None => DaemonMessage::PersonaSeedDrafted {
+                                    id,
+                                    draft: None,
+                                    error: Some("no model is configured for drafting".to_string()),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ResolvePersonaProposal {
                             id,
                             proposal_id,
@@ -2544,6 +2601,7 @@ async fn run_single_connection_daemon(
         team_missions: None,
         gate_policy: GatePolicy::default(),
         config_toml_path: None,
+        seed_draft_llm: None,
     })
     .await
 }
@@ -2620,6 +2678,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         gate_policy: GatePolicy::default(),
         pricing: Default::default(),
         config_toml_path: None,
+        seed_draft_llm: None,
     }).await
 }
 
@@ -4380,6 +4439,26 @@ fn wire_to_persona_seed(wire: aivyx_ipc::protocol::PersonaSeedWire) -> aivyx_con
     }
 }
 
+/// Chapter X — map the config seed (from the LLM drafter) to the wasm-clean
+/// wire seed the `DraftPersonaSeed` response carries.
+fn persona_seed_to_wire(seed: aivyx_config::PersonaSeed) -> aivyx_ipc::protocol::PersonaSeedWire {
+    aivyx_ipc::protocol::PersonaSeedWire {
+        learned_context: seed.learned_context,
+        communication_adaptations: seed.communication_adaptations,
+        character_traits: seed.character_traits,
+        relationship_milestones: seed.relationship_milestones,
+        skills: seed
+            .skills
+            .into_iter()
+            .map(|s| aivyx_ipc::protocol::SeedSkillWire {
+                name: s.name,
+                trigger: s.trigger,
+                procedure: s.procedure,
+            })
+            .collect(),
+    }
+}
+
 /// Phase 65 — daemon-side import handler. Validates → conflict
 /// checks → optionally wipes → replays → recomputes shared state.
 /// Best-effort per Q1(a): no atomic-tx wrapping. Returns
@@ -5551,6 +5630,12 @@ mod tests {
         assert_eq!(seed.relationship_milestones, vec!["genesis"]);
         assert_eq!(seed.skills.len(), 1);
         assert_eq!(seed.skills[0].name, "rust-review");
+
+        // The inverse mapping (drafter → wire) round-trips.
+        let back = persona_seed_to_wire(seed);
+        assert_eq!(back.character_traits, vec!["pragmatic"]);
+        assert_eq!(back.skills.len(), 1);
+        assert_eq!(back.skills[0].name, "rust-review");
     }
 
     #[tokio::test]
