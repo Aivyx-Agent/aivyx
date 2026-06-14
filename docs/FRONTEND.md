@@ -92,7 +92,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
-| **Documents** | workspace + fs_root browser | Roadmap |
+| **Documents** | read-only file browser over the agent workspace + the access-scoped fs_root — see §11 | 🔨 In progress (Ch. Z) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | the voice channel | Roadmap |
 
@@ -399,3 +399,78 @@ count, and an expand-to-soul. Live run: served wasm byte-identical/untruncated;
 the IPC probe returned all 9 members with their souls. No mirror type — the web
 renders the real `aivyx_team_types::TeamConfig`. Deferred: vertical-pack swapping
 + per-member editing.
+
+---
+
+## 11. Documents — the file browser (Chapter Z)
+
+A **read-only** browser over the two document-shaped places Aivyx already knows:
+the agent's always-on **workspace** (`~/.aivyx/workspace`, Chapter O — its own
+thoughts/plans/projects) and the operator's **`fs_root`** (the access-scoped
+shared work, Chapter N). The Studio counterpart to `fs.read` / `fs.metadata` /
+`workspace.read` — but for a human, not the agent.
+
+### 11.1 Security model (reused, not reinvented)
+
+Browsing the filesystem over IPC is the most safety-sensitive screen yet, so it
+**reuses the exact guard the fs/workspace tools use**: every request is
+lexically resolved against a pre-canonicalized root, then `std::fs::canonicalize`
+resolves all symlinks, then the result must still `starts_with(root)` — `..` and
+symlink escapes are rejected. Two roots only:
+
+- **`workspace`** — the agent's workspace root (always-on; `None`/typed error
+  when the workspace is disabled).
+- **`fs`** — the operator's `fs_root`, i.e. **the access level's reach**. At
+  `sandbox` that's `~/aivyx-sandbox`; at `home`/`full` it's broader **because the
+  operator granted it** (via Settings, confirm-first). Documents never reaches
+  past `fs_root` — expanding it is the same operator-controlled lever the agent
+  already obeys.
+
+Plus: **read-only** (list + read; no write/delete/rename from the web), file
+reads are **size-capped** (large/binary files return metadata, not bytes), and
+the screen is **localhost-only** like the rest of the Studio.
+
+### 11.2 New IPC
+
+- **`ListDir { root, path }`** → `{ entries: Vec<DocEntry>, path }` —
+  `DocEntry { name, kind: dir|file|symlink|other, size_bytes }`, sorted dirs-first
+  then name.
+- **`ReadFile { root, path }`** → `{ file: DocFile }` —
+  `DocFile { path, size_bytes, content: Option<String>, truncated, binary }`
+  (`content = None` when binary or over the cap).
+- `root` is `"workspace" | "fs"`; an unknown root / disabled workspace / escape
+  attempt → `QueryError` (`bad_root` / `no_workspace` / `path_escape`).
+
+### 11.3 The browse primitive
+
+`aivyx-channel::document_browse` — `list_dir(root, rel)` + `read_file(root, rel,
+cap)` returning the wire types, reusing `aivyx_core::tools::fs::lexical_resolve`
+(promoted to `pub`) + the canonicalize-`starts_with` check. The daemon threads
+`DocumentRoots { fs_root, workspace_root: Option }` (both canonicalized) through
+`DaemonConfig → ConnectionContext → handle_query` (the Chapter-U pattern).
+
+### 11.4 Web
+
+`View::Documents` (the sidebar item leaves the roadmap). `DocumentsPanel`: a root
+switcher (Workspace / Files), a **breadcrumb** path, a directory listing (folders
+first, click to descend, `..` to ascend), and a **file viewer** pane (text in a
+mono `<pre>`; binary/oversize → a "N KB — not shown" note). Empty/loading states.
+
+### 11.5 Invariants
+
+- **Read-only** — Documents never mutates the filesystem.
+- **Never escapes a root** — canonicalize-`starts_with`, the same guard the tools
+  use; the two roots are the only reach.
+- **Reach == access level** — `fs` browsing is exactly `fs_root`; no new grant,
+  no bypass of the Chapter-N model.
+- **Studio only / local-first** — same scope + offline rules as R–Y.
+
+### 11.6 Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **Z.0** | This contract. |
+| **Z.1** | `DocEntry`/`DocFile` wire types (`aivyx-ipc`) + `document_browse` primitive (`aivyx-channel`, reusing the fs guard); unit tests incl. escape/binary/cap. |
+| **Z.2** | `ListDir`/`ReadFile` IPC + thread `DocumentRoots` into the daemon + handlers (resolve root → primitive → typed errors); round-trip + handler tests. |
+| **Z.3** | Web: `View::Documents` + `DocumentsPanel` (root switcher + breadcrumb + listing + file viewer); `ws_task` arms; `stitch.css`. |
+| **Z.4** | Finalize: bundle, live-verify (browse workspace + fs_root, read a file, escape blocked, offline), docs, memory, push. |
