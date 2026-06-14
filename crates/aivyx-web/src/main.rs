@@ -1377,7 +1377,7 @@ fn AgentsPanel() -> Element {
                 } else {
                     div { class: "proposal-list",
                         for p in st.proposals.clone() {
-                            ProposalCard { key: "{p.id}", p }
+                            ProposalCard { key: "{p.id}", p: p.clone() }
                         }
                     }
                 }
@@ -1411,7 +1411,7 @@ fn AgentsPanel() -> Element {
                 } else {
                     div { class: "delta-list",
                         for d in st.deltas.clone() {
-                            DeltaRow { key: "{d.delta_id}", d }
+                            DeltaRow { key: "{d.delta_id}", d: d.clone() }
                         }
                     }
                 }

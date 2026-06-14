@@ -90,7 +90,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
 | **Teams** | Nonagon roster / vertical packs | Roadmap |
-| **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | 🔨 In progress (Ch. V) |
+| **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | workspace + fs_root browser | Roadmap |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
@@ -328,4 +328,4 @@ turn loop.
 | **V.2** | `aivyx-ipc`: `SetProfile` + `ProfileApplied` (round-trip tests); daemon handler (validate → rewrite → `ConfigChanged` audit → `restart_required`). Confirm the existing persona read+resolve+revert handlers cover what the web screen needs. |
 | **V.3** | Web UI part 1 — `View::Agents` + the **Profile editor** (form over the six `[profile]` fields, list add/remove, save → confirm → `ProfileApplied`, restart banner); `ws_task` arms; `stitch.css`. |
 | **V.4** | Web UI part 2 — the **Persona governance** panel: Effective Persona viewer + pending **proposals** (approve / edit / reject) + **delta chain** with revert, over the existing IPC. "Effective next turn" notices. |
-| **V.5** | Build the bundle, live-verify in a real browser (edit Profile → restart banner + toml rewritten + audit; resolve a seeded proposal → persona updates live; revert a delta), docs + memory, push. |
+| **V.5** | Build the bundle, live-verify in a real browser (edit Profile → restart banner + toml rewritten + audit; resolve a seeded proposal → persona updates live; revert a delta), docs + memory, push. **Done:** wasm serves byte-identical/untruncated; IPC probe proved `GetProfile`→`SetProfile`→`ProfileApplied` (six fields, `restart_required`), `[profile]` rewritten **in-place** preserving all sections, a shape-only `ConfigChanged` audit entry, the persona read path (effective/proposals/deltas) returns well-formed empty states on a fresh daemon, and the resolve/revert write path is wired (typed `ok:false` on bogus ids). Seeding a real proposal needs LLM reflection turns, so the resolve/revert *UI* actions are verified against the live error path rather than an approved delta. |
