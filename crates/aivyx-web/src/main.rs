@@ -18,8 +18,9 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, EffectivePersonaSummary, FrontendMessage, MemoryEntrySummary,
-    PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary, ProfileSummary,
-    QueryPayload, QueryResponsePayload, SettingsSnapshot, StreamEventPayload,
+    PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary, PersonaSeedWire,
+    ProfileSummary, QueryPayload, QueryResponsePayload, SeedSkillWire, SettingsSnapshot,
+    StreamEventPayload,
 };
 use aivyx_ipc::{ProposedPersonaDelta, TeamMissionPhase, TeamMissionView};
 
@@ -111,6 +112,12 @@ struct AgentsState {
     /// Bumped on each persona resolve/revert ack so the panel re-queries the
     /// proposals + deltas + effective persona (the live-refresh signal).
     refresh_tick: u64,
+    /// X.3 — the latest LLM-drafted seed (the onboarding card fills its form
+    /// from this); `None` until a draft arrives or after a failed draft.
+    seed_draft: Option<PersonaSeedWire>,
+    /// X.3 — bumped on every `DraftPersonaSeed` response (success or failure) so
+    /// the onboarding card can clear its "Drafting…" state and re-seed its form.
+    seed_draft_resp: u64,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -1273,6 +1280,18 @@ fn AgentsPanel() -> Element {
         }
     };
 
+    // X.3 — a *fresh* agent (the effective persona is loaded and empty, the
+    // delta chain is empty, and nothing is pending) gets the onboarding seed
+    // card instead of the (empty) governance view. Once seeded, the refresh
+    // re-query flips `is_non_empty` and the governance view takes over.
+    let is_fresh = st
+        .persona
+        .as_ref()
+        .map(|p| !p.is_non_empty)
+        .unwrap_or(false)
+        && st.deltas.is_empty()
+        && st.proposals.is_empty();
+
     rsx! {
         div { class: "settings agents",
 
@@ -1365,6 +1384,10 @@ fn AgentsPanel() -> Element {
                  Changes apply on the next turn — no restart needed."
             }
 
+            if is_fresh {
+                SeedOnboardingCard {}
+            } else {
+
             // Pending proposals — the operator's gate.
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
@@ -1415,6 +1438,131 @@ fn AgentsPanel() -> Element {
                             DeltaRow { key: "{d.delta_id}", d: d.clone() }
                         }
                     }
+                }
+            }
+
+            } // end else (governance vs. onboarding seed card)
+        }
+    }
+}
+
+/// X.3 — the "Seed your assistant" onboarding card, shown for a fresh agent.
+/// Describe the assistant → optionally let the model draft a starting set →
+/// edit → plant. The seed goes onto the signed chain via `SeedPersona` (the
+/// same primitive the boot-seed uses); the operator is always the author.
+#[component]
+fn SeedOnboardingCard() -> Element {
+    let ws = use_context::<Sender>();
+    let agents = use_context::<Signal<AgentsState>>();
+
+    let mut description = use_signal(String::new);
+    let traits = use_signal(Vec::<String>::new);
+    let adaptations = use_signal(Vec::<String>::new);
+    let mut context = use_signal(String::new);
+    let mut skill_name = use_signal(String::new);
+    let mut skill_trigger = use_signal(String::new);
+    let mut skill_procedure = use_signal(String::new);
+    let mut drafting = use_signal(|| false);
+    let mut last_resp = use_signal(|| 0u64);
+
+    // When a draft response arrives (success or failure), clear the spinner and
+    // — on success — fill the form from the drafted seed. The operator edits
+    // from there.
+    let mut traits_s = traits;
+    let mut adaptations_s = adaptations;
+    use_effect(move || {
+        let a = agents();
+        if a.seed_draft_resp != last_resp() {
+            last_resp.set(a.seed_draft_resp);
+            drafting.set(false);
+            if let Some(d) = a.seed_draft.as_ref() {
+                traits_s.set(d.character_traits.clone());
+                adaptations_s.set(d.communication_adaptations.clone());
+                context.set(d.learned_context.first().cloned().unwrap_or_default());
+                if let Some(s) = d.skills.first() {
+                    skill_name.set(s.name.clone());
+                    skill_trigger.set(s.trigger.clone());
+                    skill_procedure.set(s.procedure.clone());
+                }
+            }
+        }
+    });
+
+    let st = agents();
+
+    rsx! {
+        div { class: "glass-card settings-section seed-card",
+            div { class: "panel-head",
+                h3 { "Seed your assistant" }
+                span { class: "chip sage", "fresh" }
+            }
+            p { class: "label-tech",
+                "This agent hasn't learned a personality yet. Give it a head start — \
+                 it keeps growing from use. Describe it, optionally let the model draft \
+                 a set, edit, then plant."
+            }
+
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+
+            div { class: "field-row",
+                label { class: "label-tech", "Describe it" }
+                textarea {
+                    class: "input", rows: "2",
+                    placeholder: "e.g. a witty, terse pair-programmer who cites sources",
+                    value: "{description}", oninput: move |e| description.set(e.value()),
+                }
+            }
+            div { class: "actions",
+                button {
+                    class: "btn btn-glass",
+                    disabled: drafting(),
+                    onclick: move |_| { drafting.set(true); ws.send(draft_seed_query(description())); },
+                    {if drafting() { "Drafting…" } else { "Draft with AI" }}
+                }
+            }
+
+            ListEditor { title: "Character traits", hint: "Voice properties to start with.", items: traits }
+            ListEditor {
+                title: "Communication adaptations",
+                hint: "Refinements to how it talks (optional).",
+                items: adaptations,
+            }
+            div { class: "field-row",
+                label { class: "label-tech", "Day-one context" }
+                textarea {
+                    class: "input", rows: "2",
+                    placeholder: "Anything it should know about you / your work (optional)",
+                    value: "{context}", oninput: move |e| context.set(e.value()),
+                }
+            }
+
+            div { class: "panel-head", h4 { "Starter skill (optional)" } }
+            div { class: "field-row",
+                label { class: "label-tech", "Name" }
+                input { class: "input", placeholder: "rust-review",
+                    value: "{skill_name}", oninput: move |e| skill_name.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { class: "label-tech", "When" }
+                input { class: "input", placeholder: "when reviewing Rust",
+                    value: "{skill_trigger}", oninput: move |e| skill_trigger.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { class: "label-tech", "Does what" }
+                input { class: "input", placeholder: "check unwraps; cite file:line",
+                    value: "{skill_procedure}", oninput: move |e| skill_procedure.set(e.value()) }
+            }
+
+            div { class: "actions sticky-save",
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| ws.send(seed_persona_query(build_seed_wire(
+                        &traits(), &adaptations(), &context(),
+                        &skill_name(), &skill_trigger(), &skill_procedure(),
+                    ))),
+                    "Plant seed"
                 }
             }
         }
@@ -1745,6 +1893,62 @@ fn revert_delta_query(target_delta_id: &str) -> FrontendMessage {
     }
 }
 
+// ── X.3 — persona seed onboarding (web authoring + LLM draft). ──
+
+fn draft_seed_query(description: String) -> FrontendMessage {
+    FrontendMessage::DraftPersonaSeed {
+        id: "mc-agents-draft".to_string(),
+        description,
+    }
+}
+
+fn seed_persona_query(seed: PersonaSeedWire) -> FrontendMessage {
+    FrontendMessage::SeedPersona {
+        id: "mc-agents-seed".to_string(),
+        seed,
+    }
+}
+
+/// Build a `PersonaSeedWire` from the onboarding form. Lists are trimmed +
+/// de-blanked; the day-one context becomes a single `learned_context` entry; a
+/// skill is included only when it has a name. (The daemon adds the genesis
+/// milestone and refuses an empty seed.)
+fn build_seed_wire(
+    traits: &[String],
+    adaptations: &[String],
+    context: &str,
+    skill_name: &str,
+    skill_trigger: &str,
+    skill_procedure: &str,
+) -> PersonaSeedWire {
+    let clean = |v: &[String]| -> Vec<String> {
+        v.iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let learned_context = match context.trim() {
+        "" => Vec::new(),
+        c => vec![c.to_string()],
+    };
+    let skills = if skill_name.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![SeedSkillWire {
+            name: skill_name.trim().to_string(),
+            trigger: skill_trigger.trim().to_string(),
+            procedure: skill_procedure.trim().to_string(),
+        }]
+    };
+    PersonaSeedWire {
+        learned_context,
+        communication_adaptations: clean(adaptations),
+        character_traits: clean(traits),
+        relationship_milestones: Vec::new(),
+        skills,
+    }
+}
+
 /// Render a persona delta `op` JSON (`{kind, value}`) into a human sentence for
 /// the proposal/delta cards. Mirrors `PersonaDeltaOp`'s serde repr.
 fn render_op(category: &str, op: &serde_json::Value) -> String {
@@ -2004,6 +2208,33 @@ async fn ws_task(
                         (true, "Delta reverted — effective next turn.".to_string())
                     } else {
                         (false, error.unwrap_or_else(|| "revert failed".to_string()))
+                    });
+                }
+                // X.3 — LLM seed draft arrived (or failed). The onboarding card
+                // watches `seed_draft_resp` to clear its spinner + re-seed its
+                // form from `seed_draft`.
+                DaemonEnvelope::PersonaSeedDrafted { draft, error, .. } => {
+                    let mut a = agents.write();
+                    a.seed_draft_resp += 1;
+                    let had_draft = draft.is_some();
+                    a.seed_draft = draft;
+                    if !had_draft {
+                        a.notice = Some((
+                            false,
+                            error.unwrap_or_else(|| "couldn't draft a seed".to_string()),
+                        ));
+                    }
+                }
+                // X.3 — live seed planted (or refused). On success bump the
+                // refresh tick so the panel re-queries and the card gives way to
+                // the normal governance view.
+                DaemonEnvelope::PersonaSeedResolved { ok, appended, error, .. } => {
+                    let mut a = agents.write();
+                    a.notice = Some(if ok {
+                        a.refresh_tick += 1;
+                        (true, format!("Seeded {appended} trait(s) — effective next turn."))
+                    } else {
+                        (false, error.unwrap_or_else(|| "seeding failed".to_string()))
                     });
                 }
                 // Route a Settings write/read failure to its panel (the query

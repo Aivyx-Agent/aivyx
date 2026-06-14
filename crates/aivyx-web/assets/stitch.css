@@ -515,6 +515,11 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 /* Save action pinned to the bottom of the Agents column. */
 .sticky-save { justify-content: flex-end; padding-top: 4px; }
 
+/* X.3 — the onboarding "Seed your assistant" card: a sage left accent so a
+   fresh agent's first action reads as a welcome, not a warning. */
+.seed-card { border-left: 3px solid var(--color-sage); }
+.seed-card h4 { font-size: 13px; font-family: var(--font-mono); color: var(--color-text-secondary); }
+
 /* ── Persona governance (V.4) — proposals, effective viewer, change history. ── */
 .section-divider {
   margin-top: 12px; padding-top: 16px;
