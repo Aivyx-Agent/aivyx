@@ -4108,10 +4108,9 @@ async fn run_async(
         // into the daemon's reflection-cron lifecycle pass via
         // DaemonConfig below.
         persona_lifecycle: config_persona_lifecycle,
-        // Chapter W — `[persona_seed]` onboarding seed. Bound for real by the
-        // boot-seed hook in W.3; ignored here so the exhaustive destructure
-        // compiles in the W.1 schema-only step.
-        persona_seed: _,
+        // Chapter W — `[persona_seed]` onboarding seed, planted on the persona
+        // chain at first boot (iff empty) by the hook just below.
+        persona_seed: config_persona_seed,
         // Phase 84 — `[recall_cluster]` config. Wired into the
         // recall provider's cluster-aware expansion below.
         recall_cluster: config_recall_cluster,
@@ -4379,6 +4378,35 @@ async fn run_async(
     let shared_persona = aivyx_channel::persona::shared_effective_persona(
         aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
     );
+    // Chapter W — plant the operator's onboarding `[persona_seed]` onto the
+    // persona chain at first boot, iff the chain is empty. Done *before* the
+    // base system prompt is assembled below so a small seeded Soul (which the
+    // per-turn refiner injects whole) is present in this boot's prompt and in
+    // the live shared state. `audit = None` here — the audit log opens later;
+    // the matching `PersonaSeeded` entry is emitted once it's available.
+    let persona_seed_count = if let Some(seed) = &config_persona_seed {
+        match aivyx_channel::persona::seed_persona_chain_if_empty(
+            &persona_log,
+            &shared_persona,
+            None,
+            seed,
+        )
+        .await
+        {
+            Ok(n) => {
+                if n > 0 {
+                    eprintln!("aivyx daemon: seeded persona chain with {n} delta(s) from [persona_seed]");
+                }
+                n
+            }
+            Err(e) => {
+                eprintln!("aivyx daemon: persona seed failed (chain unchanged): {e}");
+                0
+            }
+        }
+    } else {
+        0
+    };
     // Phase 57 Task 3 — assemble the final system prompt by layering
     // Profile (operator-declared identity per PRODUCT.md P13), Persona
     // (reflection-written identity per PRODUCT.md P14, Phase 59 Task 6),
@@ -4605,6 +4633,20 @@ async fn run_async(
     let persistent_audit = Arc::new(persistent_audit);
     let audit_log_for_tool: Arc<dyn aivyx_audit::AuditLog + Send + Sync> =
         Arc::clone(&persistent_audit) as _;
+    // Chapter W — emit the deferred `PersonaSeeded` audit entry now that the
+    // audit log is open. The seed itself ran earlier (before the base system
+    // prompt), where this log did not yet exist.
+    if persona_seed_count > 0 {
+        if let Some(seed) = &config_persona_seed {
+            use aivyx_audit::AuditWriter;
+            if let Err(e) = persistent_audit.append(aivyx_audit::AuditEvent::PersonaSeeded {
+                entries: persona_seed_count,
+                categories: aivyx_channel::persona::seed_category_labels(seed),
+            }) {
+                eprintln!("aivyx daemon: failed to audit persona seed: {e}");
+            }
+        }
+    }
     // Phase 47 — daemon needs a concrete `Arc<PersistentAuditLog>` for the
     // `ListAuditEntries` / `VerifyAuditChain` queries (the
     // `entries_range` API lives on the concrete type, not the

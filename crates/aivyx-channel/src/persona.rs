@@ -652,45 +652,27 @@ pub async fn seed_persona_chain_if_empty(
         return Ok(0);
     }
 
-    // Build the (category, op) seed list in a stable order; `categories` tracks
-    // which labels were actually seeded, for the audit summary.
+    // Build the (category, op) seed list in a stable order.
     let mut ops: Vec<(PersonaDeltaCategory, PersonaDeltaOp)> = Vec::new();
-    let mut categories: Vec<&'static str> = Vec::new();
 
-    for (cat, label, values) in [
-        (
-            PersonaDeltaCategory::LearnedContext,
-            "learned_context",
-            &seed.learned_context,
-        ),
+    for (cat, values) in [
+        (PersonaDeltaCategory::LearnedContext, &seed.learned_context),
         (
             PersonaDeltaCategory::CommunicationAdaptations,
-            "communication_adaptations",
             &seed.communication_adaptations,
         ),
-        (
-            PersonaDeltaCategory::CharacterTraits,
-            "character_traits",
-            &seed.character_traits,
-        ),
+        (PersonaDeltaCategory::CharacterTraits, &seed.character_traits),
         (
             PersonaDeltaCategory::RelationshipMilestones,
-            "relationship_milestones",
             &seed.relationship_milestones,
         ),
     ] {
-        if !values.is_empty() {
-            categories.push(label);
-        }
         for v in values {
             ops.push((cat, PersonaDeltaOp::AppendList { value: v.clone() }));
         }
     }
 
     // Starter skills → a `LearnedSkill`-category AppendList of the JSON payload.
-    if !seed.skills.is_empty() {
-        categories.push("skill");
-    }
     for sk in &seed.skills {
         let learned = LearnedSkill {
             name: sk.name.clone(),
@@ -732,16 +714,43 @@ pub async fn seed_persona_chain_if_empty(
     // the next turn picks the seed up (no restart).
     recompute_shared_from_entries(shared, &log.entries());
 
-    // Best-effort audit: one PersonaSeeded entry recording the shape.
+    // Best-effort audit: one PersonaSeeded entry recording the shape. (Callers
+    // that don't yet have an audit handle — e.g. the daemon's boot path, where
+    // the audit log opens later — pass `None` and emit it themselves via
+    // [`seed_category_labels`].)
     if let Some(a) = audit {
         use aivyx_audit::AuditWriter;
         let _ = a.append(aivyx_audit::AuditEvent::PersonaSeeded {
             entries: count,
-            categories: categories.join(", "),
+            categories: seed_category_labels(seed),
         });
     }
 
     Ok(count)
+}
+
+/// Chapter W — the comma-joined category labels a [`PersonaSeed`] would seed
+/// (only the non-empty ones), for the [`AuditEvent::PersonaSeeded`] summary.
+/// Shared by [`seed_persona_chain_if_empty`] and the daemon's deferred-audit
+/// boot path (which seeds before its audit log is open).
+pub fn seed_category_labels(seed: &aivyx_config::PersonaSeed) -> String {
+    let mut labels: Vec<&str> = Vec::new();
+    if !seed.learned_context.is_empty() {
+        labels.push("learned_context");
+    }
+    if !seed.communication_adaptations.is_empty() {
+        labels.push("communication_adaptations");
+    }
+    if !seed.character_traits.is_empty() {
+        labels.push("character_traits");
+    }
+    if !seed.relationship_milestones.is_empty() {
+        labels.push("relationship_milestones");
+    }
+    if !seed.skills.is_empty() {
+        labels.push("skill");
+    }
+    labels.join(", ")
 }
 
 #[cfg(test)]
