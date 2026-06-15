@@ -412,6 +412,36 @@ pub enum QueryPayload {
         #[serde(default)]
         behavioral_constraints: Option<Vec<String>>,
     },
+    /// Chapter Voice — read the daemon's `[voice]` config snapshot for the
+    /// Voice screen: the nine options + a **readiness** check (the daemon stats
+    /// the Whisper model, Piper voice, and espeak-ng data paths). Read-only.
+    /// Responds with [`QueryResponsePayload::GetVoiceSettings`].
+    GetVoiceSettings,
+    /// Chapter Voice — rewrite the `[voice]` section of `aivyx.toml`. All fields
+    /// are `#[serde(default)]` with **clear-on-`None`** (matching
+    /// `aivyx_config::VoiceWrite`). Load-time — takes effect when the voice
+    /// channel (`aivyx --channel voice`) next starts. Responds with
+    /// [`QueryResponsePayload::VoiceApplied`] (or `QueryError`).
+    SetVoice {
+        #[serde(default)]
+        asr_engine: Option<String>,
+        #[serde(default)]
+        tts_engine: Option<String>,
+        #[serde(default)]
+        asr_model_path: Option<String>,
+        #[serde(default)]
+        asr_language: Option<String>,
+        #[serde(default)]
+        asr_beam_size: Option<u32>,
+        #[serde(default)]
+        tts_voice_path: Option<String>,
+        #[serde(default)]
+        tts_espeak_data_path: Option<String>,
+        #[serde(default)]
+        input_device: Option<String>,
+        #[serde(default)]
+        output_device: Option<String>,
+    },
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -794,6 +824,40 @@ pub enum QueryResponsePayload {
         profile: ProfileSummary,
         restart_required: bool,
     },
+    /// Response to [`QueryPayload::GetVoiceSettings`]. Chapter Voice.
+    GetVoiceSettings {
+        settings: VoiceSettingsSnapshot,
+    },
+    /// Response to [`QueryPayload::SetVoice`]. Chapter Voice — the **fresh**
+    /// snapshot (re-read from disk, readiness re-stat'd) + `restart_required`
+    /// (always `true`; `[voice]` is load-time).
+    VoiceApplied {
+        settings: VoiceSettingsSnapshot,
+        restart_required: bool,
+    },
+}
+
+/// Chapter Voice — the daemon's `[voice]` config + readiness snapshot for the
+/// Voice screen. Wasm-clean plain-field mirror of `aivyx_config::VoiceOptions`
+/// (paths as strings) plus three readiness flags the daemon computes by
+/// `stat`ing the model prerequisites.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VoiceSettingsSnapshot {
+    pub asr_engine: Option<String>,
+    pub tts_engine: Option<String>,
+    pub asr_model_path: Option<String>,
+    pub asr_language: Option<String>,
+    pub asr_beam_size: Option<u32>,
+    pub tts_voice_path: Option<String>,
+    pub tts_espeak_data_path: Option<String>,
+    pub input_device: Option<String>,
+    pub output_device: Option<String>,
+    /// `"present" | "missing" | "unset"` for the Whisper `.bin` model.
+    pub asr_model_status: String,
+    /// `"present" | "missing" | "unset"` for the Piper `.onnx` voice.
+    pub tts_voice_status: String,
+    /// `"present" | "missing" | "unset"` for the espeak-ng data directory.
+    pub espeak_status: String,
 }
 
 /// Chapter U — the daemon's effective config snapshot for the Settings screen.
@@ -2704,6 +2768,51 @@ mod tests {
         let frame = encode_frame(&resolved).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resolved);
+    }
+
+    #[test]
+    fn voice_settings_queries_and_responses_round_trip() {
+        // SetVoice with all fields absent (the "clear everything" shape).
+        let empty: QueryPayload = serde_json::from_str(r#"{"kind":"SetVoice"}"#).unwrap();
+        assert!(matches!(empty, QueryPayload::SetVoice { asr_engine: None, .. }));
+
+        let reqs = vec![
+            QueryPayload::GetVoiceSettings,
+            QueryPayload::SetVoice {
+                asr_engine: Some("whisper-rs".into()),
+                tts_engine: Some("piper".into()),
+                asr_model_path: Some("/m/whisper.bin".into()),
+                asr_language: Some("en".into()),
+                asr_beam_size: Some(5),
+                tts_voice_path: Some("/m/voice.onnx".into()),
+                tts_espeak_data_path: Some("/usr/share/espeak-ng-data".into()),
+                input_device: None,
+                output_device: None,
+            },
+        ];
+        for payload in reqs {
+            let msg = FrontendMessage::Query { id: "v".into(), payload: payload.clone() };
+            let frame = encode_frame(&msg).expect("encode");
+            let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, msg);
+        }
+
+        let snap = VoiceSettingsSnapshot {
+            asr_model_path: Some("/m/whisper.bin".into()),
+            asr_beam_size: Some(5),
+            asr_model_status: "present".into(),
+            tts_voice_status: "missing".into(),
+            espeak_status: "unset".into(),
+            ..Default::default()
+        };
+        for resp in [
+            QueryResponsePayload::GetVoiceSettings { settings: snap.clone() },
+            QueryResponsePayload::VoiceApplied { settings: snap.clone(), restart_required: true },
+        ] {
+            let frame = encode_frame(&resp).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, resp);
+        }
     }
 
     #[test]

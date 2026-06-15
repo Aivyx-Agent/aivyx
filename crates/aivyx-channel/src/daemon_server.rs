@@ -4026,6 +4026,55 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::GetVoiceSettings => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match load_settings_config(path) {
+                Ok(cfg) => QueryResponsePayload::GetVoiceSettings {
+                    settings: voice_snapshot(&cfg),
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "config_load_failed".into(),
+                    message: e,
+                },
+            }
+        }
+        QueryPayload::SetVoice {
+            asr_engine,
+            tts_engine,
+            asr_model_path,
+            asr_language,
+            asr_beam_size,
+            tts_voice_path,
+            tts_espeak_data_path,
+            input_device,
+            output_device,
+        } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let write = aivyx_config::VoiceWrite {
+                asr_engine,
+                tts_engine,
+                asr_model_path,
+                asr_language,
+                asr_beam_size,
+                tts_voice_path,
+                tts_espeak_data_path,
+                input_device,
+                output_device,
+            };
+            match aivyx_config::write_voice_section(path, &write) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "voice", &voice_change_summary(&write));
+                    voice_applied(path)
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
     }
 }
 
@@ -4119,6 +4168,83 @@ fn profile_change_summary(w: &aivyx_config::ProfileWrite) -> String {
         list("primary_use_cases", &w.primary_use_cases),
         list("behavioral_preferences", &w.behavioral_preferences),
         list("behavioral_constraints", &w.behavioral_constraints),
+    ]
+    .join(", ")
+}
+
+/// Chapter Voice — build the `[voice]` wire snapshot (the nine options +
+/// readiness) from a loaded config. Readiness is a `stat`: the Whisper model +
+/// Piper voice must be **files**, the espeak data path a **directory**.
+fn voice_snapshot(cfg: &aivyx_config::AivyxConfig) -> aivyx_ipc::protocol::VoiceSettingsSnapshot {
+    let v = &cfg.voice_options;
+    let as_str = |p: &Option<std::path::PathBuf>| p.as_ref().map(|x| x.display().to_string());
+    aivyx_ipc::protocol::VoiceSettingsSnapshot {
+        asr_engine: v.asr_engine.clone(),
+        tts_engine: v.tts_engine.clone(),
+        asr_model_path: as_str(&v.asr_model_path),
+        asr_language: v.asr_language.clone(),
+        asr_beam_size: v.asr_beam_size.map(|n| n as u32),
+        tts_voice_path: as_str(&v.tts_voice_path),
+        tts_espeak_data_path: as_str(&v.tts_espeak_data_path),
+        input_device: v.input_device.clone(),
+        output_device: v.output_device.clone(),
+        asr_model_status: path_status(v.asr_model_path.as_deref(), false),
+        tts_voice_status: path_status(v.tts_voice_path.as_deref(), false),
+        espeak_status: path_status(v.tts_espeak_data_path.as_deref(), true),
+    }
+}
+
+/// Chapter Voice — readiness for one prerequisite path: `"unset"` (no path),
+/// `"present"` (exists with the right kind), or `"missing"`.
+fn path_status(p: Option<&Path>, want_dir: bool) -> String {
+    match p {
+        None => "unset",
+        Some(path) => {
+            let ok = if want_dir { path.is_dir() } else { path.is_file() };
+            if ok {
+                "present"
+            } else {
+                "missing"
+            }
+        }
+    }
+    .to_string()
+}
+
+/// Chapter Voice — re-read the config + return a `VoiceApplied` response.
+/// `restart_required` is always `true`: `[voice]` is read when the voice channel
+/// starts, so a write never affects a running voice process.
+fn voice_applied(toml_path: &Path) -> QueryResponsePayload {
+    match load_settings_config(toml_path) {
+        Ok(cfg) => QueryResponsePayload::VoiceApplied {
+            settings: voice_snapshot(&cfg),
+            restart_required: true,
+        },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("voice settings written, but reloading them failed: {e}"),
+        },
+    }
+}
+
+/// Chapter Voice — a compact set/cleared summary of a `[voice]` write for the
+/// `ConfigChanged` audit entry (the shape, not the values — though paths aren't
+/// secrets, the audit stays uniform with the profile summary's posture).
+fn voice_change_summary(w: &aivyx_config::VoiceWrite) -> String {
+    let s = |label: &str, set: bool| format!("{label} = {}", if set { "set" } else { "cleared" });
+    fn nonblank(o: &Option<String>) -> bool {
+        o.as_deref().map(str::trim).is_some_and(|x| !x.is_empty())
+    }
+    [
+        s("asr_engine", nonblank(&w.asr_engine)),
+        s("tts_engine", nonblank(&w.tts_engine)),
+        s("asr_model_path", nonblank(&w.asr_model_path)),
+        s("asr_language", nonblank(&w.asr_language)),
+        s("asr_beam_size", w.asr_beam_size.is_some()),
+        s("tts_voice_path", nonblank(&w.tts_voice_path)),
+        s("tts_espeak_data_path", nonblank(&w.tts_espeak_data_path)),
+        s("input_device", nonblank(&w.input_device)),
+        s("output_device", nonblank(&w.output_device)),
     ]
     .join(", ")
 }
@@ -5628,6 +5754,47 @@ mod tests {
         assert_eq!(snap.budget.per_run_usd, Some(5.0));
         assert_eq!(snap.budget.on_exceeded, "deny");
         assert!(snap.embeddings_available);
+    }
+
+    #[test]
+    fn voice_snapshot_reflects_config_and_readiness() {
+        // A real Whisper model file (present), a bogus Piper path (missing),
+        // espeak left unset.
+        let dir = test_dir("voice-snapshot");
+        let model = dir.join("whisper.bin");
+        std::fs::write(&model, b"x").unwrap();
+        let path = settings_toml(
+            "voice-snapshot",
+            &format!(
+                "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\n\
+                 [voice]\nasr_engine = \"whisper-rs\"\nasr_model_path = \"{}\"\n\
+                 asr_beam_size = 5\ntts_voice_path = \"/nope/voice.onnx\"\n",
+                model.display(),
+            ),
+        );
+        let cfg = load_settings_config(&path).expect("load");
+        let snap = voice_snapshot(&cfg);
+        assert_eq!(snap.asr_engine.as_deref(), Some("whisper-rs"));
+        assert_eq!(snap.asr_beam_size, Some(5));
+        assert_eq!(snap.asr_model_status, "present", "model file exists");
+        assert_eq!(snap.tts_voice_status, "missing", "voice path set but absent");
+        assert_eq!(snap.espeak_status, "unset", "no espeak path");
+    }
+
+    #[test]
+    fn voice_change_summary_records_set_cleared_shape() {
+        let w = aivyx_config::VoiceWrite {
+            asr_engine: Some("whisper-rs".into()),
+            asr_model_path: Some("  ".into()), // blank → cleared
+            asr_beam_size: Some(5),
+            ..Default::default()
+        };
+        let s = voice_change_summary(&w);
+        assert!(s.contains("asr_engine = set"), "{s}");
+        assert!(s.contains("asr_model_path = cleared"), "{s}");
+        assert!(s.contains("asr_beam_size = set"), "{s}");
+        assert!(s.contains("tts_voice_path = cleared"), "{s}");
+        assert!(!s.contains("whisper-rs"), "summary must not carry values: {s}");
     }
 
     #[test]
