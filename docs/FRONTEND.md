@@ -94,7 +94,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
 | **Documents** | read-only file browser over the agent workspace + the access-scoped fs_root — see §11 | ✅ Live (Ch. Z) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
-| **Voice** | the voice channel | Roadmap |
+| **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
 
 The reference mockups for the locked look: `aivyx-brand/assets/stitch/`
 `aivyx_command_center`, `aivyx_missions_orchestration`, `the_terminal`.
@@ -483,3 +483,74 @@ for `plan.md` and **withheld** the binary `data.bin` (`binary: true`), `ListDir
 workspace` returned the agent's own dir, and **`../../../etc` was rejected**
 (`path_escape`) — the canonicalize-`starts_with` guard holds over IPC. Deferred:
 write/rename, a tree pane, syntax highlighting.
+
+---
+
+## 12. Voice — the host voice channel, configured (Chapter Voice)
+
+The final roadmap screen — and a deliberately **honest** one. Aivyx's voice is a
+**host-local CLI loop**: `aivyx --channel voice` runs an in-process
+mic → Whisper ASR → agent turn → Piper TTS → speakers loop on the operator's
+machine (`cpal`/`rodio`), configured by a `[voice]` TOML section. *"The audio
+loop never leaves the host."* The daemon doesn't run it and the browser can't
+reach the host microphone — so the Studio's Voice screen is **not** a live voice
+loop. It is the **configuration + readiness + launch** surface: edit `[voice]`,
+see whether the model files are actually present, and copy the command to start
+voice. (Browser-native voice — streaming the mic to the daemon's Whisper — is a
+larger, separate effort, deliberately out of scope.)
+
+### 12.1 What it edits (the `[voice]` section)
+
+`aivyx_config::VoiceOptions` is the direct `[voice]` parse target — all keys
+optional: `asr_engine` (`whisper-rs`), `tts_engine` (`piper`), `asr_model_path`
+(the Whisper `.bin`), `asr_language`, `asr_beam_size`, `tts_voice_path` (the
+Piper `.onnx`), `tts_espeak_data_path` (espeak-ng phonemizer data),
+`input_device` / `output_device` (cpal/rodio overrides). The two model paths +
+espeak data are what make-or-break a launch.
+
+### 12.2 Readiness (computed daemon-side)
+
+The screen's value beyond an editor: a **readiness check**. The daemon `stat`s
+the three filesystem prerequisites — `asr_model_path`, `tts_voice_path`,
+`tts_espeak_data_path` — and reports each `present | missing | unset`, so the
+operator sees *"✓ Whisper model, ✗ Piper voice (path set but file missing)"*
+before they ever run the command. Read-only inspection; the daemon never loads
+the audio stack.
+
+### 12.3 New IPC (mirrors Settings, Chapter U)
+
+- **`GetVoiceSettings`** → `VoiceSettingsSnapshot` (the nine `[voice]` fields +
+  the three readiness flags). Re-reads `aivyx.toml` from disk (the U on-disk
+  convention), so the editor edits what it shows.
+- **`SetVoice { …nine fields… }`** → `VoiceApplied { settings, restart_required:
+  true }`. Section-scoped `toml_edit` rewrite of `[voice]` via a new
+  `write_voice_section` helper (joining access/budget/profile in
+  `config_write.rs`); `ConfigChanged { section: "voice" }` audit; load-time, so
+  the running voice process (if any) must be restarted to apply.
+
+### 12.4 Web
+
+`View::Voice` + `VoicePanel`: the `[voice]` form (engine selects, path inputs,
+language, beam, devices), a **readiness panel** (a chip per prerequisite), the
+**launch command** (`aivyx --channel voice`, copy-able) with a one-line note
+that audio runs on the host, and the restart banner after a write. No audio APIs
+touched.
+
+### 12.5 Invariants
+
+- **Honest about the architecture** — the screen configures + checks; it never
+  pretends the browser does audio. The voice loop stays a host process.
+- **Read-only inspection / single write surface** — `GetVoiceSettings` only
+  stats paths; `SetVoice` only rewrites the `[voice]` section (preserving the
+  rest), audited, load-time. Same guarantees as Settings (U).
+- **Studio only / local-first / Stitch** — same rules as R–Z.
+
+### 12.6 Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **Voice.0** | This contract. |
+| **Voice.1** | `write_voice_section` + a `VoiceWrite` carrier in `aivyx-config/config_write.rs` (clear-on-None section rewrite); unit tests. |
+| **Voice.2** | `GetVoiceSettings`/`SetVoice` IPC + `VoiceSettingsSnapshot` (fields + readiness) + daemon handlers (re-read + stat readiness; write + `ConfigChanged` audit; reuse `config_toml_path`); round-trip + handler tests. |
+| **Voice.3** | Web: `View::Voice` + `VoicePanel` (form + readiness chips + launch command + restart banner); `ws_task` arms; `stitch.css`. |
+| **Voice.4** | Finalize: bundle, live-verify (read/write `[voice]`, readiness reflects a missing vs present model file), docs, memory, push. |
