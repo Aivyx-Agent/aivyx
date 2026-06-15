@@ -100,8 +100,8 @@ use aivyx_storage::{KeyDomain, Storage};
 // daemon's Settings IPC handlers).
 pub mod config_write;
 pub use config_write::{
-    write_access_section, write_budget_section, write_profile_section, ConfigWriteError,
-    ProfileWrite,
+    write_access_section, write_budget_section, write_profile_section, write_voice_section,
+    ConfigWriteError, ProfileWrite, VoiceWrite,
 };
 
 // --------------------------------------------------------------------

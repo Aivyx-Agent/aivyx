@@ -251,6 +251,72 @@ fn remove_profile_key(doc: &mut DocumentMut, key: &str) {
     }
 }
 
+/// The `[voice]` fields the Studio's Voice screen edits, in the carrier the
+/// daemon's `SetVoice` handler fills from IPC. Mirrors `VoiceOptions` (Chapter
+/// Voice §12.1): all optional, **clear-on-`None`** — an absent field removes the
+/// key (the voice loader's default then applies). Strings are trimmed (an
+/// all-whitespace value clears the key); paths are carried as strings (TOML
+/// stores them as strings regardless).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VoiceWrite {
+    pub asr_engine: Option<String>,
+    pub tts_engine: Option<String>,
+    pub asr_model_path: Option<String>,
+    pub asr_language: Option<String>,
+    pub asr_beam_size: Option<u32>,
+    pub tts_voice_path: Option<String>,
+    pub tts_espeak_data_path: Option<String>,
+    pub input_device: Option<String>,
+    pub output_device: Option<String>,
+}
+
+/// Rewrite the `[voice]` section of the TOML file at `path`, preserving every
+/// other section and the operator's comments — the section-scoped `toml_edit`
+/// posture of the access/budget/profile writers.
+///
+/// Each field follows clear-on-`None`: a present value is normalized and
+/// written; an absent one removes the key. There is nothing to *validate* here
+/// (the voice channel validates engine names + that the model files exist at
+/// launch), so this never fails on content — only on I/O or a malformed file.
+pub fn write_voice_section(path: &Path, voice: &VoiceWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+
+    set_or_clear_voice_str(&mut doc, "asr_engine", voice.asr_engine.as_deref());
+    set_or_clear_voice_str(&mut doc, "tts_engine", voice.tts_engine.as_deref());
+    set_or_clear_voice_str(&mut doc, "asr_model_path", voice.asr_model_path.as_deref());
+    set_or_clear_voice_str(&mut doc, "asr_language", voice.asr_language.as_deref());
+    match voice.asr_beam_size {
+        Some(n) => doc["voice"]["asr_beam_size"] = value(n as i64),
+        None => remove_voice_key(&mut doc, "asr_beam_size"),
+    }
+    set_or_clear_voice_str(&mut doc, "tts_voice_path", voice.tts_voice_path.as_deref());
+    set_or_clear_voice_str(
+        &mut doc,
+        "tts_espeak_data_path",
+        voice.tts_espeak_data_path.as_deref(),
+    );
+    set_or_clear_voice_str(&mut doc, "input_device", voice.input_device.as_deref());
+    set_or_clear_voice_str(&mut doc, "output_device", voice.output_device.as_deref());
+
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Set `[voice].<key>` to the trimmed string, or remove the key when the value
+/// is `None` or trims to empty.
+fn set_or_clear_voice_str(doc: &mut DocumentMut, key: &str, v: Option<&str>) {
+    match v.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => doc["voice"][key] = value(s),
+        None => remove_voice_key(doc, key),
+    }
+}
+
+/// Remove `key` from the `[voice]` table if the table exists.
+fn remove_voice_key(doc: &mut DocumentMut, key: &str) {
+    if let Some(t) = doc.get_mut("voice").and_then(|v| v.as_table_mut()) {
+        t.remove(key);
+    }
+}
+
 /// Stable `[budget] on_exceeded` token — matches `BudgetAction`'s
 /// `#[serde(rename_all = "snake_case")]` repr so a written file round-trips
 /// through the loader unchanged.
@@ -561,6 +627,67 @@ mod tests {
         assert!(out.contains("provider = \"ollama\""), "[agent] preserved: {out}");
         assert!(out.contains("level = \"home\""), "[access] preserved: {out}");
         assert!(out.contains("assistant_name = \"Aivyx\""), "{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn voice_writes_strings_paths_and_beam() {
+        let path = temp_toml("voice");
+        let v = VoiceWrite {
+            asr_engine: Some("whisper-rs".to_string()),
+            tts_engine: Some("piper".to_string()),
+            asr_model_path: Some("/models/whisper.bin".to_string()),
+            asr_language: Some("en".to_string()),
+            asr_beam_size: Some(5),
+            tts_voice_path: Some("/models/voice.onnx".to_string()),
+            tts_espeak_data_path: Some("/usr/share/espeak-ng-data".to_string()),
+            input_device: None,
+            output_device: None,
+        };
+        write_voice_section(&path, &v).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("asr_engine = \"whisper-rs\""), "{out}");
+        assert!(out.contains("asr_model_path = \"/models/whisper.bin\""), "{out}");
+        assert!(out.contains("asr_beam_size = 5"), "{out}");
+        assert!(out.contains("tts_voice_path = \"/models/voice.onnx\""), "{out}");
+        assert!(!out.contains("input_device"), "None device must be absent: {out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn voice_clears_none_and_blank_fields() {
+        let path = temp_toml("voice-clear");
+        std::fs::write(
+            &path,
+            "[voice]\nasr_model_path = \"/old.bin\"\nasr_beam_size = 8\nasr_language = \"en\"\n",
+        )
+        .unwrap();
+        let v = VoiceWrite {
+            asr_language: Some("  ".to_string()), // whitespace → cleared
+            // asr_model_path + asr_beam_size left None → cleared
+            ..Default::default()
+        };
+        write_voice_section(&path, &v).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(!out.contains("asr_model_path"), "None path must be cleared: {out}");
+        assert!(!out.contains("asr_beam_size"), "None beam must be cleared: {out}");
+        assert!(!out.contains("asr_language"), "blank string must be cleared: {out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn voice_preserves_other_sections() {
+        let path = temp_toml("voice-preserve");
+        std::fs::write(&path, "# cfg\n[agent]\nprovider = \"ollama\"\n").unwrap();
+        let v = VoiceWrite {
+            tts_engine: Some("piper".to_string()),
+            ..Default::default()
+        };
+        write_voice_section(&path, &v).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# cfg"), "comment preserved: {out}");
+        assert!(out.contains("provider = \"ollama\""), "[agent] preserved: {out}");
+        assert!(out.contains("tts_engine = \"piper\""), "{out}");
         std::fs::remove_file(&path).ok();
     }
 
