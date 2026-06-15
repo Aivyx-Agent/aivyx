@@ -20,7 +20,7 @@ use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
     MemoryEntrySummary, PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary,
     PersonaSeedWire, ProfileSummary, QueryPayload, QueryResponsePayload, SeedSkillWire,
-    SettingsSnapshot, StreamEventPayload,
+    SettingsSnapshot, StreamEventPayload, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
     ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView, TrustTier,
@@ -53,6 +53,7 @@ const ICON_TEAMS: Asset = asset!("/assets/icons/teams.svg");
 const ICON_AGENTS: Asset = asset!("/assets/icons/agents.svg");
 const ICON_MEMORY: Asset = asset!("/assets/icons/memory.svg");
 const ICON_DOCUMENTS: Asset = asset!("/assets/icons/documents.svg");
+const ICON_VOICE: Asset = asset!("/assets/icons/voice.svg");
 const ICON_SETTINGS: Asset = asset!("/assets/icons/settings.svg");
 const ICON_THEME: Asset = asset!("/assets/icons/theme-toggle.svg");
 
@@ -70,6 +71,7 @@ enum View {
     Agents,
     Teams,
     Documents,
+    Voice,
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -123,6 +125,15 @@ struct AgentsState {
     /// X.3 — bumped on every `DraftPersonaSeed` response (success or failure) so
     /// the onboarding card can clear its "Drafting…" state and re-seed its form.
     seed_draft_resp: u64,
+}
+
+/// Voice config screen state — Chapter Voice. The on-disk `[voice]` snapshot
+/// (+ readiness) plus the last write outcome + the load-time restart flag.
+#[derive(Clone, Default, PartialEq)]
+struct VoiceState {
+    snapshot: Option<VoiceSettingsSnapshot>,
+    notice: Option<(bool, String)>,
+    restart_required: bool,
 }
 
 /// Documents browser state — Chapter Z. The active root + path + the current
@@ -235,6 +246,7 @@ fn App() -> Element {
     let agents = use_signal(AgentsState::default);
     let roster = use_signal(|| None::<TeamConfig>);
     let documents = use_signal(DocumentsState::default);
+    let voice = use_signal(VoiceState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -243,8 +255,8 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, settings, agents, roster, documents, connected,
-            session, transcript, streaming, gate,
+            rx, missions, dashboard, memory, settings, agents, roster, documents, voice,
+            connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -253,6 +265,7 @@ fn App() -> Element {
     use_context_provider(|| agents);
     use_context_provider(|| roster);
     use_context_provider(|| documents);
+    use_context_provider(|| voice);
     use_context_provider(|| missions);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
@@ -301,6 +314,7 @@ fn App() -> Element {
         View::Agents => "Agents",
         View::Teams => "Teams",
         View::Documents => "Documents",
+        View::Voice => "Voice",
     };
 
     rsx! {
@@ -324,6 +338,7 @@ fn App() -> Element {
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
                         View::Documents => rsx! { DocumentsPanel {} },
+                        View::Voice => rsx! { VoicePanel {} },
                     }
                 }
             }
@@ -360,6 +375,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Teams) }
             NavItem { icon: ICON_DOCUMENTS, label: "Documents", active: view() == View::Documents,
                 onclick: move |_| view.set(View::Documents) }
+            NavItem { icon: ICON_VOICE, label: "Voice", active: view() == View::Voice,
+                onclick: move |_| view.set(View::Voice) }
             div { class: "nav-section label-tech", "Roadmap" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
@@ -1224,6 +1241,238 @@ fn confirm_blurb(level: &str) -> String {
             "This grants full read / write / shell within the chosen directory.".to_string()
         }
         _ => "This reaches beyond the default sandbox.".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Voice — the host voice channel, configured (Chapter Voice). A config-write
+// screen for [voice] + a readiness check + the launch command. The audio loop
+// (mic/ASR/TTS) is a host process; this screen never touches audio.
+// ---------------------------------------------------------------------------
+
+#[component]
+fn VoicePanel() -> Element {
+    let ws = use_context::<Sender>();
+    let voice = use_context::<Signal<VoiceState>>();
+
+    let mut asr_engine = use_signal(String::new);
+    let mut tts_engine = use_signal(String::new);
+    let mut asr_model_path = use_signal(String::new);
+    let mut asr_language = use_signal(String::new);
+    let mut asr_beam_size = use_signal(String::new);
+    let mut tts_voice_path = use_signal(String::new);
+    let mut tts_espeak_data_path = use_signal(String::new);
+    let mut input_device = use_signal(String::new);
+    let mut output_device = use_signal(String::new);
+    let mut last_seed = use_signal(|| None::<VoiceSettingsSnapshot>);
+
+    use_future(move || async move {
+        ws.send(get_voice_query());
+    });
+
+    // Re-seed the form from the on-disk snapshot (first load + after a write),
+    // guarded so a write error doesn't wipe in-progress edits.
+    use_effect(move || {
+        let snap = voice().snapshot.clone();
+        if snap != last_seed() {
+            if let Some(s) = snap.as_ref() {
+                asr_engine.set(s.asr_engine.clone().unwrap_or_default());
+                tts_engine.set(s.tts_engine.clone().unwrap_or_default());
+                asr_model_path.set(s.asr_model_path.clone().unwrap_or_default());
+                asr_language.set(s.asr_language.clone().unwrap_or_default());
+                asr_beam_size.set(s.asr_beam_size.map(|n| n.to_string()).unwrap_or_default());
+                tts_voice_path.set(s.tts_voice_path.clone().unwrap_or_default());
+                tts_espeak_data_path.set(s.tts_espeak_data_path.clone().unwrap_or_default());
+                input_device.set(s.input_device.clone().unwrap_or_default());
+                output_device.set(s.output_device.clone().unwrap_or_default());
+            }
+            last_seed.set(snap);
+        }
+    });
+
+    let st = voice();
+    let snap = match st.snapshot.clone() {
+        Some(s) => s,
+        None => {
+            return rsx! {
+                div { class: "settings voice",
+                    div { class: "glass-card empty", p { class: "label-tech", "Loading voice config…" } }
+                }
+            }
+        }
+    };
+
+    rsx! {
+        div { class: "settings voice",
+
+            if st.restart_required {
+                div { class: "glass-card restart-banner",
+                    strong { "Saved — restart voice to apply." }
+                    p { class: "label-tech",
+                        "[voice] is read when the voice channel starts. Stop and re-run  "
+                        code { "aivyx --channel voice" }
+                    }
+                }
+            }
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+
+            // ── Readiness ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Readiness" } }
+                p { class: "label-tech",
+                    "Voice runs on the host (microphone + speakers). These files must exist before you launch."
+                }
+                div { class: "kv-grid",
+                    ReadinessRow { label: "Whisper model", status: snap.asr_model_status.clone() }
+                    ReadinessRow { label: "Piper voice", status: snap.tts_voice_status.clone() }
+                    ReadinessRow { label: "espeak-ng data", status: snap.espeak_status.clone() }
+                }
+            }
+
+            // ── Models & engines ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Models & engines" } }
+                div { class: "field-row",
+                    label { class: "label-tech", "ASR engine" }
+                    select { class: "input", value: "{asr_engine}", onchange: move |e| asr_engine.set(e.value()),
+                        option { value: "", "default (whisper-rs)" }
+                        option { value: "whisper-rs", "whisper-rs" }
+                        option { value: "whisper-cpp-plus", "whisper-cpp-plus" }
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Whisper model" }
+                    input { class: "input", placeholder: "/path/to/ggml-model.bin",
+                        value: "{asr_model_path}", oninput: move |e| asr_model_path.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "TTS engine" }
+                    select { class: "input", value: "{tts_engine}", onchange: move |e| tts_engine.set(e.value()),
+                        option { value: "", "default (piper)" }
+                        option { value: "piper", "piper" }
+                    }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Piper voice" }
+                    input { class: "input", placeholder: "/path/to/voice.onnx",
+                        value: "{tts_voice_path}", oninput: move |e| tts_voice_path.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "espeak-ng data" }
+                    input { class: "input", placeholder: "/usr/share/espeak-ng-data",
+                        value: "{tts_espeak_data_path}", oninput: move |e| tts_espeak_data_path.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "ASR language" }
+                    input { class: "input", placeholder: "en (or auto)",
+                        value: "{asr_language}", oninput: move |e| asr_language.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Beam size" }
+                    input { class: "input", r#type: "number", placeholder: "5",
+                        value: "{asr_beam_size}", oninput: move |e| asr_beam_size.set(e.value()) }
+                }
+            }
+
+            // ── Audio devices ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Audio devices" } span { class: "chip muted", "optional" } }
+                div { class: "field-row",
+                    label { class: "label-tech", "Input" }
+                    input { class: "input", placeholder: "system default",
+                        value: "{input_device}", oninput: move |e| input_device.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Output" }
+                    input { class: "input", placeholder: "system default",
+                        value: "{output_device}", oninput: move |e| output_device.set(e.value()) }
+                }
+            }
+
+            // ── Launch ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Launch" } }
+                p { class: "label-tech", "Start voice as its own foreground process on this machine:" }
+                pre { class: "launch-cmd", "aivyx --channel voice" }
+                p { class: "label-tech sub", "The audio loop (mic → Whisper → agent → Piper → speakers) runs on the host, not in the browser." }
+            }
+
+            div { class: "actions sticky-save",
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| ws.send(set_voice_query(
+                        opt_str(&asr_engine()), opt_str(&tts_engine()), opt_str(&asr_model_path()),
+                        opt_str(&asr_language()), parse_opt_u32(&asr_beam_size()), opt_str(&tts_voice_path()),
+                        opt_str(&tts_espeak_data_path()), opt_str(&input_device()), opt_str(&output_device()),
+                    )),
+                    "Save voice config"
+                }
+            }
+        }
+    }
+}
+
+/// One readiness row — a label + a status chip (present = sage, missing = error,
+/// unset = muted). A `.kv-grid` cell.
+#[component]
+fn ReadinessRow(label: String, status: String) -> Element {
+    let (cls, txt) = match status.as_str() {
+        "present" => ("sage", "present"),
+        "missing" => ("error", "missing"),
+        _ => ("muted", "not set"),
+    };
+    rsx! {
+        div {
+            span { class: "label-tech", "{label}" }
+            div { span { class: "chip {cls}", "{txt}" } }
+        }
+    }
+}
+
+fn get_voice_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-voice-get".to_string(),
+        payload: QueryPayload::GetVoiceSettings,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_voice_query(
+    asr_engine: Option<String>,
+    tts_engine: Option<String>,
+    asr_model_path: Option<String>,
+    asr_language: Option<String>,
+    asr_beam_size: Option<u32>,
+    tts_voice_path: Option<String>,
+    tts_espeak_data_path: Option<String>,
+    input_device: Option<String>,
+    output_device: Option<String>,
+) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-voice-set".to_string(),
+        payload: QueryPayload::SetVoice {
+            asr_engine,
+            tts_engine,
+            asr_model_path,
+            asr_language,
+            asr_beam_size,
+            tts_voice_path,
+            tts_espeak_data_path,
+            input_device,
+            output_device,
+        },
+    }
+}
+
+/// Parse a numeric form field to `Option<u32>` (blank / unparseable ⇒ `None`).
+fn parse_opt_u32(s: &str) -> Option<u32> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse().ok()
     }
 }
 
@@ -2430,6 +2679,7 @@ async fn ws_task(
     mut agents: Signal<AgentsState>,
     mut roster: Signal<Option<TeamConfig>>,
     mut documents: Signal<DocumentsState>,
+    mut voice: Signal<VoiceState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -2560,6 +2810,22 @@ async fn ws_task(
                     s.restart_required = restart_required;
                     s.notice = Some((true, "Saved to aivyx.toml.".to_string()));
                 }
+                // Chapter Voice — the [voice] config + readiness.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetVoiceSettings { settings: snap },
+                    ..
+                } => {
+                    voice.write().snapshot = Some(snap);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::VoiceApplied { settings: snap, restart_required },
+                    ..
+                } => {
+                    let mut v = voice.write();
+                    v.snapshot = Some(snap);
+                    v.restart_required = restart_required;
+                    v.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ProfileApplied { profile, restart_required },
                     ..
@@ -2655,6 +2921,13 @@ async fn ws_task(
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-agents") => {
                     agents.write().notice = Some((false, message));
+                }
+                // And a [voice] write/read failure (ids prefixed `mc-voice`).
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-voice") => {
+                    voice.write().notice = Some((false, message));
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),
