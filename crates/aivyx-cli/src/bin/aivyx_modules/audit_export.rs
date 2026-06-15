@@ -228,6 +228,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
         AuditEvent::ConfigChanged { .. } => "ConfigChanged",
         AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
+        AuditEvent::DocumentMutated { .. } => "DocumentMutated",
     }
 }
 

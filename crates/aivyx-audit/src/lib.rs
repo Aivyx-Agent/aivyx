@@ -399,6 +399,22 @@ pub enum AuditEvent {
         /// `"learned_context, character_traits, skill"`.
         categories: String,
     },
+
+    /// Chapter DW — an operator-initiated filesystem mutation from the Studio's
+    /// Documents editor (the second web write surface). Records *what* changed so
+    /// the Command-Center feed + forensic walks see web-initiated file writes
+    /// alongside the agent's own `fs.*` tool calls.
+    ///
+    /// Self-contained per D4; owned + `Eq` + `Serialize` fields, so the chain
+    /// HMAC is computed over canonical JSON without surprises.
+    DocumentMutated {
+        /// `"write" | "delete" | "rename" | "mkdir"`.
+        op: String,
+        /// `"workspace"` or `"fs"` — which document root.
+        root: String,
+        /// The relative path affected (for rename: `"old -> new"`).
+        path: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].

@@ -3354,6 +3354,58 @@ async fn handle_query(
                 Err(e) => map_browse_error(e),
             }
         }
+        QueryPayload::WriteFile { root, path, content, overwrite } => {
+            // Chapter DW — create/save a file (atomic, escape-guarded).
+            let dir = match resolve_document_root(document_roots, &root) {
+                Ok(d) => d,
+                Err(resp) => return resp,
+            };
+            let res = crate::document_browse::write_file(dir, &path, &content, overwrite);
+            if res.is_ok() {
+                audit_document_mutation(audit_log, "write", &root, &path);
+            }
+            fs_mutation_result(res)
+        }
+        QueryPayload::DeleteFile { root, path, confirm } => {
+            // Hard gate: a Documents delete always needs an explicit confirm.
+            if !confirm {
+                return QueryResponsePayload::FsMutation {
+                    ok: false,
+                    error: Some("delete requires confirmation".to_string()),
+                };
+            }
+            let dir = match resolve_document_root(document_roots, &root) {
+                Ok(d) => d,
+                Err(resp) => return resp,
+            };
+            let res = crate::document_browse::delete_file(dir, &path);
+            if res.is_ok() {
+                audit_document_mutation(audit_log, "delete", &root, &path);
+            }
+            fs_mutation_result(res)
+        }
+        QueryPayload::RenamePath { root, path, new_path } => {
+            let dir = match resolve_document_root(document_roots, &root) {
+                Ok(d) => d,
+                Err(resp) => return resp,
+            };
+            let res = crate::document_browse::rename_path(dir, &path, &new_path);
+            if res.is_ok() {
+                audit_document_mutation(audit_log, "rename", &root, &format!("{path} -> {new_path}"));
+            }
+            fs_mutation_result(res)
+        }
+        QueryPayload::MakeDir { root, path } => {
+            let dir = match resolve_document_root(document_roots, &root) {
+                Ok(d) => d,
+                Err(resp) => return resp,
+            };
+            let res = crate::document_browse::make_dir(dir, &path);
+            if res.is_ok() {
+                audit_document_mutation(audit_log, "mkdir", &root, &path);
+            }
+            fs_mutation_result(res)
+        }
         QueryPayload::ResolveTeamGate { mission_id, step, approve } => {
             let Some(svc) = team_missions else {
                 return no_team_missions();
@@ -4805,6 +4857,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
         aivyx_audit::AuditEvent::ConfigChanged { .. } => "ConfigChanged",
         aivyx_audit::AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
+        aivyx_audit::AuditEvent::DocumentMutated { .. } => "DocumentMutated",
     }
     .to_string();
 
@@ -5069,6 +5122,40 @@ fn resolve_document_root<'a>(
 
 /// Chapter Z — map a [`crate::document_browse::BrowseError`] to a stable
 /// `QueryError` code for the Documents browser.
+/// Chapter DW — shared `FsMutation` result for a Documents write op.
+fn fs_mutation_result(
+    res: Result<(), crate::document_browse::BrowseError>,
+) -> QueryResponsePayload {
+    match res {
+        Ok(()) => QueryResponsePayload::FsMutation { ok: true, error: None },
+        Err(e) => QueryResponsePayload::FsMutation {
+            ok: false,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Chapter DW — append a `DocumentMutated` audit entry for a successful Documents
+/// write. Best-effort (a test fixture without an audit log is silently
+/// unaudited; an append failure is logged, not fatal — the file change landed).
+fn audit_document_mutation(
+    audit_log: Option<&PersistentAuditLog>,
+    op: &str,
+    root: &str,
+    path: &str,
+) {
+    if let Some(log) = audit_log {
+        use aivyx_audit::AuditWriter;
+        if let Err(e) = log.append(aivyx_audit::AuditEvent::DocumentMutated {
+            op: op.to_string(),
+            root: root.to_string(),
+            path: path.to_string(),
+        }) {
+            eprintln!("aivyx daemon: failed to audit document mutation: {e}");
+        }
+    }
+}
+
 fn map_browse_error(e: crate::document_browse::BrowseError) -> QueryResponsePayload {
     use crate::document_browse::BrowseError as E;
     let (code, message) = match e {
@@ -6073,6 +6160,25 @@ mod tests {
         match resolve_document_root(&roots, "etc") {
             Err(QueryResponsePayload::QueryError { code, .. }) => assert_eq!(code, "bad_root"),
             other => panic!("expected bad_root error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fs_mutation_result_maps_ok_and_err() {
+        use crate::document_browse::BrowseError;
+        match fs_mutation_result(Ok(())) {
+            QueryResponsePayload::FsMutation { ok, error } => {
+                assert!(ok);
+                assert!(error.is_none());
+            }
+            other => panic!("expected FsMutation, got {other:?}"),
+        }
+        match fs_mutation_result(Err(BrowseError::Exists)) {
+            QueryResponsePayload::FsMutation { ok, error } => {
+                assert!(!ok);
+                assert_eq!(error.as_deref(), Some("already exists"));
+            }
+            other => panic!("expected FsMutation, got {other:?}"),
         }
     }
 

@@ -345,6 +345,39 @@ pub enum QueryPayload {
         root: String,
         path: String,
     },
+    /// Chapter DW — write (create or, with `overwrite`, replace) a text file.
+    /// Same `root`/`path` rules + guard as the reads. `overwrite = false` refuses
+    /// an existing path (`exists`); the editor's save sends `true`. Atomic
+    /// temp+rename, audited. Responds with [`QueryResponsePayload::FsMutation`].
+    WriteFile {
+        root: String,
+        path: String,
+        content: String,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// Chapter DW — delete a **file** or an **empty directory** (never
+    /// recursive). **Requires** `confirm = true` — the daemon refuses without it
+    /// (`confirm_required`). Audited. Responds with `FsMutation`.
+    DeleteFile {
+        root: String,
+        path: String,
+        #[serde(default)]
+        confirm: bool,
+    },
+    /// Chapter DW — rename `path` → `new_path` (both under `root`). Never
+    /// clobbers (`new_path` must not exist). Audited. Responds with `FsMutation`.
+    RenamePath {
+        root: String,
+        path: String,
+        new_path: String,
+    },
+    /// Chapter DW — create a directory at `path`. Errors if it exists. Audited.
+    /// Responds with `FsMutation`.
+    MakeDir {
+        root: String,
+        path: String,
+    },
     /// Chapter L (L.5) — approve or reject a mission paused at a human-approval
     /// gate. Responds with [`QueryResponsePayload::TeamGateResolved`].
     ResolveTeamGate {
@@ -816,6 +849,13 @@ pub enum QueryResponsePayload {
     /// Chapter Z — response to [`QueryPayload::ReadFile`].
     ReadFile {
         file: DocFile,
+    },
+    /// Chapter DW — shared response to a Documents mutation (`WriteFile` /
+    /// `DeleteFile` / `RenamePath` / `MakeDir`). `ok = false` carries a
+    /// human-readable `error` (the web re-`ListDir`s the directory on success).
+    FsMutation {
+        ok: bool,
+        error: Option<String>,
     },
     /// Response to [`QueryPayload::GetSettings`]. Chapter U — the daemon's
     /// effective config snapshot for the Settings screen.
@@ -2791,6 +2831,38 @@ mod tests {
         let frame = encode_frame(&resolved).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resolved);
+    }
+
+    #[test]
+    fn document_mutation_queries_and_response_round_trip() {
+        // `WriteFile.overwrite` + `DeleteFile.confirm` default false.
+        let w: QueryPayload =
+            serde_json::from_str(r#"{"kind":"WriteFile","root":"fs","path":"a.txt","content":"x"}"#)
+                .unwrap();
+        assert_eq!(w, QueryPayload::WriteFile { root: "fs".into(), path: "a.txt".into(), content: "x".into(), overwrite: false });
+        let d: QueryPayload =
+            serde_json::from_str(r#"{"kind":"DeleteFile","root":"fs","path":"a.txt"}"#).unwrap();
+        assert_eq!(d, QueryPayload::DeleteFile { root: "fs".into(), path: "a.txt".into(), confirm: false });
+
+        for req in [
+            QueryPayload::WriteFile { root: "workspace".into(), path: "n.md".into(), content: "# hi".into(), overwrite: true },
+            QueryPayload::RenamePath { root: "fs".into(), path: "a.txt".into(), new_path: "b.txt".into() },
+            QueryPayload::MakeDir { root: "fs".into(), path: "newdir".into() },
+        ] {
+            let msg = FrontendMessage::Query { id: "dm".into(), payload: req.clone() };
+            let frame = encode_frame(&msg).expect("encode");
+            let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, msg);
+        }
+
+        for resp in [
+            QueryResponsePayload::FsMutation { ok: true, error: None },
+            QueryResponsePayload::FsMutation { ok: false, error: Some("already exists".into()) },
+        ] {
+            let frame = encode_frame(&resp).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, resp);
+        }
     }
 
     #[test]
