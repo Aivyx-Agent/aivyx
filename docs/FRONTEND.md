@@ -91,7 +91,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
-| **Memory** | self-learning memory browser: topics + entries + search (graph viz later) | ✅ Live (Ch. T) |
+| **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T) · 🔨 graph (Ch. MG) |
 | **Documents** | read-only file browser over the agent workspace + the access-scoped fs_root — see §11 | ✅ Live (Ch. Z) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
@@ -554,3 +554,64 @@ touched.
 | **Voice.2** | `GetVoiceSettings`/`SetVoice` IPC + `VoiceSettingsSnapshot` (fields + readiness) + daemon handlers (re-read + stat readiness; write + `ConfigChanged` audit; reuse `config_toml_path`); round-trip + handler tests. |
 | **Voice.3** | Web: `View::Voice` + `VoicePanel` (form + readiness chips + launch command + restart banner); `ws_task` arms; `stitch.css`. |
 | **Voice.4** | Finalize: bundle, live-verify (read/write `[voice]`, readiness reflects a missing vs present model file), docs, memory, push. |
+
+---
+
+## 13. Memory — the knowledge graph (Chapter MG)
+
+Chapter T shipped the Memory **browser** (topic rail + entry cards + search) and
+deliberately deferred the **graph** — the `aivyx_neural_memory_graph` mockup's
+node-and-edge view of how topics relate. This chapter adds it, and it is a
+**real** graph, not hub-and-spoke: the daemon already learns *which topics get
+recalled together in turns that go well* (the Phase-83 co-occurrence ledger,
+`PersistentCooccurrenceLedger`), giving genuine weighted edges.
+
+### 13.1 The data (already there)
+
+- **Nodes** — memory topics (`Memory::list_topics`), each sized by its entry
+  count.
+- **Edges** — `top_affinities` from the co-occurrence ledger →
+  `CooccurrencePatterns { top_pairs: Vec<PairScore> }`, where
+  `PairScore { a, b, score, samples }` is a decayed joint-helpfulness weight
+  between two topics. **Already wasm-clean** in `aivyx-ipc/ledgers.rs` — reused
+  as-is for the edges, no mirror type.
+
+Both `Memory` and the co-occurrence ledger are already reachable in
+`handle_query` (the ledger is `Option` — absent when co-occurrence isn't armed,
+in which case the graph degrades to nodes only). **No new daemon threading.**
+
+### 13.2 The one new IPC
+
+- **`GetMemoryGraph { limit }`** → `{ nodes: Vec<MemoryGraphNode>, edges:
+  Vec<PairScore> }`. `MemoryGraphNode { topic, entry_count }`. Read-only; the
+  daemon lists topics (counting entries, capped), and folds the top-`limit`
+  affinity pairs. Empty edges ⇒ a topic cloud (still useful).
+
+### 13.3 Web
+
+The Memory screen gains a **List ⇄ Graph** toggle. The graph view renders an SVG
+force-directed layout computed in-WASM (a small deterministic Fruchterman–
+Reingold sim run for a fixed number of iterations in a `use_memo`, seeded from a
+stable topic hash so it doesn't jitter on re-render): **nodes** as circles sized
+by `entry_count`, **edges** as lines whose width/opacity scale with `score`.
+Clicking a node selects that topic (reusing T's `GetMemoryTopicEntries` — drops
+back to the list, scoped to the topic). Empty-memory and ledger-absent states
+render cleanly.
+
+### 13.4 Invariants
+
+- **Read-only / real edges** — the graph only *renders* existing memory + the
+  co-occurrence ledger; it never mutates memory and synthesizes no fake edges
+  (no co-occurrence data ⇒ an honest topic cloud).
+- **Deterministic layout** — the force sim is seeded + fixed-iteration, so the
+  graph is stable across re-renders (no continuous animation loop).
+- **Studio only / local-first / Stitch** — same rules as R–Voice.
+
+### 13.5 Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **MG.0** | This contract. |
+| **MG.1** | `GetMemoryGraph` IPC + `MemoryGraphNode` (reusing `PairScore` for edges) + daemon handler (topics + counts + `top_affinities`); round-trip + handler tests. |
+| **MG.2** | Web: a List⇄Graph toggle in the Memory screen + the in-WASM force layout + SVG render + node-click → topic select; `ws_task` arm; `stitch.css`. |
+| **MG.3** | Finalize: bundle, live-verify (graph renders over seeded memory + a co-occurrence pair; node click filters; ledger-absent = topic cloud), docs, memory, push. |
