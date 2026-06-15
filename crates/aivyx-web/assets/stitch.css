@@ -618,3 +618,20 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   user-select: all; white-space: pre-wrap; word-break: break-word;
 }
 .voice .kv-grid > div { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* ── Memory knowledge graph (Chapter MG). ── */
+.mem-viewtoggle { display: flex; gap: 6px; margin-left: auto; }
+.mem-graph-card { padding: 8px; }
+.mem-graph { width: 100%; height: auto; display: block; }
+.mem-edge { stroke: var(--color-secondary); }
+.mem-node { cursor: pointer; }
+.mem-node circle {
+  fill: var(--color-secondary-dim); stroke: var(--color-secondary);
+  stroke-width: 1.5; transition: fill 0.15s;
+}
+.mem-node:hover circle { fill: var(--color-primary); stroke: var(--color-primary); }
+.mem-node text {
+  font-family: var(--font-mono); font-size: 11px; fill: var(--color-text-secondary);
+  pointer-events: none;
+}
+.mem-node:hover text { fill: var(--color-primary); }

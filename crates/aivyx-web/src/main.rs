@@ -18,12 +18,13 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
-    MemoryEntrySummary, PersonaDeltaSummary, PersonaProposalResolution, PersonaProposalSummary,
-    PersonaSeedWire, ProfileSummary, QueryPayload, QueryResponsePayload, SeedSkillWire,
-    SettingsSnapshot, StreamEventPayload, VoiceSettingsSnapshot,
+    MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary, PersonaProposalResolution,
+    PersonaProposalSummary, PersonaSeedWire, ProfileSummary, QueryPayload, QueryResponsePayload,
+    SeedSkillWire, SettingsSnapshot, StreamEventPayload, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
-    ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView, TrustTier,
+    PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
+    TrustTier,
 };
 
 /// How many recent audit entries the Command Center feed shows.
@@ -81,6 +82,10 @@ struct MemoryState {
     entries: Vec<MemoryEntrySummary>,
     /// True when a semantic search was transparently served by the keyword path.
     fell_back: bool,
+    /// MG — the knowledge-graph nodes (topics + entry counts).
+    graph_nodes: Vec<MemoryGraphNode>,
+    /// MG — the weighted co-occurrence edges (empty ⇒ a topic cloud).
+    graph_edges: Vec<PairScore>,
 }
 
 /// Settings screen state — the on-disk config snapshot + the last write outcome.
@@ -824,11 +829,15 @@ fn MemoryPanel() -> Element {
     let mut semantic = use_signal(|| false);
     // Active scope label: "recent" | "topic:<t>" | "search:<q>".
     let mut scope = use_signal(|| "recent".to_string());
+    // MG — List ⇄ Graph view toggle (local; the graph data loads alongside).
+    let mut graph_view = use_signal(|| false);
 
-    // Load topics + the recent-across-all default each time the view opens.
+    // Load topics + the recent-across-all default + the graph each time the
+    // view opens.
     use_future(move || async move {
         ws.send(mem_topics_query());
         ws.send(mem_search_query(String::new(), false));
+        ws.send(mem_graph_query());
     });
 
     let m = memory();
@@ -898,8 +907,36 @@ fn MemoryPanel() -> Element {
                     if m.fell_back {
                         span { class: "chip amber", "keyword fallback" }
                     }
+                    div { class: "mem-viewtoggle",
+                        button {
+                            class: if graph_view() { "btn btn-glass btn-xs" } else { "btn btn-primary btn-xs" },
+                            onclick: move |_| graph_view.set(false),
+                            "List"
+                        }
+                        button {
+                            class: if graph_view() { "btn btn-primary btn-xs" } else { "btn btn-glass btn-xs" },
+                            onclick: move |_| graph_view.set(true),
+                            "Graph"
+                        }
+                    }
                 }
-                if m.entries.is_empty() {
+                if graph_view() {
+                    if m.graph_nodes.is_empty() {
+                        div { class: "glass-card empty",
+                            p { class: "label-tech", "No topics to graph yet." }
+                        }
+                    } else {
+                        MemoryGraph {
+                            nodes: m.graph_nodes.clone(),
+                            edges: m.graph_edges.clone(),
+                            on_select: move |topic: String| {
+                                graph_view.set(false);
+                                scope.set(format!("topic:{topic}"));
+                                ws.send(mem_topic_query(topic));
+                            },
+                        }
+                    }
+                } else if m.entries.is_empty() {
                     div { class: "glass-card empty",
                         p { class: "label-tech", "No memory here yet — the agent writes memories as it learns what matters to you." }
                     }
@@ -947,6 +984,163 @@ fn mem_search_query(query: String, semantic: bool) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-mem-search".to_string(),
         payload: QueryPayload::SearchMemory { query, limit: MEMORY_LIMIT, semantic },
+    }
+}
+
+fn mem_graph_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mem-graph".to_string(),
+        payload: QueryPayload::GetMemoryGraph { limit: 60 },
+    }
+}
+
+// ── MG — the knowledge-graph view (force-directed layout, in-WASM). ──
+
+/// The graph canvas size (SVG viewBox units).
+const GRAPH_W: f64 = 760.0;
+const GRAPH_H: f64 = 460.0;
+
+/// A stable, deterministic hash of a topic name — seeds the layout so the graph
+/// doesn't jitter between renders.
+fn stable_hash(s: &str) -> u64 {
+    // FNV-1a.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Deterministic Fruchterman–Reingold layout: repulsion between all nodes,
+/// attraction along (weighted) edges, cooled over a fixed iteration count.
+/// Returns one `(x, y)` per node, index-aligned with `nodes`.
+fn compute_layout(nodes: &[MemoryGraphNode], edges: &[PairScore]) -> Vec<(f64, f64)> {
+    let n = nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let k = (GRAPH_W * GRAPH_H / n as f64).sqrt() * 0.55; // ideal edge length
+    // Seed positions on a spiral from a stable per-topic hash.
+    let mut pos: Vec<(f64, f64)> = nodes
+        .iter()
+        .map(|node| {
+            let h = stable_hash(&node.topic);
+            let ang = (h % 628) as f64 / 100.0; // 0..2π
+            let r = 40.0 + (h / 628 % 170) as f64;
+            (GRAPH_W / 2.0 + r * ang.cos(), GRAPH_H / 2.0 + r * ang.sin())
+        })
+        .collect();
+    let idx: std::collections::HashMap<&str, usize> =
+        nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
+
+    let mut temp = GRAPH_W / 8.0;
+    for _ in 0..220 {
+        let mut disp = vec![(0.0_f64, 0.0_f64); n];
+        // Repulsion (all pairs).
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let dx = pos[i].0 - pos[j].0;
+                let dy = pos[i].1 - pos[j].1;
+                let d = (dx * dx + dy * dy).sqrt().max(0.01);
+                let f = k * k / d;
+                let (ux, uy) = (dx / d * f, dy / d * f);
+                disp[i].0 += ux;
+                disp[i].1 += uy;
+                disp[j].0 -= ux;
+                disp[j].1 -= uy;
+            }
+        }
+        // Attraction along edges (stronger for higher-affinity pairs).
+        for e in edges {
+            if let (Some(&i), Some(&j)) = (idx.get(e.a.as_str()), idx.get(e.b.as_str())) {
+                let w = (e.score.max(0.1) as f64).min(4.0);
+                let dx = pos[i].0 - pos[j].0;
+                let dy = pos[i].1 - pos[j].1;
+                let d = (dx * dx + dy * dy).sqrt().max(0.01);
+                let f = d * d / k * (0.5 + 0.25 * w);
+                let (ux, uy) = (dx / d * f, dy / d * f);
+                disp[i].0 -= ux;
+                disp[i].1 -= uy;
+                disp[j].0 += ux;
+                disp[j].1 += uy;
+            }
+        }
+        // Apply, capped by temperature, clamped to the canvas.
+        for i in 0..n {
+            let dl = (disp[i].0 * disp[i].0 + disp[i].1 * disp[i].1).sqrt().max(0.01);
+            let mv = dl.min(temp);
+            pos[i].0 = (pos[i].0 + disp[i].0 / dl * mv).clamp(28.0, GRAPH_W - 28.0);
+            pos[i].1 = (pos[i].1 + disp[i].1 / dl * mv).clamp(28.0, GRAPH_H - 28.0);
+        }
+        temp *= 0.965;
+    }
+    pos
+}
+
+/// Node radius from entry count (sqrt-scaled, clamped).
+fn node_radius(entry_count: u32) -> f64 {
+    (6.0 + (entry_count as f64).sqrt() * 3.0).min(24.0)
+}
+
+/// The memory knowledge graph — a force-directed SVG of topic nodes (sized by
+/// entry count) + weighted co-occurrence edges. Clicking a node selects that
+/// topic. Read-only. The layout is deterministic (no animation loop).
+#[component]
+fn MemoryGraph(
+    nodes: Vec<MemoryGraphNode>,
+    edges: Vec<PairScore>,
+    on_select: EventHandler<String>,
+) -> Element {
+    let pos = compute_layout(&nodes, &edges);
+    let idx: std::collections::HashMap<&str, usize> =
+        nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
+    let max_score = edges.iter().map(|e| e.score).fold(0.1_f32, f32::max);
+
+    rsx! {
+        div { class: "glass-card mem-graph-card",
+            if edges.is_empty() {
+                p { class: "label-tech sub", "No co-occurrence links yet — topics appear as a cloud until the agent recalls them together." }
+            }
+            svg {
+                class: "mem-graph",
+                view_box: "0 0 {GRAPH_W} {GRAPH_H}",
+                // Edges first (under the nodes).
+                for e in edges.iter() {
+                    if let (Some(&i), Some(&j)) = (idx.get(e.a.as_str()), idx.get(e.b.as_str())) {
+                        {
+                            let (x1, y1) = pos[i];
+                            let (x2, y2) = pos[j];
+                            let frac = (e.score / max_score).clamp(0.1, 1.0) as f64;
+                            let w = 0.6 + frac * 3.4;
+                            let op = 0.12 + frac * 0.5;
+                            rsx! {
+                                line {
+                                    x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
+                                    class: "mem-edge",
+                                    stroke_width: "{w}", opacity: "{op}",
+                                }
+                            }
+                        }
+                    }
+                }
+                // Nodes.
+                for (i, node) in nodes.iter().enumerate() {
+                    {
+                        let (cx, cy) = pos[i];
+                        let r = node_radius(node.entry_count);
+                        let topic = node.topic.clone();
+                        rsx! {
+                            g { class: "mem-node",
+                                onclick: move |_| on_select.call(topic.clone()),
+                                circle { cx: "{cx}", cy: "{cy}", r: "{r}" }
+                                text { x: "{cx}", y: "{cy + r + 11.0}", text_anchor: "middle", "{node.topic}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2778,6 +2972,14 @@ async fn ws_task(
                     ..
                 } => {
                     memory.write().topics = topics;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetMemoryGraph { nodes, edges },
+                    ..
+                } => {
+                    let mut m = memory.write();
+                    m.graph_nodes = nodes;
+                    m.graph_edges = edges;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetMemoryTopicEntries { entries },
