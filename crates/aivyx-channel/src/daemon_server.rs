@@ -3591,6 +3591,24 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::GetMemoryGraph { limit } => {
+            // Chapter MG — topic nodes (with entry counts) + weighted
+            // co-occurrence edges. Read-only; edges empty when the ledger isn't
+            // armed (→ a topic cloud).
+            let Some(mem) = memory else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_memory".into(),
+                    message: "daemon has no memory substrate configured".into(),
+                };
+            };
+            match build_memory_graph(mem.as_ref(), cooccurrence_ledger.map(|v| &**v), limit).await {
+                Ok((nodes, edges)) => QueryResponsePayload::GetMemoryGraph { nodes, edges },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "memory_list_failed".into(),
+                    message: e,
+                },
+            }
+        }
         QueryPayload::GetMemoryTopicEntries { topic, limit } => {
             let Some(mem) = memory else {
                 return QueryResponsePayload::QueryError {
@@ -4350,6 +4368,52 @@ fn memory_entry_summary(
         created_at_secs: e.created_at_secs,
         last_read_at_secs: e.last_read_at_secs,
     }
+}
+
+/// Chapter MG — assemble the memory knowledge graph: topic nodes (each counted,
+/// capped) + the top-`limit` weighted co-occurrence edges. `Err` only when
+/// listing topics fails; an absent ledger yields no edges (a topic cloud).
+async fn build_memory_graph(
+    mem: &dyn aivyx_memory::Memory,
+    cooccurrence_ledger: Option<&crate::cooccurrence_ledger::PersistentCooccurrenceLedger>,
+    limit: u32,
+) -> Result<
+    (
+        Vec<aivyx_ipc::protocol::MemoryGraphNode>,
+        Vec<aivyx_ipc::PairScore>,
+    ),
+    String,
+> {
+    // Node entry-count cap — a node's size is a rough heat, not an exact tally.
+    const NODE_COUNT_CAP: usize = 200;
+    let topics = mem.list_topics().await.map_err(|e| e.to_string())?;
+    let mut nodes = Vec::with_capacity(topics.len());
+    for topic in &topics {
+        let entry_count = mem
+            .get_recent(topic, NODE_COUNT_CAP)
+            .await
+            .map(|e| e.len() as u32)
+            .unwrap_or(0);
+        nodes.push(aivyx_ipc::protocol::MemoryGraphNode {
+            topic: topic.clone(),
+            entry_count,
+        });
+    }
+
+    let capped = limit.clamp(1, 200) as usize;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let edges = match cooccurrence_ledger {
+        Some(l) => l
+            .top_affinities(now_secs, capped)
+            .await
+            .map(|p| p.top_pairs)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    Ok((nodes, edges))
 }
 
 /// Phase 73 — render an `AutoNotifyOutcomeSummary` into
@@ -5779,6 +5843,22 @@ mod tests {
         assert_eq!(snap.asr_model_status, "present", "model file exists");
         assert_eq!(snap.tts_voice_status, "missing", "voice path set but absent");
         assert_eq!(snap.espeak_status, "unset", "no espeak path");
+    }
+
+    #[tokio::test]
+    async fn build_memory_graph_makes_nodes_with_counts_and_no_edges_without_a_ledger() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        let mem = InMemoryMemory::new();
+        mem.put("rust", "borrow checker note").await.unwrap();
+        mem.put("rust", "lifetimes note").await.unwrap();
+        mem.put("ops", "deploy runbook").await.unwrap();
+
+        let (nodes, edges) = build_memory_graph(&mem, None, 40).await.unwrap();
+        assert!(edges.is_empty(), "no ledger ⇒ a topic cloud (no edges)");
+        let rust = nodes.iter().find(|n| n.topic == "rust").expect("rust node");
+        assert_eq!(rust.entry_count, 2);
+        let ops = nodes.iter().find(|n| n.topic == "ops").expect("ops node");
+        assert_eq!(ops.entry_count, 1);
     }
 
     #[test]

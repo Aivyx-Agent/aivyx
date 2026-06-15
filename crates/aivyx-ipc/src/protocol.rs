@@ -222,6 +222,14 @@ pub enum QueryPayload {
         #[serde(default)]
         semantic: bool,
     },
+    /// Chapter MG — fetch the memory **knowledge graph**: topic nodes (each with
+    /// its entry count) + the top-`limit` weighted co-occurrence edges (which
+    /// topics get recalled together helpfully). Read-only. `edges` is empty when
+    /// the co-occurrence ledger isn't armed (→ a topic cloud). Responds with
+    /// [`QueryResponsePayload::GetMemoryGraph`].
+    GetMemoryGraph {
+        limit: u32,
+    },
     /// Phase 78 — read-only learning-observability query.
     /// `window_secs = None` → the handler's default lookback.
     /// `#[serde(default)]` so older clients/frames decode.
@@ -550,6 +558,13 @@ pub enum QueryResponsePayload {
     /// Distinct topic names sorted ascending.
     ListMemoryTopics {
         topics: Vec<String>,
+    },
+    /// Chapter MG — response to [`QueryPayload::GetMemoryGraph`]. `nodes` are the
+    /// topics (with entry counts); `edges` are the weighted co-occurrence pairs
+    /// (`crate::PairScore`, reused as-is) — empty when co-occurrence is unarmed.
+    GetMemoryGraph {
+        nodes: Vec<MemoryGraphNode>,
+        edges: Vec<crate::PairScore>,
     },
     /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
     /// Newest-first paginated entries for one topic.
@@ -962,6 +977,14 @@ pub struct MemoryEntrySummary {
     /// Memory pane by LRU heat. `0` means "never read since
     /// Phase 74 landed."
     pub last_read_at_secs: u64,
+}
+
+/// Chapter MG — one node in the memory knowledge graph: a topic + how many
+/// entries it holds (the Studio sizes the node by this).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryGraphNode {
+    pub topic: String,
+    pub entry_count: u32,
 }
 
 /// Phase 73 — flat wire view of one `AuditEvent::AutoNotifyDispatched`
@@ -2768,6 +2791,33 @@ mod tests {
         let frame = encode_frame(&resolved).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resolved);
+    }
+
+    #[test]
+    fn memory_graph_query_and_response_round_trip() {
+        let req = FrontendMessage::Query {
+            id: "mg".into(),
+            payload: QueryPayload::GetMemoryGraph { limit: 40 },
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        let resp = QueryResponsePayload::GetMemoryGraph {
+            nodes: vec![
+                MemoryGraphNode { topic: "rust".into(), entry_count: 12 },
+                MemoryGraphNode { topic: "ops".into(), entry_count: 3 },
+            ],
+            edges: vec![crate::PairScore {
+                a: "rust".into(),
+                b: "ops".into(),
+                score: 2.5,
+                samples: 7,
+            }],
+        };
+        let frame = encode_frame(&resp).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resp, "nodes + reused PairScore edges survive the frame");
     }
 
     #[test]
