@@ -92,7 +92,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T) · 🔨 graph (Ch. MG) |
-| **Documents** | read-only file browser over the agent workspace + the access-scoped fs_root — see §11 | ✅ Live (Ch. Z) |
+| **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z) · 🔨 write (Ch. DW) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
 
@@ -615,3 +615,74 @@ render cleanly.
 | **MG.1** | `GetMemoryGraph` IPC + `MemoryGraphNode` (reusing `PairScore` for edges) + daemon handler (topics + counts + `top_affinities`); round-trip + handler tests. |
 | **MG.2** | Web: a List⇄Graph toggle in the Memory screen + the in-WASM force layout + SVG render + node-click → topic select; `ws_task` arm; `stitch.css`. |
 | **MG.3** | Finalize: bundle, live-verify (graph renders over seeded memory + a co-occurrence pair; node click filters; ledger-absent = topic cloud), docs, memory, push. |
+
+---
+
+## 14. Documents — editable (Chapter DW)
+
+Chapter Z shipped the read-only browser. This chapter makes it **editable** —
+edit a file's text and save, create files/folders, rename, delete — deliberately
+crossing Z's read-only invariant. It is the Studio's second filesystem write
+surface (after the access scope itself), and the most safety-sensitive, so the
+guards are explicit.
+
+### 14.1 Safety model (the rules)
+
+- **Never escapes a root.** Writes reuse the read guard — but a *new* path can't
+  be canonicalized, so the write primitive canonicalizes the **parent** dir
+  (which must exist + `starts_with(root)`) then joins the leaf, exactly as
+  `FsWriteTool` does. The two roots (`workspace`, `fs` = the access level) are
+  the only reach — unchanged from Z.
+- **No accidental clobber.** `WriteFile` carries an explicit **`overwrite`**
+  flag: the editor's *save* sets it (the file exists, the operator is editing
+  it); *new file* sends `false` and the daemon refuses an existing path
+  (`exists`). `RenamePath` / `MakeDir` refuse when the target already exists.
+- **Delete is hard-gated.** `DeleteFile` removes a **file or an *empty*
+  directory** only — never recursive (a non-empty dir errors). It **always**
+  requires `confirm: true` (the web shows a confirm modal); the daemon refuses
+  without it. This is stricter than `[access] confirm_destructive` on purpose —
+  delete is the one no-undo action over this surface.
+- **Atomic writes.** `WriteFile` writes via temp-file + rename (the `FsWriteTool`
+  pattern) so a crash mid-write never truncates the target. 0644.
+- **Audited.** Each successful mutation appends an `AuditEvent` so the Command
+  Center feed + forensic walk see web-initiated filesystem changes.
+
+### 14.2 New IPC
+
+All read-write, mirroring the Z `root`/`path` shape:
+- **`WriteFile { root, path, content, overwrite }`** → `FsMutation`.
+- **`DeleteFile { root, path, confirm }`** → `FsMutation`.
+- **`RenamePath { root, path, new_path }`** → `FsMutation`.
+- **`MakeDir { root, path }`** → `FsMutation`.
+- `FsMutation { ok, error }` — one shared response; the web re-`ListDir`s the
+  affected directory on success (and re-`ReadFile`s after a save). Errors map to
+  stable codes (`path_escape` / `exists` / `not_empty` / `confirm_required` /
+  `io_error`, plus Z's `bad_root` / `no_workspace`).
+
+### 14.3 Web
+
+The Documents file viewer becomes an **editor**: a textarea over the file's text
+with **Save** (→ `WriteFile { overwrite: true }`); for binary/oversize files the
+viewer stays read-only. The toolbar gains **New file**, **New folder**, and per-
+entry **Rename** / **Delete** (delete behind a confirm modal). Notices report each
+outcome; the listing refreshes from the daemon's response. Read-only roots/states
+degrade cleanly.
+
+### 14.4 Invariants
+
+- **Same reach as Z** — writes never leave the two roots; the canonicalize-
+  `starts_with` guard is shared with reads.
+- **No silent data loss** — `overwrite` is explicit, rename/mkdir refuse to
+  clobber, delete is empty-only + always-confirmed.
+- **Every write is audited** — a signed `AuditEvent` per mutation.
+- **Studio only / local-first / Stitch** — same rules as R–MG.
+
+### 14.5 Phase plan
+
+| Phase | Deliverable |
+|---|---|
+| **DW.0** | This contract. |
+| **DW.1** | `document_write` primitive in `aivyx-channel` (write/delete/rename/mkdir) reusing the Z guard + a parent-canonicalizing resolve; unit tests incl. escape, clobber-refusal, non-empty-dir, atomic save. |
+| **DW.2** | `WriteFile`/`DeleteFile`/`RenamePath`/`MakeDir` IPC + `FsMutation` + daemon handlers (confirm + overwrite enforcement + an `AuditEvent`); round-trip + handler tests. |
+| **DW.3** | Web: editor (textarea + Save) + New file/folder + Rename/Delete (confirm modal) + notices + refresh; `ws_task` arms; `stitch.css`. |
+| **DW.4** | Finalize: bundle, live-verify (edit+save, create, rename refuses clobber, delete confirms, escape blocked, audited), docs, memory, push. |
