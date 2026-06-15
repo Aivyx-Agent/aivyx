@@ -5076,6 +5076,8 @@ fn map_browse_error(e: crate::document_browse::BrowseError) -> QueryResponsePayl
         E::NotFound => ("not_found", "no such file or directory".to_string()),
         E::NotADir => ("not_a_dir", "not a directory".to_string()),
         E::NotAFile => ("not_a_file", "not a file".to_string()),
+        E::Exists => ("exists", "a file or directory with that name already exists".to_string()),
+        E::NotEmpty => ("not_empty", "the directory is not empty".to_string()),
         E::Io(s) => ("io_error", s),
     };
     QueryResponsePayload::QueryError {

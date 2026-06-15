@@ -31,6 +31,11 @@ pub enum BrowseError {
     NotADir,
     /// `read_file` was asked for a directory.
     NotAFile,
+    /// Chapter DW — the target already exists (create / rename / non-overwrite
+    /// write would clobber).
+    Exists,
+    /// Chapter DW — a directory delete was asked of a non-empty directory.
+    NotEmpty,
     /// Any other I/O failure.
     Io(String),
 }
@@ -42,6 +47,8 @@ impl std::fmt::Display for BrowseError {
             BrowseError::NotFound => write!(f, "no such file or directory"),
             BrowseError::NotADir => write!(f, "not a directory"),
             BrowseError::NotAFile => write!(f, "not a file"),
+            BrowseError::Exists => write!(f, "already exists"),
+            BrowseError::NotEmpty => write!(f, "directory is not empty"),
             BrowseError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -133,6 +140,128 @@ pub fn read_file(root: &Path, rel: &str) -> Result<DocFile, BrowseError> {
         truncated,
         binary,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Chapter DW — writes. The same root guard, but for a path that may not exist
+// yet we canonicalize the **parent** (which must) then join the leaf — exactly
+// the `FsWriteTool` pattern. No op can escape the root.
+// ---------------------------------------------------------------------------
+
+/// Resolve a target whose final component may not exist yet (create / write /
+/// rename target / mkdir): the parent dir is resolved under the root (must
+/// exist + be a directory), the single leaf component is joined on. Rejects an
+/// empty / `.` / `..`-ending `rel` (no leaf to create).
+fn safe_resolve_parent(root: &Path, rel: &str) -> Result<PathBuf, BrowseError> {
+    let rel_path = Path::new(rel.trim());
+    // `file_name()` is `None` for "", ".", "..", or a trailing-slash path —
+    // none of which name a new leaf, so they're rejected by construction.
+    let leaf = rel_path.file_name().ok_or(BrowseError::PathEscape)?;
+    let parent_rel = rel_path
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parent = safe_resolve(root, &parent_rel)?;
+    if !parent.is_dir() {
+        return Err(BrowseError::NotADir);
+    }
+    Ok(parent.join(leaf))
+}
+
+/// A unique temp-file name in the same directory (for atomic temp+rename).
+fn temp_name() -> String {
+    format!(
+        ".aivyx-tmp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    )
+}
+
+/// Write `content` to `rel` under `root` (create or, with `overwrite`, replace).
+/// Atomic (temp-file + rename), 0644. Refuses to clobber an existing path unless
+/// `overwrite`, and never replaces a directory with a file.
+pub fn write_file(
+    root: &Path,
+    rel: &str,
+    content: &str,
+    overwrite: bool,
+) -> Result<(), BrowseError> {
+    let target = safe_resolve_parent(root, rel)?;
+    if target.exists() {
+        if !overwrite {
+            return Err(BrowseError::Exists);
+        }
+        if target.is_dir() {
+            return Err(BrowseError::NotAFile);
+        }
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| BrowseError::Io("target has no parent".into()))?;
+    let tmp = parent.join(temp_name());
+    std::fs::write(&tmp, content.as_bytes()).map_err(|e| BrowseError::Io(e.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644));
+    }
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        BrowseError::Io(e.to_string())
+    })?;
+    Ok(())
+}
+
+/// Delete `rel` under `root` — a **file** or an **empty directory** only. A
+/// non-empty directory errors (never recursive); the root itself is refused.
+/// The caller (handler) enforces the operator-confirm gate before this runs.
+pub fn delete_file(root: &Path, rel: &str) -> Result<(), BrowseError> {
+    let path = safe_resolve(root, rel)?;
+    if path == root {
+        return Err(BrowseError::PathEscape);
+    }
+    let md = std::fs::metadata(&path).map_err(|e| BrowseError::Io(e.to_string()))?;
+    if md.is_dir() {
+        let nonempty = std::fs::read_dir(&path)
+            .map_err(|e| BrowseError::Io(e.to_string()))?
+            .next()
+            .is_some();
+        if nonempty {
+            return Err(BrowseError::NotEmpty);
+        }
+        std::fs::remove_dir(&path).map_err(|e| BrowseError::Io(e.to_string()))?;
+    } else {
+        std::fs::remove_file(&path).map_err(|e| BrowseError::Io(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Rename `rel` → `new_rel`, both under `root`. The source must exist; the
+/// target must **not** (never clobbers). The root itself can't be the source.
+pub fn rename_path(root: &Path, rel: &str, new_rel: &str) -> Result<(), BrowseError> {
+    let src = safe_resolve(root, rel)?;
+    if src == root {
+        return Err(BrowseError::PathEscape);
+    }
+    let dst = safe_resolve_parent(root, new_rel)?;
+    if dst.exists() {
+        return Err(BrowseError::Exists);
+    }
+    std::fs::rename(&src, &dst).map_err(|e| BrowseError::Io(e.to_string()))?;
+    Ok(())
+}
+
+/// Create a directory at `rel` under `root`. Errors if the path already exists.
+pub fn make_dir(root: &Path, rel: &str) -> Result<(), BrowseError> {
+    let target = safe_resolve_parent(root, rel)?;
+    if target.exists() {
+        return Err(BrowseError::Exists);
+    }
+    std::fs::create_dir(&target).map_err(|e| BrowseError::Io(e.to_string()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -244,6 +373,78 @@ mod tests {
         // Reading through the symlink canonicalizes outside the root → rejected.
         assert_eq!(read_file(&root, "escape").unwrap_err(), BrowseError::PathEscape);
         std::fs::remove_file(&outside).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ---- Chapter DW — writes -------------------------------------------
+
+    #[test]
+    fn write_file_creates_then_refuses_clobber_then_overwrites() {
+        let root = seeded_root();
+        // Create a new file in a subdir.
+        write_file(&root, "sub/new.txt", "v1", false).unwrap();
+        assert_eq!(read_file(&root, "sub/new.txt").unwrap().content.as_deref(), Some("v1"));
+        // Non-overwrite write to an existing path → Exists.
+        assert_eq!(write_file(&root, "sub/new.txt", "v2", false).unwrap_err(), BrowseError::Exists);
+        // Overwrite replaces it (atomically — no temp left behind).
+        write_file(&root, "sub/new.txt", "v2", true).unwrap();
+        assert_eq!(read_file(&root, "sub/new.txt").unwrap().content.as_deref(), Some("v2"));
+        let stray: Vec<_> = std::fs::read_dir(root.join("sub"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".aivyx-tmp"))
+            .collect();
+        assert!(stray.is_empty(), "no temp file left after atomic write");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn write_escape_and_dir_target_are_rejected() {
+        let root = seeded_root();
+        assert_eq!(write_file(&root, "../evil.txt", "x", false).unwrap_err(), BrowseError::PathEscape);
+        // Can't overwrite a directory with a file.
+        assert_eq!(write_file(&root, "sub", "x", true).unwrap_err(), BrowseError::NotAFile);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_file_and_empty_dir_but_not_nonempty_or_root() {
+        let root = seeded_root();
+        // File.
+        delete_file(&root, "readme.txt").unwrap();
+        assert_eq!(read_file(&root, "readme.txt").unwrap_err(), BrowseError::NotFound);
+        // Non-empty dir refused.
+        assert_eq!(delete_file(&root, "sub").unwrap_err(), BrowseError::NotEmpty);
+        // Empty dir deletes.
+        make_dir(&root, "emptydir").unwrap();
+        delete_file(&root, "emptydir").unwrap();
+        // Root refused; escape refused.
+        assert_eq!(delete_file(&root, "").unwrap_err(), BrowseError::PathEscape);
+        assert_eq!(delete_file(&root, "../../etc/hosts").unwrap_err(), BrowseError::PathEscape);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rename_moves_but_never_clobbers() {
+        let root = seeded_root();
+        rename_path(&root, "readme.txt", "renamed.md").unwrap();
+        assert!(read_file(&root, "renamed.md").is_ok());
+        assert_eq!(read_file(&root, "readme.txt").unwrap_err(), BrowseError::NotFound);
+        // Clobber refused (sub/nested.md already exists).
+        write_file(&root, "other.txt", "x", false).unwrap();
+        assert_eq!(rename_path(&root, "other.txt", "renamed.md").unwrap_err(), BrowseError::Exists);
+        // Escape refused.
+        assert_eq!(rename_path(&root, "renamed.md", "../out.md").unwrap_err(), BrowseError::PathEscape);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn make_dir_creates_and_refuses_existing() {
+        let root = seeded_root();
+        make_dir(&root, "newdir").unwrap();
+        assert!(list_dir(&root, "newdir").is_ok());
+        assert_eq!(make_dir(&root, "newdir").unwrap_err(), BrowseError::Exists);
+        assert_eq!(make_dir(&root, "sub").unwrap_err(), BrowseError::Exists);
         std::fs::remove_dir_all(&root).ok();
     }
 }
