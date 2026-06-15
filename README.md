@@ -12,15 +12,16 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Chapter P, 2026-06-13)
+## Status (Chapter Z, 2026-06-15)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → Chapter P (Local First-Run Reliability), plus 13 contract amendments |
+| Phases shipped | Phase 0 → Chapter Z (Documents), plus 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; first release is **`v0.1.0` (pre-release)** via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
+| Studio (web GUI) | **Complete** — every screen live: Command · Missions · Chat · Memory · Settings · Agents · Teams · Documents (Chapters R–Z); offline, local-first, served on `:7843` |
 | Workspace crates | 32 |
-| Rust tests | 4,582 passing |
+| Rust tests | 4,651 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 83 |
@@ -162,6 +163,37 @@ The arc to date, by chapter:
   **`aivyx doctor`** — a first-run health check that confirms a real, non-empty
   test reply and says exactly what to fix when it can't. Zero-config local
   path; cloud untouched. See [`docs/LOCAL_FIRST_RUN.md`](docs/LOCAL_FIRST_RUN.md).
+- **Chapter Q — Publish.** Activated cargo-dist into the first public binaries:
+  `v0.1.0` pre-release, installer-verified, with an alsa/musl precise-builds fix
+  surfaced by a live run.
+- **Chapters S–Z — the Studio.** The web GUI grows from two tabs into a full
+  local-first **mission-control Studio**, one screen per chapter, all read from
+  (or write through) the shared `aivyx-ipc` protocol; each is built, then
+  live-verified in a real browser, with the regenerated WASM bundle committed:
+  - **S — Command Center.** The default landing dashboard: stat cards, active
+    missions, a live audit-trail feed, agent status — all from existing
+    read-only IPC.
+  - **T — Memory.** A browser over the self-learning memory: topic rail, entry
+    cards, keyword/semantic search.
+  - **U — Settings.** The **first config-write surface**: edit the access level
+    (confirm-first, enforced server-side) and budgets; `toml_edit` section
+    rewrites, `ConfigChanged` audit, honest "restart to apply".
+  - **V — Agents.** The identity editor: a direct **Profile** write (load-time)
+    plus the self-learned **Persona** governance loop — approve / edit / reject
+    proposals and revert deltas — live over the existing signed-chain IPC.
+  - **W + X — Onboarding seed.** The end user gives the agent a **starting
+    Persona + Skills** at first launch (`[persona_seed]` → planted on the signed
+    chain at boot, iff empty, adopted turn-one) and live from the Studio, with
+    optional **"describe it and the model drafts it"** in both CLI and web.
+    See [`docs/PERSONA_SEED.md`](docs/PERSONA_SEED.md).
+  - **Y — Teams.** A read-only view of the active **Nonagon** roster (lead +
+    specialists, each with role / trust / scopes / tools / soul).
+  - **Z — Documents.** A read-only **file browser** over the agent workspace and
+    the access-scoped `fs_root`, reusing the fs tools' canonicalize-`starts_with`
+    escape guard (`..`/symlink escapes rejected over IPC).
+
+  All eight screens are offline, Stitch-styled, and served from the daemon's
+  embedded bundle. See [`docs/FRONTEND.md`](docs/FRONTEND.md).
 
 ## Five-minute setup
 

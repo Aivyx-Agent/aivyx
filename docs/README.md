@@ -60,6 +60,14 @@ edited freely when a new adapter or subsystem teaches us something new.
   specialize the one agent to a domain (template + toolkit + scopes +
   **team** + skills + integrations) without forking the substrate.
   Worked example: the Kitchen / Back-of-House pack.
+- [`FRONTEND.md`](FRONTEND.md) — the **Studio** (Chapters R–Z): the Stitch
+  design system + every web screen (Command, Missions, Chat, Memory, Settings,
+  Agents, Teams, Documents), each contract + phase plan + live-verify record.
+  ✅ complete.
+- [`PERSONA_SEED.md`](PERSONA_SEED.md) — the **onboarding seed** (Chapters W–X):
+  the end user gives the agent a starting Persona + Skills (config-driven boot
+  seed + live `SeedPersona` IPC + LLM "describe it" drafting), planted on the
+  signed chain. ✅ complete.
 
 ## Phase status
 

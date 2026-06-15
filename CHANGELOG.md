@@ -3,6 +3,49 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+Post-`0.1.0` work. The headline is the **Studio** — the daemon's web GUI grew
+from two tabs into a full local-first mission-control surface, one screen per
+chapter (R–Z), every one live-verified in a real browser with its WASM bundle
+committed.
+
+### Added
+
+- **The Studio web GUI is complete (Chapters S–Z).** Every screen is live,
+  offline, and Stitch-styled, served from the daemon's embedded bundle on
+  `:7843`:
+  - **Command Center** (S) — the default dashboard: stat cards, active missions,
+    a live audit-trail feed, agent status.
+  - **Memory** (T) — topic rail + entry cards + keyword/semantic search over the
+    self-learning memory.
+  - **Settings** (U) — the **first config-write surface**: edit the access level
+    (confirm-first, enforced server-side) and budgets; section-scoped `toml_edit`
+    rewrites with a `ConfigChanged` audit and an honest "restart to apply".
+  - **Agents** (V) — a direct **Profile** editor plus the self-learned **Persona**
+    governance loop (approve / edit / reject proposals, revert deltas), live.
+  - **Teams** (Y) — a read-only view of the active **Nonagon** roster.
+  - **Documents** (Z) — a read-only **file browser** over the agent workspace and
+    the access-scoped `fs_root`.
+- **Onboarding Persona/Skills seed (Chapters W–X).** The end user can give the
+  agent a starting Persona + Skills — by hand or by **describing it in words**
+  (the model drafts it) — at first launch (`aivyx init` → `[persona_seed]`,
+  planted on the signed chain at boot iff empty, adopted turn-one) or live from
+  the Studio. See [`docs/PERSONA_SEED.md`](docs/PERSONA_SEED.md).
+
+### Security
+
+- **Documents browsing never escapes its root.** `ListDir`/`ReadFile` reuse the
+  fs tools' lexical-resolve → canonicalize → `starts_with(root)` guard, so `..`
+  and symlink escapes are rejected over IPC; reads are size-capped + binary-aware;
+  the `fs` root is exactly the operator-granted access level.
+
+### Fixed
+
+- The `web_asset_lookup` unit test asserted the bundle was *absent*, which has
+  been false since the bundle became committed in Chapter R; rewritten for the
+  shipped reality. The full workspace test suite is green (4,651 passing).
+
 ## 0.1.0 — first public pre-release (2026-06-13)
 
 **This is an early pre-release.** Aivyx is a capable, actively-developed personal
