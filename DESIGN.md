@@ -1158,7 +1158,7 @@ Known Phase 1 refinements already flagged:
 Phase 0 is closed. This document is the **locked contract** — edits
 require an amendment under `docs/amendments/`. For the Phase 0 exit
 record and the lessons carried forward, see
-[`docs/PHASE_0.md`](docs/PHASE_0.md). For the current phase and its
-open tasks, see [`docs/PHASE_1.md`](docs/PHASE_1.md). The split
+[`docs/PHASE_0.md`](docs/archive/phases/PHASE_0.md). For the current phase and its
+open tasks, see [`docs/PHASE_1.md`](docs/archive/phases/PHASE_1.md). The split
 between this contract document and the per-phase journals is
 explained in [`docs/README.md`](docs/README.md).
