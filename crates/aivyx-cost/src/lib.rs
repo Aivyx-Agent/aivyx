@@ -24,8 +24,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub mod budget;
+pub mod rate_limit;
 pub mod report;
 pub use budget::{BudgetAction, BudgetConfig, BudgetEnforcer, BudgetVerdict, Reservation};
+pub use rate_limit::{RateAction, RateLimitConfig, RateLimiter, RateVerdict, ToolRateConfig};
 pub use report::{CostReport, ModelLine};
 
 /// Token counts for one priced unit — a single turn, or a whole run summed.
