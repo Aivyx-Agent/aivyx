@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **The Studio `/ws` bridge now enforces an `Origin` check** (closes a
+  Cross-Site WebSocket Hijacking / DNS-rebinding vector). A loopback bind is
+  not a boundary against the browser — WebSockets are exempt from the
+  same-origin policy — so a malicious page the operator visited could
+  otherwise open `ws://127.0.0.1:7843/ws` and drive the already-unlocked
+  daemon, which since the Studio's write screens can change config and the
+  filesystem. The `/ws` upgrade is now accepted only when `Origin` is absent
+  (a non-browser client, already inside the trust boundary) or exactly matches
+  a loopback origin on the bound port; cross-site, rebinding, wrong-port, and
+  `null` origins are rejected with `403`. See `THREAT_MODEL.md` §4.11.
+
 ## 0.2.0 — the Studio (2026-06-16)
 
 The headline is the **Studio** — the daemon's web GUI grew from two tabs into a

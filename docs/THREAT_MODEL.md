@@ -264,6 +264,29 @@ to its token dir + read-only system. (The residual "a malicious
 tool process abuses its own grant" case is the same class as
 §5.2 / §5.6 below — out of scope by the same reasoning.)
 
+### 4.11 A web page in the operator's browser drives the daemon (cross-origin / DNS rebinding)
+
+**Mitigation:** The Studio web UI binds `127.0.0.1` only, but a
+loopback bind is *not* by itself a boundary against the browser:
+WebSocket connections are exempt from the same-origin policy, so a
+malicious page the operator visits could otherwise open
+`ws://127.0.0.1:7843/ws` and drive the already-unlocked daemon —
+and the Studio can now **write config** (access level, budgets) and
+the **filesystem** (the Documents editor), not just chat. The
+daemon defends the `/ws` upgrade with an **`Origin` check**
+(`aivyx-channel/src/web_ui.rs`, `ws_origin_allowed`): an upgrade is
+accepted only when the `Origin` header is absent (a non-browser
+client — the CLI / IPC probe / a native app, which can already
+reach the Unix socket and so is inside the trust boundary) or
+exactly matches one of our loopback origins on the bound port
+(`http://127.0.0.1:<port>`, `http://localhost:<port>`,
+`http://[::1]:<port>`). A cross-site page's real origin, a
+rebinding attacker's hostname (resolving to `127.0.0.1` but
+presenting its own `Origin`), a wrong-port local app, and a
+sandboxed `null` origin are all rejected with `403`. This closes
+the Cross-Site WebSocket Hijacking / DNS-rebinding vector against
+the daemon's now-writable web surface.
+
 ## 5. Threats we explicitly do not defend against
 
 The honest section. These are out-of-scope by design; if they

@@ -186,7 +186,7 @@ pub async fn run_web_ui_server(
 
         tokio::spawn(async move {
             if let Err(e) =
-                handle_connection(stream, &conn_socket_path, conn_broadcaster).await
+                handle_connection(stream, &conn_socket_path, port, conn_broadcaster).await
             {
                 eprintln!("aivyx web ui: connection error: {e}");
             }
@@ -200,17 +200,37 @@ pub async fn run_web_ui_server(
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     socket_path: &Path,
+    port: u16,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
-    // Peek at the HTTP request line to determine the path.
-    // We read up to 1024 bytes to get the full request line.
-    let mut peek_buf = [0u8; 1024];
+    // Peek at the request head to determine the path *and* read the
+    // `Origin` header for the WebSocket origin check. 4 KiB comfortably
+    // covers a standard handshake's request line + headers.
+    let mut peek_buf = [0u8; 4096];
     let n = stream
         .peek(&mut peek_buf)
         .await?;
-    let request_line = String::from_utf8_lossy(&peek_buf[..n]);
+    let request_head = String::from_utf8_lossy(&peek_buf[..n]);
 
-    if request_line.starts_with("GET /ws") {
+    if request_head.starts_with("GET /ws") {
+        // CSWSH / DNS-rebinding defense: a browser *always* sends `Origin` on a
+        // WebSocket handshake, so a cross-site page trying to drive this
+        // localhost daemon (which can write config + the filesystem) is
+        // detectable. Reject any `Origin` that isn't one of our own loopback
+        // origins on the bound port. A missing `Origin` is a non-browser client
+        // (the CLI / Python IPC probe / native apps) and is allowed — those can
+        // already reach the Unix socket directly, so they're inside the trust
+        // boundary regardless.
+        if !ws_origin_allowed(&request_head, port) {
+            return serve_bytes(
+                stream,
+                "403 Forbidden",
+                "text/plain; charset=utf-8",
+                b"forbidden: cross-origin websocket rejected",
+            )
+            .await;
+        }
+
         // WebSocket upgrade — let tokio-tungstenite handle the
         // HTTP 101 handshake and the WebSocket framing.
         let ws_stream = tokio_tungstenite::accept_async(stream)
@@ -221,7 +241,37 @@ async fn handle_connection(
     } else {
         // Static HTTP: serve the embedded Dioxus bundle, falling back to the
         // legacy page at `/` while the bundle is unbuilt.
-        serve_static(stream, request_path(&request_line)).await
+        serve_static(stream, request_path(&request_head)).await
+    }
+}
+
+/// Extract the `Origin` header value (case-insensitive name) from a peeked
+/// HTTP request head, if present.
+fn parse_origin(request_head: &str) -> Option<&str> {
+    request_head.split("\r\n").find_map(|line| {
+        line.split_once(':').and_then(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("origin").then(|| value.trim())
+        })
+    })
+}
+
+/// CSWSH defense for the `/ws` upgrade. Returns `true` when the connection may
+/// be upgraded:
+/// - no `Origin` header → a non-browser client (CLI / IPC probe / native), allowed;
+/// - an `Origin` that exactly matches one of our loopback origins on `port`.
+///
+/// Everything else — a cross-site page's real origin, a rebinding attacker's
+/// hostname, or a sandboxed `null` origin — is rejected.
+fn ws_origin_allowed(request_head: &str, port: u16) -> bool {
+    match parse_origin(request_head) {
+        None => true,
+        Some(origin) => [
+            format!("http://127.0.0.1:{port}"),
+            format!("http://localhost:{port}"),
+            format!("http://[::1]:{port}"),
+        ]
+        .iter()
+        .any(|allowed| origin.eq_ignore_ascii_case(allowed)),
     }
 }
 
@@ -617,6 +667,39 @@ mod tests {
             web_asset("/definitely-not-an-asset.js").is_none(),
             "unknown asset paths miss",
         );
+    }
+
+    #[test]
+    fn parse_origin_is_case_insensitive_and_optional() {
+        let head = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:7843\r\nOrigin: http://127.0.0.1:7843\r\n\r\n";
+        assert_eq!(parse_origin(head), Some("http://127.0.0.1:7843"));
+        // header-name case must not matter
+        let lower = "GET /ws HTTP/1.1\r\norigin:   http://localhost:7843  \r\n\r\n";
+        assert_eq!(parse_origin(lower), Some("http://localhost:7843"));
+        // absent
+        let none = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:7843\r\n\r\n";
+        assert_eq!(parse_origin(none), None);
+    }
+
+    #[test]
+    fn ws_origin_allows_loopback_and_no_origin_rejects_cross_site() {
+        let port = 7843;
+        let head = |o: &str| format!("GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: {o}\r\n\r\n");
+        // our own loopback origins on the bound port — allowed
+        assert!(ws_origin_allowed(&head("http://127.0.0.1:7843"), port));
+        assert!(ws_origin_allowed(&head("http://localhost:7843"), port));
+        assert!(ws_origin_allowed(&head("http://[::1]:7843"), port));
+        assert!(ws_origin_allowed(&head("HTTP://LOCALHOST:7843"), port)); // case-insensitive
+        // non-browser client (no Origin) — allowed (inside the trust boundary)
+        assert!(ws_origin_allowed("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n", port));
+        // CSWSH: a malicious page's real origin — rejected
+        assert!(!ws_origin_allowed(&head("http://evil.example"), port));
+        // DNS rebinding: attacker hostname resolving to 127.0.0.1 — rejected
+        assert!(!ws_origin_allowed(&head("http://attacker.test:7843"), port));
+        // wrong port (another local app) — rejected
+        assert!(!ws_origin_allowed(&head("http://127.0.0.1:9999"), port));
+        // sandboxed/file origin — rejected
+        assert!(!ws_origin_allowed(&head("null"), port));
     }
 
     #[test]
