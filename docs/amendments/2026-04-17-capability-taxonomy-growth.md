@@ -591,6 +591,34 @@ The Phase 183 enumeration plus one new **infrastructure** base
 
 Total: 16 + 5 + 34 + 20 = 75.
 
+## Chapter Contacts addendum — Google People API (Broaden #1) (2026-06-17)
+
+> *Added at Chapter Contacts CT.1. The first **Broaden**-track
+> domain (backend-audit F4 — everyday-PA breadth). Contacts is
+> the fifth Google integration, via the `aivyx-contacts`
+> third-party tool process over the People API. Six tools ship
+> (3 read / 3 write, mirroring `drive.*`): `contacts.search`,
+> `contacts.list`, `contacts.get`, `contacts.create`,
+> `contacts.update`, `contacts.delete`. Two new bases gate them:
+> `contacts.read` for the three read tools and `contacts.write`
+> for the three write tools. Both Trusted-tier-only by default —
+> same gating pattern as `email.*` / `calendar.*` / `drive.*` per
+> the Phase 62 Q2(a) precedent. `contacts.delete` is irreversible
+> and additionally confirm-first at the tool level (the
+> Documents-`delete` policy).*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Contacts | `contacts.read` | Broaden #1 — `contacts.search`, `contacts.list`, `contacts.get` against the operator's authorized Google contacts (People API) |
+| Contacts | `contacts.write` | Broaden #1 — `contacts.create`, `contacts.update` (etag round-trip), `contacts.delete` (confirm-first, irreversible; Trusted-tier-only at the ceiling, matching `drive.write` / `calendar.write` / `email.send`) |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **83 → 85** (the two new third-party
+tool-process bases). The `known_bases_count_matches_phase_143_a3_addendum`
+test pins the new total at **85**, so this addendum and the runtime
+stay in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

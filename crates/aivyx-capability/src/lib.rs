@@ -200,6 +200,22 @@ const KNOWN_BASES: &[&str] = &[
     //               (Trusted-tier only by default).
     "n8n.read",
     "n8n.write",
+    // Contacts (Chapter Contacts — aivyx-contacts third-party
+    // tool process, the fifth Google integration). First
+    // Broaden-track domain (closes the contacts/CRM slice of
+    // backend-audit F4). Two bases for the six-tool People API
+    // surface (3 read / 3 write, mirroring drive.*):
+    //   contacts.read  — contacts.search, contacts.list,
+    //                    contacts.get.
+    //   contacts.write — contacts.create, contacts.update,
+    //                    contacts.delete (contacts.delete is
+    //                    irreversible — confirm-first per the
+    //                    Documents-delete policy; Trusted-tier
+    //                    only by default, matching the
+    //                    email.* / calendar.* / drive.*
+    //                    third-party-tool-process gating).
+    "contacts.read",
+    "contacts.write",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -984,6 +1000,14 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Chapter F precedent for write-capable bases.
         "n8n.read",
         "n8n.write",
+        // Chapter Contacts — aivyx-contacts third-party tool
+        // process (the fifth Google integration; first Broaden
+        // domain). Two bases for the six-tool People API surface;
+        // Trusted-only default matches the Chapter F precedent for
+        // write-capable bases (contacts.write mutates the user's
+        // address book; contacts.delete is irreversible).
+        "contacts.read",
+        "contacts.write",
         // Kitchen / BOH vertical pack — `kitchen.read` (the read +
         // compute tool surface). Trusted-tier-only default, matching
         // the email.* / web.search / drive.* third-party-tool-process
@@ -1826,11 +1850,14 @@ mod tests {
         // append-only food-safety (HACCP) compliance log.
         // Chapter O adds `workspace` (one base for the agent's own
         // workspace.* tools).
+        // Chapter Contacts adds contacts.read + contacts.write for the
+        // aivyx-contacts third-party tool process (Google People API;
+        // first Broaden-track everyday-PA domain, audit F4).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            83,
+            85,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
@@ -1844,5 +1871,38 @@ mod tests {
         assert_eq!(r.base(), "budget.read");
         let w = Scope::parse("budget.write").expect("budget.write");
         assert_eq!(w.base(), "budget.write");
+    }
+
+    #[test]
+    fn contacts_read_and_write_bases_parse() {
+        // Chapter Contacts — both People API bases parse via
+        // Scope::parse exactly as their drive.* siblings do.
+        let r = Scope::parse("contacts.read").expect("contacts.read");
+        assert_eq!(r.base(), "contacts.read");
+        let w = Scope::parse("contacts.write").expect("contacts.write");
+        assert_eq!(w.base(), "contacts.write");
+    }
+
+    #[test]
+    fn contacts_bases_are_trusted_only() {
+        // Chapter Contacts — contacts.* sits in the Trusted ceiling
+        // only, matching every other Chapter F third-party-tool-process
+        // base. SemiTrusted / Untrusted operators get zero contacts
+        // access without an explicit per-role grant (Phase 62 Q2(a)).
+        for base in ["contacts.read", "contacts.write"] {
+            let scope = Scope::parse(base).expect("contacts base parses");
+            assert!(
+                TrustTier::Trusted.default_ceiling().grants(&scope),
+                "Trusted ceiling must hold {base}"
+            );
+            assert!(
+                !TrustTier::SemiTrusted.default_ceiling().grants(&scope),
+                "SemiTrusted ceiling must NOT hold {base}"
+            );
+            assert!(
+                !TrustTier::Untrusted.default_ceiling().grants(&scope),
+                "Untrusted ceiling must NOT hold {base}"
+            );
+        }
     }
 }
