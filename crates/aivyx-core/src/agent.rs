@@ -91,6 +91,28 @@ pub trait BudgetGate: Send + Sync {
 /// `aivyx-channel`.
 pub trait TurnBudgetGuard: Send {}
 
+/// Chapter Throttle (TH.2) — a per-tool-call rate-limit / quota gate. The turn
+/// loop consults [`admit_tool_call`](RateGate::admit_tool_call) before
+/// dispatching each tool call, **after** the capability + role checks and the
+/// budget gate (so a scope-denied call is never reported as "throttled").
+///
+/// `Err(reason)` blocks the call — the dispatcher routes it to
+/// [`ToolOutcome::RateLimited`] with that reason. `Ok(())` admits it.
+/// **Alert-tier** limits (warn-but-proceed) are handled *inside* the concrete
+/// gate (it audits the warning there) and still return `Ok`, so the trait stays
+/// a simple admit/block decision — mirroring how [`BudgetGate`] keeps the turn
+/// loop ignorant of pricing.
+///
+/// `ConcreteAgent` is deliberately ignorant of `[rate_limit]` config and the
+/// counters; the concrete gate (which owns the `RateLimiter` and supplies the
+/// clock) lives in `aivyx-channel`. `None` on the agent means "no gate,"
+/// preserving pre-Throttle behavior byte-for-byte.
+pub trait RateGate: Send + Sync {
+    /// Consulted before each tool call. `Err(reason)` blocks the call;
+    /// `Ok(())` admits it.
+    fn admit_tool_call(&self, tool: &str) -> Result<(), String>;
+}
+
 /// The reference `Agent` implementation.
 ///
 /// Holds all the collaborators a turn loop needs by `Arc` / interior
@@ -857,6 +879,7 @@ fn tool_outcome_summary_str(s: &ToolOutcomeSummary) -> &'static str {
         } => "completed",
         ToolOutcomeSummary::Denied => "denied",
         ToolOutcomeSummary::NotInRole => "not in role",
+        ToolOutcomeSummary::RateLimited => "rate limited",
         ToolOutcomeSummary::RequiresEscalation => "requires escalation",
         ToolOutcomeSummary::Failed => "failed",
     }

@@ -4926,6 +4926,7 @@ fn fold_tool_stats(
             aivyx_core::ToolOutcomeSummary::Completed { .. } => "completed",
             aivyx_core::ToolOutcomeSummary::Denied => "denied",
             aivyx_core::ToolOutcomeSummary::NotInRole => "not_in_role",
+            aivyx_core::ToolOutcomeSummary::RateLimited => "rate_limited",
             aivyx_core::ToolOutcomeSummary::RequiresEscalation => {
                 "requires_escalation"
             }

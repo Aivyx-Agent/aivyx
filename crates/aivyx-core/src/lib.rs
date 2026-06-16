@@ -40,7 +40,7 @@ pub mod skill_proposer;
 pub mod textual_tool_call;
 pub mod tools;
 
-pub use agent::{BudgetGate, ConcreteAgent, TurnBudgetGuard, MAX_STEPS_PER_TURN};
+pub use agent::{BudgetGate, ConcreteAgent, RateGate, TurnBudgetGuard, MAX_STEPS_PER_TURN};
 pub use gate_policy::GatePolicy;
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};
 pub use planner::{
@@ -466,6 +466,16 @@ pub enum ToolOutcome {
     NotInRole {
         tool_name: String,
     },
+    /// Chapter Throttle (TH.2) — the tool exists, the agent holds the
+    /// capability, and the role allows it, but a configured **rate limit /
+    /// quota** would be exceeded by this call (`[rate_limit]`). Forensically
+    /// distinct from `Denied` (capability) and `NotInRole` (role policy) so a
+    /// walk can separate "throttled" from "lacks authority" from "role forbids."
+    /// `reason` names the breached limit + window. See `docs/RATE_LIMITS.md`.
+    RateLimited {
+        tool_name: String,
+        reason: String,
+    },
     RequiresEscalation {
         reason: String,
     },
@@ -534,6 +544,7 @@ pub enum ToolOutcomeSummary {
     Completed { verified: VerificationSummary },
     Denied,
     NotInRole,
+    RateLimited,
     RequiresEscalation,
     Failed,
 }
@@ -573,6 +584,7 @@ impl From<&ToolOutcome> for ToolOutcomeSummary {
             },
             ToolOutcome::Denied { .. } => ToolOutcomeSummary::Denied,
             ToolOutcome::NotInRole { .. } => ToolOutcomeSummary::NotInRole,
+            ToolOutcome::RateLimited { .. } => ToolOutcomeSummary::RateLimited,
             ToolOutcome::RequiresEscalation { .. } => ToolOutcomeSummary::RequiresEscalation,
             ToolOutcome::Failed(_) => ToolOutcomeSummary::Failed,
         }

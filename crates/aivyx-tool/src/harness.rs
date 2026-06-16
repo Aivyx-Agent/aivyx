@@ -139,6 +139,14 @@ fn outcome_to_wire(call_id: String, outcome: ToolOutcome) -> ToolToDaemon {
             code: "not_in_role".into(),
             message: format!("tool {tool_name} not in active role's allowlist"),
         },
+        ToolOutcome::RateLimited { tool_name, reason } => ToolToDaemon::ToolError {
+            call_id,
+            code: "rate_limited".into(),
+            message: format!(
+                "tool {tool_name} throttled: {reason} (this should not happen — \
+                 the parent enforces rate limits before InvokeTool)"
+            ),
+        },
         ToolOutcome::RequiresEscalation { reason } => ToolToDaemon::ToolError {
             call_id,
             code: "requires_escalation".into(),

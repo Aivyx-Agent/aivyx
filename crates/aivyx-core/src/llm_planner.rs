@@ -1050,9 +1050,9 @@ impl TurnPlanner for LlmPlanner {
 /// { "error": "<kind>", "message": "<detail>" }
 /// ```
 ///
-/// The `error` field is one of: `denied`, `failed`, `timed_out`,
-/// `requires_escalation`. It is stable across versions; new kinds land
-/// as new strings, never as renames.
+/// The `error` field is one of: `denied`, `not_in_role`, `rate_limited`,
+/// `failed`, `timed_out`, `requires_escalation`. It is stable across versions;
+/// new kinds land as new strings, never as renames.
 fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
     match outcome {
         ToolOutcome::Completed { output, .. } => {
@@ -1076,6 +1076,13 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
             let envelope = json!({
                 "error": "not_in_role",
                 "message": format!("tool {tool_name} is not in the active role's allowlist"),
+            });
+            (envelope.to_string(), true)
+        }
+        ToolOutcome::RateLimited { tool_name, reason } => {
+            let envelope = json!({
+                "error": "rate_limited",
+                "message": format!("tool {tool_name} throttled: {reason}"),
             });
             (envelope.to_string(), true)
         }
@@ -2554,6 +2561,27 @@ mod tests {
         let parsed: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(parsed["error"], "failed");
         assert!(parsed["message"].as_str().unwrap().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn rate_limited_outcome_produces_rate_limited_envelope() {
+        // TH.2 — a throttled call renders a distinct `rate_limited` error the
+        // model can adapt to, carrying the breached-limit reason.
+        let outcome = ToolOutcome::RateLimited {
+            tool_name: "web.fetch".to_string(),
+            reason: "per-turn cap for `web.fetch` reached: 6 of 6".to_string(),
+        };
+        let (content, is_error) = render_tool_result(&outcome);
+        assert!(is_error);
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["error"], "rate_limited");
+        assert!(parsed["message"].as_str().unwrap().contains("web.fetch"));
+        assert!(parsed["message"].as_str().unwrap().contains("per-turn cap"));
+        // Forensically distinct from capability / role denials.
+        let summary = crate::ToolOutcomeSummary::from(&outcome);
+        assert_eq!(summary, crate::ToolOutcomeSummary::RateLimited);
+        assert_ne!(summary, crate::ToolOutcomeSummary::Denied);
+        assert_ne!(summary, crate::ToolOutcomeSummary::NotInRole);
     }
 
     // -----------------------------------------------------------------------
