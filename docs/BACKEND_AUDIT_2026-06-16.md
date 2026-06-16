@@ -95,21 +95,28 @@ SMS/messaging, smart-home, and media — the remaining Broaden slices. The
 covered set still skews developer / knowledge-worker
 (Gmail / Calendar / Drive / Notion / n8n + Contacts).
 
-### 🔵 F5 — Three unmaintained transitive dependencies
+### 🟢 F5 — Three unmaintained transitive dependencies — **RESOLVED (deny.toml)**
 
 `fxhash` (RUSTSEC-2025-0057), `number_prefix` (RUSTSEC-2025-0119),
 `paste` (RUSTSEC-2024-0436) — **unmaintained, not vulnerable**; zero CVEs.
-Track for replacement when their parents update. (The repo's Dependabot
-alerts were not readable via the current PAT — confirm on the Security tab;
-these advisories are the likely content.)
+None is a direct Aivyx dependency: `fxhash` / `number_prefix` only enter the
+build under the opt-in `mistralrs` local-LLM provider features (via
+`bm25` / `indicatif`→`hf-hub`), and `paste` rides `frankenstein`
+(`aivyx-telegram`). No code change removes them until those upstreams update.
+**Resolved** by recording the decision in a root [`deny.toml`](../deny.toml):
+the three advisories are ignored with parent-chain rationale, and
+`cargo deny check advisories` (graph built `all-features = true`, so the
+optional provider stacks are actually evaluated) is **green** while still
+surfacing any *new* advisory. Revisit `paste` at the `frankenstein` 0.50 bump.
 
-### 🔵 F6 — `SystemTime`-seeded backoff jitter
+### 🟢 F6 — `SystemTime`-seeded backoff jitter — **RESOLVED**
 
-`aivyx-voice/session.rs` `backoff_with_jitter`. Non-security
-(thundering-herd timing), defaults to off. Key material is unaffected —
-the store salt is `Uuid::new_v4()` (122 bits of `getrandom` CSPRNG) and
-AEAD nonces likewise. Close only if you want a clean "no `SystemTime`
-randomness anywhere" story.
+`aivyx-voice/session.rs` `backoff_with_jitter` seeded its ±jitter offset
+from `SystemTime` subsec-nanos. Non-security (thundering-herd timing),
+defaults to off — but **fixed** for the clean "no `SystemTime` randomness
+anywhere" story: the jitter now draws from the low 64 bits of
+`Uuid::new_v4()`, the same `getrandom`-backed CSPRNG used for the store
+salt and AEAD nonces. (Key material was never affected.)
 
 ### 🟢 F7 — Doc/code count drift — **RESOLVED (Chapter Throttle TH.4)**
 
@@ -143,10 +150,12 @@ Nothing architectural is missing. The genuine *security* defect (F1) is
 **fixed**, and the **Harden** track is now **closed** — F2 (tool-call rate
 limiting / quota) shipped as **Chapter Throttle**, and F7 (count drift) is
 resolved with a corrected storage-domain count + a drift-guard test. The
-remaining open items are roadmap-shaped (F3 cross-channel continuity, F4
-PA-domain breadth) or cosmetic (F5–F6) — the expected "broaden" layer on a
+cosmetic findings are also closed — **F6** (SystemTime jitter → CSPRNG) and
+**F5** (unmaintained transitive deps recorded in `deny.toml`, gate green).
+The remaining open items are the two roadmap-shaped tracks (F3 cross-channel
+continuity, F4 PA-domain breadth) — the expected "broaden/unify" layer on a
 mature, disciplined substrate. The natural seeds for the next roadmap:
 
-1. ~~**Harden:** tool-level rate limiting / quota (F2); count-assertion tests (F7).~~ ✅ done (Chapter Throttle).
+1. ~~**Harden:** tool-level rate limiting / quota (F2); count-assertion tests (F7).~~ ✅ done (Chapter Throttle). Cosmetic F5/F6 also closed.
 2. **Unify:** the Channel Activation Milestone — one assistant everywhere (F3).
-3. **Broaden:** everyday-PA tool domains (F4).
+3. **Broaden:** everyday-PA tool domains (F4). First slice (Contacts) ✅ shipped.

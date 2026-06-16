@@ -1,0 +1,47 @@
+# cargo-deny configuration — supply-chain advisory policy.
+#
+# Run: `cargo deny check advisories`
+#
+# This file exists to make Aivyx's supply-chain decisions durable and
+# reviewable (backend-audit finding F5). The audit flagged three
+# *unmaintained* (not vulnerable, zero CVEs) transitive crates. None is
+# a direct Aivyx dependency — each is pulled deep under an upstream
+# crate we don't control — so there is no code change that removes them
+# until their parents update. Rather than let them sit as an unrecorded
+# "known issue," they are listed here with rationale: the gate stays
+# green on these three while still surfacing any *new* advisory.
+
+# Build the dependency graph with all features so the optional
+# local-LLM provider stacks (mistralrs → bm25/indicatif → fxhash /
+# number_prefix) are actually evaluated — otherwise those two
+# advisories are never encountered under default features and the
+# ignores below read as stale.
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# Treat unmaintained advisories as findings (so new ones surface),
+# except the three documented below.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # fxhash — RUSTSEC-2025-0057 (unmaintained). Pulled via
+    #   fxhash → bm25 → mistralrs-core → mistralrs → aivyx-llm
+    # i.e. only when an in-process mistralrs local-LLM provider feature
+    # is enabled. Not a direct dep; removable only when bm25/mistralrs
+    # drop it. Not vulnerable.
+    { id = "RUSTSEC-2025-0057", reason = "unmaintained, not vulnerable; transitive under mistralrs (bm25); awaiting upstream" },
+
+    # number_prefix — RUSTSEC-2025-0119 (unmaintained). Pulled via
+    #   number_prefix → indicatif 0.17 → hf-hub → mistralrs-core
+    # Same mistralrs local-LLM stack. Not a direct dep. Not vulnerable.
+    { id = "RUSTSEC-2025-0119", reason = "unmaintained, not vulnerable; transitive under mistralrs (indicatif→hf-hub); awaiting upstream" },
+
+    # paste — RUSTSEC-2024-0436 (unmaintained proc-macro). Pulled via
+    #   paste → frankenstein (+ macro_rules_attribute) → aivyx-telegram
+    # frankenstein is our Telegram Bot API wrapper; a 0.50 bump may drop
+    # it, deferred to the Channel Activation Milestone (Telegram can't be
+    # live-verified outside it). Not vulnerable.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained, not vulnerable; transitive under frankenstein (aivyx-telegram); revisit at the frankenstein 0.50 bump" },
+]
