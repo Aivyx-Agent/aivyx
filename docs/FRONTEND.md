@@ -91,8 +91,8 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
-| **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T) · 🔨 graph (Ch. MG) |
-| **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z) · 🔨 write (Ch. DW) |
+| **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T + MG) |
+| **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z + DW) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
 
@@ -686,3 +686,9 @@ degrade cleanly.
 | **DW.2** | `WriteFile`/`DeleteFile`/`RenamePath`/`MakeDir` IPC + `FsMutation` + daemon handlers (confirm + overwrite enforcement + an `AuditEvent`); round-trip + handler tests. |
 | **DW.3** | Web: editor (textarea + Save) + New file/folder + Rename/Delete (confirm modal) + notices + refresh; `ws_task` arms; `stitch.css`. |
 | **DW.4** | Finalize: bundle, live-verify (edit+save, create, rename refuses clobber, delete confirms, escape blocked, audited), docs, memory, push. |
+
+> **Status:** ✅ Live (Chapter DW complete). Write loop verified end-to-end via
+> the IPC probe — create (`overwrite=false`), save (`overwrite=true`), mkdir,
+> rename (clobber refused), delete (confirm gate enforced, then removed), escape
+> blocked (`path escapes the allowed root`), and **5 `DocumentMutated` audit
+> entries** recorded — plus the rebuilt bundle served byte-identical at `:7843`.

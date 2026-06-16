@@ -2771,7 +2771,7 @@ fn DocumentsPanel() -> Element {
 
             // File viewer/editor (when one is open) else the directory listing.
             if let Some(file) = d.file.clone() {
-                FileViewer { key: "{file.path}", file, root: root.clone() }
+                FileViewer { key: "{file.path}", file: file.clone(), root: root.clone() }
             } else {
                 div { class: "glass-card doc-listing",
                     if d.entries.is_empty() {
