@@ -45,6 +45,19 @@ chose A over B today," it goes in the phase doc. If it's a one-paragraph
 intent for a future phase or milestone, it goes in `ROADMAP.md` or
 `PRODUCT_ROADMAP.md`.
 
+## Reviews
+
+Point-in-time audits of the framework's state — current at top level,
+historical under [`archive/`](archive/):
+
+- [`BACKEND_AUDIT_2026-06-16.md`](BACKEND_AUDIT_2026-06-16.md) — the
+  **current** backend audit (v0.2.0, post-Studio): health snapshot,
+  prior-gap status, and the ranked findings (F1 CSWSH **resolved**;
+  F2–F4 roadmap-shaped) that seed the next roadmap.
+- [`archive/BACKEND_REVIEW_2026-06-06.md`](archive/BACKEND_REVIEW_2026-06-06.md)
+  and [`archive/AGENT_REVIEW_2026-06-05.md`](archive/AGENT_REVIEW_2026-06-05.md)
+  — the prior Phase-179/184 reviews (superseded).
+
 ## Cross-phase reference docs
 
 Living documents that span multiple phases and capture patterns
