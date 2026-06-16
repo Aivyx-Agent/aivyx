@@ -1215,8 +1215,9 @@ pub struct VoiceImageConfig {
     /// multiple operators retry against the
     /// same origin during a flap. Default 0 =
     /// deterministic backoff (preserves Phase
-    /// 166 behavior). PRNG source is stdlib
-    /// SystemTime nanos; not cryptographic.
+    /// 166 behavior). Jitter is drawn from the
+    /// getrandom-backed `Uuid::new_v4()` CSPRNG
+    /// (F6) — no SystemTime randomness.
     #[serde(default)]
     pub url_retry_jitter_ms: u64,
 }
@@ -1546,26 +1547,32 @@ async fn send_with_retry(
 /// Phase 169 — exponential backoff with
 /// optional jitter. `base_ms * 2^attempt`
 /// is the deterministic component; jitter is
-/// a `[-jitter_ms, +jitter_ms]` offset using
-/// stdlib SystemTime nanos as a PRNG source.
+/// a `[-jitter_ms, +jitter_ms]` offset.
 /// When `jitter_ms == 0`, returns the
 /// deterministic value (Phase 166 behavior).
 /// Saturating-arithmetic prevents over- or
 /// under-flow on pathological inputs.
+///
+/// The jitter source is `Uuid::new_v4()` (F6) —
+/// the same getrandom-backed CSPRNG Aivyx uses
+/// for store salts and AEAD nonces — so there is
+/// no `SystemTime`-seeded randomness anywhere in
+/// the codebase. (Backoff jitter is timing, not
+/// key material; the change is for a clean "no
+/// SystemTime randomness" story, not a security
+/// fix.)
 fn backoff_with_jitter(base_ms: u64, attempt: u32, jitter_ms: u64) -> u64 {
     let deterministic = base_ms.saturating_mul(1u64 << attempt);
     if jitter_ms == 0 {
         return deterministic;
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as u64)
-        .unwrap_or(0);
+    // Draw the low 64 bits of a v4 UUID's 122 CSPRNG bits.
+    let rand_u64 = uuid::Uuid::new_v4().as_u128() as u64;
     // Range is 2 * jitter_ms + 1 possible
     // offsets; offset shifts to [-jitter_ms,
     // +jitter_ms].
     let range = jitter_ms.saturating_mul(2).saturating_add(1);
-    let offset = (nanos % range) as i64 - jitter_ms as i64;
+    let offset = (rand_u64 % range) as i64 - jitter_ms as i64;
     if offset >= 0 {
         deterministic.saturating_add(offset as u64)
     } else {
@@ -2866,16 +2873,20 @@ url_retry_jitter_ms = 250
         // With jitter=100, the result is
         // bounded by [base*2^attempt - 100,
         // base*2^attempt + 100]. Sample 200
-        // times to exercise the SystemTime
-        // entropy.
+        // times to exercise the CSPRNG draw.
         let base = 500u64;
         let attempt = 0;
         let jitter = 100u64;
         let range = (base - jitter)..=(base + jitter);
+        let mut seen = std::collections::HashSet::new();
         for _ in 0..200 {
             let v = backoff_with_jitter(base, attempt, jitter);
             assert!(range.contains(&v), "{v} not in {range:?}");
+            seen.insert(v);
         }
+        // The CSPRNG draw must actually vary — a constant
+        // (or SystemTime-collapsed) source would yield one value.
+        assert!(seen.len() > 1, "jitter did not vary across 200 draws");
     }
 
     #[test]

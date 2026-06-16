@@ -81,6 +81,12 @@ reqwest = { workspace = true }
 # dep matching the same pattern.
 futures-util = { workspace = true }
 
+# Backoff-jitter randomness (F6). `Uuid::new_v4()` is the
+# getrandom-backed CSPRNG the rest of Aivyx already trusts for
+# salts / nonces, so the backoff jitter draws from the same
+# source instead of SystemTime nanos. Workspace dep already.
+uuid = { workspace = true }
+
 # Audio I/O — always on inside aivyx-voice. cpal is the
 # pure-Rust cross-platform audio library Aivyx already uses
 # transitively through other channels; pinning here for
