@@ -5,28 +5,38 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
-Post-`0.1.0` work. The headline is the **Studio** — the daemon's web GUI grew
-from two tabs into a full local-first mission-control surface, one screen per
-chapter (R–Z), every one live-verified in a real browser with its WASM bundle
-committed.
+## 0.2.0 — the Studio (2026-06-16)
+
+The headline is the **Studio** — the daemon's web GUI grew from two tabs into a
+**complete** local-first mission-control surface, one screen per chapter (R–Z
+plus Voice), every one live-verified in a real browser with its WASM bundle
+committed. The entire screen inventory is now live: Command, Missions, Chat,
+Memory, Settings, Agents, Teams, Documents, Voice.
 
 ### Added
 
-- **The Studio web GUI is complete (Chapters S–Z).** Every screen is live,
-  offline, and Stitch-styled, served from the daemon's embedded bundle on
-  `:7843`:
+- **The Studio web GUI is complete.** Every screen is live, offline, and
+  Stitch-styled, served from the daemon's embedded bundle on `:7843`:
   - **Command Center** (S) — the default dashboard: stat cards, active missions,
     a live audit-trail feed, agent status.
   - **Memory** (T) — topic rail + entry cards + keyword/semantic search over the
-    self-learning memory.
+    self-learning memory, **plus a knowledge-graph view** (MG): a real weighted
+    graph (nodes = topics, edges = the co-occurrence ledger's pair scores) laid
+    out in-WASM with a deterministic force-directed simulation; click a node to
+    filter its entries.
   - **Settings** (U) — the **first config-write surface**: edit the access level
     (confirm-first, enforced server-side) and budgets; section-scoped `toml_edit`
     rewrites with a `ConfigChanged` audit and an honest "restart to apply".
   - **Agents** (V) — a direct **Profile** editor plus the self-learned **Persona**
     governance loop (approve / edit / reject proposals, revert deltas), live.
   - **Teams** (Y) — a read-only view of the active **Nonagon** roster.
-  - **Documents** (Z) — a read-only **file browser** over the agent workspace and
-    the access-scoped `fs_root`.
+  - **Documents** (Z) — a **file browser and editor** over the agent workspace and
+    the access-scoped `fs_root`: read files, and (DW) edit + save, create
+    files/folders, rename, and delete.
+  - **Voice** — a `[voice]` config editor with a daemon-side readiness check
+    (ASR/TTS model + espeak data: present / missing / unset) and the launch
+    command. Voice itself is a host-local CLI loop (`aivyx --channel voice`), so
+    the screen configures it rather than doing browser audio.
 - **Onboarding Persona/Skills seed (Chapters W–X).** The end user can give the
   agent a starting Persona + Skills — by hand or by **describing it in words**
   (the model drafts it) — at first launch (`aivyx init` → `[persona_seed]`,
@@ -39,12 +49,19 @@ committed.
   fs tools' lexical-resolve → canonicalize → `starts_with(root)` guard, so `..`
   and symlink escapes are rejected over IPC; reads are size-capped + binary-aware;
   the `fs` root is exactly the operator-granted access level.
+- **Editable Documents is the most safety-sensitive surface, and gated to match
+  (DW).** Writes canonicalize the *parent* dir (a new file can't be canonicalized)
+  and re-check `starts_with(root)`; `WriteFile` carries an explicit `overwrite`
+  flag (no accidental clobber); rename/mkdir refuse existing targets; `DeleteFile`
+  is **empty-only, never recursive, and always requires `confirm: true`** (the web
+  shows a confirm modal). Writes are atomic (temp-file + rename), and **every
+  mutation is recorded as a signed `DocumentMutated` audit event.**
 
 ### Fixed
 
 - The `web_asset_lookup` unit test asserted the bundle was *absent*, which has
   been false since the bundle became committed in Chapter R; rewritten for the
-  shipped reality. The full workspace test suite is green (4,651 passing).
+  shipped reality. The full workspace test suite is green (4,666 passing).
 
 ## 0.1.0 — first public pre-release (2026-06-13)
 

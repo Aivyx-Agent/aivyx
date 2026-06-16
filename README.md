@@ -12,16 +12,16 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (Chapter Z, 2026-06-15)
+## Status (v0.2.0 — the Studio, 2026-06-16)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → Chapter Z (Documents), plus 13 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; first release is **`v0.1.0` (pre-release)** via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
-| Studio (web GUI) | **Complete** — every screen live: Command · Missions · Chat · Memory · Settings · Agents · Teams · Documents (Chapters R–Z); offline, local-first, served on `:7843` |
+| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.2.0`** (early pre-release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
+| Studio (web GUI) | **Complete** — every screen live: Command · Missions · Chat · Memory (+ graph) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 32 |
-| Rust tests | 4,651 passing |
+| Rust tests | 4,666 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 83 |
@@ -278,8 +278,8 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Release pipeline status
 
-The release pipeline is **active** on the public repo. The first
-release is `v0.1.0` (pre-release):
+The release pipeline is **active** on the public repo. The latest
+release is `v0.2.0` (early pre-release; `v0.1.0` was the first):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
   for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
@@ -292,8 +292,8 @@ release is `v0.1.0` (pre-release):
   workflow both CI and release pipelines call — the release
   short-circuits if the gate fails.
 
-Cutting a release is a single step: `git tag v0.1.0 && git push
-origin v0.1.0`, and the workflow publishes the binaries + installer.
+Cutting a release is a single step: `git tag v0.2.0 && git push
+origin v0.2.0`, and the workflow publishes the binaries + installer.
 
 ## Architecture at a glance
 
