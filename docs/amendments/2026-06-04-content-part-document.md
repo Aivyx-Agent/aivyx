@@ -154,4 +154,4 @@ reject the media type.
 
 ## Implementing phase
 
-Phase 163. See [`docs/PHASE_163.md`](../PHASE_163.md).
+Phase 163. See [`docs/PHASE_163.md`](../archive/phases/PHASE_163.md).

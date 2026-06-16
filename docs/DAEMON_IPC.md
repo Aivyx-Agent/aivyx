@@ -8,7 +8,7 @@ protocol-version bump and a documented migration path.
 
 For the product commitment this protocol delivers against, see
 [`../PRODUCT.md` P4](../PRODUCT.md) (Daemon-Default Architecture).
-For the phase journal, see [`PHASE_16.md`](PHASE_16.md).
+For the phase journal, see [`PHASE_16.md`](archive/phases/PHASE_16.md).
 
 ---
 

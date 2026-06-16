@@ -66,7 +66,7 @@ sockets, `DaemonLifecycleEvent` as a separate message type from
 client + one round-trip integration test proving the protocol
 carries one turn end-to-end. All byte-identity streaks held; six
 architectural questions resolved with streak-preserving options.
-See [`docs/PHASE_16.md`](PHASE_16.md).
+See [`docs/PHASE_16.md`](archive/phases/PHASE_16.md).
 
 **Phase 17 (Production Hardening, 2026-04-16):** converted
 the PoC into a production-ready daemon substrate: multi-turn
@@ -76,7 +76,7 @@ enum refactor), and a multi-turn client library (`DaemonSession`)
 with `spawn_daemon_and_wait` auto-spawn logic. Closed 3 of 5
 Phase 16 net-new deferrals. All byte-identity streaks held;
 production-core streak at six consecutive phases (longest in
-project history). See [`docs/PHASE_17.md`](PHASE_17.md).
+project history). See [`docs/PHASE_17.md`](archive/phases/PHASE_17.md).
 
 **Phase 18 (Frontend Wiring, 2026-04-16):** wired the default
 `aivyx` invocation to auto-spawn a daemon, connect via
@@ -87,7 +87,7 @@ fallback. `DaemonCancelHandle` for ctrl-C cancellation over IPC
 fixed a cancel-flag reset bug between turns. All byte-identity
 streaks held; production-core at seven consecutive phases (longest
 in project history). Closed the REPL-mode-over-IPC deferral.
-See [`docs/PHASE_18.md`](PHASE_18.md).
+See [`docs/PHASE_18.md`](archive/phases/PHASE_18.md).
 
 **Phase 19 (Multi-Connection + Telegram Port, 2026-04-16):**
 upgraded the daemon from single-connection to multi-connection
@@ -99,7 +99,7 @@ to `pub` for binary access; binary line-count managed via
 extraction to `telegram_daemon_frontend.rs`. All byte-identity
 streaks held; production-core at eight consecutive phases.
 Closed the Telegram-over-daemon deferral from Phase 16.
-See [`docs/PHASE_19.md`](PHASE_19.md).
+See [`docs/PHASE_19.md`](archive/phases/PHASE_19.md).
 
 **Phase 20 (Daemon Management + Deferral Cleanup, 2026-04-16):**
 non-product-shape cleanup phase closing six daemon-management
@@ -112,7 +112,7 @@ grants` reflexivity investigation (reflexive for all practical
 scopes), and `CEILING_SEMITRUSTED` doc-comment rewrite. Rolling
 backlog 16 → 10. All byte-identity streaks held; production-core
 at nine consecutive phases (new record). See
-[`docs/PHASE_20.md`](PHASE_20.md).
+[`docs/PHASE_20.md`](archive/phases/PHASE_20.md).
 
 **Phase 21 (Mission Primitive, 2026-04-17):** delivered the first
 concrete piece of **P2 — Mission Primitive** as a product-shape
@@ -128,7 +128,7 @@ gate prompt (`Approve? [y/N]:`) and Telegram `/approve`/`/reject`
 text commands. Five design decisions, five Q-block questions
 resolved. All byte-identity streaks held; production-core at ten
 consecutive phases (new record). Test delta +29 (569→598). See
-[`docs/PHASE_21.md`](PHASE_21.md).
+[`docs/PHASE_21.md`](archive/phases/PHASE_21.md).
 
 **Next:** Escalation→gate turn-loop wiring (daemon-side
 orchestration between `TurnOutcome::Escalated` and
@@ -164,7 +164,7 @@ roles (`default`, `coder`, `researcher`,
 child surprise case, and a `--print-role <name>` debug
 flag lets operators inspect the effective envelope of
 any role without side effects. See
-[`docs/PHASE_13.md`](PHASE_13.md) for the full phase
+[`docs/PHASE_13.md`](archive/phases/PHASE_13.md) for the full phase
 record.
 
 Once the binary no longer hard-codes role bodies, two derived
@@ -261,7 +261,7 @@ the same `assemble_role_envelope`-produced `CapabilitySet`
 the production dispatcher reads from, so the operator's
 debug-time view of sub-session reachability is guaranteed to
 agree with the runtime's dispatch-time view by construction.
-See [`docs/PHASE_14.md`](PHASE_14.md) for the full phase
+See [`docs/PHASE_14.md`](archive/phases/PHASE_14.md) for the full phase
 record.
 
 The Mission Primitive is now the next keystone that couples
@@ -310,13 +310,13 @@ introspection tool giving the agent read access to its own
 recent turn outcomes. Combined with deferral cleanup
 (`mission.list`/`mission.status` tools, webhook port config,
 forensic `ToolOutcome::NotInRole`). See
-[`docs/PHASE_28.md`](PHASE_28.md).
+[`docs/PHASE_28.md`](archive/phases/PHASE_28.md).
 
 **Phase 29 (Agent Reflection Loop, 2026-04-18):** frozen.
 Completes the Reflection Layer — `reflection.propose` and
 `reflection.apply` tools for the full observe-propose-approve-apply
 cycle. Memory-only scope for this phase; runtime role-config
-mutation deferred. See [`docs/PHASE_29.md`](PHASE_29.md).
+mutation deferred. See [`docs/PHASE_29.md`](archive/phases/PHASE_29.md).
 
 **Phase 30 (Runtime Role Mutation, 2026-04-18):** frozen.
 Completes P8 — `RoleOverrides` struct with prompt appendix and
@@ -325,7 +325,7 @@ planner factory integration reading overrides per-turn, and
 extended `reflection.apply` for role mutations. Full
 observe-propose-approve-apply cycle now operational for both
 memory writes and runtime role-config changes. See
-[`docs/PHASE_30.md`](PHASE_30.md).
+[`docs/PHASE_30.md`](archive/phases/PHASE_30.md).
 
 **Status: G3 / P8 — Reflection Layer is now fully delivered**
 across Phases 28–30.
@@ -472,7 +472,7 @@ scheduler — `KeyDomain::Schedules`, `ScheduleRecord` CRUD,
 adaptive-tick and dedup, four agent tools (`schedule.create`,
 `.list`, `.delete`, `.update`) gated to `CEILING_TRUSTED`.
 660 tests. All byte-identity streaks held. See
-[`docs/PHASE_26.md`](PHASE_26.md).
+[`docs/PHASE_26.md`](archive/phases/PHASE_26.md).
 
 **Phase 27 (Webhook Triggers + File Watchers, 2026-04-18):**
 completed G5. Webhook HTTP listener (localhost-only, hyper,
@@ -481,7 +481,7 @@ cross-platform, per-watch debounce), `TriggerDispatch`
 unification with shared turn-lock, opt-in `wrap_mission`
 on all trigger configs closing the Phase 26 deferral.
 Nine storage domains. +30 tests (660→690). See
-[`docs/PHASE_27.md`](PHASE_27.md).
+[`docs/PHASE_27.md`](archive/phases/PHASE_27.md).
 
 **Status: G5 — Autonomous and Scheduled Execution is now
 fully delivered** across Phases 26–27.

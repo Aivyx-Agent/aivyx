@@ -235,7 +235,7 @@ OAuth substrate.
 - [`PRODUCT.md`](PRODUCT.md) — locked product contract (P1–P14)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase-by-phase narrative
 - [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md) — product-shape milestone narrative
-- [`docs/`](docs/) — per-phase journals (frozen artifacts)
+- [`docs/`](docs/) — living reference docs + roadmaps (per-phase journals are archived under [`docs/archive/`](docs/archive/))
 
 ## Building & testing
 

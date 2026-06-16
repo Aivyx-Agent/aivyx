@@ -2563,7 +2563,7 @@ and surfaced ten distinct text-form tool-call formats
 across the local-LLM landscape. Phase 127 closes the
 parsing gap with multi-format extraction; see the next
 sub-section. Full reasoning in
-[`PHASE_126.md`](PHASE_126.md) "Research-driven amendment".
+[`PHASE_126.md`](archive/phases/PHASE_126.md) "Research-driven amendment".
 
 ### Multi-format tool-call extraction (Phase 127)
 

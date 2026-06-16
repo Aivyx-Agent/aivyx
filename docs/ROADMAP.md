@@ -94,7 +94,7 @@ setup cost, which is a judgement call to be made at the time.
 
 ## Phase 13 — Role-Config Migration (shipped)
 
-**Frozen — see [PHASE_13.md](PHASE_13.md).** Opened and
+**Frozen — see [PHASE_13.md](archive/phases/PHASE_13.md).** Opened and
 exited 2026-04-15. Delivered **P9 — Per-Role Full
 Capability Declaration** in four tasks: per-role envelope
 fields in `aivyx-config` (Task 1, `2c7acfe`), binary
@@ -115,7 +115,7 @@ Phase 10/11 held and Phase 12 broke it).
 
 ## Phase 14 — Sub-Agent Role-Switching (shipped)
 
-**Frozen — see [PHASE_14.md](PHASE_14.md).** Opened and
+**Frozen — see [PHASE_14.md](archive/phases/PHASE_14.md).** Opened and
 exited 2026-04-16. Delivered the first concrete piece of
 **PRODUCT.md P1 — Sub-Agent Mode via Role-Switching** in
 four tasks: lift `assemble_role_envelope` from the
@@ -143,7 +143,7 @@ impossibility test, which read from the same
 
 ## Phase 15 — Channel-Lib Consolidation (shipped)
 
-**Frozen — see [PHASE_15.md](PHASE_15.md).** Opened
+**Frozen — see [PHASE_15.md](archive/phases/PHASE_15.md).** Opened
 and exited 2026-04-16 as the **first non-product-shape
 sub-phase** in project history. Five tasks: open
 commit (Task 1, `2d97cfd`), cross-crate integration
@@ -185,7 +185,7 @@ reusable pattern rather than a one-shot trick.
 
 ## Phase 16 — Daemon Migration: Protocol Settlement (phase 1 of N) (frozen)
 
-**Frozen — see [PHASE_16.md](PHASE_16.md).** Opened
+**Frozen — see [PHASE_16.md](archive/phases/PHASE_16.md).** Opened
 and closed 2026-04-16 as the first phase of the
 **Daemon Migration keystone** (P4 Daemon-Default
 Architecture). Delivered: (1) `docs/DAEMON_IPC.md`
@@ -207,7 +207,7 @@ was wrong; every mitigation argument held. Test delta
 
 ## Phase 17 — Daemon Migration: Production Hardening (phase 2 of N) (frozen)
 
-**Frozen — see [PHASE_17.md](PHASE_17.md).** Opened
+**Frozen — see [PHASE_17.md](archive/phases/PHASE_17.md).** Opened
 and exited 2026-04-16 as the second phase of the
 **Daemon Migration keystone**. Delivered: (1) multi-
 turn daemon server with graceful shutdown via
@@ -228,7 +228,7 @@ phases is the longest in project history. Test delta
 
 ## Phase 18 — Daemon Migration: Frontend Wiring (phase 3 of N) (frozen)
 
-**Frozen — see [PHASE_18.md](PHASE_18.md).** Opened
+**Frozen — see [PHASE_18.md](archive/phases/PHASE_18.md).** Opened
 and exited 2026-04-16 as the third phase of the
 **Daemon Migration keystone**. Delivered: (1) daemon-
 backed REPL loop (`run_daemon_session` +
@@ -264,7 +264,7 @@ from Phase 16.
 
 ## Phase 20 — Daemon Management + Deferral Cleanup (frozen)
 
-**Frozen — see [PHASE_20.md](PHASE_20.md).** Non-product-
+**Frozen — see [PHASE_20.md](archive/phases/PHASE_20.md).** Non-product-
 shape cleanup phase (same category as Phase 15). Closed
 six of sixteen rolling deferrals: `daemon status`/`stop`
 subcommands (Phase 17), PID file (Phase 17), `--no-daemon`
@@ -278,7 +278,7 @@ core at nine (new record).
 
 ## Phase 21 — Mission Primitive (P2) (frozen)
 
-**Frozen — see [PHASE_21.md](PHASE_21.md).** Delivered the
+**Frozen — see [PHASE_21.md](archive/phases/PHASE_21.md).** Delivered the
 first concrete piece of **PRODUCT.md P2 — Mission Primitive**
 in eight tasks: mission state model with six-state machine +
 16 unit tests (Task 3), `mission.create` and `mission.gate`
@@ -295,7 +295,7 @@ escalation→gate turn-loop wiring, mission list/status tools).
 
 ## Phase 22 — Contract Refresh (frozen)
 
-**Frozen — see [PHASE_22.md](PHASE_22.md).** Opened and
+**Frozen — see [PHASE_22.md](archive/phases/PHASE_22.md).** Opened and
 exited 2026-04-17. First-ever contract amendment batch: four
 amendments to `DESIGN.md` (Daemon IPC Protocol, Mission State
 Machine, Capability Taxonomy Growth, Workspace Layout),
@@ -312,7 +312,7 @@ questions resolved. Zero net-new deferrals.
 
 ## Phase 23 — Escalation→Gate Wiring + MCP Foundation (frozen)
 
-**Frozen — see [PHASE_23.md](PHASE_23.md).** Mixed phase:
+**Frozen — see [PHASE_23.md](archive/phases/PHASE_23.md).** Mixed phase:
 (1) escalation→gate turn-loop wiring closing the Phase 21
 deferral — `SubmitInput.mission_id` + daemon-side gate
 creation + resume turn on approval (Task 2); (2) MCP client
@@ -326,7 +326,7 @@ MCP SSE transport).
 
 ## Phase 24 — MCP Integration: Config + Binary Wiring (frozen)
 
-**Frozen — see [PHASE_24.md](PHASE_24.md).** Opened and
+**Frozen — see [PHASE_24.md](archive/phases/PHASE_24.md).** Opened and
 exited 2026-04-17 as the second MCP Integration phase.
 Five tasks: `[[mcp_server]]` TOML config entries with
 `McpServerConfig` struct + disabled-server filtering (Task 2,
@@ -344,7 +344,7 @@ net-new). Two Q-block questions resolved.
 
 ## Phase 25 — Multi-Provider Support (frozen)
 
-**Frozen — see [PHASE_25.md](PHASE_25.md).** Opened and
+**Frozen — see [PHASE_25.md](archive/phases/PHASE_25.md).** Opened and
 exited 2026-04-17. OpenAI-compatible `LlmProvider` adapter
 (`provider-openai` feature in `aivyx-llm`) with `OpenAiProvider`
 implementing `stream_turn` for `/v1/chat/completions`. Shared
@@ -359,7 +359,7 @@ counting).
 
 ## Phase 26 — Scheduled Execution: Timer Primitives (frozen)
 
-**Frozen — see [PHASE_26.md](PHASE_26.md).** Opened and
+**Frozen — see [PHASE_26.md](archive/phases/PHASE_26.md).** Opened and
 exited 2026-04-17. First phase of the Scheduled Execution
 milestone (PRODUCT.md G5). Delivered: `KeyDomain::Schedules`
 (7th encrypted storage domain), `ScheduleRecord` CRUD with
@@ -376,7 +376,7 @@ scheduled turns).
 
 ## Phase 27 — Scheduled Execution Phase 2: Webhook Triggers + File Watchers (frozen)
 
-**Frozen — see [PHASE_27.md](PHASE_27.md).** Opened and
+**Frozen — see [PHASE_27.md](archive/phases/PHASE_27.md).** Opened and
 exited 2026-04-18. Completed **PRODUCT.md G5 — Autonomous and
 Scheduled Execution** by adding webhook triggers (localhost-only
 hyper HTTP/1.1 listener on 127.0.0.1:7842) and file-change
@@ -412,7 +412,7 @@ untouched. Test delta +4 (697->701).
 
 ## Phase 30 — Runtime Role Mutation (P8 completion) (frozen)
 
-**Frozen — see [PHASE_30.md](PHASE_30.md).** Completed
+**Frozen — see [PHASE_30.md](archive/phases/PHASE_30.md).** Completed
 PRODUCT.md P8 — Outcome-Driven Audited Reflection. Added
 `RoleOverrides` struct with prompt appendix and allowlist
 add/remove, `role.update` tool and capability base, planner
@@ -510,7 +510,7 @@ PRODUCT.md touched. Test count unchanged at 788.
 
 ## Phase 39 — Web UI Channel (Phase 1: Chat Interface)
 
-**Frozen — see [PHASE_39.md](PHASE_39.md).** First phase of the
+**Frozen — see [PHASE_39.md](archive/phases/PHASE_39.md).** First phase of the
 Web UI Channel milestone. Added a localhost-only web chat interface
 (`127.0.0.1:7843`) that connects to the daemon over the existing
 IPC protocol via WebSocket. `FrontendType::Web` variant,
@@ -523,7 +523,7 @@ lib.rs untouched (streak 3).
 
 ## Phase 40 — Parallel Tool Execution
 
-**Shipped — see [PHASE_40.md](PHASE_40.md).** Resolves the D1
+**Shipped — see [PHASE_40.md](archive/phases/PHASE_40.md).** Resolves the D1
 deferred concurrency decision (line 67) via Amendment A6.
 Implements batch tool dispatch: `LlmStepEnd::ToolCalls` surfaces
 all tool-use blocks from providers, `NextStep::ToolCalls` carries
@@ -535,7 +535,7 @@ streak (A6) and lib.rs streak (core changes).
 
 ## Phase 41 — Daemon Hardening & Error Typing
 
-**Shipped — see [PHASE_41.md](PHASE_41.md).** Hardening phase:
+**Shipped — see [PHASE_41.md](archive/phases/PHASE_41.md).** Hardening phase:
 `DaemonConfig` parameter-object refactor (10 params → 1 struct),
 `DaemonError` thiserror enum replacing ~30 `Result<_, String>`
 signatures across 5 files, crash-recovery metadata (`daemon.state`
@@ -549,7 +549,7 @@ touched (A7), PRODUCT.md untouched (streak 5), lib.rs untouched
 
 ## Phase 42 — Shell Hardening & Memory GC (frozen)
 
-**Frozen — see [PHASE_42.md](PHASE_42.md).** Closed two
+**Frozen — see [PHASE_42.md](archive/phases/PHASE_42.md).** Closed two
 operational safety gaps: zombie grandchildren (process-group
 execution with SIGTERM→SIGKILL on timeout) and unbounded
 memory growth (per-topic cap enforcement, TTL-based expiry,
@@ -599,7 +599,7 @@ streak → 5, PRODUCT.md streak → 10, lib.rs streak → 1.
 
 ## Phase 47 — Web UI Phase 2 (Mission Dashboard + Audit Viewer) [SHIPPED]
 
-**Frozen — see [PHASE_47.md](PHASE_47.md).** Extended the daemon
+**Frozen — see [PHASE_47.md](archive/phases/PHASE_47.md).** Extended the daemon
 IPC protocol with a read-only `Query`/`QueryResponse` envelope and
 shipped four backend queries (`ListSessions`, `ListMissions`,
 `GetMission`, `ListAuditEntries`, `VerifyAuditChain`). Added
@@ -612,7 +612,7 @@ dashboard, `handle_connection` parameter-struct lift.
 
 ## Phase 48 — Channel Adapter SDK & Documentation (P5 + P11) [SHIPPED]
 
-**Frozen — see [PHASE_48.md](PHASE_48.md).** Shipped
+**Frozen — see [PHASE_48.md](archive/phases/PHASE_48.md).** Shipped
 `docs/CHANNEL_SDK.md` (the v0 third-party contract document),
 extended `docs/ADAPTER_PATTERN.md` with an out-of-tree section,
 and built `examples/python-channel/` — a stdlib-only Python
@@ -625,7 +625,7 @@ remains as a forward commitment.
 
 ## Phase 55 — MCP Server Sandbox Layer [SHIPPED]
 
-**Frozen — see [PHASE_55.md](PHASE_55.md).** First post-Chapter-A
+**Frozen — see [PHASE_55.md](archive/phases/PHASE_55.md).** First post-Chapter-A
 phase. Ported the Phase 52 generic command-wrapper sandbox from
 `[[tool_process]]` to `[[mcp_server]]`, closing THREAT_MODEL.md
 §5.2. New `aivyx-mcp::SandboxConfig` parallel to
@@ -664,7 +664,7 @@ hold.
 
 ## Phase 57 — Profile Foundation [SHIPPED]
 
-**Frozen — see [PHASE_57.md](PHASE_57.md).** First code
+**Frozen — see [PHASE_57.md](archive/phases/PHASE_57.md).** First code
 phase of the Profile + Persona arc. Delivered the Profile
 substrate per PRODUCT.md P13:
 
@@ -704,7 +704,7 @@ Phase 58 (Inspection) is next.
 
 ## Phase 58 — Profile Inspection (closes P13) [SHIPPED]
 
-**Frozen — see [PHASE_58.md](PHASE_58.md).** Operator-facing
+**Frozen — see [PHASE_58.md](archive/phases/PHASE_58.md).** Operator-facing
 inspection and edit surface that closes the Assistant Profile
 milestone. After Phase 58, **P1–P13 are all fully shipped**;
 only P14 (Persona, Phases 59–60) remains forward.
@@ -738,7 +738,7 @@ PRODUCT.md → broke at 2 (Task 5, intentional), lib.rs
 
 ## Phase 59 — Persona Foundation [SHIPPED]
 
-**Frozen — see [PHASE_59.md](PHASE_59.md).** First code phase
+**Frozen — see [PHASE_59.md](archive/phases/PHASE_59.md).** First code phase
 of the Persona half of the Profile + Persona arc. Delivered
 the Persona substrate per PRODUCT.md P14 across six Q-block
 resolutions:
@@ -792,7 +792,7 @@ Phase 60 (Persona Visualization) is next.
 
 ## Phase 60 — Persona Visualization (closes P14 + ledger) [SHIPPED]
 
-**Frozen — see [PHASE_60.md](PHASE_60.md).** Closes the
+**Frozen — see [PHASE_60.md](archive/phases/PHASE_60.md).** Closes the
 Profile + Persona forward arc and the entire PRODUCT.md
 forward-commitment ledger. Delivered across five Q-block
 resolutions:
@@ -848,7 +848,7 @@ amendment-introduced commitments.
 
 ## Phase 61 — Distribution: Release Pipeline (Pipeline Ready, Publication Held)
 
-**Frozen — see [PHASE_61.md](PHASE_61.md).** First phase past
+**Frozen — see [PHASE_61.md](archive/phases/PHASE_61.md).** First phase past
 the closed forward-commitment ledger. Operator-feedback-shaped
 work on the post-Phase-60 substrate-ergonomics axis, opening
 the **Distribution Milestone** (phase 1 of N).
@@ -911,7 +911,7 @@ net-new deferral (Task 7 — v0.1.0 publication).
 
 ## Phase 62 — Reach: Agent-Initiated Outbound Notifications
 
-**Frozen — see [PHASE_62.md](PHASE_62.md).** Second phase past
+**Frozen — see [PHASE_62.md](archive/phases/PHASE_62.md).** Second phase past
 the closed forward-commitment ledger and the first phase of the
 new **Reach Milestone**. Gives the agent a `notify.send`
 infrastructure tool that pushes a message to an
@@ -986,7 +986,7 @@ name specific targets when needed.
 
 ## Phase 63 — Reach Phase 2: Trigger-Config Notify Sugar
 
-**Frozen — see [PHASE_63.md](PHASE_63.md).** Second phase of
+**Frozen — see [PHASE_63.md](archive/phases/PHASE_63.md).** Second phase of
 the Reach Milestone. Closes the Phase 62-deferred trigger-
 config sugar alternative: each `[[schedule]]`, `[[webhook]]`,
 `[[file_watch]]` entry accepts an optional
@@ -1052,7 +1052,7 @@ the `render_notify_body` unit coverage.
 
 ## Phase 64 — Identity Export (Persona Phase 3)
 
-**Frozen — see [PHASE_64.md](PHASE_64.md).** Closes the oldest
+**Frozen — see [PHASE_64.md](archive/phases/PHASE_64.md).** Closes the oldest
 open deferral: Phase 60's "identity export/import" item. The
 phase ships **export only** per the implementation-time scope
 adjustment; import lands in Phase 65 with focused destructive-
@@ -1112,7 +1112,7 @@ opens next with the dedicated scope.
 
 ## Phase 65 — Identity Import (Persona Phase 4)
 
-**Frozen — see [PHASE_65.md](PHASE_65.md).** Closes the Phase
+**Frozen — see [PHASE_65.md](archive/phases/PHASE_65.md).** Closes the Phase
 60 identity-deferral end to end. `aivyx identity import
 <path>` replays an exported bundle onto the local persona
 chain, re-signing each delta against the target host's HMAC
@@ -1168,7 +1168,7 @@ import).
 
 ## Phase 66 — Starter Profile Templates
 
-**Frozen — see [PHASE_66.md](PHASE_66.md).** Closes the third
+**Frozen — see [PHASE_66.md](archive/phases/PHASE_66.md).** Closes the third
 post-Phase-60 codebase-review direction (after Distribution
 and Reach). Ships `aivyx init --template <name>` so a fresh
 operator gets from "downloaded the binary" to "useful agent"
@@ -1229,7 +1229,7 @@ Phase 66 substantial-scope-but-clean shape.
 
 ## Phase 67 — Auto-Notify Audit Event
 
-**Frozen — see [PHASE_67.md](PHASE_67.md).** Closes the Phase
+**Frozen — see [PHASE_67.md](archive/phases/PHASE_67.md).** Closes the Phase
 63 deferred Q1(a) sign-off: shipping
 `AuditEvent::AutoNotifyDispatched` as a new variant of the
 audit chain enum + wiring `TriggerDispatch` with the audit
@@ -1300,7 +1300,7 @@ as a dedicated future-phase deferral.
 
 ## Phase 68 — Email SMTP Notify Backend (Reach Phase 3)
 
-**Frozen — see [PHASE_68.md](PHASE_68.md).** Third notify
+**Frozen — see [PHASE_68.md](archive/phases/PHASE_68.md).** Third notify
 backend after Phase 62's Telegram + webhook. Closes the
 largest remaining adoption-shape gap on the Reach axis:
 every operator has email; most don't run Telegram bots.
@@ -1358,7 +1358,7 @@ follow-ups; the substrate is extensible.
 
 ## Phase 69 — Web UI Desktop Notifications (Reach Phase 4)
 
-**Frozen — see [PHASE_69.md](PHASE_69.md).** Fourth notify
+**Frozen — see [PHASE_69.md](archive/phases/PHASE_69.md).** Fourth notify
 backend after Phase 62's Telegram + webhook and Phase 68's
 email. Closes the focused-at-the-laptop case: operators who
 already keep the Web UI tab open at `127.0.0.1:7843` get
@@ -1422,7 +1422,7 @@ icons.
 
 ## Phase 70 — Reflection Auto-Loop (P14 Self-Learning Closure)
 
-**Frozen — see [PHASE_70.md](PHASE_70.md).** Closes the
+**Frozen — see [PHASE_70.md](archive/phases/PHASE_70.md).** Closes the
 long-held self-learning half of **P14 Persona**. Phase 29
 (frozen) shipped the reflection substrate — `ReflectionProposeTool`
 + `ReflectionApplyTool` — but the agent's persona-delta
@@ -1508,7 +1508,7 @@ way.
 
 ## Phase 71 — Reflection Scheduler Loop (closes Phase 70 deferral)
 
-**Frozen — see [PHASE_71.md](PHASE_71.md).** Closes the
+**Frozen — see [PHASE_71.md](archive/phases/PHASE_71.md).** Closes the
 cron-auto-firing deferral carried at Phase 70 exit. After
 Phase 71 the self-learning loop is genuinely autonomous: at
 each configured cron boundary the daemon synthesizes recent
@@ -1578,7 +1578,7 @@ autonomous end-to-end.
 
 ## Phase 72 — Reach Polish: Multi-Target, Default, Conditional
 
-**Frozen — see [PHASE_72.md](PHASE_72.md).** Closes three
+**Frozen — see [PHASE_72.md](archive/phases/PHASE_72.md).** Closes three
 Tier-1 operator-feedback shapes carried from the Reach
 Milestone (Phases 62-69) in one phase:
 
@@ -1625,7 +1625,7 @@ follow-up — different cluster of concerns.
 
 ## Phase 73 — Reach Tier-2 Polish: Retry, Rate Limit, History
 
-**Frozen — see [PHASE_73.md](PHASE_73.md).** Closes the
+**Frozen — see [PHASE_73.md](archive/phases/PHASE_73.md).** Closes the
 Tier-2 polish backlog Phase 72 explicitly deferred. Three
 items shipped in one phase:
 
@@ -1673,7 +1673,7 @@ pressure surfaces.
 
 ## Phase 74 — Memory Polish: Search, Retention, LRU, Web UI Pane
 
-**Frozen — see [PHASE_74.md](PHASE_74.md).** Completes the
+**Frozen — see [PHASE_74.md](archive/phases/PHASE_74.md).** Completes the
 self-learning triad — Persona (P14), reflection (Phases
 70-71), and now a first-class memory surface. Four items:
 
@@ -1714,7 +1714,7 @@ gated.
 
 ## Phase 75 — Semantic RAG Memory Arc
 
-**Frozen — see [PHASE_75.md](PHASE_75.md).** Picks up the
+**Frozen — see [PHASE_75.md](archive/phases/PHASE_75.md).** Picks up the
 Phase 74 deferred "semantic RAG" follow-up: embedding-ranked
 memory retrieval layered on top of keyword search, off by
 default. Eight tasks:
@@ -1764,7 +1764,7 @@ operator-feedback-gated.
 
 ## Phase 76 — Automatic Semantic Recall (RAG context injection)
 
-**Frozen — see [PHASE_76.md](PHASE_76.md).** Closes the RAG arc
+**Frozen — see [PHASE_76.md](archive/phases/PHASE_76.md).** Closes the RAG arc
 Phase 75 set up: the agent no longer only recalls when it calls
 `memory.search` — every turn it embeds the user's message and
 auto-injects the most relevant past memories. Pure integration
@@ -1811,7 +1811,7 @@ operator-feedback-gated.
 
 ## Phase 77 — Recall → Reflection Feedback Loop
 
-**Frozen — see [PHASE_77.md](PHASE_77.md).** Closes the loop
+**Frozen — see [PHASE_77.md](archive/phases/PHASE_77.md).** Closes the loop
 Phase 76 opened: recall stops being a bigger cache and starts
 *teaching* the system. Pure integration on the 75/76/70-71
 substrate, zero new deps.
@@ -1854,7 +1854,7 @@ are operator-feedback-gated.
 
 ## Phase 78 — Learning Observability & Trust Surface
 
-**Frozen — see [PHASE_78.md](PHASE_78.md).** Makes the closed
+**Frozen — see [PHASE_78.md](archive/phases/PHASE_78.md).** Makes the closed
 Phase 75–77 self-learning loop *legible*: an autonomous system
 the operator can't see is one they can't trust. A read-only
 view of what the assistant has learned and why, with full
@@ -1895,7 +1895,7 @@ insights) are operator-feedback-gated.
 
 ## Phase 79 — Adaptive Persona (contextual "Soul" selection)
 
-**Frozen — see [PHASE_79.md](PHASE_79.md).** The accreted
+**Frozen — see [PHASE_79.md](archive/phases/PHASE_79.md).** The accreted
 Persona was dumped whole into every system prompt, unbounded
 and turn-blind. Phase 79 makes the Soul *adaptive*: per-turn
 semantic selection of the relevant facets, reusing the Phase
@@ -1940,7 +1940,7 @@ conversational-window selection) are operator-feedback-gated.
 
 ## Phase 80 — Proactive Surfacing (the assistant brings things to you)
 
-**Frozen — see [PHASE_80.md](PHASE_80.md).** For 79 phases the
+**Frozen — see [PHASE_80.md](archive/phases/PHASE_80.md).** For 79 phases the
 assistant only ever acted when prompted. Phase 80 is the
 capstone of the 75–79 arc: on its existing reflection cadence
 it notices a concrete, high-confidence reason to reach out and
@@ -1995,7 +1995,7 @@ operator-feedback-gated.
 
 ## Phase 81 — Persona Lifecycle (the Soul that refines itself)
 
-**Frozen — see [PHASE_81.md](PHASE_81.md).** For 80 phases
+**Frozen — see [PHASE_81.md](archive/phases/PHASE_81.md).** For 80 phases
 the Persona only ever grew. Phase 81 closes the open half of
 the identity arc (the Phase 79 deferral, made consequential by
 Phase 80): on the existing reflection cadence the assistant
@@ -2051,7 +2051,7 @@ revert) are operator-feedback-gated.
 
 ## Phase 82 — Persistent Helpfulness Ledger (durable, longitudinal self-learning)
 
-**Frozen — see [PHASE_82.md](PHASE_82.md).** For 81 phases
+**Frozen — see [PHASE_82.md](archive/phases/PHASE_82.md).** For 81 phases
 the "did recalling this topic help" signal was ephemeral
 (Phase 77 recomputed a tally each window and discarded it) —
 the common cause behind Phase 81's age-only decay, Phase 77's
@@ -2112,7 +2112,7 @@ topic canonicalization) are operator-feedback-gated.
 
 ## Phase 83 — Cross-Session Pattern Learning (the durable co-occurrence ledger)
 
-**Frozen — see [PHASE_83.md](PHASE_83.md).** Phase 77's
+**Frozen — see [PHASE_83.md](archive/phases/PHASE_83.md).** Phase 77's
 headline deferral, unblocked by the Phase 82 durable-ledger
 model. Per-topic helpfulness is shallow; the relationships
 *between* topics — which travel together and jointly help —
@@ -2173,7 +2173,7 @@ operator-tunable top-K/half-life) are operator-feedback-gated.
 
 ## Phase 84 — Cluster-Aware Co-Recall (the first consumption phase)
 
-**Frozen — see [PHASE_84.md](PHASE_84.md).** Phases 82–83
+**Frozen — see [PHASE_84.md](archive/phases/PHASE_84.md).** Phases 82–83
 built durable learning substrate surface-only; Phase 84 is the
 first phase that *acts* on it, consuming the freshest piece
 (the Phase 83 co-occurrence ledger). Auto-recall (Phase 76)
@@ -2238,7 +2238,7 @@ operator-feedback-gated.
 
 ## Phase 85 — Helpfulness-Driven Persona Decay (the self-improving Soul, completed)
 
-**Frozen — see [PHASE_85.md](PHASE_85.md).** The symmetric
+**Frozen — see [PHASE_85.md](archive/phases/PHASE_85.md).** The symmetric
 consumption to Phase 84 and the long-deferred Phase 81+82
 capstone: Phase 81 decay was age-only; Phase 85 wires the
 durable Phase 82 helpfulness ledger so the Soul retires
@@ -2298,7 +2298,7 @@ canonicalization) are operator-feedback-gated.
 
 ## Phase 86 — Conversational-Window Relevance (sharpening the whole stack's input, completed)
 
-**Frozen — see [PHASE_86.md](PHASE_86.md).** The twice-deferred
+**Frozen — see [PHASE_86.md](archive/phases/PHASE_86.md).** The twice-deferred
 (Phase 76 *and* Phase 79) input-quality gap: for 85 phases the
 assistant judged relevance off *one line*. Phase 86 gives both
 relevance consumers — auto-recall (76) and adaptive Persona
@@ -2354,7 +2354,7 @@ are operator-feedback-gated.
 
 ## Phase 87 — Pattern-Driven Persona Proposals (the self-improving Soul, the second consumption, completed)
 
-**Frozen — see [PHASE_87.md](PHASE_87.md).** Closes the
+**Frozen — see [PHASE_87.md](archive/phases/PHASE_87.md).** Closes the
 deliberate Phase 85 deferral. After 84 (recall acts on the
 Phase 83 co-occurrence ledger) and 85 (decay acts on the
 Phase 82 helpfulness ledger), the visible asymmetry was that
@@ -2405,7 +2405,7 @@ canonicalization) are operator-feedback-gated.
 
 ## Phase 88 — Pattern-Driven Persona Decay (the decay-side of the Phase 87 arc, completed)
 
-**Frozen — see [PHASE_88.md](PHASE_88.md).** Closes the
+**Frozen — see [PHASE_88.md](archive/phases/PHASE_88.md).** Closes the
 deliberate Phase 87 deferral with the decay half of the
 symmetric arc. After Phase 87 made the Phase 83 co-occurrence
 ledger drive Persona *construction*, Phase 88 makes the
@@ -2450,7 +2450,7 @@ runs with `cooccurrence_ledger: None`).
 
 ## Phase 89 — Topic Canonicalization (sharper learning through sharper bookkeeping, completed)
 
-**Frozen — see [PHASE_89.md](PHASE_89.md).** Closes the
+**Frozen — see [PHASE_89.md](archive/phases/PHASE_89.md).** Closes the
 longest-standing learning-stack deferral — the Phase 82
 deferral carried forward six times through Phases 83-88. For
 88 phases every topic-keyed accumulator (the Phase 7 memory,
@@ -2518,7 +2518,7 @@ are operator-feedback-gated.
 
 ## Phase 90 — Heuristic Recall Gate (the third move in the input-quality arc, completed)
 
-**Frozen — see [PHASE_90.md](PHASE_90.md).** Closes the
+**Frozen — see [PHASE_90.md](archive/phases/PHASE_90.md).** Closes the
 longest-running recall-side deferral (Phase 76, carried
 forward 14 phases through 77-89). For 89 phases both
 auto-recall (Phase 76) and adaptive Persona selection
@@ -2577,7 +2577,7 @@ operator-feedback-gated.
 
 ## Phase 91 — LLM-Judged Recall Usefulness (the missing half of the learning loop, completed)
 
-**Frozen — see [PHASE_91.md](PHASE_91.md).** Closes the
+**Frozen — see [PHASE_91.md](archive/phases/PHASE_91.md).** Closes the
 longest-running feedback-side deferral — the Phase 77
 deferral carried forward 14 phases through 78-90. For 90
 phases the recall-feedback signal has been STRUCTURAL: every
@@ -2647,7 +2647,7 @@ gated.
 
 ## Phase 92 — Pattern-Driven Supersession (the longest-running Persona-actuator deferral, closed)
 
-**Frozen — see [PHASE_92.md](PHASE_92.md).** Closes the
+**Frozen — see [PHASE_92.md](archive/phases/PHASE_92.md).** Closes the
 Phase 70 proposal-supersession deferral — 22 phases old,
 deferred again at Phase 87 and Phase 88. After Phase 87
 (pattern-driven construction) and Phase 88 (pattern-driven
@@ -2708,7 +2708,7 @@ gated.
 
 ## Phase 93 — Recall-Feedback Switches to LLM-Judgment Signal (closing the Phase 91 deferral)
 
-**Frozen — see [PHASE_93.md](PHASE_93.md).** Closes the
+**Frozen — see [PHASE_93.md](archive/phases/PHASE_93.md).** Closes the
 Phase 91 deferral named verbatim in the Phase 92 open doc:
 "actuator-side switch from structural proxy to the new
 judgment signal." Phase 91 added the per-hit
@@ -2783,7 +2783,7 @@ deferrals list) are operator-feedback-gated.
 
 ## Phase 94 — Web UI Grouping for Linked Supersession Proposals (Phase 92's first deferral, closed)
 
-**Frozen — see [PHASE_94.md](PHASE_94.md).** Closes the
+**Frozen — see [PHASE_94.md](archive/phases/PHASE_94.md).** Closes the
 Phase 92 deferral that headlined that phase's "likely
 follow-ups" list: *"Web UI visual grouping of linked
 supersession proposals."* Phase 92 shipped the structured
@@ -2857,7 +2857,7 @@ deferrals list) are operator-feedback-gated.
 
 ## Phase 95 — Reflection Cadence Learning (Skip-When-Idle) (Phase 71's reflection-cadence deferral, closed)
 
-**Frozen — see [PHASE_95.md](PHASE_95.md).** Closes the
+**Frozen — see [PHASE_95.md](archive/phases/PHASE_95.md).** Closes the
 Phase 71 deferral that's been carried 24 phases:
 *"reflection cadence learning."* The reflection cron has
 been firing unconditionally on its `cron` schedule since
@@ -2925,7 +2925,7 @@ deferrals list) are operator-feedback-gated.
 
 ## Phase 96 — ANN Index for Semantic Memory Search (Phase 75's ANN-index deferral, closed)
 
-**Frozen — see [PHASE_96.md](PHASE_96.md).** Closes the
+**Frozen — see [PHASE_96.md](archive/phases/PHASE_96.md).** Closes the
 Phase 75 deferral that's been carried 20 phases: the
 approximate-nearest-neighbor index for semantic memory
 search. The brute-force `rank_by_cosine` over the full
@@ -2985,7 +2985,7 @@ operator-feedback-gated.
 
 ## Phase 97 — Token-Budget Context Sizing (Phase 76's + Phase 86's longest-running content deferral, closed)
 
-**Frozen — see [PHASE_97.md](PHASE_97.md).** Closes the
+**Frozen — see [PHASE_97.md](archive/phases/PHASE_97.md).** Closes the
 twice-deferred token-budget item carried 21 phases
 (Phase 76) and 11 phases (Phase 86). Auto-recall,
 adaptive Persona selection, and the conversational
@@ -3057,7 +3057,7 @@ gated.
 
 ## Phase 98 — Hybrid Keyword+Semantic Recall Fusion (Phase 75's hybrid-fusion deferral, closed)
 
-**Frozen — see [PHASE_98.md](PHASE_98.md).** Closes
+**Frozen — see [PHASE_98.md](archive/phases/PHASE_98.md).** Closes
 Phase 75's 23-phase-old hybrid-fusion deferral. The
 recall pipeline has ranked by cosine similarity over
 embeddings since Phase 75 — strong on semantic
@@ -3127,7 +3127,7 @@ operator-feedback-gated.
 
 ## Phase 99 — Local Testing Setup (operator-requested)
 
-**Frozen — see [PHASE_99.md](PHASE_99.md).** The first
+**Frozen — see [PHASE_99.md](archive/phases/PHASE_99.md).** The first
 operator-feedback infrastructure phase. Ninety-nine phases
 of substrate shipped with the test pyramid resting entirely
 on `cargo test`; what the project never had was a one-command
@@ -3169,19 +3169,19 @@ no tool behind them.
 **Expected phases:**
 
 - **Phase 100 — Tool-Surface Gap Closure.** Shipped — see
-  below and [PHASE_100.md](PHASE_100.md).
+  below and [PHASE_100.md](archive/phases/PHASE_100.md).
 - **Phase 101 — Tool-Call Input Validation & Repair.**
-  Shipped — see below and [PHASE_101.md](PHASE_101.md). The
+  Shipped — see below and [PHASE_101.md](archive/phases/PHASE_101.md). The
   reliability item: the planner validates a known tool's
   call input against the tool's schema before dispatch and
   loops the model to repair a malformed call.
 - **Phase 102 — Tool Observability (`aivyx tools`).**
-  Shipped — see below and [PHASE_102.md](PHASE_102.md). A
+  Shipped — see below and [PHASE_102.md](archive/phases/PHASE_102.md). A
   read-only subcommand that lists every registered tool
   and annotates each with audit-derived call/outcome
   stats, with a `--window` filter.
 - **Phase 103 — External Tool Ergonomics (`aivyx tool init`).**
-  Shipped — see below and [PHASE_103.md](PHASE_103.md). The
+  Shipped — see below and [PHASE_103.md](archive/phases/PHASE_103.md). The
   closing Chapter B item: an `aivyx tool init <path>`
   subcommand that scaffolds a runnable Rust tool-process
   starter (Cargo.toml, src/main.rs handshake + invocation
@@ -3216,7 +3216,7 @@ touches: the `aivyx init` wizard itself.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 104 — `aivyx init` Polish.** Shipped — see
-  below and [PHASE_104.md](PHASE_104.md). Refreshed
+  below and [PHASE_104.md](archive/phases/PHASE_104.md). Refreshed
   stale provider defaults, named a concrete starter
   model on the empty-Ollama path, and added a verify-
   before-write step against `GET /v1/models` so a broken
@@ -3265,7 +3265,7 @@ operator pressure tightens the exact scope.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 105 — Trajectory Logging (`aivyx audit export`).**
-  Shipped — see below and [PHASE_105.md](PHASE_105.md).
+  Shipped — see below and [PHASE_105.md](archive/phases/PHASE_105.md).
   Lowest-risk Chapter D item. The HMAC audit chain already
   carried the structured per-turn / per-tool-call rows a
   trajectory exporter needs; Phase 105 wired
@@ -3275,7 +3275,7 @@ operator pressure tightens the exact scope.
   `aivyx-core/src/lib.rs` 5.
 
 - **Phase 106 — MCP Server Breadth (Curated Recipes).**
-  Shipped — see below and [PHASE_106.md](PHASE_106.md). Q1a
+  Shipped — see below and [PHASE_106.md](archive/phases/PHASE_106.md). Q1a
   at sign-off chose **recipes-only** scope: zero new
   bundled-server code paths. Shipped `docs/MCP_RECIPES.md`
   cataloguing 12 well-supported MCP servers (filesystem,
@@ -3289,7 +3289,7 @@ operator pressure tightens the exact scope.
   server code stays a deferral pending operator pressure.
 
 - **Phase 107 — Discord Channel Adapter (`aivyx-discord`).**
-  Shipped — see below and [PHASE_107.md](PHASE_107.md). Full
+  Shipped — see below and [PHASE_107.md](archive/phases/PHASE_107.md). Full
   parity with `aivyx-telegram` at the in-process layer.
   `aivyx --channel discord` runs an end-to-end Discord bot
   against twilight-rs (twilight-gateway + twilight-http +
@@ -3308,7 +3308,7 @@ operator pressure tightens the exact scope.
   — both land alongside in a focused follow-on.
 
 - **Phase 108 — Slack Channel Adapter (`aivyx-slack`).**
-  Shipped — see below and [PHASE_108.md](PHASE_108.md).
+  Shipped — see below and [PHASE_108.md](archive/phases/PHASE_108.md).
   Fourth in-tree channel adapter, four-data-point
   confirmation for `docs/ADAPTER_PATTERN.md` (was
   confirmed-at-three at Phase 107). slack-morphism 2.22 SDK,
@@ -3327,7 +3327,7 @@ operator pressure tightens the exact scope.
   `/approve` / `/reject` gate-resolve routing.
 
 - **Phase 109 — Tool Breadth (Amendment A12).** Shipped —
-  see below and [PHASE_109.md](PHASE_109.md). Q1a chose
+  see below and [PHASE_109.md](archive/phases/PHASE_109.md). Q1a chose
   **`git.status` + `git.diff`** sharing one new `git.read`
   scope base (qualified by repo path) as the headline two
   tools. Q2a also closed **`net.dns`** as a bonus closure
@@ -3344,7 +3344,7 @@ operator pressure tightens the exact scope.
   `+15`–`+25` band at the upper edge).
 
 - **Phase 110 — Skills Auto-Creation (Reflection Staging).**
-  Shipped — see below and [PHASE_110.md](PHASE_110.md). The
+  Shipped — see below and [PHASE_110.md](archive/phases/PHASE_110.md). The
   last Chapter D item — closes the sixth and final
   Hermes-comparison gap. LearnedSkill as the 11th
   PersonaDeltaCategory variant reusing the entire Phase
@@ -3373,7 +3373,7 @@ an amendment.
 
 ## Phase 111 — Adapter Production Wiring (operator-requested follow-on)
 
-**Frozen — see [PHASE_111.md](PHASE_111.md).** Standalone
+**Frozen — see [PHASE_111.md](archive/phases/PHASE_111.md).** Standalone
 phase past Chapter D's close (no chapter framing, matching
 the Phase 99 precedent for operator-requested follow-on
 work). Landed the two Phase-107/108-internal carve-outs:
@@ -3431,7 +3431,7 @@ based on observed value vs the next-axis options.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 114 — Persona Auto-Proposer Generalization.**
-  Active — see below and [PHASE_114.md](PHASE_114.md).
+  Active — see below and [PHASE_114.md](archive/phases/PHASE_114.md).
   Extends the Phase 112 auto-proposer from `LearnedSkill`
   to every PersonaDeltaCategory variant. Per-category
   TOML config (operator-picked over uniform-single); same
@@ -3479,7 +3479,7 @@ each phase exit.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 123 — Gmail Integration.** Frozen — see below
-  and [PHASE_123.md](PHASE_123.md). Operator-provided
+  and [PHASE_123.md](archive/phases/PHASE_123.md). Operator-provided
   Google OAuth (Q1a Recommended); full read + draft +
   send tool surface (Q2c non-Recommended; honest scope
   acceptance); per-tool-process token file storage
@@ -3519,7 +3519,7 @@ pattern) without architectural additions.
 **Expected phases (subject to revision at each exit):**
 
 - **Phase 125 — Personal Assistant Tool Bundle.** Frozen
-  — see below and [PHASE_125.md](PHASE_125.md). Bundled
+  — see below and [PHASE_125.md](archive/phases/PHASE_125.md). Bundled
   eight tools through one `aivyx-toolkit` binary:
   `web.search` (Brave API), four `task.*` (TODO CRUD),
   three `health.check.*` (scheduled URL monitoring with
@@ -3539,7 +3539,7 @@ first-real-use signal.
 
 After the Phase 172–179 correction-learning + autonomous-loop
 arc, the Phase 179 backend review
-([BACKEND_REVIEW_2026-06-06.md](BACKEND_REVIEW_2026-06-06.md))
+([BACKEND_REVIEW_2026-06-06.md](archive/BACKEND_REVIEW_2026-06-06.md))
 took stock against the founding goal — a *Local-First,
 Security-Focused, fully customizable autonomous Personal
 Assistant* an End User shapes by Personality + Role at first
@@ -3728,7 +3728,7 @@ verify):**
 
 ## Phase 184 — Conversational Skill-Teaching (Chapter H #5)
 
-**Frozen — see [PHASE_184.md](PHASE_184.md).** The End User can
+**Frozen — see [PHASE_184.md](archive/phases/PHASE_184.md).** The End User can
 *teach* the agent a skill in conversation (`skills.teach` /
 `skills.update` / `skills.forget`): the agent drafts it, shows it
 back, and on explicit confirmation saves it as a callable skill
@@ -3739,7 +3739,7 @@ untouched.
 
 ## Phase 183 — Reminders (Everyday-PA Breadth #1, Chapter H #4)
 
-**Frozen — see [PHASE_183.md](PHASE_183.md).** One-shot reminders
+**Frozen — see [PHASE_183.md](archive/phases/PHASE_183.md).** One-shot reminders
 — *"remind me at 6pm"* → a notification arrives. Daemon-native
 (`KeyDomain::Reminders` + a `ReminderStore` + `remind.*`
 channel-tier tools + a re-arming driver that pushes due reminders
@@ -3748,7 +3748,7 @@ daemon's job, not a pull-only tool process.
 
 ## Phase 182 — Guided In-Agent Credential Onboarding (Chapter H #3)
 
-**Frozen — see [PHASE_182.md](PHASE_182.md).** `aivyx connect
+**Frozen — see [PHASE_182.md](archive/phases/PHASE_182.md).** `aivyx connect
 <service>` replaces the undocumented connect-a-tool sequence: it
 guides the Google Cloud app setup, writes `config.toml`, shells
 out to the tested per-service `auth init`, confirms, and offers
@@ -3757,7 +3757,7 @@ unauthenticated tool at startup.
 
 ## Phase 181 — Guided First-Launch Identity Builder (Chapter H #2)
 
-**Frozen — see [PHASE_181.md](PHASE_181.md).** First launch
+**Frozen — see [PHASE_181.md](archive/phases/PHASE_181.md).** First launch
 becomes shaping a relationship: the End User describes what they
 want, the LLM drafts all six P13 Profile fields from a
 relationship conversation (with a fully-offline manual fallback),
@@ -3767,7 +3767,7 @@ grow.
 
 ## Phase 180 — Security-by-Default: Bundled Sandbox Preset (Chapter H #1)
 
-**Frozen — see [PHASE_180.md](PHASE_180.md).** Tool processes are
+**Frozen — see [PHASE_180.md](archive/phases/PHASE_180.md).** Tool processes are
 OS-isolated by default for new launches: a bundled
 bubblewrap / firejail preset (auto-detected,
 filesystem-isolated with only the per-tool token dir writable,
@@ -3777,7 +3777,7 @@ existing configs are byte-identical.
 
 ## Phase 179 — Tool Surfacing in OutcomeSummary
 
-**Frozen — see [PHASE_179.md](PHASE_179.md).** The reflection
+**Frozen — see [PHASE_179.md](archive/phases/PHASE_179.md).** The reflection
 family's `OutcomeSummary` now carries each turn's **tools** (the
 restart-safe `ToolCall` scope base — no `tool_id` map), rendered
 into the reflection prompt and, opt-in via
@@ -3790,7 +3790,7 @@ a substrate-vs-loop label).
 
 ## Phase 178 — LLM-Judged Correction Classification
 
-**Frozen — see [PHASE_178.md](PHASE_178.md).** Closed the Phase
+**Frozen — see [PHASE_178.md](archive/phases/PHASE_178.md).** Closed the Phase
 172 debt: the correction signal is now LLM-judged (genuine
 `rework` vs `praise` vs `unrelated`), folding only real reworks.
 A truncated, encrypted `query_text` on the recall log gives the
@@ -3800,33 +3800,33 @@ tests, in band.
 
 ## Phase 177 — Loop Loose-Ends Bundle
 
-**Frozen — see [PHASE_177.md](PHASE_177.md).** Operator polish on
+**Frozen — see [PHASE_177.md](archive/phases/PHASE_177.md).** Operator polish on
 the autonomous loop: live `tokens used` in `aivyx loop status`,
 `aivyx loop skip <id>`, and progress-note de-duplication.
 
 ## Phase 176 — Loop Token-Budget Cap
 
-**Frozen — see [PHASE_176.md](PHASE_176.md).** A third loop cap —
+**Frozen — see [PHASE_176.md](archive/phases/PHASE_176.md).** A third loop cap —
 `max_run_tokens` — alongside the iteration and wall-clock caps,
 summing turn spend over the run window with a `StopBudget`
 termination reason.
 
 ## Phase 175 — Loop Progress Log
 
-**Frozen — see [PHASE_175.md](PHASE_175.md).** Cross-iteration
+**Frozen — see [PHASE_175.md](archive/phases/PHASE_175.md).** Cross-iteration
 learning: a `loop.note` tool writes to a reserved progress topic
 that is auto-injected into each iteration's prompt, so a long
 backlog gets easier as it goes.
 
 ## Phase 174 — Loop Hardening (Gate Verification)
 
-**Frozen — see [PHASE_174.md](PHASE_174.md).** Driver-side
+**Frozen — see [PHASE_174.md](archive/phases/PHASE_174.md).** Driver-side
 verification that the loop's build/test gates actually ran and
 passed before a backlog story is marked complete.
 
 ## Phase 173 — Autonomous Loop Foundation (the Aivyx Ralph Loop)
 
-**Frozen — see [PHASE_173.md](PHASE_173.md).** Aivyx's native
+**Frozen — see [PHASE_173.md](archive/phases/PHASE_173.md).** Aivyx's native
 answer to the "Ralph" technique: a fully autonomous,
 self-re-arming agent loop over an HMAC-chained append-only
 backlog substrate, a re-arming driver (sibling of the reflection
@@ -3835,7 +3835,7 @@ wall-clock caps, and a pure `decide()` termination function.
 
 ## Phase 172 — Correction-Signal Learning Loop
 
-**Frozen — see [PHASE_172.md](PHASE_172.md).** The agent now
+**Frozen — see [PHASE_172.md](archive/phases/PHASE_172.md).** The agent now
 notices when the operator *corrects* it: a structural
 correction detector (`completed`-then-rapid-followup), a durable
 decayed correction ledger, and an opt-in
@@ -3844,7 +3844,7 @@ on a topic into operator-gated Persona proposals.
 
 ## Phase 171 — Loose Ends Bundle (GIF/WebP Clipboard + calendarList Cache TTL Knob)
 
-**Frozen — see [PHASE_171.md](PHASE_171.md).** Capstone phase
+**Frozen — see [PHASE_171.md](archive/phases/PHASE_171.md).** Capstone phase
 before extended review. Two small substrate
 cleanups: Phase 170's just-shipped clipboard
 signature carry-over (GIF + WebP byte signature
@@ -3856,7 +3856,7 @@ workspace deps.
 
 ## Phase 170 — Voice Polish Bundle (Mid-Recording /image + Clipboard Source + Abort UX Knob)
 
-**Frozen — see [PHASE_170.md](PHASE_170.md).** Three deferred
+**Frozen — see [PHASE_170.md](archive/phases/PHASE_170.md).** Three deferred
 voice carry-overs in one bundle. Mid-recording
 `/image <path>` now queues the image and
 continues recording instead of stopping. New
@@ -3871,7 +3871,7 @@ workspace deps.
 
 ## Phase 169 — Phase 166 + 167 Retry/Filter Refinements (Actor Filter + 503/429 Retry + Jitter)
 
-**Frozen — see [PHASE_169.md](PHASE_169.md).** Three small
+**Frozen — see [PHASE_169.md](archive/phases/PHASE_169.md).** Three small
 substrate follow-ons: Phase 167's lone open
 carry-over (actor_email post-fetch filter on
 drive.recent_activity), Phase 166's 503/429
@@ -3884,7 +3884,7 @@ Zero new workspace deps.
 
 ## Phase 168 — Phase 161 + 165 Stragglers (Read-Stalled-Bytes Timeout + Catalog-Aware PDF Page Count)
 
-**Frozen — see [PHASE_168.md](PHASE_168.md).** Two unrelated
+**Frozen — see [PHASE_168.md](archive/phases/PHASE_168.md).** Two unrelated
 honest-debts from two different parent phases.
 Read-stalled-bytes timeout defeats slow-trickle
 URL servers that fall under the per-request
@@ -3899,7 +3899,7 @@ substrate-level depth. Zero new workspace deps.
 
 ## Phase 167 — drive.recent_activity Follow-Ons (Action Filter + Consolidation Knob + Parent Folder)
 
-**Frozen — see [PHASE_167.md](PHASE_167.md).** Phase 159 close-
+**Frozen — see [PHASE_167.md](archive/phases/PHASE_167.md).** Phase 159 close-
 out, deferred 8 phases (the longest gap in the
 project's close-out ledger; user declined this
 surface six times before picking it). Three input
@@ -3915,7 +3915,7 @@ Zero new workspace deps.
 
 ## Phase 166 — Small Carry-Overs Bundle (PDF Page Cap Knob + URL Retry + Drive Walk Floor)
 
-**Frozen — see [PHASE_166.md](PHASE_166.md).** Three small
+**Frozen — see [PHASE_166.md](archive/phases/PHASE_166.md).** Three small
 substrate carry-overs from three different
 phases: Phase 165's hardcoded
 `ANTHROPIC_PDF_PAGE_CAP` becomes a config knob
@@ -3931,7 +3931,7 @@ different crates. Zero new workspace deps.
 
 ## Phase 165 — Multimodal Stragglers Bundle (Office Formats + Per-URL Headers + PDF Page Cap)
 
-**Frozen — see [PHASE_165.md](PHASE_165.md).** Three multimodal
+**Frozen — see [PHASE_165.md](archive/phases/PHASE_165.md).** Three multimodal
 honest-debts in one phase. Five additional Office
 formats (DOC/RTF/ODT/pptx/xlsx) extend the Phase
 164 DOCX inference. Per-URL header presets via
@@ -3945,7 +3945,7 @@ cadence. Zero new workspace deps.
 
 ## Phase 164 — Phase 163 Cleanups (Anthropic Model Guard + DOCX Inference)
 
-**Frozen — see [PHASE_164.md](PHASE_164.md).** Phase 163 just-
+**Frozen — see [PHASE_164.md](archive/phases/PHASE_164.md).** Phase 163 just-
 shipped follow-ons (two-debt bundle; smaller than
 the typical three). Anthropic provider gains a
 pre-flight model-version guard so document blocks
@@ -3961,7 +3961,7 @@ Zero new workspace deps.
 
 ## Phase 163 — `ContentPart::Document` for PDF Routing
 
-**Frozen — see [PHASE_163.md](PHASE_163.md).** First DESIGN.md
+**Frozen — see [PHASE_163.md](archive/phases/PHASE_163.md).** First DESIGN.md
 amendment in 54 phases (A13 under
 `docs/amendments/`). Phase 162's just-shipped
 honest-debt: PDFs flow through
@@ -3977,7 +3977,7 @@ Zero new workspace deps.
 
 ## Phase 162 — Phase 156 + 161 Stragglers (PDF/SVG/TIFF + Authenticated URL Fetch)
 
-**Frozen — see [PHASE_162.md](PHASE_162.md).** Phase 156's last
+**Frozen — see [PHASE_162.md](archive/phases/PHASE_162.md).** Phase 156's last
 two carry-overs. PDF/SVG/TIFF media type inference
 extends `infer_image_media_type` and
 `media_type_from_content_type` (the downstream
@@ -3991,7 +3991,7 @@ to zero. Zero new workspace deps.
 
 ## Phase 161 — Multimodal Carry-Overs Bundle (Image Size Cap + URL Fetch Timeout + HEAD Pre-Fetch)
 
-**Frozen — see [PHASE_161.md](PHASE_161.md).** Phase 156 close-out
+**Frozen — see [PHASE_161.md](archive/phases/PHASE_161.md).** Phase 156 close-out
 deferred 4 phases. Three multimodal honest-debts
 in one phase: operator-tunable image size cap
 (replaces the hardcoded 10MB with a
@@ -4005,7 +4005,7 @@ Zero new workspace deps.
 
 ## Phase 160 — Throttle the Drive Walk: `walk_folder_tree` max_concurrent
 
-**Frozen — see [PHASE_160.md](PHASE_160.md).** Phase 157 close-out
+**Frozen — see [PHASE_160.md](archive/phases/PHASE_160.md).** Phase 157 close-out
 deferred 2 phases. Single honest-debt: the parallel
 level-BFS walk fires unthrottled concurrent
 `/files?q=...` queries. Adds a Semaphore-based
@@ -4018,7 +4018,7 @@ workspace deps.
 
 ## Phase 159 — Drive Activity API: `drive.recent_activity`
 
-**Frozen — see [PHASE_159.md](PHASE_159.md).** Twice-deferred
+**Frozen — see [PHASE_159.md](archive/phases/PHASE_159.md).** Twice-deferred
 Recommended pivot. New `drive.recent_activity` tool
 backed by the Drive Activity API (separate googleapis
 subdomain, separate OAuth scope). Answers "who did
@@ -4033,7 +4033,7 @@ Operators with existing tokens re-run
 
 ## Phase 158 — Calendar Follow-Ons Bundle (Sliding-Window Dedup + calendarList Cache + min_concurrent)
 
-**Frozen — see [PHASE_158.md](PHASE_158.md).** Phase 155 close-out
+**Frozen — see [PHASE_158.md](archive/phases/PHASE_158.md).** Phase 155 close-out
 deferred 3 phases. Three calendar honest-debts in one
 phase: sliding-window adjacency merge replaces the
 5-min bucket flooring in fuzzy dedup, calendarList
@@ -4045,7 +4045,7 @@ honest-debts. Zero new workspace deps.
 
 ## Phase 157 — Drive Recursive Walk Close-Out Bundle
 
-**Frozen — see [PHASE_157.md](PHASE_157.md).** Phase 153 close-out
+**Frozen — see [PHASE_157.md](archive/phases/PHASE_157.md).** Phase 153 close-out
 deferred 4 phases. Three drive honest-debts in one
 phase: parallel walk_folder_tree via level-BFS +
 join_all, drive_id scope on the recursive walk
@@ -4058,7 +4058,7 @@ to aivyx-drive as crate dep; zero new workspace deps.
 
 ## Phase 156 — Multimodal Close-Out Bundle (Multi-Image + URL Source + Size Cap)
 
-**Frozen — see [PHASE_156.md](PHASE_156.md).** Phase 154 close-out
+**Frozen — see [PHASE_156.md](archive/phases/PHASE_156.md).** Phase 154 close-out
 deferred 2 phases. Three multimodal honest-debts in one
 phase: multi-image queue (Vec<(media_type, data)>), URL
 source via reqwest (operator types `/image https://...`
@@ -4069,7 +4069,7 @@ dep (already a workspace dep); zero new workspace deps.
 
 ## Phase 155 — Calendar: Small Follow-Ons Bundle
 
-**Frozen — see [PHASE_155.md](PHASE_155.md).** Phase 151 follow-on
+**Frozen — see [PHASE_155.md](archive/phases/PHASE_155.md).** Phase 151 follow-on
 deferred 4 phases. Three small close-outs in one phase:
 fuzzy dedup (normalize summary + 5-min time bucket;
 `fuzzy_dedup` knob defaults true), writable_only filter
@@ -4081,7 +4081,7 @@ close-out pattern. Zero new workspace deps.
 
 ## Phase 154 — Multimodal: Image Attachment via Voice
 
-**Frozen — see [PHASE_154.md](PHASE_154.md).** New feature surface
+**Frozen — see [PHASE_154.md](archive/phases/PHASE_154.md).** New feature surface
 after 3 debt-close phases (151-153). Wires existing
 MessageContent::Mixed shape into the voice channel:
 operator types `/image <path>` at the PTT prompt instead
@@ -4093,7 +4093,7 @@ Zero new workspace deps; substrate already in place.
 
 ## Phase 153 — Drive: `recent_*` Close-Out Bundle
 
-**Frozen — see [PHASE_153.md](PHASE_153.md).** Phase 148 close-out
+**Frozen — see [PHASE_153.md](archive/phases/PHASE_153.md).** Phase 148 close-out
 deferred 5 phases. Closes two drive honest-debts in one
 phase: drive_id parameter on drive.recent_files +
 drive.recent_changes for Team-Drive-scoped recent
@@ -4105,7 +4105,7 @@ voice bundle pattern. Zero new workspace deps.
 
 ## Phase 152 — Voice Carry-Overs Bundle
 
-**Frozen — see [PHASE_152.md](PHASE_152.md).** Pivot back to voice
+**Frozen — see [PHASE_152.md](archive/phases/PHASE_152.md).** Pivot back to voice
 after 5 non-voice phases. Closes three voice honest-debts
 in one phase: aggressive abort (drop cpal stream for
 instant silence instead of rodio clear+sleep_until_end,
@@ -4118,7 +4118,7 @@ pattern. Zero new workspace deps.
 
 ## Phase 151 — Calendar: Phase 142 Debt Cleanup Bundle
 
-**Frozen — see [PHASE_151.md](PHASE_151.md).** Phase 142 close-out
+**Frozen — see [PHASE_151.md](archive/phases/PHASE_151.md).** Phase 142 close-out
 deferred 9 phases. Closes three calendar honest-debts in
 one phase: sequential→parallel fan-out via join_all on
 multi-calendar upcoming, cross-calendar event dedup by
@@ -4128,7 +4128,7 @@ Phase 148's drive cleanup. Zero new workspace deps.
 
 ## Phase 150 — Budget: Category Whitelist + Case-Fold + Suggest-Existing
 
-**Frozen — see [PHASE_150.md](PHASE_150.md).** Phase 143
+**Frozen — see [PHASE_150.md](archive/phases/PHASE_150.md).** Phase 143
 longest-standing honest-debt close-out (carried 6
 phases). Free-text categories from Phase 143 meant
 "Food" / "food" / "fod" were three different categories;
@@ -4142,7 +4142,7 @@ Pure substrate; zero new workspace deps.
 
 ## Phase 149 — Budget: `budget.trend` (Month-Over-Month Deltas)
 
-**Frozen — see [PHASE_149.md](PHASE_149.md).** Phase 143 #4
+**Frozen — see [PHASE_149.md](archive/phases/PHASE_149.md).** Phase 143 #4
 honest-debt close-out. Pivot from drive/calendar
 after four consecutive debt-closure phases (146-148):
 Phase 149 ships genuinely new operator-facing
@@ -4155,7 +4155,7 @@ aggregation over existing entries. Toolkit harness
 
 ## Phase 148 — Drive: `list_drives` + `parent_folder_id` Filter
 
-**Frozen — see [PHASE_148.md](PHASE_148.md).** Phase 145 close-out.
+**Frozen — see [PHASE_148.md](archive/phases/PHASE_148.md).** Phase 145 close-out.
 Phase 145 shipped drive.recent_files +
 drive.recent_changes but called out two specific
 honest-debts: no parent_folder_id filter (operators
@@ -4167,7 +4167,7 @@ surface 9 → 10 tools; zero new workspace deps.
 
 ## Phase 147 — Chapter G: `health.check.remove`
 
-**Frozen — see [PHASE_147.md](PHASE_147.md).** Phase 125 final
+**Frozen — see [PHASE_147.md](archive/phases/PHASE_147.md).** Phase 125 final
 candidate close-out. Phase 125 framed three Chapter G #2
 candidates: calendar reminders (✓ 141-142), budget
 tracking (✓ 143-144), and health.check.remove + alert
@@ -4180,7 +4180,7 @@ workspace deps.
 
 ## Phase 146 — Voice Mid-Synthesis Abort UX
 
-**Frozen — see [PHASE_146.md](PHASE_146.md).** Phase 138 close-out
+**Frozen — see [PHASE_146.md](archive/phases/PHASE_146.md).** Phase 138 close-out
 deferred 7 phases. Phase 138 shipped streaming TTS and
 called out mid-synthesis abort UX as honest-debt; every
 subsequent voice phase carried it without resolution.
@@ -4193,7 +4193,7 @@ refactor; zero new workspace deps.
 
 ## Phase 145 — Drive: `recent_files` + `recent_changes`
 
-**Frozen — see [PHASE_145.md](PHASE_145.md).** Pivot from toolkit
+**Frozen — see [PHASE_145.md](archive/phases/PHASE_145.md).** Pivot from toolkit
 after four consecutive Chapter F/G phases (141-144).
 Drive's 7-tool surface has been quiet since Phase 129;
 Phase 145 adds the LLM-ergonomic shape that mirrors
@@ -4207,7 +4207,7 @@ workspace deps.
 
 ## Phase 144 — Close Phase 143 Debt: budget.update + budget.delete + secure_io extract
 
-**Frozen — see [PHASE_144.md](PHASE_144.md).** Phase 143 close-out.
+**Frozen — see [PHASE_144.md](archive/phases/PHASE_144.md).** Phase 143 close-out.
 Phase 143 shipped budget.record + budget.summary but
 without edit/delete tools and with save_to_disk +
 create_dir_all_secure + write_secure duplicated across
@@ -4219,7 +4219,7 @@ Pure substrate work; zero new workspace deps.
 
 ## Phase 143 — Chapter G: Budget Tracking
 
-**Frozen — see [PHASE_143.md](PHASE_143.md).** Pivot from calendar
+**Frozen — see [PHASE_143.md](archive/phases/PHASE_143.md).** Pivot from calendar
 to another Phase 125 Chapter G #2 candidate. Adds
 `budget.record(amount, category, note?)` +
 `budget.summary(period?, since?, until?)` to the
@@ -4233,7 +4233,7 @@ workspace deps.
 
 ## Phase 142 — `calendar.list_calendars` + Multi-Calendar `upcoming`
 
-**Frozen — see [PHASE_142.md](PHASE_142.md).** Phase 141 follow-on.
+**Frozen — see [PHASE_142.md](archive/phases/PHASE_142.md).** Phase 141 follow-on.
 Phase 141 made calendar.upcoming ergonomic but on `primary`
 only. Real operators have 3-5 calendars (work, personal,
 shared, project). Phase 142 adds calendar.list_calendars so
@@ -4245,7 +4245,7 @@ workspace deps.
 
 ## Phase 141 — Chapter G: `calendar.upcoming` Tool
 
-**Frozen — see [PHASE_141.md](PHASE_141.md).** Pivot from voice
+**Frozen — see [PHASE_141.md](archive/phases/PHASE_141.md).** Pivot from voice
 after six consecutive voice phases (135-140). Phase 125's
 Chapter G #2 candidate list included calendar reminders;
 Phase 141 ships the read-side tool: `calendar.upcoming`
@@ -4259,7 +4259,7 @@ a separate Phase 142+ architectural question.
 
 ## Phase 140 — Close Phase 139 Debt: TOML Config + Manual-Abort UX
 
-**Frozen — see [PHASE_140.md](PHASE_140.md).** Phase 139 close-out.
+**Frozen — see [PHASE_140.md](archive/phases/PHASE_140.md).** Phase 139 close-out.
 Phase 139 shipped energy-threshold VAD with two
 documented debts: hardcoded thresholds (no operator
 tunability) and lost manual-abort affordance (can't
@@ -4272,7 +4272,7 @@ tokio::io::stdin + serde already in workspace.
 
 ## Phase 139 — Voice Activity Detection (Energy Threshold)
 
-**Frozen — see [PHASE_139.md](PHASE_139.md).** Phase 138 follow-on.
+**Frozen — see [PHASE_139.md](archive/phases/PHASE_139.md).** Phase 138 follow-on.
 Phase 138 collapsed voice latency-to-first-audio with
 streaming TTS; Phase 139 attacks the next UX irritant
 in PTT: operator currently presses Enter twice (start +
@@ -4286,7 +4286,7 @@ Phase 140+ if operators hit noisy environments.
 
 ## Phase 138 — Streaming TTS During LLM Generation
 
-**Frozen — see [PHASE_138.md](PHASE_138.md).** Phase 137 follow-on.
+**Frozen — see [PHASE_138.md](archive/phases/PHASE_138.md).** Phase 137 follow-on.
 Phase 137 gave voice feature parity with Local; Phase 138
 attacks the biggest remaining UX weakness — latency-to-
 first-audio. Today a long agent reply produces tens of
@@ -4301,7 +4301,7 @@ new workspace dependencies; tokio mpsc already in use.
 
 ## Phase 137 — Voice Agent Feature Parity with Local
 
-**Frozen — see [PHASE_137.md](PHASE_137.md).** Phase 136
+**Frozen — see [PHASE_137.md](archive/phases/PHASE_137.md).** Phase 136
 follow-on. Phase 135 shipped the voice substrate;
 Phase 136 wired the audio I/O loop end-to-end. But
 the binary's voice arm still constructs a *minimal*
@@ -4329,7 +4329,7 @@ operator framing.
 
 ## Phase 136 — Voice Audio I/O Loop: Close-Out
 
-**Frozen — see [PHASE_136.md](PHASE_136.md).** Phase 135
+**Frozen — see [PHASE_136.md](archive/phases/PHASE_136.md).** Phase 135
 close-out. Phase 135 shipped the voice substrate
 (ASR + TTS adapters, channel impl, session seam)
 but deferred the cpal + rodio audio I/O loop body
@@ -4363,7 +4363,7 @@ hold per operator framing.
 
 ## Phase 135 — Voice I/O: Talk to the Agent, Agent Talks Back
 
-**Frozen — see [PHASE_135.md](PHASE_135.md).** First multimodal-
+**Frozen — see [PHASE_135.md](archive/phases/PHASE_135.md).** First multimodal-
 interaction phase. Aivyx has shipped text + image input
 through cloud LLMs since Phase 45, but operator-facing
 input has always been keyboard-only and agent output
@@ -4430,7 +4430,7 @@ framing, intentional hold.
 
 ## Phase 134 — Direction B: Embedded Rust-Native Inference (`mistral.rs`)
 
-**Frozen — see [PHASE_134.md](PHASE_134.md).** Largest
+**Frozen — see [PHASE_134.md](archive/phases/PHASE_134.md).** Largest
 architectural phase since Phase 121. Phase 133 set
 up the question — three first-class out-of-process
 providers; now what? Phase 134 answers: **Aivyx can
@@ -4480,7 +4480,7 @@ Activation Milestone.**
 
 ## Phase 133 — Local LLM Provider Alternatives (`llama-server` + Jan)
 
-**Frozen — see [PHASE_133.md](PHASE_133.md).** First multi-provider
+**Frozen — see [PHASE_133.md](archive/phases/PHASE_133.md).** First multi-provider
 phase since Phase 121 (which swapped Ollama's
 OpenAI-compat path for a native `/api/chat`
 adapter). Phase 133 widens Aivyx's local-LLM story
@@ -4540,7 +4540,7 @@ Activation Milestone.**
 
 ## Phase 132 — `aivyx-auth-cli` Substrate Lift
 
-**Frozen — see [PHASE_132.md](PHASE_132.md).** First substrate
+**Frozen — see [PHASE_132.md](archive/phases/PHASE_132.md).** First substrate
 phase since Phase 129 (Google OAuth lift). Operator-
 picked at the Phase 131 direction question after the
 auth_cli posture reached three concrete data points
@@ -4591,7 +4591,7 @@ taking it.
 
 ## Phase 131 — n8n Workflow Automation Integration (Chapter F #7)
 
-**Frozen — see [PHASE_131.md](PHASE_131.md).** Seventh Chapter F
+**Frozen — see [PHASE_131.md](archive/phases/PHASE_131.md).** Seventh Chapter F
 integration; first targeting a workflow-automation
 service. Operator-picked at the Phase 131 direction
 question (n8n bundled with the same posture as Phase
@@ -4687,7 +4687,7 @@ Jira, etc.).
 
 ## Phase 130 — Notion + Obsidian Knowledge-Management Bundle (Chapter F #5)
 
-**Frozen — see [PHASE_130.md](PHASE_130.md).** Largest Chapter F
+**Frozen — see [PHASE_130.md](archive/phases/PHASE_130.md).** Largest Chapter F
 phase yet by tool count (13) and task count (17).
 Operator-picked at the Phase 130 direction question: bundle
 Notion and Obsidian under a "knowledge management" theme
@@ -4814,7 +4814,7 @@ explicitly when picking direction.
 
 ## Phase 129 — Google Drive + OAuth Substrate Lift (Chapter F #3)
 
-**Frozen — see [PHASE_129.md](PHASE_129.md).** Chapter F
+**Frozen — see [PHASE_129.md](archive/phases/PHASE_129.md).** Chapter F
 third integration; first Chapter F phase to ship two pieces of
 substrate work in one phase — the OAuth substrate lift
 Phase 128 Q2a deferred to "the third Google integration"
@@ -4934,7 +4934,7 @@ signal in its own right.
 
 ## Phase 128 — Google Calendar Integration (Chapter F #2)
 
-**Frozen — see [PHASE_128.md](PHASE_128.md).** Chapter F
+**Frozen — see [PHASE_128.md](archive/phases/PHASE_128.md).** Chapter F
 second integration; first Chapter F phase since Phase 123
 shipped Gmail. Operator-pressure pick after Phase 127 exit listed
 Chapter F #2 / Chapter G #2 as operator-tool-surface
@@ -5033,7 +5033,7 @@ Audit's #1.
 
 ## Phase 127 — Multi-Format Tool-Call Extraction (substrate completion)
 
-**Frozen — see [PHASE_127.md](PHASE_127.md).** Phase 126's
+**Frozen — see [PHASE_127.md](archive/phases/PHASE_127.md).** Phase 126's
 substrate gap finished. Phase 126 shipped a textual
 extractor handling two emission formats — the two
 Phase 124 happened to observe. Phase 126 close-out
@@ -5160,7 +5160,7 @@ Audit's #1.
 
 ## Phase 126 — Textual Tool-Call Extraction
 
-**Frozen — see [PHASE_126.md](PHASE_126.md).** Operator
+**Frozen — see [PHASE_126.md](archive/phases/PHASE_126.md).** Operator
 picked this as the next direction after Phase 125 exit
 listed it as the most concrete substrate move remaining
 on the local-LLM-rehab axis. Phase 124's secondary finding
@@ -5249,7 +5249,7 @@ unchanged.
 
 ## Phase 125 — Personal Assistant Tool Bundle (Chapter G #1)
 
-**Frozen — see [PHASE_125.md](PHASE_125.md).** Chapter G
+**Frozen — see [PHASE_125.md](archive/phases/PHASE_125.md).** Chapter G
 opener. Operator-pressure pick after the Phase 124 exit
 framing left operator-tooling-coverage as the load-bearing
 question.
@@ -5328,7 +5328,7 @@ include the milestone itself; honest tracking continues.
 
 ## Phase 124 — Few-Shot Tool-Call Examples (Local-LLM Rehab #4)
 
-**Frozen — see [PHASE_124.md](PHASE_124.md).** Fourth named
+**Frozen — see [PHASE_124.md](archive/phases/PHASE_124.md).** Fourth named
 phase against the local-LLM rehabilitation axis. Operator-
 pressure pick after the Phase 124 direction question:
 rejected all standing candidates (Chapter F #2, Channel
@@ -5409,7 +5409,7 @@ unchanged.
 
 ## Phase 123 — Gmail Integration (Chapter F #1)
 
-**Frozen — see [PHASE_123.md](PHASE_123.md).** Chapter F
+**Frozen — see [PHASE_123.md](archive/phases/PHASE_123.md).** Chapter F
 opener. Operator-pressure pick after the audit's #1
 (Channel Activation Milestone) was deferred for the
 twelfth time. Targets the external-productivity-
@@ -5492,7 +5492,7 @@ Phase 124 also skips it.
 
 ## Phase 122 — Per-Model Prompt Variants (Local-LLM Rehab #2)
 
-**Frozen — see [PHASE_122.md](PHASE_122.md).** Third-named
+**Frozen — see [PHASE_122.md](archive/phases/PHASE_122.md).** Third-named
 phase against the audit's local-LLM rehabilitation axis,
 opened against signal from real interactive use after
 Phase 121 shipped: 13 turns × 0 tool calls between
@@ -5572,7 +5572,7 @@ operator-pressure-driven new direction.
 
 ## Phase 121 — Native Ollama Tool-Calling Path (Local-LLM Rehab #3)
 
-**Frozen — see [PHASE_121.md](PHASE_121.md).** Second-
+**Frozen — see [PHASE_121.md](archive/phases/PHASE_121.md).** Second-
 named phase against the audit's local-LLM rehabilitation
 axis. New dedicated `OllamaProvider` in
 `aivyx-llm/src/ollama/` mirroring `aivyx-llm/src/openai/`.
@@ -5633,7 +5633,7 @@ unshipped), release prep, Chapter F.
 
 ## Phase 120 — Tool-Call Validation + Recovery (Local-LLM Rehabilitation #1)
 
-**Frozen — see [PHASE_120.md](PHASE_120.md).** First-named
+**Frozen — see [PHASE_120.md](archive/phases/PHASE_120.md).** First-named
 phase against the audit's local-LLM rehabilitation axis.
 Closes the qwen3.6/gemma4 tool-name hallucination failure
 mode (per phase-99-local-builds memory): when a local
@@ -5683,7 +5683,7 @@ path (#3), release prep, new Chapter F.
 
 ## Phase 119 — Phase 118 Apply-Side Closeout + Tool-Relevance Dump (Operator-Value Polish)
 
-**Frozen — see [PHASE_119.md](PHASE_119.md).** Audit-
+**Frozen — see [PHASE_119.md](archive/phases/PHASE_119.md).** Audit-
 informed phase. Closes the manual-edit gap left by
 Phase 118 and the deferred `aivyx tool-relevance dump`
 CLI from Phase 116. Three new operator-side CLI
@@ -5742,7 +5742,7 @@ direction for Phase 120.
 
 ## Phase 118 — Outcome-Driven Profile/Role Refinement (Chapter E #4 — closer)
 
-**Frozen — see [PHASE_118.md](PHASE_118.md).** The last
+**Frozen — see [PHASE_118.md](archive/phases/PHASE_118.md).** The last
 named Chapter E axis. Adds `ProfileHint` and
 `RoleDefinitionSuggestion` variants to
 `PersonaDeltaCategory`, extends the Phase 114 auto-
@@ -5790,7 +5790,7 @@ shaped by operator pressure.
 
 ## Phase 117 — Phase 116 Deferral Closeout (live-prompt pipe + per-skill tracking)
 
-**Frozen — see [PHASE_117.md](PHASE_117.md).** Standalone
+**Frozen — see [PHASE_117.md](archive/phases/PHASE_117.md).** Standalone
 phase that closes both Phase-116-internal deferrals
 together per Q1b sign-off. After Phase 117, the Phase 116
 relevance substrate reaches the LLM in live turns AND
@@ -5836,7 +5836,7 @@ this phase.
 
 ## Phase 116 — Tool/Skill Selection Learning from Outcomes (Chapter E #3)
 
-**Frozen — see [PHASE_116.md](PHASE_116.md).** Third phase
+**Frozen — see [PHASE_116.md](archive/phases/PHASE_116.md).** Third phase
 of Chapter E. The agent's tool/skill selection has been
 pure LLM intuition since Phase 0; Phase 116 builds a
 relevance ledger that tracks per-tool/per-skill success/
@@ -5887,7 +5887,7 @@ the next phase exit.
 
 ## Phase 115 — Self-Correction Loop on Failed Turns (Chapter E #2)
 
-**Frozen — see [PHASE_115.md](PHASE_115.md).** Second
+**Frozen — see [PHASE_115.md](archive/phases/PHASE_115.md).** Second
 phase of Chapter E. Closes the symmetric negative-
 feedback half of Phase 114's auto-proposer. The agent
 observes failed turns (Failed / Cancelled / TimedOut /
@@ -5945,7 +5945,7 @@ pressure-shaped at the next phase exit.
 
 ## Phase 114 — Persona Auto-Proposer Generalization (Chapter E opener)
 
-**Frozen — see [PHASE_114.md](PHASE_114.md).** First
+**Frozen — see [PHASE_114.md](archive/phases/PHASE_114.md).** First
 phase of Chapter E. Generalizes the Phase 112 skill auto-
 proposer from `LearnedSkill` to the full 11-category
 `PersonaDeltaCategory` surface. After Phase 114, the
@@ -5992,7 +5992,7 @@ precedent.
 
 ## Phase 113 — Operator-Surface Polish (deferral cleanup)
 
-**Frozen — see [PHASE_113.md](PHASE_113.md).** Standalone
+**Frozen — see [PHASE_113.md](archive/phases/PHASE_113.md).** Standalone
 phase past Chapter D's close, mirroring the Phase 20
 (Daemon Management + Deferral Cleanup) precedent: batch
 five small named operator-surface deferrals into one
@@ -6049,7 +6049,7 @@ Activation Milestone is fully ready to run.
 
 ## Phase 112 — Skill Auto-Proposer (Phase 110's named follow-on)
 
-**Frozen — see [PHASE_112.md](PHASE_112.md).** Shipped the
+**Frozen — see [PHASE_112.md](archive/phases/PHASE_112.md).** Shipped the
 agent-side auto-proposer that closes the last named Chapter
 D follow-on (Phase 110's deferral) and the project-vision
 critical-path piece. After Phase 112, the agent self-learns
@@ -6140,7 +6140,7 @@ envelope); `aivyx-core/src/lib.rs` predicted to break
 
 ## Phase 110 — Skills Auto-Creation (Reflection Staging) (Chapter D)
 
-**Frozen — see [PHASE_110.md](PHASE_110.md).** The sixth and
+**Frozen — see [PHASE_110.md](archive/phases/PHASE_110.md).** The sixth and
 final Chapter D item — the substrate-design-heavy piece the
 ROADMAP flagged with "highest amendment risk." Extends the
 existing reflection layer (Phase 29 propose / apply, Phase
@@ -6172,7 +6172,7 @@ without compounding break-on-break framing.
 
 ## Phase 109 — Tool Breadth + Amendment A12 (Chapter D)
 
-**Frozen — see [PHASE_109.md](PHASE_109.md).** The fifth
+**Frozen — see [PHASE_109.md](archive/phases/PHASE_109.md).** The fifth
 Chapter D item — Hermes-comparison tool-breadth gap closure.
 Three new substrate tools across A12 + one Phase-100 audit
 closure: `git.status` and `git.diff` sharing a new
@@ -6195,7 +6195,7 @@ Phase 100's audit conclusions.
 
 ## Phase 108 — Slack Channel Adapter (`aivyx-slack`) (Chapter D)
 
-**Frozen — see [PHASE_108.md](PHASE_108.md).** The fourth
+**Frozen — see [PHASE_108.md](archive/phases/PHASE_108.md).** The fourth
 Chapter D item and the four-data-point confirmation for the
 adapter pattern Phase 9 wrote down (then Phase 107 promoted
 to confirmed-at-three). Adds a new workspace crate
@@ -6230,7 +6230,7 @@ bundles with the Phase 107 daemon-frontend follow-on.
 
 ## Phase 107 — Discord Channel Adapter (`aivyx-discord`) (Chapter D)
 
-**Frozen — see [PHASE_107.md](PHASE_107.md).** The third
+**Frozen — see [PHASE_107.md](archive/phases/PHASE_107.md).** The third
 Chapter D item and the first to genuinely grow the substrate.
 Phases 105 and 106 were lower-risk reader / docs work; Phase
 107 added a new workspace crate (`aivyx-discord`) at full
@@ -6271,7 +6271,7 @@ Channel Activation Milestone per the
 
 ## Phase 106 — MCP Server Breadth (Curated Recipes) (Chapter D)
 
-**Frozen — see [PHASE_106.md](PHASE_106.md).** The second
+**Frozen — see [PHASE_106.md](archive/phases/PHASE_106.md).** The second
 Chapter D item. Phase 46 shipped the first bundled MCP server
 (`aivyx mcp-server web-search`); Phase 24 / 32 shipped the
 external `[[mcp_server]]` TOML surface for plugging in any
@@ -6302,7 +6302,7 @@ operator pressure.
 
 ## Phase 105 — Trajectory Logging (`aivyx audit export`) (Chapter D opener)
 
-**Frozen — see [PHASE_105.md](PHASE_105.md).** Chapter D's
+**Frozen — see [PHASE_105.md](archive/phases/PHASE_105.md).** Chapter D's
 opener and the easiest-wins-first item of the Hermes-
 comparison-driven arc. A read-only offline subcommand that
 emits the HMAC audit chain as JSONL on stdout. Each line is
@@ -6330,7 +6330,7 @@ the Phase 47 `Query` envelope.
 
 ## Phase 104 — `aivyx init` Polish (Chapter C opener)
 
-**Frozen — see [PHASE_104.md](PHASE_104.md).** Chapter C's
+**Frozen — see [PHASE_104.md](archive/phases/PHASE_104.md).** Chapter C's
 opener. After 60-plus phases of substrate work, the init
 wizard's first-touch UX had accumulated three concrete
 paper-cuts: stale Anthropic/OpenAI default model strings
@@ -6361,7 +6361,7 @@ wizard's retry loop branches on).
 
 ## Phase 100 — Tool-Surface Gap Closure (Chapter B opener)
 
-**Frozen — see [PHASE_100.md](PHASE_100.md).** Chapter B's
+**Frozen — see [PHASE_100.md](archive/phases/PHASE_100.md).** Chapter B's
 opener. `fs.delete` and `fs.metadata` are D4-original
 substrate scope bases (Phase 0, in Amendment A3's inventory)
 that have never had a first-party tool — the agent can read
@@ -6385,7 +6385,7 @@ directory listing inside `fs.metadata`). Workspace tests
 
 ## Phase 101 — Tool-Call Input Validation & Repair (Chapter B)
 
-**Frozen — see [PHASE_101.md](PHASE_101.md).** Chapter B's
+**Frozen — see [PHASE_101.md](archive/phases/PHASE_101.md).** Chapter B's
 reliability item. Two `dev-verify` runs (Phases 99, 100)
 caught local models emitting tool calls with malformed
 arguments. The planner already loops the model to retry an
@@ -6409,7 +6409,7 @@ Workspace tests `+9` → 1787.
 
 ## Phase 102 — Tool Observability (`aivyx tools`) (Chapter B)
 
-**Frozen — see [PHASE_102.md](PHASE_102.md).** Chapter B's
+**Frozen — see [PHASE_102.md](archive/phases/PHASE_102.md).** Chapter B's
 observability item. Phase 100 widened the tool surface and
 Phase 101 made tool calls more reliable; neither gave the
 operator a way to *see* the tool layer. Phase 102 adds
@@ -6430,7 +6430,7 @@ workspace tests `+12` → 1799.
 
 ## Phase 103 — External Tool Ergonomics (`aivyx tool init`) (Chapter B)
 
-**Frozen — see [PHASE_103.md](PHASE_103.md).** Chapter B's
+**Frozen — see [PHASE_103.md](archive/phases/PHASE_103.md).** Chapter B's
 closing item. Three Chapter B phases shipped the *operator's*
 tool experience (Phase 100 surface, Phase 101 reliability,
 Phase 102 observability); Phase 103 closes the chapter on the
@@ -6492,7 +6492,7 @@ to a specific need.
 
 ## Phase 54 — Final Documentation Sweep (Chapter A Closer) [SHIPPED]
 
-**Frozen — see [PHASE_54.md](PHASE_54.md).** Closed Chapter A
+**Frozen — see [PHASE_54.md](archive/phases/PHASE_54.md).** Closed Chapter A
 with a docs catch-up. Root README rewritten (179 lines, current
 state + five-minute setup). PRODUCT_ROADMAP Delivered section
 refreshed with all 12 PRODUCT.md commitments grouped by category
@@ -6513,7 +6513,7 @@ operation, a future cleanup phase will absorb it.
 
 ## Phase 52 — Tool Process Sandbox Layer [SHIPPED]
 
-**Frozen — see [PHASE_52.md](PHASE_52.md).** Added a generic
+**Frozen — see [PHASE_52.md](archive/phases/PHASE_52.md).** Added a generic
 command-wrapper sandbox layer to `[[tool_process]]`.
 `[tool_process.sandbox] { wrapper, args }` is prepended to the
 spawn — `wrapper wrapper_args... command command_args...`.
@@ -6530,7 +6530,7 @@ lib.rs → 1).
 
 ## Phase 51 — Cleanup: Error Typing + ConnectionContext + Passphrase Path [SHIPPED]
 
-**Frozen — see [PHASE_51.md](PHASE_51.md).** Mechanical
+**Frozen — see [PHASE_51.md](archive/phases/PHASE_51.md).** Mechanical
 Chapter A cleanup phase. Closed three independent items:
 
 1. **`AivyxError::{Storage,Crypto}` typed nested errors.** The
@@ -6553,7 +6553,7 @@ streak → 3, PRODUCT.md streak → 2.
 
 ## Phase 50 — P12 Closeout: First-Party In-Process Protocol Unification [SHIPPED]
 
-**Frozen — see [PHASE_50.md](PHASE_50.md).** Wired the two Phase
+**Frozen — see [PHASE_50.md](archive/phases/PHASE_50.md).** Wired the two Phase
 49 deferred bridge stubs: `ToolEvent` frames now relay onto the
 channel (`Status`/`OutputChunk` → `StreamEvent`), and
 cancellation is targeted via `CancelInvocation { call_id }`
@@ -6574,7 +6574,7 @@ refresh (honest break, predicted).
 
 ## Phase 49 — Tool Process IPC Foundation (P12) [SHIPPED]
 
-**Frozen — see [PHASE_49.md](PHASE_49.md).** Delivered the
+**Frozen — see [PHASE_49.md](archive/phases/PHASE_49.md).** Delivered the
 last `PRODUCT.md` forward commitment. New 12th workspace crate
 `aivyx-tool` shipping `ToolProcessBridge` (spawns + handshakes a
 child over length-prefixed JSON on stdin/stdout, `kill_on_drop`
