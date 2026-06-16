@@ -1,11 +1,17 @@
 # Agent Creation & Onboarding (Chapter Genesis)
 
-> **Status:** 🟡 **design contract** (Chapter Genesis opening, GE.0). The locked
-> contract for **unifying agent creation/onboarding across the CLI and the web
-> Studio** onto one shared model. Scope: the **single assistant** identity
-> (Profile + Persona + Soul); **team creation is deferred** (§3). This is a
-> *consolidation* chapter — it extends a pattern already proven in one half
-> rather than inventing a new mechanism.
+> **Status:** ✅ **shipped** (Chapter Genesis complete, GE.0–GE.5). This began as
+> the design contract and is now implemented: the Profile drafter lifted into
+> `aivyx-channel` (`profile_draft.rs`, GE.1) so one drafter backs both surfaces;
+> the `DraftProfile` IPC + wasm-clean `ProfileDraftWire` (GE.2); the Studio
+> **"Create your agent"** flow sequencing Profile → Persona seed → access over
+> existing IPC (GE.3); provider/model kept CLI-set and shown read-only (GE.4,
+> §5). Scope: the **single assistant** identity (Profile + Persona + Soul);
+> **team creation is deferred** (§3, a future "Chapter Roster" that reuses these
+> primitives). A *consolidation* chapter — it extended the Chapter-X persona-seed
+> unification to the Profile half rather than inventing a mechanism. After it,
+> both the CLI wizard and the web Studio drive the **same** drafters and the
+> **same** config writers (the §1 split is gone).
 
 ## 1. The gap — onboarding is split, and the reusable half is trapped
 
