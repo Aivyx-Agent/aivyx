@@ -154,8 +154,8 @@ struct DocumentsState {
     entries: Vec<DocEntry>,
     /// The open file in the viewer, or `None` when showing the listing.
     file: Option<DocFile>,
-    /// Last error (e.g. a denied path / read failure).
-    notice: Option<String>,
+    /// Last outcome `(ok, message)` (a denied path / read failure / DW write).
+    notice: Option<(bool, String)>,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -2671,6 +2671,15 @@ fn DocumentsPanel() -> Element {
     let ws = use_context::<Sender>();
     let mut documents = use_context::<Signal<DocumentsState>>();
 
+    // Toolbar create state: Some(true)=new file, Some(false)=new folder.
+    let mut new_kind = use_signal(|| None::<bool>);
+    let mut new_name = use_signal(String::new);
+    // Per-entry rename (the entry name being renamed) + the pending value.
+    let mut rename_of = use_signal(|| None::<String>);
+    let mut rename_to = use_signal(String::new);
+    // The entry path pending a delete confirmation (→ modal).
+    let mut delete_of = use_signal(|| None::<String>);
+
     // First entry → default to the workspace root.
     use_future(move || async move {
         if documents.read().root.is_empty() {
@@ -2681,10 +2690,12 @@ fn DocumentsPanel() -> Element {
 
     let d = documents();
     let root = if d.root.is_empty() { "workspace".to_string() } else { d.root.clone() };
+    let cur = d.path.clone();
+    let viewing = d.file.is_some();
 
     rsx! {
         div { class: "documents",
-            // Root switcher.
+            // Toolbar: root switcher + New file / New folder.
             div { class: "doc-toolbar",
                 button {
                     class: if root == "workspace" { "btn btn-primary btn-xs" } else { "btn btn-glass btn-xs" },
@@ -2695,6 +2706,42 @@ fn DocumentsPanel() -> Element {
                     class: if root == "fs" { "btn btn-primary btn-xs" } else { "btn btn-glass btn-xs" },
                     onclick: move |_| switch_doc_root(documents, ws, "fs"),
                     "Files"
+                }
+                if !viewing {
+                    div { style: "flex:1" }
+                    button { class: "btn btn-glass btn-xs", onclick: move |_| { new_name.set(String::new()); new_kind.set(Some(true)); }, "New file" }
+                    button { class: "btn btn-glass btn-xs", onclick: move |_| { new_name.set(String::new()); new_kind.set(Some(false)); }, "New folder" }
+                }
+            }
+
+            // New file/folder name input (inline).
+            if let Some(is_file) = new_kind() {
+                div { class: "add-row",
+                    input { class: "input", placeholder: if is_file { "new-file.md" } else { "new-folder" },
+                        value: "{new_name}", oninput: move |e| new_name.set(e.value()) }
+                    {
+                        let (r, base) = (root.clone(), cur.clone());
+                        rsx! {
+                            button {
+                                class: "btn btn-primary btn-xs",
+                                onclick: move |_| {
+                                    let nm = new_name();
+                                    if !nm.trim().is_empty() {
+                                        let target = join_doc_path(&base, nm.trim());
+                                        if is_file {
+                                            ws.send(write_file_query(&r, &target, String::new(), false));
+                                        } else {
+                                            ws.send(make_dir_query(&r, &target));
+                                        }
+                                        ws.send(list_dir_refresh_query(&r, &base));
+                                    }
+                                    new_kind.set(None);
+                                },
+                                "Create"
+                            }
+                        }
+                    }
+                    button { class: "btn btn-glass btn-xs", onclick: move |_| new_kind.set(None), "Cancel" }
                 }
             }
 
@@ -2718,13 +2765,13 @@ fn DocumentsPanel() -> Element {
                 }
             }
 
-            if let Some(msg) = d.notice.clone() {
-                div { class: "notice err", "{msg}" }
+            if let Some((ok, msg)) = d.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
             }
 
-            // File viewer (when one is open) else the directory listing.
+            // File viewer/editor (when one is open) else the directory listing.
             if let Some(file) = d.file.clone() {
-                FileViewer { file }
+                FileViewer { key: "{file.path}", file, root: root.clone() }
             } else {
                 div { class: "glass-card doc-listing",
                     if d.entries.is_empty() {
@@ -2733,22 +2780,91 @@ fn DocumentsPanel() -> Element {
                         for e in d.entries.clone() {
                             {
                                 let target = join_doc_path(&d.path, &e.name);
-                                let (r, is_dir) = (root.clone(), e.kind == "dir");
+                                let (r, base) = (root.clone(), cur.clone());
+                                let is_dir = e.kind == "dir";
+                                let renaming = rename_of() == Some(e.name.clone());
                                 rsx! {
-                                    button {
-                                        class: "doc-row",
-                                        onclick: move |_| {
-                                            if is_dir {
-                                                ws.send(list_dir_query(&r, &target));
-                                            } else {
-                                                ws.send(read_file_query(&r, &target));
+                                    div { class: "doc-row",
+                                        if renaming {
+                                            input { class: "input", value: "{rename_to}", oninput: move |ev| rename_to.set(ev.value()) }
+                                            {
+                                                let (r2, base2, tgt2) = (r.clone(), base.clone(), target.clone());
+                                                rsx! {
+                                                    button { class: "btn btn-primary btn-xs",
+                                                        onclick: move |_| {
+                                                            let nm = rename_to();
+                                                            if !nm.trim().is_empty() {
+                                                                let new_target = join_doc_path(&base2, nm.trim());
+                                                                ws.send(rename_path_query(&r2, &tgt2, &new_target));
+                                                                ws.send(list_dir_refresh_query(&r2, &base2));
+                                                            }
+                                                            rename_of.set(None);
+                                                        },
+                                                        "Save"
+                                                    }
+                                                }
                                             }
-                                        },
-                                        span { class: "doc-ico", {kind_glyph(&e.kind)} }
-                                        span { class: "doc-name", "{e.name}" }
-                                        span { class: "doc-size label-tech",
-                                            {if e.kind == "file" { fmt_size(e.size_bytes) } else { String::new() }} }
+                                            button { class: "btn btn-glass btn-xs", onclick: move |_| rename_of.set(None), "Cancel" }
+                                        } else {
+                                            {
+                                                let (r3, tgt3) = (r.clone(), target.clone());
+                                                rsx! {
+                                                    button { class: "doc-open",
+                                                        onclick: move |_| {
+                                                            if is_dir { ws.send(list_dir_query(&r3, &tgt3)); }
+                                                            else { ws.send(read_file_query(&r3, &tgt3)); }
+                                                        },
+                                                        span { class: "doc-ico", {kind_glyph(&e.kind)} }
+                                                        span { class: "doc-name", "{e.name}" }
+                                                        span { class: "doc-size label-tech",
+                                                            {if e.kind == "file" { fmt_size(e.size_bytes) } else { String::new() }} }
+                                                    }
+                                                }
+                                            }
+                                            div { class: "doc-actions",
+                                                {
+                                                    let nm = e.name.clone();
+                                                    rsx! {
+                                                        button { class: "btn btn-glass btn-xs", title: "Rename",
+                                                            onclick: move |_| { rename_to.set(nm.clone()); rename_of.set(Some(nm.clone())); }, "✎" }
+                                                    }
+                                                }
+                                                {
+                                                    let tgt4 = target.clone();
+                                                    rsx! {
+                                                        button { class: "btn btn-glass btn-xs danger", title: "Delete",
+                                                            onclick: move |_| delete_of.set(Some(tgt4.clone())), "🗑" }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Delete confirm modal (the one hard-gated, no-undo action).
+        if let Some(path) = delete_of() {
+            div { class: "modal-scrim",
+                div { class: "glass-card modal",
+                    h3 { "Delete?" }
+                    p { "Permanently delete  " code { "{path}" } "  from {root}? This cannot be undone." }
+                    div { class: "actions",
+                        button { class: "btn btn-glass", onclick: move |_| delete_of.set(None), "Cancel" }
+                        {
+                            let (r, base, p) = (root.clone(), cur.clone(), path.clone());
+                            rsx! {
+                                button { class: "btn btn-primary",
+                                    onclick: move |_| {
+                                        ws.send(delete_file_query(&r, &p));
+                                        ws.send(list_dir_refresh_query(&r, &base));
+                                        delete_of.set(None);
+                                    },
+                                    "Delete"
                                 }
                             }
                         }
@@ -2759,32 +2875,54 @@ fn DocumentsPanel() -> Element {
     }
 }
 
-/// The file content pane — text in a mono `<pre>`, or a "not shown" note for
-/// binary / over-cap files. A back action returns to the listing.
+/// The file content pane — an editor for text files (textarea + Save), or a
+/// "not shown" note for binary / over-cap files.
 #[component]
-fn FileViewer(file: DocFile) -> Element {
+fn FileViewer(file: DocFile, root: String) -> Element {
+    let ws = use_context::<Sender>();
     let mut documents = use_context::<Signal<DocumentsState>>();
+    // Seeded once per file (the panel keys this component by path, so it
+    // remounts — and re-seeds — when a different file is opened).
+    let mut edited = use_signal(|| file.content.clone().unwrap_or_default());
+    let editable = file.content.is_some() && !file.binary;
+
     rsx! {
         div { class: "glass-card doc-viewer",
             div { class: "panel-head",
                 h4 { "{file.path}" }
                 span { class: "chip", {fmt_size(file.size_bytes)} }
+                if editable {
+                    {
+                        let (r, p) = (root.clone(), file.path.clone());
+                        rsx! {
+                            button { class: "btn btn-primary btn-xs",
+                                onclick: move |_| ws.send(write_file_query(&r, &p, edited(), true)),
+                                "Save"
+                            }
+                        }
+                    }
+                }
                 button { class: "btn btn-glass btn-xs", onclick: move |_| documents.write().file = None, "Close" }
             }
             if file.truncated {
-                div { class: "notice err", "Showing the first 256 KB of a larger file." }
+                div { class: "notice err", "Showing the first 256 KB of a larger file — editing is disabled to avoid truncating it." }
             }
-            match &file.content {
-                Some(text) => rsx! { pre { class: "doc-text", "{text}" } },
-                None => rsx! {
-                    p { class: "label-tech sub",
-                        {if file.binary {
-                            format!("Binary file — {} not shown.", fmt_size(file.size_bytes))
-                        } else {
-                            "File too large to display.".to_string()
-                        }}
-                    }
-                },
+            if editable && !file.truncated {
+                textarea { class: "doc-edit", spellcheck: "false",
+                    value: "{edited}", oninput: move |e| edited.set(e.value()) }
+            } else {
+                match &file.content {
+                    Some(text) => rsx! { pre { class: "doc-text", "{text}" } },
+                    None => rsx! {
+                        p { class: "label-tech sub",
+                            {if file.binary {
+                                format!("Binary file — {} not shown.", fmt_size(file.size_bytes))
+                            } else {
+                                "File too large to display.".to_string()
+                            }}
+                        }
+                    },
+                }
             }
         }
     }
@@ -2807,6 +2945,58 @@ fn list_dir_query(root: &str, path: &str) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-docs-list".to_string(),
         payload: QueryPayload::ListDir { root: root.to_string(), path: path.to_string() },
+    }
+}
+
+/// Re-list after a mutation — a distinct id so the ws_task keeps the outcome
+/// notice (a navigation list clears it).
+fn list_dir_refresh_query(root: &str, path: &str) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-refresh".to_string(),
+        payload: QueryPayload::ListDir { root: root.to_string(), path: path.to_string() },
+    }
+}
+
+// ── DW — the Documents write queries. ──
+
+fn write_file_query(root: &str, path: &str, content: String, overwrite: bool) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-write".to_string(),
+        payload: QueryPayload::WriteFile {
+            root: root.to_string(),
+            path: path.to_string(),
+            content,
+            overwrite,
+        },
+    }
+}
+
+fn delete_file_query(root: &str, path: &str) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-delete".to_string(),
+        payload: QueryPayload::DeleteFile {
+            root: root.to_string(),
+            path: path.to_string(),
+            confirm: true,
+        },
+    }
+}
+
+fn rename_path_query(root: &str, path: &str, new_path: &str) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-rename".to_string(),
+        payload: QueryPayload::RenamePath {
+            root: root.to_string(),
+            path: path.to_string(),
+            new_path: new_path.to_string(),
+        },
+    }
+}
+
+fn make_dir_query(root: &str, path: &str) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-docs-mkdir".to_string(),
+        payload: QueryPayload::MakeDir { root: root.to_string(), path: path.to_string() },
     }
 }
 
@@ -2910,17 +3100,20 @@ async fn ws_task(
                     roster.set(Some(cfg));
                 }
                 // Chapter Z — Documents browser: a directory listing arrived;
-                // the echoed `path` is authoritative. Re-listing closes any open
-                // file and clears the notice.
+                // the echoed `path` is authoritative. A *refresh* re-list (after
+                // a DW mutation) keeps the outcome notice; a *navigation* re-list
+                // clears it.
                 DaemonEnvelope::QueryResponse {
+                    id,
                     payload: QueryResponsePayload::ListDir { entries, path },
-                    ..
                 } => {
                     let mut d = documents.write();
                     d.entries = entries;
                     d.path = path;
                     d.file = None;
-                    d.notice = None;
+                    if !id.starts_with("mc-docs-refresh") {
+                        d.notice = None;
+                    }
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ReadFile { file },
@@ -2930,13 +3123,35 @@ async fn ws_task(
                     d.file = Some(file);
                     d.notice = None;
                 }
+                // DW — a write mutation acked: set the outcome notice + bump the
+                // refresh tick so the panel re-lists the directory.
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::FsMutation { ok, error },
+                } if id.starts_with("mc-docs") => {
+                    let mut d = documents.write();
+                    d.notice = Some(if ok {
+                        let what = if id.contains("delete") {
+                            "Deleted."
+                        } else if id.contains("rename") {
+                            "Renamed."
+                        } else if id.contains("mkdir") {
+                            "Folder created."
+                        } else {
+                            "Saved."
+                        };
+                        (true, what.to_string())
+                    } else {
+                        (false, error.unwrap_or_else(|| "Operation failed.".to_string()))
+                    });
+                }
                 // A denied path / read failure on the Documents screen (ids
                 // prefixed `mc-docs`) → a notice, leaving the listing intact.
                 DaemonEnvelope::QueryResponse {
                     id,
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-docs") => {
-                    documents.write().notice = Some(message);
+                    documents.write().notice = Some((false, message));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListAuditEntries { entries, total_len },

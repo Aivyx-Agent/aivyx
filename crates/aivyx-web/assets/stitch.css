@@ -590,15 +590,28 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .crumb-sep { color: var(--color-text-disabled); }
 .doc-listing { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
 .doc-row {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 7px 10px; border: 0; border-radius: 6px; background: transparent;
-  font: inherit; text-align: left; cursor: pointer; color: var(--color-text-primary);
-  transition: background 0.12s;
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  border-radius: 6px; transition: background 0.12s;
 }
 .doc-row:hover { background: var(--color-bg-raised); }
+.doc-open {
+  display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+  padding: 7px 10px; border: 0; border-radius: 6px; background: transparent;
+  font: inherit; text-align: left; cursor: pointer; color: var(--color-text-primary);
+}
+.doc-actions { display: flex; gap: 2px; flex: none; padding-right: 6px; opacity: 0; transition: opacity 0.12s; }
+.doc-row:hover .doc-actions { opacity: 1; }
 .doc-ico { flex: none; width: 18px; text-align: center; }
 .doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
 .doc-size { flex: none; color: var(--color-text-disabled); }
+.doc-edit {
+  width: 100%; min-height: 50vh; resize: vertical;
+  padding: 12px 14px; border-radius: 0.375rem;
+  background: var(--color-bg-code); border: 1px solid var(--color-border-ghost);
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;
+  color: var(--color-text-primary); white-space: pre; overflow: auto;
+}
+.doc-edit:focus { outline: none; border-color: var(--color-border-active); }
 .doc-viewer { display: flex; flex-direction: column; gap: 10px; }
 .doc-viewer h4 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 13px; }
 .doc-text {
