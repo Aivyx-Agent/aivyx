@@ -15,7 +15,7 @@ use aivyx_llm::ollama::RECOMMENDED_LOCAL_MODEL;
 use aivyx_llm::verify::{verify_provider_credentials, VerifyError, VerifyProvider};
 use aivyx_llm::LlmProvider;
 
-use super::identity_draft::{
+use aivyx_channel::profile_draft::{
     draft_identity, DraftedProfile, IdentityAnswers,
 };
 

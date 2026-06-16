@@ -1,5 +1,14 @@
-//! Phase 181 — LLM-assisted identity draft for the guided
-//! first-launch builder.
+//! LLM-assisted **Profile** draft for guided agent creation.
+//!
+//! Phase 181 introduced this as the CLI wizard's identity
+//! builder. Chapter Genesis (GE.1) lifted it out of the
+//! `aivyx-cli` binary into `aivyx-channel` — next to
+//! [`crate::persona_seed_draft`] — so the **same drafter** backs
+//! both the `aivyx init` CLI wizard and the daemon's
+//! `DraftProfile` IPC (the Studio onboarding flow, GE.2/GE.3).
+//! The two drafters are complementary: this one drafts the
+//! operator-**declared** P13 Profile (six fields); the persona
+//! seed drafts the **learned** voice-layer facets.
 //!
 //! The operator answers a short relationship conversation (what
 //! they want the assistant to be, the role it plays, how it

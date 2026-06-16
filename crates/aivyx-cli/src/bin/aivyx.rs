@@ -110,8 +110,6 @@ mod identity;
 mod mcp_recipes;
 #[path = "aivyx_modules/init.rs"]
 mod init;
-#[path = "aivyx_modules/identity_draft.rs"]
-mod identity_draft;
 #[path = "aivyx_modules/connect.rs"]
 mod connect;
 #[path = "aivyx_modules/init_templates.rs"]
