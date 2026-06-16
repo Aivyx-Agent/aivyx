@@ -21,11 +21,18 @@
 //! cross-tool response shape stays operator-predictable (the
 //! `web.search` / Gmail precedent).
 
+pub mod create;
+pub mod delete;
 pub mod get;
 pub mod list;
 pub mod person;
+pub mod resource_name;
 pub mod search;
+pub mod update;
 
+pub use create::ContactsCreate;
+pub use delete::ContactsDelete;
 pub use get::ContactsGet;
 pub use list::ContactsList;
 pub use search::ContactsSearch;
+pub use update::ContactsUpdate;

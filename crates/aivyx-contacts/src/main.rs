@@ -19,7 +19,10 @@ use aivyx_contacts::auth_cli::{
     revoke::{run_auth_revoke, GOOGLE_REVOKE_ENDPOINT},
     status::run_auth_status,
 };
-use aivyx_contacts::tools::{ContactsGet, ContactsList, ContactsSearch};
+use aivyx_contacts::tools::{
+    ContactsCreate, ContactsDelete, ContactsGet, ContactsList, ContactsSearch,
+    ContactsUpdate,
+};
 use aivyx_contacts::{
     default_token_path, load_tokens, run_multi_tool_subprocess, ContactsClient,
 };
@@ -148,12 +151,16 @@ async fn run_ipc_loop() -> ExitCode {
         token_path,
     ));
 
-    // CT.3 — the three read tools (search / list / get). The
-    // three write tools (create / update / delete) land in CT.4.
+    // The six People API tools: three read (CT.3) + three write
+    // (CT.4). Write tools require contacts.write (Trusted-tier);
+    // contacts.delete is additionally confirm-first.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ContactsSearch::new(Arc::clone(&client))),
         Arc::new(ContactsList::new(Arc::clone(&client))),
         Arc::new(ContactsGet::new(Arc::clone(&client))),
+        Arc::new(ContactsCreate::new(Arc::clone(&client))),
+        Arc::new(ContactsUpdate::new(Arc::clone(&client))),
+        Arc::new(ContactsDelete::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-contacts").await {

@@ -18,6 +18,7 @@ use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verificatio
 
 use crate::contacts_client::SharedContactsClient;
 use crate::tools::person::{trim_person, PERSON_FIELDS};
+use crate::tools::resource_name::parse_resource_name;
 
 pub struct ContactsGet {
     id: ToolId,
@@ -92,29 +93,6 @@ impl Tool for ContactsGet {
             verified: Verification::NotApplicable,
         }
     }
-}
-
-/// Validate and extract `resource_name`. People resource names
-/// are `people/<id>`; we require that prefix so the tool can't
-/// be coerced into building a path that escapes the people
-/// collection.
-pub(crate) fn parse_resource_name(input: &Value) -> Result<String, String> {
-    let obj = input
-        .as_object()
-        .ok_or_else(|| "input must be a JSON object".to_string())?;
-    let name = match obj.get("resource_name") {
-        Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
-        Some(Value::String(_)) | None => {
-            return Err("`resource_name` is required and must be a non-empty string".to_string())
-        }
-        Some(_) => return Err("`resource_name` must be a string".to_string()),
-    };
-    if !name.starts_with("people/") || name.contains("..") {
-        return Err(format!(
-            "`resource_name` must look like `people/<id>` (got {name:?})"
-        ));
-    }
-    Ok(name)
 }
 
 fn input_schema() -> Value {
