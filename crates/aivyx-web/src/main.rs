@@ -19,8 +19,8 @@
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
     MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary, PersonaProposalResolution,
-    PersonaProposalSummary, PersonaSeedWire, ProfileSummary, QueryPayload, QueryResponsePayload,
-    SeedSkillWire, SettingsSnapshot, StreamEventPayload, VoiceSettingsSnapshot,
+    PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
+    QueryResponsePayload, SeedSkillWire, SettingsSnapshot, StreamEventPayload, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
@@ -73,6 +73,9 @@ enum View {
     Teams,
     Documents,
     Voice,
+    /// Chapter Genesis — the guided agent-creation flow (Profile → Persona seed
+    /// → access). First-run lands here when the Profile isn't yet declared.
+    Onboarding,
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -130,6 +133,12 @@ struct AgentsState {
     /// X.3 — bumped on every `DraftPersonaSeed` response (success or failure) so
     /// the onboarding card can clear its "Drafting…" state and re-seed its form.
     seed_draft_resp: u64,
+    /// GE.3 — the latest LLM-drafted **Profile** (the onboarding flow's step 1
+    /// fills its six fields from this); `None` until a draft arrives or fails.
+    profile_draft: Option<ProfileDraftWire>,
+    /// GE.3 — bumped on every `DraftProfile` response (success or failure) so the
+    /// onboarding flow can clear its "Drafting…" state and re-fill its form.
+    profile_draft_resp: u64,
 }
 
 /// Voice config screen state — Chapter Voice. The on-disk `[voice]` snapshot
@@ -320,6 +329,7 @@ fn App() -> Element {
         View::Teams => "Teams",
         View::Documents => "Documents",
         View::Voice => "Voice",
+        View::Onboarding => "Create your agent",
     };
 
     rsx! {
@@ -344,6 +354,7 @@ fn App() -> Element {
                         View::Teams => rsx! { TeamsPanel {} },
                         View::Documents => rsx! { DocumentsPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
+                        View::Onboarding => rsx! { OnboardingPanel { view } },
                     }
                 }
             }
@@ -364,6 +375,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 img { src: LOGOMARK, alt: "Aivyx" }
                 span { class: "wordmark", "AIVYX" }
             }
+            NavItem { icon: ICON_AGENTS, label: "Create", active: view() == View::Onboarding,
+                onclick: move |_| view.set(View::Onboarding) }
             NavItem { icon: ICON_COMMAND, label: "Command", active: view() == View::Command,
                 onclick: move |_| view.set(View::Command) }
             NavItem { icon: ICON_MISSIONS, label: "Missions", active: view() == View::Missions,
@@ -1923,6 +1936,217 @@ fn AgentsPanel() -> Element {
     }
 }
 
+/// Chapter Genesis (GE.3) — the guided agent-creation flow. Three sequenced
+/// steps over existing IPC: (1) Profile — the declared identity, optionally
+/// LLM-drafted via `DraftProfile`, persisted via `SetProfile`; (2) Persona seed
+/// — the learned voice, via the X.3 `SeedOnboardingCard`; (3) Access — how far
+/// the agent reaches, via `SetAccessLevel`. The operator authors every field;
+/// the LLM only drafts. Targets a running daemon (the cold-start path is
+/// `aivyx init`); Profile + access are load-time so a restart applies them.
+#[component]
+fn OnboardingPanel(view: Signal<View>) -> Element {
+    let step = use_signal(|| 0u8);
+    rsx! {
+        div { class: "view-stack",
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "Create your agent" }
+                    span { class: "chip sage", "step {step() + 1} of 3" }
+                }
+                p { class: "muted",
+                    "Shape your assistant's identity, voice, and reach. You're the author of "
+                    "record — the model only drafts. Profile and access apply after a daemon restart."
+                }
+                div { class: "step-rail",
+                    StepDot { n: 1, label: "Profile", active: step() == 0, done: step() > 0 }
+                    StepDot { n: 2, label: "Persona", active: step() == 1, done: step() > 1 }
+                    StepDot { n: 3, label: "Access", active: step() == 2, done: false }
+                }
+            }
+            match step() {
+                0 => rsx! { OnboardingProfileStep { step } },
+                1 => rsx! {
+                    div { class: "view-stack",
+                        SeedOnboardingCard {}
+                        div { class: "wizard-nav",
+                            button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(0); }, "Back" }
+                            button { class: "btn", onclick: move |_| { let mut s = step; s.set(2); }, "Continue →" }
+                        }
+                    }
+                },
+                _ => rsx! { OnboardingAccessStep { step, view } },
+            }
+        }
+    }
+}
+
+/// One dot in the onboarding step rail.
+#[component]
+fn StepDot(n: u8, label: &'static str, active: bool, done: bool) -> Element {
+    let cls = if active { "step-dot active" } else if done { "step-dot done" } else { "step-dot" };
+    rsx! {
+        div { class: "{cls}",
+            span { class: "step-num", if done { "✓" } else { "{n}" } }
+            span { class: "step-label", "{label}" }
+        }
+    }
+}
+
+/// GE.3 step 1 — the declared Profile. Four onboarding answers feed an optional
+/// LLM draft (`DraftProfile`); the six Profile fields below are then editable
+/// and saved via `SetProfile`.
+#[component]
+fn OnboardingProfileStep(step: Signal<u8>) -> Element {
+    let ws = use_context::<Sender>();
+    let agents = use_context::<Signal<AgentsState>>();
+
+    // The four relationship answers (LLM draft inputs).
+    let mut intent = use_signal(String::new);
+    let mut role = use_signal(String::new);
+    let mut tone = use_signal(String::new);
+    let mut never_do = use_signal(String::new);
+
+    // The six declared Profile fields (editable; the draft fills them).
+    let mut assistant_name = use_signal(String::new);
+    let mut operator_profile = use_signal(String::new);
+    let mut communication_style = use_signal(String::new);
+    let mut use_cases = use_signal(String::new);
+    let mut prefs = use_signal(String::new);
+    let mut constraints = use_signal(String::new);
+
+    let mut drafting = use_signal(|| false);
+    let mut last_resp = use_signal(|| 0u64);
+
+    // Fill the six fields when a Profile draft arrives (success or failure).
+    use_effect(move || {
+        let a = agents();
+        if a.profile_draft_resp != last_resp() {
+            last_resp.set(a.profile_draft_resp);
+            drafting.set(false);
+            if let Some(d) = a.profile_draft.as_ref() {
+                assistant_name.set(d.assistant_name.clone().unwrap_or_default());
+                operator_profile.set(d.operator_profile.clone().unwrap_or_default());
+                communication_style.set(d.communication_style.clone().unwrap_or_default());
+                use_cases.set(d.primary_use_cases.join(", "));
+                prefs.set(d.behavioral_preferences.join(", "));
+                constraints.set(d.behavioral_constraints.join(", "));
+            }
+        }
+    });
+
+    let st = agents();
+    let saved = st.restart_required;
+
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head", h3 { "1 · Profile — who your assistant is" } }
+            p { class: "muted", "Answer in your own words, then let the model draft a starting Profile — or fill the six fields yourself." }
+
+            label { class: "field-label", "What do you want this assistant to be for you?" }
+            textarea { class: "input", rows: "2", value: "{intent}", oninput: move |e| intent.set(e.value()) }
+            label { class: "field-label", "What role should it play?" }
+            input { class: "input", value: "{role}", placeholder: "collaborator / coach / assistant …", oninput: move |e| role.set(e.value()) }
+            label { class: "field-label", "How should it talk?" }
+            input { class: "input", value: "{tone}", placeholder: "warm but concise …", oninput: move |e| tone.set(e.value()) }
+            label { class: "field-label", "What must it never do?" }
+            input { class: "input", value: "{never_do}", placeholder: "never flatter; always confirm destructive actions …", oninput: move |e| never_do.set(e.value()) }
+
+            div { class: "wizard-nav",
+                button {
+                    class: "btn ghost",
+                    disabled: drafting(),
+                    onclick: move |_| {
+                        drafting.set(true);
+                        ws.send(draft_profile_query(intent(), role(), tone(), never_do()));
+                    },
+                    if drafting() { "Drafting…" } else { "✦ Draft with AI" }
+                }
+            }
+
+            hr { class: "divider" }
+            div { class: "panel-head", h4 { "Your Profile" } }
+            label { class: "field-label", "Assistant name" }
+            input { class: "input", value: "{assistant_name}", oninput: move |e| assistant_name.set(e.value()) }
+            label { class: "field-label", "About you (operator profile)" }
+            textarea { class: "input", rows: "2", value: "{operator_profile}", oninput: move |e| operator_profile.set(e.value()) }
+            label { class: "field-label", "Communication style" }
+            input { class: "input", value: "{communication_style}", oninput: move |e| communication_style.set(e.value()) }
+            label { class: "field-label", "Primary use cases (comma-separated)" }
+            input { class: "input", value: "{use_cases}", oninput: move |e| use_cases.set(e.value()) }
+            label { class: "field-label", "Behavioral preferences (comma-separated)" }
+            input { class: "input", value: "{prefs}", oninput: move |e| prefs.set(e.value()) }
+            label { class: "field-label", "Behavioral constraints (comma-separated)" }
+            input { class: "input", value: "{constraints}", oninput: move |e| constraints.set(e.value()) }
+
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+            if saved {
+                div { class: "notice ok", "Profile saved — it shapes every turn after the next daemon restart." }
+            }
+
+            div { class: "wizard-nav",
+                button {
+                    class: "btn",
+                    onclick: move |_| {
+                        ws.send(set_profile_query(
+                            opt_str(&assistant_name()),
+                            opt_str(&operator_profile()),
+                            opt_str(&communication_style()),
+                            csv_opt(&use_cases()),
+                            csv_opt(&prefs()),
+                            csv_opt(&constraints()),
+                        ));
+                        let mut s = step; s.set(1);
+                    },
+                    "Save & continue →"
+                }
+                button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(1); }, "Skip for now" }
+            }
+        }
+    }
+}
+
+/// GE.3 step 3 — access level, via the existing `SetAccessLevel` (confirm-first
+/// on any expansion beyond the sandbox).
+#[component]
+fn OnboardingAccessStep(step: Signal<u8>, view: Signal<View>) -> Element {
+    let ws = use_context::<Sender>();
+    let agents = use_context::<Signal<AgentsState>>();
+    let mut level = use_signal(|| "sandbox".to_string());
+    let st = agents();
+
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head", h3 { "3 · Access — how far it reaches" } }
+            p { class: "muted", "Start narrow; you can widen later in Settings. Expanding beyond the sandbox is confirmed first." }
+            select {
+                class: "input",
+                value: "{level}",
+                onchange: move |e| level.set(e.value()),
+                option { value: "sandbox", "sandbox — ~/aivyx-sandbox" }
+                option { value: "home", "home — your home directory" }
+                option { value: "full", "full — the whole machine" }
+            }
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+            div { class: "wizard-nav",
+                button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(1); }, "Back" }
+                button {
+                    class: "btn",
+                    onclick: move |_| {
+                        // Confirm-first: the daemon gates any expansion beyond sandbox.
+                        ws.send(set_access_query(level(), None, true));
+                        view.set(View::Command);
+                    },
+                    "Finish — go to Command Center"
+                }
+            }
+        }
+    }
+}
+
 /// X.3 — the "Seed your assistant" onboarding card, shown for a fresh agent.
 /// Describe the assistant → optionally let the model draft a starting set →
 /// edit → plant. The seed goes onto the signed chain via `SeedPersona` (the
@@ -2314,6 +2538,21 @@ fn opt_str(s: &str) -> Option<String> {
     }
 }
 
+/// GE.3 — a comma-separated list field → `Some(cleaned)` of trimmed non-empty
+/// entries, or `None` when the field is blank (clear the key).
+fn csv_opt(s: &str) -> Option<Vec<String>> {
+    let cleaned: Vec<String> = s
+        .split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 /// A list field → `Some(cleaned)` of trimmed non-empty entries, or `None` when
 /// empty (clear the key — "no declared entries", distinct from `[]`).
 fn opt_list(v: &[String]) -> Option<Vec<String>> {
@@ -2367,6 +2606,23 @@ fn revert_delta_query(target_delta_id: &str) -> FrontendMessage {
     FrontendMessage::RevertPersonaDelta {
         id: format!("mc-agents-revert-{target_delta_id}"),
         target_delta_id: target_delta_id.to_string(),
+    }
+}
+
+// ── GE.3 — Genesis onboarding: LLM-drafted Profile (step 1). ──
+
+fn draft_profile_query(
+    intent: String,
+    role: String,
+    tone: String,
+    never_do: String,
+) -> FrontendMessage {
+    FrontendMessage::DraftProfile {
+        id: "mc-onboard-profile-draft".to_string(),
+        intent,
+        role,
+        tone,
+        never_do,
     }
 }
 
@@ -3308,6 +3564,21 @@ async fn ws_task(
                         a.notice = Some((
                             false,
                             error.unwrap_or_else(|| "couldn't draft a seed".to_string()),
+                        ));
+                    }
+                }
+                // GE.3 — LLM Profile draft arrived (or failed). The onboarding
+                // flow's step 1 watches `profile_draft_resp` to clear its
+                // spinner + fill its six fields from `profile_draft`.
+                DaemonEnvelope::ProfileDrafted { draft, error, .. } => {
+                    let mut a = agents.write();
+                    a.profile_draft_resp += 1;
+                    let had_draft = draft.is_some();
+                    a.profile_draft = draft;
+                    if !had_draft {
+                        a.notice = Some((
+                            false,
+                            error.unwrap_or_else(|| "couldn't draft a profile".to_string()),
                         ));
                     }
                 }

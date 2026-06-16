@@ -648,3 +648,27 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   pointer-events: none;
 }
 .mem-node:hover text { fill: var(--color-primary); }
+
+/* ── Chapter Genesis — onboarding flow (GE.3) ── */
+.view-stack { display: flex; flex-direction: column; gap: 16px; }
+.field-label {
+  font-size: 12px; color: var(--color-text-secondary);
+  margin-top: 4px; font-weight: 500;
+}
+.divider { border: none; border-top: 1px solid var(--color-secondary-dim); margin: 4px 0; }
+.wizard-nav { display: flex; justify-content: flex-end; gap: 10px; padding-top: 6px; }
+.step-rail { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
+.step-dot {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--color-bg-surface); border: 1px solid var(--color-secondary-dim);
+  color: var(--color-text-disabled); font-size: 12px;
+}
+.step-dot.active { border-color: var(--color-primary); color: var(--color-primary); }
+.step-dot.done { border-color: var(--color-sage); color: var(--color-sage); }
+.step-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--color-bg-elevated); font-size: 11px; font-weight: 600;
+}
+.step-label { font-weight: 500; }
