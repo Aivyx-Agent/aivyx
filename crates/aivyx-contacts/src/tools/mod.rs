@@ -21,4 +21,11 @@
 //! cross-tool response shape stays operator-predictable (the
 //! `web.search` / Gmail precedent).
 
+pub mod get;
+pub mod list;
 pub mod person;
+pub mod search;
+
+pub use get::ContactsGet;
+pub use list::ContactsList;
+pub use search::ContactsSearch;

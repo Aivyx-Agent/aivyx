@@ -23,6 +23,11 @@
 
 use serde_json::{json, Value};
 
+/// The People API field mask every contacts tool requests —
+/// the four fields [`trim_person`] surfaces. Passed as
+/// `readMask` (search) or `personFields` (list / get / update).
+pub const PERSON_FIELDS: &str = "names,emailAddresses,phoneNumbers,organizations";
+
 /// Flatten a raw People API `Person` JSON object into the
 /// trimmed snake-cased shape Aivyx tools return.
 pub fn trim_person(person: &Value) -> Value {

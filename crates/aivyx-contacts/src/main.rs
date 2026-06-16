@@ -19,6 +19,7 @@ use aivyx_contacts::auth_cli::{
     revoke::{run_auth_revoke, GOOGLE_REVOKE_ENDPOINT},
     status::run_auth_status,
 };
+use aivyx_contacts::tools::{ContactsGet, ContactsList, ContactsSearch};
 use aivyx_contacts::{
     default_token_path, load_tokens, run_multi_tool_subprocess, ContactsClient,
 };
@@ -147,12 +148,13 @@ async fn run_ipc_loop() -> ExitCode {
         token_path,
     ));
 
-    // CT.2 scaffold — the six People API tools land in CT.3
-    // (search / list / get) + CT.4 (create / update / delete).
-    // `client` is constructed (token refresh + path wiring
-    // verified) but not yet handed to any tool.
-    let _ = &client;
-    let tools: Vec<Arc<dyn Tool>> = vec![];
+    // CT.3 — the three read tools (search / list / get). The
+    // three write tools (create / update / delete) land in CT.4.
+    let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(ContactsSearch::new(Arc::clone(&client))),
+        Arc::new(ContactsList::new(Arc::clone(&client))),
+        Arc::new(ContactsGet::new(Arc::clone(&client))),
+    ];
 
     match run_multi_tool_subprocess(tools, "aivyx-contacts").await {
         Ok(()) => ExitCode::SUCCESS,

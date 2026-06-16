@@ -1,0 +1,174 @@
+//! `contacts.get` — full detail for one resolved contact.
+//!
+//! CT.3. Single GET to `people/{resourceName}`. The
+//! `resource_name` comes from a prior `contacts.search` /
+//! `contacts.list` result.
+//!
+//! ## API call
+//!
+//! `GET /people/{resourceName}?personFields=<fields>` — returns
+//! a `Person` directly (no envelope), trimmed via
+//! [`super::person::trim_person`].
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use aivyx_capability::Scope;
+use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
+
+use crate::contacts_client::SharedContactsClient;
+use crate::tools::person::{trim_person, PERSON_FIELDS};
+
+pub struct ContactsGet {
+    id: ToolId,
+    schema: Value,
+    client: SharedContactsClient,
+}
+
+impl ContactsGet {
+    pub fn new(client: SharedContactsClient) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: input_schema(),
+            client,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for ContactsGet {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "contacts.get"
+    }
+
+    fn description(&self) -> &str {
+        "Fetch full detail for one Google contact. Input is a \
+         JSON object with a required `resource_name` field (e.g. \
+         `people/c123`, from a `contacts.search` / `contacts.list` \
+         result). Returns the trimmed contact `{resource_name, \
+         etag, display_name, emails, phones, organizations}`. The \
+         `etag` is required by `contacts.update`."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("contacts.read")
+            .expect("contacts.read must parse — it is in KNOWN_BASES from Chapter Contacts")
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let resource_name = match parse_resource_name(&input) {
+            Ok(r) => r,
+            Err(reason) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("contacts.get: {reason}"),
+                });
+            }
+        };
+
+        let path = format!("/{resource_name}");
+        let query: Vec<(&str, String)> = vec![("personFields", PERSON_FIELDS.to_string())];
+
+        let body: Value = match self.client.get_json(&path, &query).await {
+            Ok(v) => v,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("contacts.get: API call failed: {e}"),
+                });
+            }
+        };
+
+        ToolOutcome::Completed {
+            output: trim_person(&body),
+            verified: Verification::NotApplicable,
+        }
+    }
+}
+
+/// Validate and extract `resource_name`. People resource names
+/// are `people/<id>`; we require that prefix so the tool can't
+/// be coerced into building a path that escapes the people
+/// collection.
+pub(crate) fn parse_resource_name(input: &Value) -> Result<String, String> {
+    let obj = input
+        .as_object()
+        .ok_or_else(|| "input must be a JSON object".to_string())?;
+    let name = match obj.get("resource_name") {
+        Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+        Some(Value::String(_)) | None => {
+            return Err("`resource_name` is required and must be a non-empty string".to_string())
+        }
+        Some(_) => return Err("`resource_name` must be a string".to_string()),
+    };
+    if !name.starts_with("people/") || name.contains("..") {
+        return Err(format!(
+            "`resource_name` must look like `people/<id>` (got {name:?})"
+        ));
+    }
+    Ok(name)
+}
+
+fn input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "resource_name": {
+                "type": "string",
+                "description": "People API resource name, e.g. `people/c123`."
+            }
+        },
+        "required": ["resource_name"],
+        "additionalProperties": false
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_resource_name_accepts_people_id() {
+        let r = parse_resource_name(&json!({"resource_name": "people/c123"})).expect("ok");
+        assert_eq!(r, "people/c123");
+    }
+
+    #[test]
+    fn parse_resource_name_trims() {
+        let r = parse_resource_name(&json!({"resource_name": "  people/c1 "})).expect("ok");
+        assert_eq!(r, "people/c1");
+    }
+
+    #[test]
+    fn parse_resource_name_requires_field() {
+        let e = parse_resource_name(&json!({})).expect_err("err");
+        assert!(e.contains("`resource_name`"), "{e}");
+    }
+
+    #[test]
+    fn parse_resource_name_rejects_non_people_prefix() {
+        let e = parse_resource_name(&json!({"resource_name": "contactGroups/x"})).expect_err("err");
+        assert!(e.contains("people/"), "{e}");
+    }
+
+    #[test]
+    fn parse_resource_name_rejects_traversal() {
+        let e = parse_resource_name(&json!({"resource_name": "people/../foo"})).expect_err("err");
+        assert!(e.contains("people/"), "{e}");
+    }
+
+    #[test]
+    fn input_schema_requires_resource_name() {
+        let s = input_schema();
+        assert_eq!(s["required"], json!(["resource_name"]));
+        assert_eq!(s["additionalProperties"], false);
+    }
+}
