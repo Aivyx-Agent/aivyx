@@ -58,6 +58,13 @@ pub const SERVICES: &[ConnectService] = &[
         google_api: "Google Drive API",
         redirect_port: 8767,
     },
+    ConnectService {
+        key: "contacts",
+        display: "Google Contacts",
+        binary: "aivyx-contacts",
+        google_api: "People API",
+        redirect_port: 8768,
+    },
 ];
 
 /// Look up a service by its key (case-insensitive).
@@ -312,9 +319,14 @@ pub async fn run_connect(service: Option<&str>) -> Result<(), String> {
         Some(k) => k,
     };
     let svc = find_service(key).ok_or_else(|| {
+        let known = SERVICES
+            .iter()
+            .map(|s| s.key)
+            .collect::<Vec<_>>()
+            .join(", ");
         format!(
-            "unknown service `{key}`. Connectable: gmail, calendar, \
-             drive. Run `aivyx connect` to list them."
+            "unknown service `{key}`. Connectable: {known}. \
+             Run `aivyx connect` to list them."
         )
     })?;
 

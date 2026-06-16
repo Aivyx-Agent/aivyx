@@ -1,11 +1,21 @@
 # Contacts (Chapter Contacts)
 
-> **Status:** 🟡 **design contract** (Chapter Contacts opening, CT.0). This is
-> the locked contract for the first **Broaden** chapter — the everyday-PA
-> domain expansion seeded by finding **F4** of the
+> **Status:** ✅ **shipped** (Chapter Contacts complete, CT.0–CT.5). This began
+> as the design contract and is now implemented: two Trusted-tier scope bases
+> (`contacts.read` / `contacts.write`, `aivyx-capability`), the `aivyx-contacts`
+> third-party tool-process binary over the Google People API (cloned from the
+> `aivyx-drive` OAuth-binary template, consuming `aivyx-google-oauth`), six
+> tools (`contacts.search` / `list` / `get` + `create` / `update` / `delete`),
+> and `aivyx connect contacts` guided onboarding. The first **Broaden** chapter
+> — the everyday-PA domain expansion seeded by finding **F4** of the
 > [2026-06-16 backend audit](BACKEND_AUDIT_2026-06-16.md) ("the covered set
 > still skews developer / knowledge-worker"). Contacts is the first slice:
 > the agent learns *who the people in your life are*.
+>
+> **Open questions resolved as committed:** F-1 — `contacts.list` returns one
+> page + `next_page_token` (not eager pagination). F-2 — `contacts.update`
+> derives the `updatePersonFields` mask from the keys supplied, guarded by the
+> required `etag`.
 >
 > Capabilities gate *what* a tool may do; budgets
 > ([`COST_GOVERNANCE.md`](COST_GOVERNANCE.md)) gate *how much it spends*;
@@ -140,11 +150,17 @@ binary. The operator adds one entry to `aivyx.toml`:
 [[tool_process]]
 name = "contacts"
 command = "aivyx-contacts"
-# scopes the daemon will let this process's tools request
-scopes = ["contacts.read", "contacts.write"]
+# Optional per-tool scope overrides — operator CAN narrow,
+# CANNOT widen (e.g. drop contacts.write to make the process
+# read-only). The tools declare contacts.read / contacts.write
+# themselves; the daemon checks them against the active role.
+# [tool_process.scope_overrides]
 ```
 
-…and runs the one-time OAuth handshake out-of-band:
+The fastest path is `aivyx connect contacts`, which writes the
+config, runs the consent flow, and offers to add the
+`[[tool_process]]` entry for you. To do it by hand, run the
+one-time OAuth handshake out-of-band:
 
 ```sh
 aivyx-contacts auth init      # opens Google consent, writes tokens.json (0600)

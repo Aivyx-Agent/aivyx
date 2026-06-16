@@ -2740,7 +2740,7 @@ applied posture per tool at startup (`sandboxed (bubblewrap)` or
 ## Connecting a productivity tool — `aivyx connect` (Phase 182)
 
 The fastest way to connect a Google productivity tool (Gmail,
-Calendar, Drive) is the guided command:
+Calendar, Drive, Contacts) is the guided command:
 
 ```sh
 aivyx connect            # list connectable services + status

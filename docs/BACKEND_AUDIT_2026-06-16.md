@@ -85,12 +85,15 @@ deferral markers in `aivyx-slack` / `aivyx-discord`). The largest *feature*
 gap — the agent does not yet feel like *one* assistant across Local / voice
 / Discord / Slack / Telegram. Roadmap-sized, not a defect.
 
-### 🟠 F4 — Everyday-PA domain breadth
+### 🟠 F4 — Everyday-PA domain breadth — **first slice landed (Chapter Contacts)**
 
-Reminders (Phase 183) and budget/cost (Ch. K) landed, but contacts/CRM,
-weather, maps/location, SMS/messaging, smart-home, and media remain absent.
-The covered set still skews developer / knowledge-worker
-(Gmail / Calendar / Drive / Notion / n8n).
+Reminders (Phase 183) and budget/cost (Ch. K) landed; **Chapter Contacts**
+(the Broaden track's first chapter) adds the **contacts/CRM** primitive via the
+`aivyx-contacts` People API tool process (six tools — see
+[`CONTACTS.md`](CONTACTS.md)). Still absent: weather, maps/location,
+SMS/messaging, smart-home, and media — the remaining Broaden slices. The
+covered set still skews developer / knowledge-worker
+(Gmail / Calendar / Drive / Notion / n8n + Contacts).
 
 ### 🔵 F5 — Three unmaintained transitive dependencies
 
