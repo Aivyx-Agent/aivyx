@@ -27,174 +27,6 @@ verifiable offline.
 | Capability scope bases | 83 |
 | Encrypted storage domains | 20 |
 
-The arc to date, by chapter:
-
-- **Phases 0–49 — Commitment surface.** Built out the original
-  PRODUCT.md surface: channels, daemon, missions, reflection,
-  scheduling, MCP, multi-provider LLM, web UI, multimodal input,
-  bundled tools, channel/tool SDKs, tool-process IPC.
-- **Phases 50–54 (Chapter A — Foundation Closeout).** Paid down
-  the cleanup backlog, added the sandbox layer, resynced docs.
-- **Phases 56–60 — Profile + Persona.** The operator-declared
-  identity layer (P13) and the reflection-written character
-  layer (P14) — Aivyx as a *self-learning AI personal assistant
-  with a user-defined Profile and Persona shaped to the
-  end-user's use-case*.
-- **Phase 61 — Distribution (pipeline ready).** Wired the
-  release substrate (CI gates, dist config, four-target matrix);
-  publication waits on public hosting.
-- **Phases 62–99 — Onboarding + recall self-tuning.** Template
-  archetypes (`init --template`), the recall-feedback learning
-  loop, helpfulness/co-occurrence ledgers, LLM-judged recall.
-- **Chapter B — Tooling (100+).** Tool stats, tool-author
-  ergonomics, the in-tree adapter checklist.
-- **Chapter C — Operator Onboarding (104+).** Docs-landing and
-  paper-cut reduction.
-- **Chapter D — Substrate Breadth (105–110+).** Audit export,
-  richer IPC surfaces, the threat-model-adjacent hardening.
-- **Chapter E — Self-Improvement Loop Deepening (114+).**
-  Generalised the learning loop beyond recall to the full
-  reflection family.
-- **Chapter F — External Productivity Integrations (123+).**
-  Operator-OAuth productivity tools as separate per-service
-  binaries: Gmail, Google Calendar, Google Drive, Notion,
-  Obsidian, n8n — each a sandboxed tool process over the IPC
-  bridge.
-- **Chapter G — Toolkit.** A multi-tool single-binary bundle
-  (`web.search` + `task.*` + `health.check.*`), plus the Discord
-  / Slack channel adapters and the voice channel.
-- **Phases 172–179 — Correction learning + the autonomous
-  loop.** A correction-signal learning loop (the agent notices
-  when the operator reworks its answer), now structurally
-  detected, LLM-judged (genuine rework vs praise), and
-  tool-attributed; and the **Aivyx Ralph loop** — a fully
-  autonomous, self-re-arming agent loop over an HMAC-chained
-  backlog with iteration / wall-clock / token caps, driver-side
-  gate verification, and a cross-iteration progress log.
-- **Chapter H — Productize (Phases 180–184).** Closing the
-  backend-review gaps that stand between a mature substrate and a
-  launchable product: a **secure-by-default sandbox** preset for
-  tool processes; a **guided first-launch identity builder**
-  (the End User shapes their assistant's Personality + Role,
-  optionally LLM-assisted); **`aivyx connect`** — guided in-agent
-  OAuth onboarding for the productivity tools; **reminders** (the
-  first everyday-PA capability); and **conversational
-  skill-teaching** — the End User teaches the agent a skill in
-  chat. Together these realize the founding "fully customizable"
-  promise: Profile, Persona, Roles, and skills are all
-  user-shaped.
-- **Chapter I — Interface & Reach (Phases 185+).** Richer frontends
-  around the one daemon: a **terminal TUI** (`ratatui`/`crossterm`,
-  `aivyx tui`) — streaming chat, scrollback, status bar, and
-  multi-view navigation (Chat · Missions · Dashboard · Audit · Tools) —
-  quarantined to a dedicated `aivyx-tui` frontend crate so the
-  substrate stays dependency-clean.
-- **Chapter J — Nonagon: Multi-Agent Teams.** The free-core
-  multi-agent capability: a **lead** agent convenes up to **9
-  attenuated specialists**, decomposes a mission into a **DAG**,
-  delegates, verifies, and synthesizes — all in the **one daemon** on
-  the **one HMAC chain**, preserving the single-agent ethos (one lead;
-  ephemeral, least-privileged specialists, **NT-02:** specialist `⊆`
-  lead). Ships the `aivyx-team` engine, **`aivyx team run "<mission>"`**
-  / **`aivyx team roster`**, the live TUI Missions panel, and the first
-  **vertical pack** — `aivyx-kitchen`'s Back-of-House Nonagon. See
-  [`docs/NONAGON.md`](docs/NONAGON.md) + [`docs/VERTICAL_PACKS.md`](docs/VERTICAL_PACKS.md).
-- **Chapter K — Cost Governance.** Dollar visibility and budgets layered
-  over the token usage the **one HMAC chain** already records. A new
-  `aivyx-cost` crate prices each turn's `TokenUsage` into dollars (built-in
-  cloud-model rates + `[pricing.<model>]` overrides; local models are free),
-  emits a per-turn **`LlmCost`** audit event, and rolls it into a priced
-  report behind **`aivyx cost [--today]`**. Enforcement is opt-in via
-  `[budget]` caps (`per_run_usd` / `per_day_usd`, *alert* or *deny*): a
-  per-run **dollar cap on the autonomous loop** (surfaced in `aivyx loop
-  status`) and a **pre-call budget gate on the interactive / team / voice
-  turn loop** that refuses a turn before any model call when the daily cap
-  would be busted. Free core — observability + safety, not customer billing.
-  See [`docs/COST_GOVERNANCE.md`](docs/COST_GOVERNANCE.md).
-- **Chapter L — Daemon-side Teams.** Nonagon moves from a one-shot CLI
-  command into the **daemon**: durable team missions (a `SharedMissionState`
-  over a redb-backed store), **checkpoint/resume** around human-approval
-  gates, a **live TUI Missions feed** (approve / reject inline), goal→plan
-  LLM decomposition, per-call vertical-pack `TeamConfig`, and a `team.run`
-  tool that lets the autonomous loop convene a team. Fire-and-forget,
-  durable, on the one HMAC chain. See [`docs/DAEMON_TEAMS.md`](docs/DAEMON_TEAMS.md).
-- **Chapter M — Web Mission-Control.** A browser GUI for the daemon: a
-  **Dioxus (Rust→WASM)** client that speaks the daemon's wire protocol over a
-  `/ws` bridge, sharing a new **wasm-clean `aivyx-ipc`** protocol crate
-  (+ `aivyx-team-types`) extracted from the channel layer. Missions + Chat
-  views; the daemon serves the embedded WASM bundle with an HTML fallback,
-  and the legacy inspection panes live on at `/classic`. See
-  [`docs/WEB_MISSION_CONTROL.md`](docs/WEB_MISSION_CONTROL.md).
-- **Chapter R — Stitch frontend.** The agent's web UI adopts the **Stitch**
-  design system (*The Neon Cartographer*: layered midnight, warm amber + cyber
-  purple, Space Grotesk / Inter / JetBrains Mono, the candle mark): a real token
-  layer, self-hosted fonts + brand icons (no CDN — fully offline), an app-shell
-  (sidebar + topbar + status bar) and component kit, and a reskin of Missions
-  (orchestration look) + Chat (terminal look). Studio surface only; Creator and
-  Nexus are separate. See [`docs/FRONTEND.md`](docs/FRONTEND.md).
-- **Headless Execution Mode.** A per-run opt-in **non-interactive** mode:
-  at any approval gate a headless run **refuses-and-aborts** rather than
-  hanging on an absent operator — never auto-approving, with confirm-first /
-  irreversible tools *always* blocked. Spans the single-agent turn, team
-  missions, and the operator-absent triggers (loop / cron / webhook /
-  file-watch, which default to headless); every refusal lands a legible
-  `HeadlessRefusal` audit event. See [`docs/HEADLESS_MODE.md`](docs/HEADLESS_MODE.md).
-- **Chapter N — Operator Access Levels.** The operator chooses, as an
-  explicit audited **Setting**, how far the agent reaches into their machine —
-  **sandbox** (default) / **workspace** / **home** / **full** — via
-  `[access] level`, the **`aivyx access`** command, and the init wizard.
-  `fs_root` is the single lever; remote channels stay tier-attenuated (full
-  for *you*, sandboxed for a webhook); irreversible fs ops gate behind a
-  confirm-first seatbelt. See [`docs/ACCESS_LEVELS.md`](docs/ACCESS_LEVELS.md).
-- **Chapter O — Agent Personal Workspace.** The agent gets a room of its
-  own: a dedicated, **always-available** `~/.aivyx/workspace` it owns —
-  distinct from memory (recall facts) and the operator's `fs_root` (shared
-  work) — with `workspace.*` tools, prompt awareness, an **`aivyx workspace
-  ls / cat`** visibility command, and **proactive journaling** (the agent
-  periodically reflects on recent activity and writes to its own journal).
-  Independent of the access level; even a sandboxed agent has its notebook.
-  See [`docs/AGENT_WORKSPACE.md`](docs/AGENT_WORKSPACE.md).
-- **Chapter P — Local First-Run Reliability.** Make the free
-  *"runs-on-your-hardware, no API key"* (Ollama) on-ramp **just work** for a
-  new user. Auto-detects the model's native context window so `num_ctx` no
-  longer starves generation (the bare config used to emit one token);
-  recommends + offers to **pull** a vetted **tool-capable** model (`qwen3:8b`);
-  handles thinking-models and their tool-calls transparently; and adds
-  **`aivyx doctor`** — a first-run health check that confirms a real, non-empty
-  test reply and says exactly what to fix when it can't. Zero-config local
-  path; cloud untouched. See [`docs/LOCAL_FIRST_RUN.md`](docs/LOCAL_FIRST_RUN.md).
-- **Chapter Q — Publish.** Activated cargo-dist into the first public binaries:
-  `v0.1.0` pre-release, installer-verified, with an alsa/musl precise-builds fix
-  surfaced by a live run.
-- **Chapters S–Z — the Studio.** The web GUI grows from two tabs into a full
-  local-first **mission-control Studio**, one screen per chapter, all read from
-  (or write through) the shared `aivyx-ipc` protocol; each is built, then
-  live-verified in a real browser, with the regenerated WASM bundle committed:
-  - **S — Command Center.** The default landing dashboard: stat cards, active
-    missions, a live audit-trail feed, agent status — all from existing
-    read-only IPC.
-  - **T — Memory.** A browser over the self-learning memory: topic rail, entry
-    cards, keyword/semantic search.
-  - **U — Settings.** The **first config-write surface**: edit the access level
-    (confirm-first, enforced server-side) and budgets; `toml_edit` section
-    rewrites, `ConfigChanged` audit, honest "restart to apply".
-  - **V — Agents.** The identity editor: a direct **Profile** write (load-time)
-    plus the self-learned **Persona** governance loop — approve / edit / reject
-    proposals and revert deltas — live over the existing signed-chain IPC.
-  - **W + X — Onboarding seed.** The end user gives the agent a **starting
-    Persona + Skills** at first launch (`[persona_seed]` → planted on the signed
-    chain at boot, iff empty, adopted turn-one) and live from the Studio, with
-    optional **"describe it and the model drafts it"** in both CLI and web.
-    See [`docs/PERSONA_SEED.md`](docs/PERSONA_SEED.md).
-  - **Y — Teams.** A read-only view of the active **Nonagon** roster (lead +
-    specialists, each with role / trust / scopes / tools / soul).
-  - **Z — Documents.** A read-only **file browser** over the agent workspace and
-    the access-scoped `fs_root`, reusing the fs tools' canonicalize-`starts_with`
-    escape guard (`..`/symlink escapes rejected over IPC).
-
-  All eight screens are offline, Stitch-styled, and served from the daemon's
-  embedded bundle. See [`docs/FRONTEND.md`](docs/FRONTEND.md).
-
 ## Five-minute setup
 
 Aivyx ships zero hosted dependencies. The quickest path is the
@@ -205,17 +37,14 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh | sh
 ```
 
-(Resolves once `v0.1.0` is tagged and built — see
-[Release pipeline status](#release-pipeline-status). Prefer to compile?
-The build-from-source steps below work today.)
+Prefer to compile? The build-from-source steps below work too.
 
-**Phase 66 onboarding fast-path:** after `cargo build --release
---bin aivyx`, run `./target/release/aivyx init --template
-coder` (or `researcher` / `personal`) to skip the from-scratch
-config and run the wizard pre-filled from a starter archetype.
-See [`docs/TEMPLATES.md`](docs/TEMPLATES.md) for what each
-template contains. The manual path below is shown for
-reference.
+**Onboarding fast-path:** after `cargo build --release --bin
+aivyx`, run `./target/release/aivyx init --template coder` (or
+`researcher` / `personal`) to skip the from-scratch config and run
+the wizard pre-filled from a starter archetype. See
+[`docs/TEMPLATES.md`](docs/TEMPLATES.md) for what each template
+contains. The manual path below is shown for reference.
 
 ```sh
 # 1. Install Ollama and pull a tool-capable model (no API key required)
@@ -252,9 +81,12 @@ mkdir -p /tmp/aivyx-sandbox
 ```
 
 Then open `http://127.0.0.1:7843/` in a browser — that's the
-Web UI. Type a message in the **Chat** tab. Click **Audit** to
-watch events land in the HMAC-chained log; click **Verify chain**
-to cold-verify the chain offline.
+**Studio**, the local-first web GUI. It opens on the **Command
+Center** dashboard; use the **Chat** tab to talk to the agent,
+**Memory** to browse what it's learned, **Documents** to read and
+edit files in scope, and **Settings** to adjust access + budgets.
+The HMAC audit log (with offline **Verify chain**) lives in the
+legacy inspection panes at `/classic`.
 
 **Terminal frontends + the Nonagon (Chapter I/J):**
 
@@ -276,6 +108,44 @@ For a config that uses Anthropic or OpenAI instead, see
 adapter, see [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
 For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
+## Highlights
+
+- **Runs on your hardware, no API key.** The headline path is local inference
+  via [Ollama](https://ollama.com) with a zero-config on-ramp — auto
+  context-window sizing, a vetted tool-capable model, and `aivyx doctor` to
+  confirm the path end to end. Anthropic / OpenAI are optional, under *your*
+  key, talking directly to the provider.
+- **Secure by construction.** Capability-based scopes + trust tiers bound
+  exactly what the agent can reach; every action lands on an **HMAC-chained,
+  offline-verifiable audit log**; storage is encrypted at rest
+  (Argon2id → HKDF → ChaCha20-Poly1305).
+- **Operator-chosen reach.** *You* pick how far the agent reaches —
+  **sandbox** / **workspace** / **home** / **full** — as an audited setting
+  (`aivyx access`); irreversible filesystem ops are confirm-first.
+- **A self-learning identity.** A user-defined **Profile** plus a
+  reflection-written **Persona/Soul**, seedable at first launch (by hand or
+  *"describe it and the model drafts it"*) and governed through approve / edit
+  / reject proposals.
+- **Multi-agent teams (Nonagon).** A lead convenes up to **9** least-privileged
+  specialists, decomposes a mission into a DAG, delegates, verifies, and
+  synthesizes — durable, resumable, on the one HMAC chain; **vertical packs**
+  swap in a domain crew.
+- **The Studio — a local-first web GUI.** Nine offline, Stitch-styled screens
+  served on `:7843`: Command Center, Missions, Chat, Memory (+ knowledge
+  graph), Settings, Agents, Teams, Documents (browse + edit), Voice.
+- **More frontends, one daemon.** A terminal TUI (`aivyx tui`), the CLI, and
+  channel adapters — Telegram, Discord, Slack, voice.
+- **Productivity integrations.** Gmail, Calendar, Drive, Notion, Obsidian, n8n,
+  plus a web/task/health toolkit — each a sandboxed, operator-OAuth tool
+  process.
+- **Autonomy with brakes.** An autonomous, self-re-arming loop and a
+  non-interactive **headless mode** (refuses-and-aborts at gates, never
+  auto-approving), with **cost governance** — per-turn dollar pricing and
+  `[budget]` caps.
+
+The full phase-by-phase arc lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the
+recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Release pipeline status
 
 The release pipeline is **active** on the public repo. The latest
@@ -292,8 +162,8 @@ release is `v0.2.0` (early pre-release; `v0.1.0` was the first):
   workflow both CI and release pipelines call — the release
   short-circuits if the gate fails.
 
-Cutting a release is a single step: `git tag v0.2.0 && git push
-origin v0.2.0`, and the workflow publishes the binaries + installer.
+Cutting a release is a single step: `git tag vX.Y.Z && git push
+origin vX.Y.Z`, and the workflow publishes the binaries + installer.
 
 ## Architecture at a glance
 
@@ -313,12 +183,12 @@ operator
    └── tool process bridge (third-party + productivity tools as subprocesses)
 ```
 
-Twenty-four crates in the workspace. The substrate core:
+Thirty-two crates in the workspace. The substrate core:
 
 | Crate | What it owns |
 |---|---|
 | `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 13 substrate tools |
-| `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, 75 scope bases |
+| `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, the active scope bases |
 | `aivyx-crypto` | Argon2id, HKDF-SHA256, ChaCha20-Poly1305 |
 | `aivyx-storage` | redb-backed encrypted store, 20 key domains |
 | `aivyx-audit` | HMAC-chained audit log, offline verification |
@@ -326,6 +196,7 @@ Twenty-four crates in the workspace. The substrate core:
 | `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama impls |
 | `aivyx-memory` | `memory.{read,write,forget,gc}` + redb-backed substrate |
 | `aivyx-channel` | Daemon, CLI/Local channel, Web UI, mission/schedule/reflection/loop machinery |
+| `aivyx-ipc` | wasm-clean wire protocol shared by the daemon and the Dioxus web client |
 | `aivyx-mcp` | MCP client adapter (stdio + SSE) |
 | `aivyx-tool` | Tool process IPC bridge + sandbox wrapper layer |
 
