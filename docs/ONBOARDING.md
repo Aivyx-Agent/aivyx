@@ -94,18 +94,28 @@ and serves an onboarding wizard (a larger change).
   onboarding wizard" boot mode. Noted as a possible future (it would make the
   web a true cold-start surface), but it is not required to close the split.
 
-## 5. Provider/model from the web (open — GE.4)
+## 5. Provider/model from the web — RESOLVED (GE.4): option (a)
 
 Provider+model is the one setting that must exist *before* the daemon boots, so
-it's the awkward edge of the web flow. Two options, decided at GE.4:
+it's the awkward edge of the web flow. Two options were on the table:
 
 - **(a) Assume provider/model is CLI/installer-set**, and the web flow starts at
   the Profile step. Smaller; honest about the chicken-and-egg.
 - **(b) Add a provider/model config writer** (extend the Chapter-U `toml_edit`
   `write_*_section` family with a `[provider]`/`[model]` writer + IPC + a web
   step), restart-required like the other config writes. Larger, but makes the
-  web flow complete end-to-end. *Lean: (a) for GE.3, revisit (b) as GE.4 once
-  the rest of the flow is proven.*
+  web flow complete end-to-end.
+
+**Decision (GE.4): (a).** The web flow does **not** write provider/model. The
+daemon can't be talking to the browser at all unless a provider/model is already
+configured (it's load-time and precedes boot), so writing it from the live web
+session is the wrong layer — that's `aivyx init`'s job (the cold-start path,
+§4). The onboarding intro instead **shows** the configured provider/model
+read-only (from the existing `GetSettings` snapshot, which already carries both),
+with a one-line pointer to `aivyx init` / the config for changing it. Option (b)
+remains a clean future add if a true browser cold-start mode (§4) ever lands —
+at that point the daemon boots unconfigured and a provider/model *write* step
+becomes necessary rather than redundant.
 
 ## 6. What's deliberately *not* here
 

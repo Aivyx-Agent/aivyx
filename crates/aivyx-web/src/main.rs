@@ -1946,6 +1946,18 @@ fn AgentsPanel() -> Element {
 #[component]
 fn OnboardingPanel(view: Signal<View>) -> Element {
     let step = use_signal(|| 0u8);
+    let ws = use_context::<Sender>();
+    let settings = use_context::<Signal<SettingsState>>();
+
+    // GE.4 — provider/model is CLI/installer-set (it must precede daemon boot),
+    // so the flow only *shows* it read-only. Fetch the snapshot on mount.
+    use_effect(move || {
+        ws.send(get_settings_query());
+    });
+    let model_line = settings()
+        .snapshot
+        .map(|s| format!("Connected to {} · {}", s.provider, s.model));
+
     rsx! {
         div { class: "view-stack",
             div { class: "glass-card settings-section",
@@ -1956,6 +1968,11 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
                 p { class: "muted",
                     "Shape your assistant's identity, voice, and reach. You're the author of "
                     "record — the model only drafts. Profile and access apply after a daemon restart."
+                }
+                if let Some(line) = model_line {
+                    p { class: "muted", style: "font-size:12px;",
+                        "{line} — set the provider/model with `aivyx init` or in your config."
+                    }
                 }
                 div { class: "step-rail",
                     StepDot { n: 1, label: "Profile", active: step() == 0, done: step() > 0 }
