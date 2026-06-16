@@ -211,6 +211,10 @@ pub struct AgentStackSpec {
     /// LLM-backed channels (voice) set this from the shared
     /// `ChannelBudgetGate` built at startup.
     pub budget_gate: Option<Arc<dyn aivyx_core::BudgetGate>>,
+    /// Chapter Throttle (TH.3) — optional per-tool-call rate-limit gate,
+    /// attached to the built agent. `None` (the default) leaves tool calls
+    /// unthrottled. The daemon builds this from `[rate_limit]` at startup.
+    pub rate_gate: Option<Arc<dyn aivyx_core::RateGate>>,
 }
 
 impl AgentStackSpec {
@@ -236,6 +240,7 @@ impl AgentStackSpec {
             // The REPL/local path is ungated for now; daemon + voice attach
             // the shared gate at their own build sites.
             budget_gate: None,
+            rate_gate: None,
         }
     }
 }
@@ -278,6 +283,7 @@ pub fn build_agent_stack(
         system_prompt_refiner,
         prompt_refresher,
         budget_gate,
+        rate_gate,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -326,7 +332,8 @@ pub fn build_agent_stack(
     )
     .with_tool_allowlist(tool_allowlist)
     .with_memory_topic_prefix(memory_topic_prefix)
-    .with_budget_gate(budget_gate);
+    .with_budget_gate(budget_gate)
+    .with_rate_gate(rate_gate);
 
     Arc::new(agent)
 }

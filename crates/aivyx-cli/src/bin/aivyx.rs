@@ -4229,6 +4229,9 @@ async fn run_async(
         // Chapter K (K.4.2) — `[budget]` dollar caps. Parsed + validated by
         // the loader; consumed by the turn-loop budget gate built below.
         budget: config_budget,
+        // Chapter Throttle (TH.3) — `[rate_limit]` tool-call caps. Consumed by
+        // the turn-loop rate gate built below.
+        rate_limit: config_rate_limit,
         // Phase 120 — operator-configurable threshold for the
         // planner's tool-name fuzzy-match recovery. Threaded
         // into `LlmPlannerConfig` below.
@@ -6671,6 +6674,13 @@ async fn run_async(
                 DEFAULT_MAX_TOKENS,
             );
 
+        // Chapter Throttle (TH.3) — the shared per-tool-call rate gate, attached
+        // to the daemon's agent so every interactive / team turn's tool calls are
+        // bounded by the operator's `[rate_limit]` caps. `None` when uncapped, so
+        // an unconfigured daemon keeps today's behavior byte-for-byte.
+        let daemon_rate_gate: Option<Arc<dyn aivyx_core::RateGate>> =
+            aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone());
+
         // Chapter L (L.5) — the daemon's team-mission service: the registry
         // over KeyDomain::TeamMissions (reloaded on startup so paused missions
         // resume across a restart) plus the run deps (provider/model/audit/the
@@ -6720,7 +6730,8 @@ async fn run_async(
             )
             .with_tool_allowlist(daemon_tool_allowlist)
             .with_memory_topic_prefix(memory_topic_prefix)
-            .with_budget_gate(daemon_budget_gate),
+            .with_budget_gate(daemon_budget_gate)
+            .with_rate_gate(daemon_rate_gate),
         );
 
         let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
@@ -7764,6 +7775,11 @@ async fn run_async(
                         Arc::clone(&persistent_audit_for_query),
                         aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
                         DEFAULT_MAX_TOKENS,
+                    ),
+                    // Chapter Throttle (TH.3) — voice tool calls are bounded by
+                    // the same `[rate_limit]` caps as every other turn.
+                    rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(
+                        config_rate_limit.clone(),
                     ),
                 };
                 let agent = aivyx_channel::session::build_agent_stack(

@@ -111,6 +111,11 @@ pub trait RateGate: Send + Sync {
     /// Consulted before each tool call. `Err(reason)` blocks the call;
     /// `Ok(())` admits it.
     fn admit_tool_call(&self, tool: &str) -> Result<(), String>;
+
+    /// Called once at the start of every turn so per-turn quotas reset at the
+    /// turn boundary. Default no-op (a gate with only sliding-window limits, or
+    /// a test stub, need not override). The sliding window persists across turns.
+    fn begin_turn(&self) {}
 }
 
 /// The reference `Agent` implementation.
@@ -162,6 +167,13 @@ pub struct ConcreteAgent {
     /// `None` (the default) preserves pre-K.4.2 behavior byte-for-byte:
     /// turns run ungated. See [`BudgetGate`].
     budget_gate: Option<Arc<dyn BudgetGate>>,
+    /// Chapter Throttle (TH.3) — optional per-tool-call rate-limit / quota gate.
+    /// When `Some`, the turn loop calls [`RateGate::begin_turn`] at turn start
+    /// and [`RateGate::admit_tool_call`] before each tool call, refusing the
+    /// call (→ [`ToolOutcome::RateLimited`]) when an operator `[rate_limit]`
+    /// would be exceeded. `None` (the default) preserves pre-Throttle behavior
+    /// byte-for-byte. See [`RateGate`].
+    rate_gate: Option<Arc<dyn RateGate>>,
 }
 
 impl ConcreteAgent {
@@ -181,6 +193,7 @@ impl ConcreteAgent {
             memory_topic_prefix: None,
             tool_allowlist: None,
             budget_gate: None,
+            rate_gate: None,
         }
     }
 
@@ -219,6 +232,15 @@ impl ConcreteAgent {
         self.budget_gate = gate;
         self
     }
+
+    /// Attach a Chapter Throttle per-tool-call rate-limit gate. See the
+    /// [`Self::rate_gate`] field doc for semantics. `None` means "no gate,"
+    /// preserving pre-Throttle behavior. TH.3 wires this from the operator's
+    /// `[rate_limit]` config at agent-stack construction time.
+    pub fn with_rate_gate(mut self, gate: Option<Arc<dyn RateGate>>) -> Self {
+        self.rate_gate = gate;
+        self
+    }
 }
 
 #[async_trait]
@@ -255,6 +277,13 @@ impl Agent for ConcreteAgent {
 
         let mut planner = (self.planner_factory)();
         planner.begin_turn(&message).await;
+
+        // Chapter Throttle (TH.3) — reset per-turn tool-call quotas at the turn
+        // boundary. Applies to every turn (a scripted planner can still dispatch
+        // tool calls); the gate's sliding window persists across turns.
+        if let Some(gate) = &self.rate_gate {
+            gate.begin_turn();
+        }
 
         // Chapter K (K.4.2) — pre-call dollar gate. Reserve budget for this
         // turn *before* spawning the deadline task or entering the loop, so a
@@ -786,6 +815,34 @@ impl ConcreteAgent {
                 StepObservation {
                     tool_id,
                     summary: ToolOutcomeSummary::Denied,
+                },
+                outcome,
+            );
+        }
+
+        // Chapter Throttle (TH.3) — rate-limit / quota gate. Checked *after* the
+        // role + capability gates (so a scope-denied call is never reported as
+        // throttled) and *before* execution. A `Deny` blocks the call and emits
+        // a dedicated `RateLimited` audit record alongside the `ToolCall` entry
+        // (whose outcome summary is `RateLimited`); an `Alert` is handled inside
+        // the gate and returns `Ok`, so it falls through to execute.
+        if let Some(gate) = self.rate_gate.as_ref()
+            && let Err(reason) = gate.admit_tool_call(&tool_name_str)
+        {
+            self.audit.on_event(AuditTag::RateLimited {
+                turn_id,
+                tool_attempted: tool_id,
+                tool: tool_name_str.clone(),
+                reason: reason.clone(),
+            });
+            let outcome = ToolOutcome::RateLimited {
+                tool_name: tool_name_str,
+                reason,
+            };
+            return (
+                StepObservation {
+                    tool_id,
+                    summary: ToolOutcomeSummary::RateLimited,
                 },
                 outcome,
             );
@@ -2472,6 +2529,152 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
             "in-role call must not produce ScopeDenied"
+        );
+    }
+
+    // =====================================================================
+    // Chapter Throttle (TH.3) — rate-gate dispatch-layer wiring
+    // =====================================================================
+
+    /// Denies once `cap` calls have been admitted this gate-lifetime; records
+    /// how many times `begin_turn` fired.
+    struct MockRateGate {
+        cap: usize,
+        admitted: Arc<std::sync::atomic::AtomicUsize>,
+        begins: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl RateGate for MockRateGate {
+        fn admit_tool_call(&self, _tool: &str) -> Result<(), String> {
+            let n = self.admitted.fetch_add(1, Ordering::SeqCst);
+            if n >= self.cap {
+                Err(format!("per-turn cap reached: {n} of {}", self.cap))
+            } else {
+                Ok(())
+            }
+        }
+        fn begin_turn(&self) {
+            self.begins.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_gate_throttles_after_cap_and_audits() {
+        // The agent holds the capability and the tool is in-role, but the rate
+        // gate caps at 2 calls/turn. A plan of three web.fetch calls: the first
+        // two execute (ToolCall audit), the third is throttled — RateLimited
+        // outcome + a dedicated RateLimited audit record, and the tool never
+        // runs a third time. begin_turn fires once at the turn boundary.
+        let audit = RecordingAudit::new();
+        let fetch = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let fetch_id = fetch.id();
+        let caps = CapabilitySet::from_scopes([Scope::parse("shell.exec").unwrap()]);
+
+        let call = || NextStep::ToolCall {
+            tool_id: fetch_id,
+            input: json!({}),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+        let plan = vec![
+            call(),
+            call(),
+            call(),
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let registry = Arc::new(ToolRegistry::new(vec![fetch as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+
+        let admitted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let begins = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let gate = Arc::new(MockRateGate {
+            cap: 2,
+            admitted: Arc::clone(&admitted),
+            begins: Arc::clone(&begins),
+        });
+
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_rate_gate(Some(gate));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "fetch fetch fetch");
+        let _ = agent.turn(message, &channel).await;
+
+        let events = audit.snapshot();
+        // The two admitted calls executed → two ToolCall audit entries.
+        let tool_calls = events
+            .iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .count();
+        assert_eq!(tool_calls, 2, "exactly the admitted calls execute: {events:?}");
+
+        // The throttled call emits a dedicated RateLimited record (not a
+        // ToolCall, not a ScopeDenied) naming the tool.
+        let rate_limited: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                AuditTag::RateLimited { tool, reason, .. } => Some((tool, reason)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rate_limited.len(), 1, "one throttled call: {events:?}");
+        assert_eq!(rate_limited[0].0, "shell.exec");
+        assert!(rate_limited[0].1.contains("cap reached"));
+
+        // A throttled call is never a capability/role denial.
+        assert!(
+            !events.iter().any(|e| matches!(e, AuditTag::ScopeDenied { .. })),
+            "throttling is distinct from ScopeDenied"
+        );
+        assert_eq!(begins.load(Ordering::SeqCst), 1, "begin_turn fired once");
+    }
+
+    #[tokio::test]
+    async fn no_rate_gate_preserves_ungated_behavior() {
+        // Backwards-compat: an agent built without a rate gate dispatches every
+        // call unthrottled (the pre-Throttle path).
+        let audit = RecordingAudit::new();
+        let fetch = Arc::new(FakeTool::new_bare("shell.exec", "shell.exec"));
+        let fetch_id = fetch.id();
+        let caps = CapabilitySet::from_scopes([Scope::parse("shell.exec").unwrap()]);
+        let call = || NextStep::ToolCall {
+            tool_id: fetch_id,
+            input: json!({}),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+        let plan = vec![call(), call(), call(), NextStep::FinalMessage("ok".into())];
+        let registry = Arc::new(ToolRegistry::new(vec![fetch as Arc<dyn Tool>]));
+        let plan_arc = Arc::new(plan);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let _ = agent
+            .turn(Message::text(channel.session, "go"), &channel)
+            .await;
+        let events = audit.snapshot();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+                .count(),
+            3,
+            "ungated: all three calls execute"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, AuditTag::RateLimited { .. })),
+            "no gate → no RateLimited events"
         );
     }
 

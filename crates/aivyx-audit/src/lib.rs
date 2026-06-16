@@ -107,6 +107,18 @@ pub enum AuditEvent {
         held_capabilities: CapabilitySet,
     },
 
+    /// Chapter Throttle (TH.3) — a tool call blocked by a `[rate_limit]` cap.
+    /// Distinct from `ScopeDenied` (capability / role) so a forensic walk
+    /// separates throttled from unauthorized; `reason` names the breached limit
+    /// and window. The same call's `ToolCall` entry carries a `RateLimited`
+    /// outcome summary.
+    RateLimited {
+        turn_id: TurnId,
+        tool_attempted: ToolId,
+        tool: String,
+        reason: String,
+    },
+
     /// Turn started. Correlates with `TurnEnded` via `turn_id`.
     TurnStarted {
         turn_id: TurnId,
@@ -1053,6 +1065,17 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 tool_attempted,
                 scope_requested,
                 held_capabilities,
+            },
+            AuditTag::RateLimited {
+                turn_id,
+                tool_attempted,
+                tool,
+                reason,
+            } => AuditEvent::RateLimited {
+                turn_id,
+                tool_attempted,
+                tool,
+                reason,
             },
             AuditTag::MemoryAccess {
                 turn_id,

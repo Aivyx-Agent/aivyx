@@ -904,6 +904,11 @@ pub struct AivyxConfig {
     /// opts in with `per_run_usd` / `per_day_usd`. Consumed by the turn-loop
     /// budget gate via a `BudgetEnforcer`.
     pub budget: aivyx_cost::BudgetConfig,
+    /// Chapter Throttle (TH.3) — `[rate_limit]` tool-call caps. Defaults to
+    /// uncapped (`RateLimitConfig::default()`); the operator opts in with
+    /// per-turn / per-tool / sliding-window limits. Consumed by the turn-loop
+    /// rate gate via a `RateLimiter`.
+    pub rate_limit: aivyx_cost::RateLimitConfig,
     /// Phase 120 — `[providers] tool_name_auto_correct_threshold`.
     /// Threshold in `[0.0, 1.0]` for the planner's tool-name
     /// fuzzy-match recovery. When the LLM emits a tool name not
@@ -3191,6 +3196,10 @@ struct RawToml {
     /// the table parses directly into an `aivyx_cost::BudgetConfig`.
     #[serde(default)]
     budget: aivyx_cost::BudgetConfig,
+    /// `[rate_limit]` section. Chapter Throttle (TH.3) — tool-call caps;
+    /// the table parses directly into an `aivyx_cost::RateLimitConfig`.
+    #[serde(default)]
+    rate_limit: aivyx_cost::RateLimitConfig,
     /// Phase 134 — `[mistralrs]` config section for the
     /// embedded Rust-native provider.
     #[serde(default)]
@@ -5157,6 +5166,11 @@ impl AivyxConfig {
             }
         }
 
+        // Chapter Throttle (TH.3) — [rate_limit] tool-call caps. All fields are
+        // unsigned counts/seconds, so there is nothing to reject at load; an
+        // empty/uncapped section is the default. Consumed by the rate gate.
+        let rate_limit = toml.rate_limit.clone();
+
         // Phase 120 — [providers] tool_name_auto_correct_threshold.
         // Default to DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD when
         // absent; reject out-of-range [0.0, 1.0] values at parse
@@ -6128,6 +6142,7 @@ impl AivyxConfig {
             ollama_prompt_strategies,
             pricing,
             budget,
+            rate_limit,
             tool_name_auto_correct_threshold,
             roles,
             active_role,

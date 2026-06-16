@@ -216,6 +216,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
     match event {
         AuditEvent::ToolCall { .. } => "ToolCall",
         AuditEvent::ScopeDenied { .. } => "ScopeDenied",
+        AuditEvent::RateLimited { .. } => "RateLimited",
         AuditEvent::TurnStarted { .. } => "TurnStarted",
         AuditEvent::TurnEnded { .. } => "TurnEnded",
         AuditEvent::LlmCost { .. } => "LlmCost",

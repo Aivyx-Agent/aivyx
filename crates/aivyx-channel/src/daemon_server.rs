@@ -4845,6 +4845,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
     let event_type = match &entry.event {
         aivyx_audit::AuditEvent::ToolCall { .. } => "ToolCall",
         aivyx_audit::AuditEvent::ScopeDenied { .. } => "ScopeDenied",
+        aivyx_audit::AuditEvent::RateLimited { .. } => "RateLimited",
         aivyx_audit::AuditEvent::TurnStarted { .. } => "TurnStarted",
         aivyx_audit::AuditEvent::TurnEnded { .. } => "TurnEnded",
         aivyx_audit::AuditEvent::LlmCost { .. } => "LlmCost",

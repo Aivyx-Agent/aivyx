@@ -708,6 +708,17 @@ pub enum AuditTag {
         scope_requested: Scope,
         held_capabilities: CapabilitySet,
     },
+    /// Chapter Throttle (TH.3) — fires when a tool call is blocked by a
+    /// `[rate_limit]` cap (a `Deny`-action limit). Distinct from `ScopeDenied`
+    /// (capability / role) so a forensic walk separates throttled from
+    /// unauthorized. The same call's `ToolCall` entry carries a `RateLimited`
+    /// outcome summary; this dedicated record names the breached limit.
+    RateLimited {
+        turn_id: TurnId,
+        tool_attempted: ToolId,
+        tool: String,
+        reason: String,
+    },
     /// Phase 117 — fires when `skills.invoke` runs successfully.
     /// Distinct from the `ToolCall` entry the planner emits for
     /// the same call so audit forensics can answer "which skill

@@ -57,6 +57,7 @@ pub mod team_mission_driver;
 /// (`ChannelBudgetGate`) for the interactive / team turn loop, over the
 /// `aivyx_core::BudgetGate` trait.
 pub mod budget_gate;
+pub mod rate_gate;
 pub mod cooccurrence_ledger;
 /// Phase 172 — the structural correction-signal detector +
 /// durable decayed correction ledger + consolidation pass.
