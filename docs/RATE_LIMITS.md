@@ -1,8 +1,14 @@
 # Tool-Call Rate Limits & Quotas (Chapter Throttle)
 
-> **Status:** 📐 **design contract** (Chapter Throttle, phase TH.0). This
-> document is the `.0` contract for the phase; the sections below define the
-> shape before code lands and become the implementation reference.
+> **Status:** ✅ **shipped** (Chapter Throttle complete, TH.0–TH.4). This began
+> as the design contract and is now implemented: the `RateLimiter` core
+> (`aivyx-cost`), the `RateGate` trait + `ToolOutcome::RateLimited` (`aivyx-core`),
+> the `AuditEvent::RateLimited` record (`aivyx-audit`), the `[rate_limit]` config
+> (`aivyx-config`), the `ChannelRateGate` wired into the daemon + voice turn loops
+> (`aivyx-channel`/`aivyx-cli`), and a `THREAT_MODEL.md` §4.9 note. **One deferral:**
+> `write_rate_limit_section` — its only consumer is a future Studio rate-limit
+> editor (§6 defers that editor); the `[rate_limit]` config is hand-editable and
+> enforced today.
 >
 > Throttle gives the operator **control over how often tools run**. Capabilities
 > gate *what* a tool may do; budgets ([`COST_GOVERNANCE.md`](COST_GOVERNANCE.md))
@@ -123,6 +129,8 @@ Settings screen uses (`write_*_section`) so it is editable by hand **and**
 chapter.
 
 ## 7. Phase plan
+
+All phases ✅ shipped.
 
 | Phase | Deliverable |
 |---|---|

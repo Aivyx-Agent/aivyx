@@ -5,6 +5,26 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Tool-call rate limits & quotas (Chapter Throttle).** A third dispatch gate —
+  after the capability + role gates, before execute — bounds *how often* tools
+  run, the sibling of Chapter K's dollar budgets for call counts. Opt-in
+  `[rate_limit]` config sets per-turn-per-tool, per-turn-total, and per-tool
+  sliding-window caps with an `alert` (warn + proceed) or `deny` (block) action;
+  a throttled call yields a forensically-distinct `ToolOutcome::RateLimited` and
+  a dedicated `RateLimited` audit record (separate from capability/role denials).
+  Bounds a runaway turn — autonomous loop, Nonagon mission, or interactive — from
+  hammering `web.fetch` / `shell.exec`. Uncapped by default, so existing configs
+  are unchanged. See [`docs/RATE_LIMITS.md`](docs/RATE_LIMITS.md); closes backend
+  audit finding **F2**.
+
+### Fixed
+
+- **Storage-domain count corrected (21, was documented as 20)** — the Phase-183
+  `Reminders` `KeyDomain` was never propagated to the docs. Added a
+  `key_domain_count_matches_docs` drift-guard test (audit **F7**).
+
 ### Security
 
 - **The Studio `/ws` bridge now enforces an `Origin` check** (closes a

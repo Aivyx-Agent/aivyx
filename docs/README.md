@@ -90,7 +90,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 - [`RATE_LIMITS.md`](RATE_LIMITS.md) — **tool-call rate limits & quotas**
   (Chapter Throttle): the per-tool / per-turn / sliding-window gate that bounds
   *how often* tools run — the budget gate's sibling for call counts; closes
-  audit F2. 📐 design contract (TH.0).
+  audit F2. ✅ shipped.
 
 ## Archive
 

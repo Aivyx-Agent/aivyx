@@ -25,7 +25,7 @@ verifiable offline.
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 83 |
-| Encrypted storage domains | 20 |
+| Encrypted storage domains | 21 |
 
 ## Five-minute setup
 
@@ -140,8 +140,9 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
   process.
 - **Autonomy with brakes.** An autonomous, self-re-arming loop and a
   non-interactive **headless mode** (refuses-and-aborts at gates, never
-  auto-approving), with **cost governance** — per-turn dollar pricing and
-  `[budget]` caps.
+  auto-approving), with **cost governance** (per-turn dollar pricing and
+  `[budget]` caps) and **tool-call rate limits** (`[rate_limit]` per-turn /
+  per-tool / sliding-window quotas that alert or deny).
 
 The full phase-by-phase arc lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the
 recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
@@ -190,7 +191,7 @@ Thirty-two crates in the workspace. The substrate core:
 | `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 13 substrate tools |
 | `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, the active scope bases |
 | `aivyx-crypto` | Argon2id, HKDF-SHA256, ChaCha20-Poly1305 |
-| `aivyx-storage` | redb-backed encrypted store, 20 key domains |
+| `aivyx-storage` | redb-backed encrypted store, 21 key domains |
 | `aivyx-audit` | HMAC-chained audit log, offline verification |
 | `aivyx-config` | TOML + env loader with source provenance |
 | `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama impls |

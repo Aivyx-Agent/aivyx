@@ -242,6 +242,17 @@ append-only substrate: a tampered or reordered entry trips the
 chain check. The operator can stop a run at any time
 (`aivyx loop stop`) and inspect live spend (`aivyx loop status`).
 
+As of **Chapter Throttle**, an opt-in `[rate_limit]` adds a fourth
+bound that applies *within* every turn (loop iteration, Nonagon
+sub-turn, or interactive turn alike): per-turn-per-tool, per-turn-total,
+and sliding-window caps on **how often a tool is called**, with an
+`alert` or `deny` action. This complements the run-level caps above —
+where `max_iterations`/`max_run_tokens` bound the *run*, the rate gate
+bounds a single runaway turn from hammering `web.fetch` / `shell.exec`.
+A throttled call is refused before execution and lands a dedicated
+`RateLimited` audit record. Uncapped by default; see
+[`RATE_LIMITS.md`](RATE_LIMITS.md).
+
 ### 4.10 A productivity tool exfiltrates data to an external service
 
 **Mitigation:** The Chapter F/G productivity integrations

@@ -67,14 +67,16 @@ origin on the bound port; cross-site / DNS-rebind / wrong-port / `null`
 origins get a `403`. Verified at the wire level + unit-tested; documented
 as [`THREAT_MODEL.md`](THREAT_MODEL.md) §4.11.
 
-### 🟠 F2 — No tool-level rate limiting / quota
+### 🟢 F2 — No tool-level rate limiting / quota — **RESOLVED (Chapter Throttle)**
 
-Capabilities gate *what* a tool may do, never *how often*.
-`notify_dispatcher` has per-channel rate limits, but there is no general
-per-tool / per-turn quota — relevant for a security-focused framework
-running autonomous loops (a misbehaving loop can hammer
-`web.fetch` / `shell.exec`). **Open.** Roadmap candidate: a capability-set
-or turn-loop-level call budget, audited like other limits.
+Capabilities gated *what* a tool may do, never *how often* — within a turn /
+loop iteration / Nonagon mission, tool calls were unbounded. **Fixed** by
+**Chapter Throttle**: a third dispatch gate (`RateGate`) checked after the
+capability + role gates and before execute, bounding calls by the operator's
+`[rate_limit]` caps (per-turn-per-tool, per-turn-total, sliding-window) with an
+`alert` / `deny` action. A throttled call yields a forensically-distinct
+`ToolOutcome::RateLimited` + a dedicated `RateLimited` audit record. Opt-in
+(uncapped default), on the one chain. See [`RATE_LIMITS.md`](RATE_LIMITS.md).
 
 ### 🟠 F3 — Channel Activation Milestone (cross-channel continuity)
 
@@ -106,12 +108,15 @@ the store salt is `Uuid::new_v4()` (122 bits of `getrandom` CSPRNG) and
 AEAD nonces likewise. Close only if you want a clean "no `SystemTime`
 randomness anywhere" story.
 
-### 🔵 F7 — Doc/code count drift
+### 🟢 F7 — Doc/code count drift — **RESOLVED (Chapter Throttle TH.4)**
 
-The scope-base count drifts between docs (83) and code (~88 `KNOWN_BASES`
-literals). A one-line `assert_eq!(KNOWN_BASES.len(), N)` test — plus
-equivalents for storage-domain and substrate-tool counts — would stop docs
-diverging from code.
+The originally-flagged scope-base drift was a false alarm: `KNOWN_BASES.len()`
+is already asserted `== 83` in code (the audit's "~88" was an over-counting
+grep that included doc-comment examples). The *real* drift was the **storage
+domain count** — code has **21** (`KeyDomain::ALL`) while the docs said 20 (the
+Phase-183 `Reminders` domain was never propagated). **Fixed**: corrected the
+docs to 21 and added a `key_domain_count_matches_docs` assertion with a
+doc-update reminder, so the figure can no longer diverge silently.
 
 ### Note (not a finding)
 
@@ -124,19 +129,21 @@ reachable on bad input would be worthwhile but is low priority.
 Crypto (Argon2id → HKDF-SHA256 → ChaCha20-Poly1305, CSPRNG salts/nonces via
 `getrandom`, zeroize-on-drop), the HMAC audit chain (offline-verifiable,
 `ChainBroken` on tamper), capability enforcement in the turn loop, encrypted
-storage (20 HKDF-isolated domains), and OAuth per-process token isolation are
+storage (21 HKDF-isolated domains), and OAuth per-process token isolation are
 all present, wired, and well-tested. The five founding pillars
 (Local-First · Security-Focused · Customizable · Autonomous · general-purpose)
 are intact.
 
 ## 5. Bottom line
 
-Nothing architectural is missing. The one genuine *security* defect (F1) is
-**fixed**. The remaining open items are roadmap-shaped (F2 rate-limiting/quota,
-F3 cross-channel continuity, F4 PA-domain breadth) or cosmetic (F5–F7) — the
-expected "broaden + harden" layer on a mature, disciplined substrate. These
-are the natural seeds for the next roadmap:
+Nothing architectural is missing. The genuine *security* defect (F1) is
+**fixed**, and the **Harden** track is now **closed** — F2 (tool-call rate
+limiting / quota) shipped as **Chapter Throttle**, and F7 (count drift) is
+resolved with a corrected storage-domain count + a drift-guard test. The
+remaining open items are roadmap-shaped (F3 cross-channel continuity, F4
+PA-domain breadth) or cosmetic (F5–F6) — the expected "broaden" layer on a
+mature, disciplined substrate. The natural seeds for the next roadmap:
 
-1. **Harden:** tool-level rate limiting / quota (F2); count-assertion tests (F7).
+1. ~~**Harden:** tool-level rate limiting / quota (F2); count-assertion tests (F7).~~ ✅ done (Chapter Throttle).
 2. **Unify:** the Channel Activation Milestone — one assistant everywhere (F3).
 3. **Broaden:** everyday-PA tool domains (F4).

@@ -996,6 +996,19 @@ mod tests {
     // ---- KeyDomain --------------------------------------------------
 
     #[test]
+    fn key_domain_count_matches_docs() {
+        // F7 drift-guard (Chapter Throttle TH.4): pin the number of encrypted
+        // storage domains so the figure in the code and the docs cannot diverge
+        // silently. `as_bytes()` / `table_name()` are exhaustive matches, so a
+        // new variant forces a compile error there; this test plus `ALL` catch
+        // the count. **If this number changes, update `KeyDomain::ALL`, the
+        // "Encrypted storage domains" row + the `aivyx-storage` line in
+        // `README.md`, and the storage-domain figure in
+        // `docs/BACKEND_AUDIT_*.md`.**
+        assert_eq!(KeyDomain::ALL.len(), 21, "encrypted storage domain count");
+    }
+
+    #[test]
     fn key_domain_info_strings_are_distinct() {
         // Regression lock for D7 — any change here is a subkey
         // rotation for the affected domain and must be deliberate.
