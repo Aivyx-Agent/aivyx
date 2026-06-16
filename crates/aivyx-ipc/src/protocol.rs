@@ -1283,6 +1283,30 @@ pub struct SeedSkillWire {
     pub procedure: String,
 }
 
+/// Chapter Genesis — wire mirror of `aivyx_cli`/`aivyx_channel`'s
+/// `DraftedProfile`: the six declared P13 Profile fields the LLM drafts
+/// from the operator's onboarding answers. Returned by `DraftProfile`;
+/// the operator edits the fields and persists them via the existing
+/// `SetProfile` query. Plain fields only — no `aivyx-config` /
+/// `aivyx-llm` dep — so the crate stays wasm-clean. Every field is
+/// best-effort: a scalar the model omits is `None`, a list it omits is
+/// empty, and the operator is always the author of record.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProfileDraftWire {
+    #[serde(default)]
+    pub assistant_name: Option<String>,
+    #[serde(default)]
+    pub operator_profile: Option<String>,
+    #[serde(default)]
+    pub communication_style: Option<String>,
+    #[serde(default)]
+    pub primary_use_cases: Vec<String>,
+    #[serde(default)]
+    pub behavioral_preferences: Vec<String>,
+    #[serde(default)]
+    pub behavioral_constraints: Vec<String>,
+}
+
 /// Chapter Z — one entry in a `ListDir` response. Read-only directory listing
 /// for the Studio's Documents browser.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1402,6 +1426,26 @@ pub enum FrontendMessage {
     DraftPersonaSeed {
         id: String,
         description: String,
+    },
+    /// Chapter Genesis — ask the daemon to **draft** the declared P13
+    /// Profile from the operator's short onboarding answers (what they
+    /// want the assistant to be, the role it plays, how it should talk,
+    /// what it must never do) using the configured model. Read-only — it
+    /// drafts nothing; the operator edits the returned fields and
+    /// persists them via the `SetProfile` query. LLM-assisted, so it can
+    /// fail (no model / model error) — the UI falls back to manual entry.
+    ///
+    /// Reply: [`DaemonMessage::ProfileDrafted`] with the same `id`.
+    DraftProfile {
+        id: String,
+        /// "What do you want this assistant to be for you?"
+        intent: String,
+        /// The role it should play (collaborator / coach / assistant / …).
+        role: String,
+        /// How it should talk — tone & warmth.
+        tone: String,
+        /// The hard lines — what it must never do.
+        never_do: String,
     },
     /// Phase 65 — operator-driven Persona chain import (Phase 60
     /// identity-deferral closer). Replays a parsed export bundle
@@ -1617,6 +1661,15 @@ pub enum DaemonMessage {
     PersonaSeedDrafted {
         id: String,
         draft: Option<PersonaSeedWire>,
+        error: Option<String>,
+    },
+    /// Chapter Genesis — response to [`FrontendMessage::DraftProfile`].
+    /// `draft` is `Some` with the LLM-drafted Profile (which the operator
+    /// edits, then persists via `SetProfile`); `None` with `error` when no
+    /// model is configured or the draft failed.
+    ProfileDrafted {
+        id: String,
+        draft: Option<ProfileDraftWire>,
         error: Option<String>,
     },
     /// Phase 65 — response to [`FrontendMessage::ImportPersonaChain`].
@@ -1954,6 +2007,12 @@ pub enum DaemonEnvelope {
     PersonaSeedDrafted {
         id: String,
         draft: Option<PersonaSeedWire>,
+        error: Option<String>,
+    },
+    // Chapter Genesis — LLM-drafted declared Profile.
+    ProfileDrafted {
+        id: String,
+        draft: Option<ProfileDraftWire>,
         error: Option<String>,
     },
     // Phase 65 — Persona import resolution.
@@ -3208,6 +3267,55 @@ mod tests {
         assert_eq!(seed.character_traits, vec!["witty"]);
         assert!(seed.learned_context.is_empty());
         assert!(seed.skills.is_empty());
+    }
+
+    #[test]
+    fn draft_profile_request_and_response_round_trip() {
+        // Chapter Genesis — the onboarding answers go out, the drafted
+        // Profile (or a typed error) comes back, both surviving a frame.
+        let req = FrontendMessage::DraftProfile {
+            id: "mc-onboard-draft".into(),
+            intent: "a calm thinking partner for my writing".into(),
+            role: "collaborator".into(),
+            tone: "warm but concise".into(),
+            never_do: "never flatter; never pad answers".into(),
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        for resp in [
+            DaemonEnvelope::ProfileDrafted {
+                id: "mc-onboard-draft".into(),
+                draft: Some(ProfileDraftWire {
+                    assistant_name: Some("Quill".into()),
+                    primary_use_cases: vec!["writing".into()],
+                    behavioral_constraints: vec!["never flatter".into()],
+                    ..Default::default()
+                }),
+                error: None,
+            },
+            DaemonEnvelope::ProfileDrafted {
+                id: "mc-onboard-draft".into(),
+                draft: None,
+                error: Some("no model configured".into()),
+            },
+        ] {
+            let frame = encode_frame(&resp).expect("encode");
+            let (back, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, resp);
+        }
+    }
+
+    #[test]
+    fn profile_draft_wire_defaults_absent_fields() {
+        // A minimal draft (only a name) decodes with scalars None + lists empty.
+        let json = r#"{"assistant_name":"Quill"}"#;
+        let d: ProfileDraftWire = serde_json::from_str(json).expect("decode");
+        assert_eq!(d.assistant_name.as_deref(), Some("Quill"));
+        assert!(d.operator_profile.is_none());
+        assert!(d.primary_use_cases.is_empty());
+        assert!(d.behavioral_constraints.is_empty());
     }
 
     #[test]

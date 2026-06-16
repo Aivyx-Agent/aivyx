@@ -2304,6 +2304,59 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::DraftProfile {
+                            id,
+                            intent,
+                            role,
+                            tone,
+                            never_do,
+                        } => {
+                            // Chapter Genesis — one-shot LLM draft of the
+                            // declared P13 Profile from the operator's
+                            // onboarding answers. Read-only (writes nothing);
+                            // the operator edits + persists via SetProfile.
+                            // Reuses the same provider/model as the persona
+                            // seed drafter. No model ⇒ typed error.
+                            let answers = crate::profile_draft::IdentityAnswers {
+                                intent,
+                                role,
+                                tone,
+                                never_do,
+                            };
+                            let resp = match seed_draft_llm.as_ref() {
+                                Some(llm) => {
+                                    match crate::profile_draft::draft_identity(
+                                        &llm.provider,
+                                        &llm.model,
+                                        &answers,
+                                    )
+                                    .await
+                                    {
+                                        Some(profile) => DaemonMessage::ProfileDrafted {
+                                            id,
+                                            draft: Some(drafted_profile_to_wire(profile)),
+                                            error: None,
+                                        },
+                                        None => DaemonMessage::ProfileDrafted {
+                                            id,
+                                            draft: None,
+                                            error: Some(
+                                                "the model couldn't draft a profile — \
+                                                 fill it in manually instead"
+                                                    .to_string(),
+                                            ),
+                                        },
+                                    }
+                                }
+                                None => DaemonMessage::ProfileDrafted {
+                                    id,
+                                    draft: None,
+                                    error: Some("no model is configured for drafting".to_string()),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ResolvePersonaProposal {
                             id,
                             proposal_id,
@@ -4752,6 +4805,21 @@ fn persona_seed_to_wire(seed: aivyx_config::PersonaSeed) -> aivyx_ipc::protocol:
                 procedure: s.procedure,
             })
             .collect(),
+    }
+}
+
+/// Chapter Genesis — map the LLM-drafted `DraftedProfile` to the
+/// wasm-clean wire the `DraftProfile` response carries.
+fn drafted_profile_to_wire(
+    profile: crate::profile_draft::DraftedProfile,
+) -> aivyx_ipc::protocol::ProfileDraftWire {
+    aivyx_ipc::protocol::ProfileDraftWire {
+        assistant_name: profile.assistant_name,
+        operator_profile: profile.operator_profile,
+        communication_style: profile.communication_style,
+        primary_use_cases: profile.primary_use_cases,
+        behavioral_preferences: profile.behavioral_preferences,
+        behavioral_constraints: profile.behavioral_constraints,
     }
 }
 
