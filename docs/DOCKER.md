@@ -1,11 +1,16 @@
 # Containerized Deployment (Chapter Harbor)
 
-> **Status:** 🟡 **design contract** (Chapter Harbor opening, HB.0). The locked
-> contract for shipping Aivyx as a **docker-compose appliance**: a one-command,
-> always-on daemon + Studio that a user runs on a homelab box or VPS, without a
-> Rust toolchain or a native binary on their main machine. This document fixes
-> the **framing, scope, and the two security-sensitive daemon changes** the
-> deployment requires, before any `Dockerfile` is written.
+> **Status:** ✅ **usable from source** (Chapter Harbor HB.0–HB.4 complete; HB.5
+> CI image-publish pending). Aivyx ships as a **docker-compose appliance**: a
+> one-command, always-on daemon + Studio for a homelab box or VPS, no Rust
+> toolchain on the operator's machine. The two opt-in daemon changes
+> (`web_ui_host` §4.1, `web_ui_allowed_origins` §4.2) are in; the `Dockerfile` +
+> `docker-compose.yml` + baked appliance config are **built and run end-to-end**
+> (HB.1 §9), the OAuth-in-Docker recipe is documented (§7), and the operator
+> install steps live in [`INSTALL.md`](INSTALL.md#docker--the-server-appliance).
+> The only remainder is **HB.5** — publishing the image to a registry via CI so
+> users don't build from source. This document remains the locked design
+> reference (framing in §2, the security-sensitive daemon changes in §4).
 
 ## 1. The gap — there is no "just run it" server deployment
 
@@ -227,8 +232,8 @@ cross-platform fix, and the host-networking dance retires. Tracked, not built.
 | **HB.1** | ✅ The **cloud-provider spike**: multi-stage `Dockerfile` (debian-slim runtime, daemon + all tool binaries) + `docker-compose.yml` for the Anthropic profile (no Ollama, no OAuth) + baked appliance config + secret-bridging entrypoint. Includes the §4.1 `web_ui_host` change (opt-in). **Built + ran end-to-end** (Docker 29.5, legacy builder): image builds (290 MB), daemon boots, Studio reachable through the published port, state persists across `down`/`up`, passphrase bridged from the Docker secret. Three build-verify fixes: `WORKDIR /root/.aivyx` (the daemon reads `./aivyx.toml` from the CWD), the appliance role named `default` (the active role), and a legacy-builder Dockerfile (no `buildx`/BuildKit cache mounts required). |
 | **HB.2** | ✅ The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the F-4 non-loopback startup warning + the optional **Ollama sibling** (CPU default; opt-in GPU override `deploy/docker/compose.gpu.yml`). |
 | **HB.3** | ✅ The **OAuth-in-Docker recipe** (§7) — corrected from the original sketch: the callback listener binds container-loopback + Google mandates a loopback `redirect_uri`, so the flow uses **host networking** (Linux) / a host-run binary (Docker Desktop), tokens landing in the shared volume. Doc, not code. *Recipe is code-read-verified, not yet live-run against a real Google app.* |
-| **HB.4** | **Docs**: this file flipped to shipped + an INSTALL.md "Docker" section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, and the worked compose. |
-| **HB.5** | **CI image publish**: a workflow that builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (alongside the existing cargo-dist binaries). Also the first real `docker build` verification of HB.1's image. |
+| **HB.4** | ✅ **Docs**: this file's status flipped to *usable from source* + an [INSTALL.md "Docker"](INSTALL.md#docker--the-server-appliance) section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, the Ollama/GPU + OAuth pointers, and the worked compose quick-start. |
+| **HB.5** | **CI image publish**: a workflow that builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (alongside the existing cargo-dist binaries). HB.1 is already locally `docker build`-verified (§9); HB.5 automates the publish. |
 
 ## 10. Open questions (resolved)
 

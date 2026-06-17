@@ -169,6 +169,65 @@ Signing + notarization is on the deferred-distribution list. It
 requires an Apple Developer account and a CI-side cert pipeline;
 it lands in a follow-up phase once operator pressure surfaces.
 
+## Docker — the server appliance
+
+`docker compose up` runs Aivyx as an always-on **server appliance**: the
+daemon + the Studio web GUI in one container, no Rust toolchain on your
+machine.
+
+**This is a different deployment than the native install above.** The native
+binary is **local-first** — the agent reaches *your* real files and devices. In
+a container it reaches a **bind-mounted volume** (`./workspace`), the Studio is
+exposed deliberately, and there's no voice. It's the homelab / VPS / "give me an
+always-on assistant" profile, not a drop-in for the desktop install. See
+[`DOCKER.md`](DOCKER.md) for the full framing and security posture, and
+[`../deploy/docker/README.md`](../deploy/docker/README.md) for the worked files.
+
+### Quick start (cloud provider)
+
+```sh
+# 1. set the store passphrase (a Docker SECRET — not a plain env var)
+printf '%s' 'a-strong-passphrase' > deploy/docker/secrets/passphrase
+
+# 2. give it an API key
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# 3. bring it up (builds the image the first time; ~minutes)
+docker compose up --build
+
+# 4. open the Studio and create your agent
+#    → http://localhost:7843  → the "Create" screen (guided onboarding)
+```
+
+State (config, encrypted store, audit chain, OAuth tokens) persists in the
+`aivyx-data` named volume across `docker compose down` / `up`. The agent's files
+live in `./workspace` (mounted at `/work`).
+
+### What you should know
+
+- **Localhost only by default.** The compose publishes to `127.0.0.1:7843`.
+  Exposing the Studio off-host needs **both** `[daemon] web_ui_host = "0.0.0.0"`
+  *and* `[daemon] web_ui_allowed_origins = ["https://your-host"]` (the daemon
+  rejects off-host WebSocket origins otherwise), **plus** auth + TLS in front
+  (a reverse proxy like Caddy/Traefik — Aivyx doesn't ship one). The daemon
+  prints a one-line warning when it binds a non-loopback host.
+- **Passphrase posture.** The store passphrase comes from a Docker *secret*
+  (bridged to `AIVYX_PASSPHRASE` by the entrypoint), not a plain `environment:`
+  value — a deliberate step down from the desktop's interactive prompt, but it
+  keeps the passphrase out of `docker inspect`.
+- **Local models.** The bundled `ollama` sibling service is optional
+  (`docker compose --profile ollama up`) and CPU-only by default; NVIDIA GPU
+  passthrough layers in [`../deploy/docker/compose.gpu.yml`](../deploy/docker/compose.gpu.yml).
+- **OAuth tools** (Gmail / Calendar / Drive / Contacts / …) are baked into the
+  image; completing the one-time consent in a container needs the host-network
+  recipe in [`DOCKER.md`](DOCKER.md) §7.
+- **Builder.** The `Dockerfile` uses the legacy builder (no `buildx`/BuildKit
+  required); a `docker buildx build --mount=type=cache …` is an optional
+  rebuild speed-up.
+
+The image is published to a registry in a follow-up (the CI image-publish
+phase); until then `docker compose up --build` builds it locally from source.
+
 ## Where files land
 
 | File | Default location | Configurable? |

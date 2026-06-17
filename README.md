@@ -39,6 +39,13 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 
 Prefer to compile? The build-from-source steps below work too.
 
+**Want an always-on server instead of a local binary?** `docker
+compose up` runs Aivyx as a homelab/VPS **appliance** (daemon +
+Studio in a container) — a different, deliberately-scoped profile
+from the local-first install. See
+[`docs/INSTALL.md`](docs/INSTALL.md#docker--the-server-appliance)
+and [`docs/DOCKER.md`](docs/DOCKER.md).
+
 **Onboarding fast-path:** after `cargo build --release --bin
 aivyx`, run `./target/release/aivyx init --template coder` (or
 `researcher` / `personal`) to skip the from-scratch config and run
