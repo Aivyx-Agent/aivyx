@@ -51,5 +51,7 @@ State (config, encrypted store, audit chain, OAuth tokens) persists in the
   NVIDIA Container Toolkit on the host). Voice is out of scope.
 - **OAuth tools** (Gmail/Calendar/Drive/Contacts/…) are baked into the image but
   the in-container consent flow needs the published-callback recipe (HB.3).
-- **Verification.** This image hasn't been built in CI yet (HB.5). If `docker
-  build` surfaces a glibc/static issue, see `docs/DOCKER.md` F-2 (musl fallback).
+- **Verification.** Built + run end-to-end locally (Docker 29.5, legacy
+  builder): image builds, daemon boots, Studio serves on `:7843`, state
+  persists across `down`/`up`. Not yet built in CI (HB.5). Uses the legacy
+  builder (no `buildx` needed); `DOCKER_BUILDKIT=0 docker build` is implied.

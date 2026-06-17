@@ -36,9 +36,11 @@ web_ui_host = "0.0.0.0"
 
 # The agent boots without a Profile/Persona on purpose: open the Studio and use
 # the **Create** screen (Chapter Genesis) to shape your assistant. A minimal
-# default role keeps it useful before you do.
+# default role keeps it useful before you do. Named `default` so it is the
+# active role at boot (the daemon's active role is `default` unless AIVYX_ROLE
+# or `--role` overrides it).
 [[role]]
-name = "assistant"
+name = "default"
 system_prompt = "You are a personal assistant running as a local appliance. Be concise and surface what matters. Operate within the /work volume you've been given."
 tool_allowlist = [
     "fs.read",

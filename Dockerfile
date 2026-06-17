@@ -21,12 +21,13 @@ WORKDIR /app
 # pre-built, committed dist/ bundle.
 COPY . .
 
-# Build the daemon + all Chapter F/G tool-process binaries in one pass. Cache
-# the cargo registry + target dir across builds (BuildKit), and copy the release
-# artifacts out within the same RUN (cache mounts don't survive the step).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo build --release \
+# Build the daemon + all Chapter F/G tool-process binaries in one pass, then copy
+# the release artifacts to /out for the runtime stage.
+#
+# No BuildKit cache mounts — the legacy builder works everywhere (buildx is
+# optional). Rebuilds recompile from scratch; `docker buildx build` with
+# `--mount=type=cache` is a speed optimization left to the operator.
+RUN cargo build --release \
         -p aivyx-cli \
         -p aivyx-gmail -p aivyx-calendar -p aivyx-drive -p aivyx-contacts \
         -p aivyx-notion -p aivyx-obsidian -p aivyx-n8n -p aivyx-toolkit \
@@ -53,7 +54,11 @@ COPY deploy/docker/entrypoint.sh /usr/local/bin/aivyx-entrypoint
 RUN chmod +x /usr/local/bin/aivyx-entrypoint
 
 # Studio + state live here; mount a named volume on /root/.aivyx to persist.
+# WORKDIR is /root/.aivyx because the daemon reads `./aivyx.toml` relative to its
+# working directory (there is no --config flag yet), and the entrypoint seeds the
+# appliance config there on first boot.
 ENV HOME=/root
+WORKDIR /root/.aivyx
 VOLUME ["/root/.aivyx", "/work"]
 EXPOSE 7843
 

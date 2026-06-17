@@ -6,6 +6,10 @@
 /target
 **/target
 
+# Local daemon runtime dirs (contain Unix sockets the tar can't pack).
+/.dev-run
+**/*.sock
+
 # Dioxus intermediate build output (the embedded bundle is dist/, kept).
 /target/dx
 
