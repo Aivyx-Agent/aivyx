@@ -134,8 +134,11 @@ pub struct DaemonConfig {
     pub file_watch_store: Option<DomainHandle>,
     /// Port for the localhost-only webhook HTTP listener.
     pub webhook_port: Option<u16>,
-    /// Port for the localhost-only web UI server.
+    /// Port for the web UI server.
     pub web_ui_port: Option<u16>,
+    /// Bind host for the web UI server. `None` → `127.0.0.1` (the
+    /// localhost-only default). Chapter Harbor: `0.0.0.0` for containers.
+    pub web_ui_host: Option<std::net::IpAddr>,
     /// Optional shared memory instance for background GC.
     pub memory: Option<Arc<dyn aivyx_memory::Memory>>,
     /// If set, entries older than this many seconds are expired by a
@@ -518,6 +521,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         file_watch_store,
         webhook_port,
         web_ui_port,
+        web_ui_host,
         memory,
         memory_ttl_secs,
         audit_log,
@@ -1088,6 +1092,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         tokio::spawn(async move {
             if let Err(e) = crate::web_ui::run_web_ui_server(
                 web_socket_path,
+                web_ui_host,
                 port,
                 web_shutdown,
                 web_broadcaster,
@@ -2701,6 +2706,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         file_watch_store: None,
         webhook_port: None,
         web_ui_port: None,
+        web_ui_host: None,
         memory: None,
         memory_ttl_secs: None,
         audit_log: None,

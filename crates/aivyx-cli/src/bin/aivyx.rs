@@ -4199,6 +4199,7 @@ async fn run_async(
         reflection_schedules: config_reflection_schedules,
         webhook_port: config_webhook_port,
         web_ui_port: config_web_ui_port,
+        web_ui_host: config_web_ui_host,
         memory_ttl_secs,
         // Phase 74 — per-topic-glob retention rules. Threaded
         // into the daemon's memory-GC timer below so the hourly
@@ -6981,6 +6982,7 @@ async fn run_async(
             file_watch_store: Some(file_watch_domain),
             webhook_port: config_webhook_port,
             web_ui_port: cli_web_ui_port.or(config_web_ui_port),
+            web_ui_host: config_web_ui_host,
             memory: Some(Arc::clone(&memory)),
             memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
             audit_log: Some(Arc::clone(&persistent_audit_for_query)),

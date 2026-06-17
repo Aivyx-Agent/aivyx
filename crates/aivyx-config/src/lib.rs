@@ -1027,6 +1027,14 @@ pub struct AivyxConfig {
     /// (uses default 7843) or `[daemon] web_ui_port = <N>` (enables on
     /// that port). Phase 39.
     pub web_ui_port: Option<u16>,
+    /// Web UI bind host. `None` (default) binds `127.0.0.1` — the
+    /// localhost-only posture every native install keeps. Chapter Harbor:
+    /// set `[daemon] web_ui_host = "0.0.0.0"` for containerized deployment
+    /// (Docker forwards published ports to the container's `0.0.0.0`, not
+    /// its loopback, so the appliance profile must bind a routable host).
+    /// Binding beyond loopback is a deliberate network exposure — pair it
+    /// with auth/TLS in front (see `docs/DOCKER.md`).
+    pub web_ui_host: Option<std::net::IpAddr>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -3259,11 +3267,13 @@ struct RawToml {
 
 /// `[daemon]` section in the TOML file. Phase 28 Task 3.
 /// Phase 39 adds `web_ui` and `web_ui_port` for the web UI channel.
+/// Chapter Harbor adds `web_ui_host` for containerized deployment.
 #[derive(Debug, Default, Deserialize)]
 struct RawDaemon {
     webhook_port: Option<u16>,
     web_ui: Option<bool>,
     web_ui_port: Option<u16>,
+    web_ui_host: Option<String>,
 }
 
 /// `[profile]` section in the TOML file. Phase 57 (PRODUCT.md P13).
@@ -6164,6 +6174,18 @@ impl AivyxConfig {
                 (Some(true), None) => Some(7843),
                 // Not configured or explicitly disabled.
                 _ => None,
+            },
+            web_ui_host: match toml.daemon.web_ui_host {
+                None => None,
+                Some(s) => Some(s.parse::<std::net::IpAddr>().map_err(|_| {
+                    ConfigError::Invalid {
+                        field: "daemon.web_ui_host",
+                        reason: format!(
+                            "must be an IP address (e.g. \"127.0.0.1\" or \
+                             \"0.0.0.0\"); got {s:?}"
+                        ),
+                    }
+                })?),
             },
         })
     }

@@ -1,0 +1,51 @@
+# Aivyx — default appliance config (Chapter Harbor, HB.1).
+#
+# Baked into the container image as a sensible zero-config default. Mount your
+# own config over `/root/.aivyx/aivyx.toml` to override any of this.
+#
+# This is the SERVER-APPLIANCE profile (see docs/DOCKER.md): the agent reaches a
+# bind-mounted /work volume, the Studio is exposed deliberately, and there is no
+# voice. It is NOT the desktop local-first install.
+
+[agent]
+# Cloud provider for the HB.1 spike (no GPU, no local model). The API key comes
+# from the ANTHROPIC_API_KEY env var (compose passes it through) — never bake a
+# key into the image.
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+
+[storage]
+# Lives under the mounted named volume so the encrypted store + audit chain
+# persist across `docker compose down/up`.
+path = "/root/.aivyx/store.redb"
+
+[fs]
+# The agent's filesystem reach = the bind-mounted /work volume (NOT the host's
+# real home). This is the deliberate container boundary — give the agent only
+# what you mount.
+root = "/work"
+
+[daemon]
+# Serve the Studio. web_ui_host = 0.0.0.0 is REQUIRED in a container: Docker
+# forwards a published port to the container's 0.0.0.0, not its loopback, so the
+# default 127.0.0.1 bind would be unreachable. Binding beyond loopback is a
+# deliberate exposure — publish only to host-localhost (compose does) or front
+# it with auth + TLS for remote access (docs/DOCKER.md).
+web_ui = true
+web_ui_host = "0.0.0.0"
+
+# The agent boots without a Profile/Persona on purpose: open the Studio and use
+# the **Create** screen (Chapter Genesis) to shape your assistant. A minimal
+# default role keeps it useful before you do.
+[[role]]
+name = "assistant"
+system_prompt = "You are a personal assistant running as a local appliance. Be concise and surface what matters. Operate within the /work volume you've been given."
+tool_allowlist = [
+    "fs.read",
+    "fs.write",
+    "memory.read",
+    "memory.write",
+    "memory.forget",
+    "web.fetch",
+    "notify.send",
+]

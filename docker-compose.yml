@@ -1,0 +1,48 @@
+# Aivyx — server-appliance deployment (Chapter Harbor, HB.1).
+#
+# Quick start (cloud provider — no GPU, no OAuth):
+#   1. printf '%s' 'your-store-passphrase' > deploy/docker/secrets/passphrase
+#   2. export ANTHROPIC_API_KEY=sk-ant-...
+#   3. docker compose up --build
+#   4. open http://localhost:7843  → use the "Create" screen to make your agent
+#
+# This is the SERVER-APPLIANCE profile (docs/DOCKER.md): the agent reaches the
+# bind-mounted ./workspace, the Studio is published to host-localhost only, and
+# there is no voice. It is NOT the desktop local-first install.
+
+services:
+  aivyx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aivyx:dev
+    # Host-localhost only by default. To expose remotely, change the host side
+    # AND set a [daemon] web_ui_allowed_origins (HB.2) + front it with TLS/auth.
+    ports:
+      - "127.0.0.1:7843:7843"
+    volumes:
+      - aivyx-data:/root/.aivyx        # config + encrypted store + audit chain + tokens
+      - ./workspace:/work              # the agent's filesystem reach (fs_root)
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your shell or .env}
+    secrets:
+      - aivyx_passphrase               # → AIVYX_PASSPHRASE via the entrypoint
+    restart: unless-stopped
+
+  # ── optional local-model profile: `docker compose --profile ollama up` ──
+  # Then set provider="ollama" + [ollama] base_url="http://ollama:11434" in your
+  # mounted config. GPU passthrough (nvidia runtime) is a documented add-on (HB.2).
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  aivyx-data:
+  ollama-data:
+
+secrets:
+  aivyx_passphrase:
+    file: ./deploy/docker/secrets/passphrase

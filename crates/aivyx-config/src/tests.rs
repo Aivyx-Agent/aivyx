@@ -3223,6 +3223,54 @@ fn daemon_web_ui_absent_means_none() {
     drop(env);
 }
 
+#[test]
+fn daemon_web_ui_host_absent_defaults_to_none() {
+    // Chapter Harbor — no web_ui_host → None (the daemon binds 127.0.0.1,
+    // the localhost-only default every native install keeps).
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[daemon]\nweb_ui = true\n", "web-ui-host-absent");
+    assert_eq!(cfg.web_ui_host, None);
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_host_parses_bind_all() {
+    // Chapter Harbor — `0.0.0.0` for containerized deployment.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n",
+        "web-ui-host-all",
+    );
+    assert_eq!(
+        cfg.web_ui_host,
+        Some(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+    );
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_host_rejects_non_ip() {
+    // A non-IP value is a hard config error, not a silent fallback.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("web-ui-host-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[daemon]\nweb_ui_host = \"not-an-ip\"\n").unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must reject");
+    assert!(
+        err.to_string().contains("web_ui_host"),
+        "error should name the field: {err}"
+    );
+    drop(env);
+}
+
 // ------------------------------------------------------------------
 // Phase 46: `bundled` flag on [[mcp_server]]
 // ------------------------------------------------------------------

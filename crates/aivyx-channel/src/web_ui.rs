@@ -137,10 +137,17 @@ impl ChannelContext for WebDaemonChannel {
 // Web UI HTTP + WebSocket server
 // ---------------------------------------------------------------------------
 
-/// Run the web UI server. Binds `127.0.0.1:<port>`, serves the
-/// embedded HTML at `GET /`, and upgrades `GET /ws` to WebSocket.
-/// Each WS connection bridges to the daemon's Unix socket at
-/// `socket_path`.
+/// Run the web UI server. Binds `<host>:<port>` (default host
+/// `127.0.0.1`), serves the embedded HTML at `GET /`, and upgrades
+/// `GET /ws` to WebSocket. Each WS connection bridges to the daemon's
+/// Unix socket at `socket_path`.
+///
+/// `host` is `None` for the default localhost-only posture every native
+/// install keeps; Chapter Harbor passes `0.0.0.0` for containerized
+/// deployment (Docker forwards published ports to the container's
+/// `0.0.0.0`, not its loopback). Binding beyond loopback is a deliberate
+/// network exposure — the WS Origin allowlist (below) still defends
+/// against CSWSH / DNS-rebinding, and operators front it with auth/TLS.
 ///
 /// Uses `tokio-tungstenite` directly on the TCP stream — each
 /// incoming connection is peeked to determine if it's a WebSocket
@@ -151,11 +158,14 @@ impl ChannelContext for WebDaemonChannel {
 /// cancelled.
 pub async fn run_web_ui_server(
     socket_path: PathBuf,
+    host: Option<std::net::IpAddr>,
     port: u16,
     shutdown: CancellationToken,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let host = host
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let addr = std::net::SocketAddr::new(host, port);
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|source| DaemonError::Bind {

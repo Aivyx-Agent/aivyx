@@ -1,0 +1,26 @@
+# Keep the build context small + the build deterministic.
+# NOTE: crates/aivyx-web/dist/ is deliberately NOT ignored — the daemon embeds
+# that committed Studio bundle at compile time.
+
+# Rust build output (rebuilt inside the image).
+/target
+**/target
+
+# Dioxus intermediate build output (the embedded bundle is dist/, kept).
+/target/dx
+
+# VCS + local tooling.
+/.git
+/.github
+.gitignore
+
+# Local secrets must never enter the image.
+deploy/docker/secrets/*
+!deploy/docker/secrets/passphrase.example
+
+# Editor / OS noise.
+**/*.swp
+.DS_Store
+
+# Docs/journals aren't needed for the build.
+/docs/archive

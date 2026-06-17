@@ -1,0 +1,50 @@
+# Aivyx in Docker (Chapter Harbor)
+
+Run Aivyx as an always-on **server appliance** — daemon + Studio in one
+`docker compose up`, no Rust toolchain on your machine. This is **not** the
+desktop local-first install: in a container the agent reaches a bind-mounted
+volume (not your real home), the Studio is exposed deliberately, and there's no
+voice. See [`docs/DOCKER.md`](../../docs/DOCKER.md) for the full framing and
+security posture.
+
+## Quick start (cloud provider — HB.1)
+
+```sh
+# 1. set the store passphrase (Docker secret — never an env var in plain sight)
+printf '%s' 'a-strong-passphrase' > deploy/docker/secrets/passphrase
+
+# 2. give it an API key
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# 3. bring it up (builds the image the first time)
+docker compose up --build
+
+# 4. open the Studio and create your agent
+open http://localhost:7843     # → use the "Create" screen (Chapter Genesis)
+```
+
+State (config, encrypted store, audit chain, OAuth tokens) persists in the
+`aivyx-data` volume across `docker compose down`/`up`. The agent's files live in
+`./workspace` (mounted at `/work`).
+
+## What's in here
+
+| File | Purpose |
+|---|---|
+| [`../../Dockerfile`](../../Dockerfile) | Multi-stage build: daemon + all tool binaries → debian-slim |
+| [`../../docker-compose.yml`](../../docker-compose.yml) | The appliance service (+ optional `ollama` profile) |
+| `aivyx.appliance.toml` | Baked default config (mount your own to override) |
+| `entrypoint.sh` | Bridges the passphrase secret → `AIVYX_PASSPHRASE`; seeds `~/.aivyx` on first boot |
+| `secrets/` | Your store passphrase (git-ignored; only `passphrase.example` is tracked) |
+
+## Notes & limits (this phase)
+
+- **Localhost only.** The compose publishes to `127.0.0.1:7843`. Remote access
+  needs the configurable Origin allowlist (HB.2) **and** TLS/auth in front —
+  don't just widen the port binding.
+- **Cloud provider first.** The `ollama` sibling service is wired but optional;
+  GPU passthrough is a later add-on (HB.2). Voice is out of scope.
+- **OAuth tools** (Gmail/Calendar/Drive/Contacts/…) are baked into the image but
+  the in-container consent flow needs the published-callback recipe (HB.3).
+- **Verification.** This image hasn't been built in CI yet (HB.5). If `docker
+  build` surfaces a glibc/static issue, see `docs/DOCKER.md` F-2 (musl fallback).
