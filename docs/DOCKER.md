@@ -100,11 +100,14 @@ the docs pair it with "put auth + TLS in front."
    `access` to a workspace rooted at `/work` and explain the boundary. *Not a
    bug — a reframing.*
 2. **OAuth loopback.** `aivyx connect` opens a **host** browser to
-   `127.0.0.1:<port>/callback`, but that loopback is the container's. Resolution:
-   publish the connect callback port, register the **host-mapped** `redirect_uri`
-   in the Google app, run the consent from the host browser. A documented recipe
-   (HB.3), not a code change. The fiddliest part of onboarding — called out
-   plainly.
+   `127.0.0.1:<port>/callback`, but that loopback is the container's — and the
+   listener binds `127.0.0.1` *inside* the container, which Docker port-publish
+   can't reach (it forwards to the container's `0.0.0.0`). Google also **requires**
+   a loopback `redirect_uri` for desktop clients (the code rejects non-loopback
+   hosts), so the "publish the port + host-mapped redirect" idea doesn't apply.
+   Resolution: run the one-shot consent in a container that **shares the host
+   network** (so the container's loopback *is* the host's), writing tokens into
+   the shared volume — see §7 for the full recipe. Doc, not code.
 3. **Web exposure.** Covered by §4. Default localhost-only; remote is opt-in with
    auth/TLS guidance.
 4. **Local models (Ollama).** Bundling Ollama as a **sibling compose service** is
@@ -151,7 +154,61 @@ runtime carrying the `aivyx` daemon **plus every tool-process binary**, with the
 embedded Studio bundle (already in the daemon binary). `CMD` runs the daemon
 (`aivyx daemon run`).
 
-## 7. What's deliberately *not* here
+## 7. OAuth in Docker — the recipe (HB.3)
+
+Connecting a Google tool (Gmail / Calendar / Drive / Contacts / …) needs a
+one-time browser consent. Two facts force the shape of this (§5.2):
+
+- `aivyx-<svc> auth init` binds its callback listener on **`127.0.0.1:<port>`
+  inside the container**, which a published port can't reach.
+- Google **requires** a loopback `redirect_uri` for desktop OAuth clients — you
+  cannot point it at the container's routable address.
+
+The clean resolution is to run the consent **once** in a throwaway container that
+**shares the host network namespace**, so the container's `127.0.0.1` *is* the
+host's. Consent happens in the host browser; the resulting `config.toml` +
+`tokens.json` are written straight into the shared `aivyx-data` volume, and the
+long-running daemon container picks them up.
+
+### Linux (host networking)
+
+```sh
+# One-shot: the interactive connect wizard, on the host network, writing into
+# the same volume the daemon uses. Prompts for the Google client_id/secret,
+# prints a consent URL to open in your host browser, captures the redirect on
+# host-loopback, and offers to add the [[tool_process]] entry to the mounted
+# aivyx.toml.
+docker compose run --rm -it \
+  --network host \
+  --entrypoint aivyx \
+  aivyx connect contacts
+
+# then restart the daemon so it loads the new tokens + [[tool_process]] entry
+docker compose restart aivyx
+```
+
+Because `connect` writes to `/root/.aivyx/...` (the `aivyx-data` volume) and the
+daemon mounts the same volume, the credential and the config edit are visible to
+the daemon after the restart. Nothing is published; the consent listener lives
+on host-loopback only for the duration of the one-shot.
+
+### Docker Desktop (macOS / Windows) — host networking caveat
+
+`--network host` does not share host-loopback the same way on Docker Desktop.
+There, run the per-service auth on the **host** instead — `aivyx connect <svc>`
+with a natively-installed `aivyx` + `aivyx-<svc>` (the cargo-dist binaries) — then
+make the resulting `~/.aivyx/tool-processes/<svc>/` directory available to the
+container (copy it into the `aivyx-data` volume, or bind-mount it). The token
+file is host-portable; only the consent step needs native loopback.
+
+### Why not a code change?
+
+Host networking keeps HB.3 **doc-only**, as the contract intends. A future
+browser-cold-start daemon mode (§4) would change the calculus — at that point a
+configurable callback bind-host on `auth init` (mirroring §4.1) becomes the
+cross-platform fix, and the host-networking dance retires. Tracked, not built.
+
+## 8. What's deliberately *not* here
 
 - **Not a Kubernetes chart / Helm.** One box, one compose file. K8s is a later
   call if demand appears.
@@ -162,31 +219,29 @@ embedded Studio bundle (already in the daemon binary). `CMD` runs the daemon
   (Caddy/Traefik) in front for remote exposure; it does not ship one.
 - **Not a desktop-install replacement** (§2).
 
-## 8. Phase plan
+## 9. Phase plan
 
 | Phase | Deliverable |
 |---|---|
 | **HB.0** | This contract. |
-| **HB.1** | The **cloud-provider spike**: multi-stage `Dockerfile` (musl/static → distroless, daemon + all tool binaries) + `docker-compose.yml` for the Anthropic/OpenAI profile (no Ollama, no OAuth). Includes the §4.1 `web_ui_host` change (opt-in). Acceptance: `docker compose up` → Studio reachable at `http://localhost:7843`, a chat turn completes, state persists across `down`/`up`. |
-| **HB.2** | The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the optional **Ollama sibling** service (CPU profile out of the box; documented GPU profile). |
-| **HB.3** | The **OAuth-in-Docker recipe** (§5.2) — published callback port + host-mapped `redirect_uri`, verified end-to-end against one Google service. Doc, not code. |
+| **HB.1** | ✅ The **cloud-provider spike**: multi-stage `Dockerfile` (debian-slim runtime, daemon + all tool binaries) + `docker-compose.yml` for the Anthropic profile (no Ollama, no OAuth) + baked appliance config + secret-bridging entrypoint. Includes the §4.1 `web_ui_host` change (opt-in). *Image not yet `docker build`-verified (no Docker in dev env) — pending a local/CI build (HB.5).* |
+| **HB.2** | ✅ The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the F-4 non-loopback startup warning + the optional **Ollama sibling** (CPU default; opt-in GPU override `deploy/docker/compose.gpu.yml`). |
+| **HB.3** | ✅ The **OAuth-in-Docker recipe** (§7) — corrected from the original sketch: the callback listener binds container-loopback + Google mandates a loopback `redirect_uri`, so the flow uses **host networking** (Linux) / a host-run binary (Docker Desktop), tokens landing in the shared volume. Doc, not code. *Recipe is code-read-verified, not yet live-run against a real Google app.* |
 | **HB.4** | **Docs**: this file flipped to shipped + an INSTALL.md "Docker" section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, and the worked compose. |
-| **HB.5** | **CI image publish**: a workflow that builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (alongside the existing cargo-dist binaries). |
+| **HB.5** | **CI image publish**: a workflow that builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (alongside the existing cargo-dist binaries). Also the first real `docker build` verification of HB.1's image. |
 
-## 9. Open questions (resolved at HB.N)
+## 10. Open questions (resolved)
 
-- **F-1 (HB.1):** does the image **bake a default `aivyx.toml`** (appliance
-  defaults: `web_ui_host=0.0.0.0`, `access` at `/work`, tool processes wired) and
-  let a mounted config override it, or require the user to supply one? *Lean:
-  bake a sensible appliance default; mount-to-override. Zero-config `up` is the
-  whole value proposition.*
-- **F-2 (HB.1):** distroless vs `debian-slim` runtime. *Lean: distroless static
-  (musl) for size/surface; fall back to `debian-slim` if a tool process needs
-  glibc/dynamic deps (audit at HB.1).*
-- **F-3 (HB.2):** Ollama GPU profile — ship the nvidia-runtime compose override
-  in-repo, or document it only? *Lean: document + a commented `compose.gpu.yml`
-  override; don't make GPU a default path.*
-- **F-4 (HB.4):** how hard to push users toward a reverse proxy for any non-
-  localhost exposure — a hard warning in the daemon logs when `web_ui_host` is
-  non-loopback **and** the allowlist is non-empty, or docs only? *Lean: a
-  one-line startup warning; cheap, and exposure is the main footgun.*
+- **F-1 (HB.1):** does the image **bake a default `aivyx.toml`** and let a mounted
+  config override it? **Resolved: yes** — `deploy/docker/aivyx.appliance.toml` is
+  baked and the entrypoint seeds it on first boot; mount your own to override.
+- **F-2 (HB.1):** distroless vs `debian-slim` runtime. **Resolved: debian-slim**
+  (+ ca-certificates) for the spike — reliable, no static-linking surprises, and
+  rustls/RustCrypto means no OpenSSL anyway. Musl/distroless stays a future size
+  optimization, re-evaluated once the image is actually built (HB.5).
+- **F-3 (HB.2):** Ollama GPU profile in-repo or documented only? **Resolved:** a
+  committed-but-opt-in override (`deploy/docker/compose.gpu.yml`), layered
+  explicitly; GPU is never the default path.
+- **F-4 (HB.2):** reverse-proxy push for non-localhost exposure. **Resolved:** a
+  one-line daemon startup warning when `web_ui_host` is non-loopback, plus the
+  README exposure recipe (host + allowlist + TLS). Implemented in HB.2.
