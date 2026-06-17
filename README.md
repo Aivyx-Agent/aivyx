@@ -12,19 +12,19 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (v0.2.0 — the Studio, 2026-06-16)
+## Status (v0.2.0 — the Studio + post-Studio chapters, 2026-06-17)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus 13 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), and Genesis (unified CLI + web agent onboarding) — and 13 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.2.0`** (early pre-release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
-| Studio (web GUI) | **Complete** — every screen live: Command · Missions · Chat · Memory (+ graph) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
-| Workspace crates | 32 |
-| Rust tests | 4,666 passing |
+| Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
+| Workspace crates | 33 |
+| Rust tests | 4,791 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 83 |
+| Capability scope bases | 85 |
 | Encrypted storage domains | 21 |
 
 ## Five-minute setup
@@ -130,14 +130,18 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
   specialists, decomposes a mission into a DAG, delegates, verifies, and
   synthesizes — durable, resumable, on the one HMAC chain; **vertical packs**
   swap in a domain crew.
-- **The Studio — a local-first web GUI.** Nine offline, Stitch-styled screens
-  served on `:7843`: Command Center, Missions, Chat, Memory (+ knowledge
-  graph), Settings, Agents, Teams, Documents (browse + edit), Voice.
+- **The Studio — a local-first web GUI.** Ten offline, Stitch-styled screens
+  served on `:7843`: Create (guided agent onboarding), Command Center, Missions,
+  Chat, Memory (+ knowledge graph), Settings, Agents, Teams, Documents (browse +
+  edit), Voice.
+- **One onboarding, two surfaces.** A guided "create your agent" flow (Profile →
+  Persona seed → access) drives the **same** drafters and config writers from
+  both `aivyx init` (CLI cold-start) and the Studio (live daemon).
 - **More frontends, one daemon.** A terminal TUI (`aivyx tui`), the CLI, and
   channel adapters — Telegram, Discord, Slack, voice.
-- **Productivity integrations.** Gmail, Calendar, Drive, Notion, Obsidian, n8n,
-  plus a web/task/health toolkit — each a sandboxed, operator-OAuth tool
-  process.
+- **Productivity integrations.** Gmail, Calendar, Drive, Contacts, Notion,
+  Obsidian, n8n, plus a web/task/health toolkit — each a sandboxed,
+  operator-OAuth tool process.
 - **Autonomy with brakes.** An autonomous, self-re-arming loop and a
   non-interactive **headless mode** (refuses-and-aborts at gates, never
   auto-approving), with **cost governance** (per-turn dollar pricing and
@@ -206,7 +210,8 @@ Channel adapters — `aivyx-telegram`, `aivyx-discord`,
 
 Productivity integrations (Chapter F/G — each a sandboxed
 operator-OAuth tool process) — `aivyx-gmail`, `aivyx-calendar`,
-`aivyx-drive`, `aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n`,
+`aivyx-drive`, `aivyx-contacts` (Google People API),
+`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n`,
 `aivyx-toolkit` (web.search + task.* + health.check.*), with
 `aivyx-google-oauth` + `aivyx-auth-cli` providing the shared
 OAuth substrate.
@@ -214,6 +219,9 @@ OAuth substrate.
 ## Where to look next
 
 **For operators** wanting to use Aivyx:
+- [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — creating your agent:
+  the guided Profile → Persona → access flow, shared by `aivyx init`
+  and the Studio's **Create** screen.
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what Aivyx
   defends against, what it doesn't. Read this before deploying.
 - [`examples/`](examples/) — worked TOML configs for Ollama,
