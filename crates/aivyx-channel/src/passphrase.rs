@@ -739,6 +739,7 @@ mod tests {
     /// This proves the bytes flowing out of `rpassword` round-trip
     /// cleanly into `Vec<u8>` with the right trimming.
     #[test]
+    #[allow(deprecated)] // test seam: rpassword 7.5 deprecated prompt_password_from_bufread; prod uses prompt_password
     fn interactive_source_reads_password_from_bufread() {
         let mut reader = &b"pipe-passphrase\n"[..];
         let mut sink: Vec<u8> = Vec::new();
@@ -767,6 +768,7 @@ mod tests {
     /// would derive a deterministic master key and defeat the whole
     /// Argon2id layer.
     #[test]
+    #[allow(deprecated)] // test seam: rpassword 7.5 deprecated prompt_password_from_bufread; prod uses prompt_password
     fn interactive_source_rejects_empty_password() {
         let mut reader = &b"\n"[..];
         let mut sink: Vec<u8> = Vec::new();
@@ -808,6 +810,7 @@ mod tests {
     /// interactive helper produces, the outer `derive_master_key`
     /// treats it identically to an equally-valued `Fixture`."
     #[test]
+    #[allow(deprecated)] // test seam: rpassword 7.5 deprecated prompt_password_from_bufread; prod uses prompt_password
     fn interactive_and_fixture_produce_same_master_key_for_same_bytes() {
         let dir = TestDir::new();
         let salt_path = dir.salt();
