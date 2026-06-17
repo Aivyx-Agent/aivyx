@@ -1,0 +1,28 @@
+# Optional NVIDIA-GPU override for the bundled Ollama service (Chapter Harbor HB.2).
+#
+# GPU passthrough needs the NVIDIA Container Toolkit installed on the host
+# (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/). Without
+# it, Ollama runs CPU-only (the default in docker-compose.yml) — correct, just
+# slower. GPU is opt-in, never the default path.
+#
+# Usage (layer this over the base compose, with the ollama profile):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f deploy/docker/compose.gpu.yml \
+#     --profile ollama up
+#
+# Then point the daemon at it in your mounted config:
+#   [agent]  provider = "ollama"   model = "llama3.1"
+#   [ollama] base_url = "http://ollama:11434"
+
+services:
+  ollama:
+    # Reserve all NVIDIA GPUs for Ollama (the modern compose device-reservation
+    # form; equivalent to `--gpus all`).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]

@@ -31,7 +31,8 @@ services:
 
   # ── optional local-model profile: `docker compose --profile ollama up` ──
   # Then set provider="ollama" + [ollama] base_url="http://ollama:11434" in your
-  # mounted config. GPU passthrough (nvidia runtime) is a documented add-on (HB.2).
+  # mounted config. Runs CPU-only by default; for NVIDIA GPU passthrough layer in
+  # deploy/docker/compose.gpu.yml (`-f docker-compose.yml -f deploy/docker/compose.gpu.yml`).
   ollama:
     image: ollama/ollama:latest
     profiles: ["ollama"]

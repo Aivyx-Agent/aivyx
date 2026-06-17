@@ -139,6 +139,10 @@ pub struct DaemonConfig {
     /// Bind host for the web UI server. `None` → `127.0.0.1` (the
     /// localhost-only default). Chapter Harbor: `0.0.0.0` for containers.
     pub web_ui_host: Option<std::net::IpAddr>,
+    /// Extra WS Origin allowlist entries beyond the built-in loopback origins.
+    /// Empty (default) keeps the localhost-only CSWSH posture. Chapter Harbor:
+    /// the hostnames a remotely-exposed Studio is served at.
+    pub web_ui_allowed_origins: Vec<String>,
     /// Optional shared memory instance for background GC.
     pub memory: Option<Arc<dyn aivyx_memory::Memory>>,
     /// If set, entries older than this many seconds are expired by a
@@ -522,6 +526,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         webhook_port,
         web_ui_port,
         web_ui_host,
+        web_ui_allowed_origins,
         memory,
         memory_ttl_secs,
         audit_log,
@@ -1089,11 +1094,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         let web_shutdown = shutdown.clone();
         let web_socket_path = socket_path.to_path_buf();
         let web_broadcaster = web_ui_broadcaster.clone();
+        let web_origins = web_ui_allowed_origins.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::web_ui::run_web_ui_server(
                 web_socket_path,
                 web_ui_host,
                 port,
+                web_origins,
                 web_shutdown,
                 web_broadcaster,
             )
@@ -2707,6 +2714,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         webhook_port: None,
         web_ui_port: None,
         web_ui_host: None,
+        web_ui_allowed_origins: Vec::new(),
         memory: None,
         memory_ttl_secs: None,
         audit_log: None,

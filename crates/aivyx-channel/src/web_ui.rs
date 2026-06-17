@@ -160,12 +160,26 @@ pub async fn run_web_ui_server(
     socket_path: PathBuf,
     host: Option<std::net::IpAddr>,
     port: u16,
+    allowed_origins: Vec<String>,
     shutdown: CancellationToken,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     let host = host
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let addr = std::net::SocketAddr::new(host, port);
+    let allowed_origins = Arc::new(allowed_origins);
+
+    // Chapter Harbor F-4 — binding beyond loopback is a deliberate network
+    // exposure. Warn once at startup so an operator who flips web_ui_host can't
+    // miss that the Studio (a powerful agent) is now reachable off-host.
+    if !host.is_loopback() {
+        eprintln!(
+            "aivyx web ui: WARNING — binding {host} (non-loopback). The Studio \
+             is exposed beyond this host. Put auth + TLS in front, and set \
+             `[daemon] web_ui_allowed_origins` for the hostnames you serve. See \
+             docs/DOCKER.md."
+        );
+    }
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|source| DaemonError::Bind {
@@ -193,10 +207,17 @@ pub async fn run_web_ui_server(
 
         let conn_socket_path = Arc::clone(&socket_path);
         let conn_broadcaster = web_ui_broadcaster.clone();
+        let conn_allowed_origins = Arc::clone(&allowed_origins);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                handle_connection(stream, &conn_socket_path, port, conn_broadcaster).await
+            if let Err(e) = handle_connection(
+                stream,
+                &conn_socket_path,
+                port,
+                &conn_allowed_origins,
+                conn_broadcaster,
+            )
+            .await
             {
                 eprintln!("aivyx web ui: connection error: {e}");
             }
@@ -211,6 +232,7 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     socket_path: &Path,
     port: u16,
+    allowed_origins: &[String],
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     // Peek at the request head to determine the path *and* read the
@@ -231,7 +253,7 @@ async fn handle_connection(
         // (the CLI / Python IPC probe / native apps) and is allowed — those can
         // already reach the Unix socket directly, so they're inside the trust
         // boundary regardless.
-        if !ws_origin_allowed(&request_head, port) {
+        if !ws_origin_allowed(&request_head, port, allowed_origins) {
             return serve_bytes(
                 stream,
                 "403 Forbidden",
@@ -268,20 +290,30 @@ fn parse_origin(request_head: &str) -> Option<&str> {
 /// CSWSH defense for the `/ws` upgrade. Returns `true` when the connection may
 /// be upgraded:
 /// - no `Origin` header → a non-browser client (CLI / IPC probe / native), allowed;
-/// - an `Origin` that exactly matches one of our loopback origins on `port`.
+/// - an `Origin` that exactly matches one of our loopback origins on `port`;
+/// - an `Origin` that matches an operator-configured `extra_origins` entry
+///   (Chapter Harbor `[daemon] web_ui_allowed_origins` — empty by default, so
+///   the localhost-only posture is unchanged unless the operator opts in to
+///   remote exposure).
 ///
 /// Everything else — a cross-site page's real origin, a rebinding attacker's
-/// hostname, or a sandboxed `null` origin — is rejected.
-fn ws_origin_allowed(request_head: &str, port: u16) -> bool {
+/// hostname, or a sandboxed `null` origin — is rejected. Comparison is
+/// case-insensitive and ignores a trailing slash on either side.
+fn ws_origin_allowed(request_head: &str, port: u16, extra_origins: &[String]) -> bool {
     match parse_origin(request_head) {
         None => true,
-        Some(origin) => [
-            format!("http://127.0.0.1:{port}"),
-            format!("http://localhost:{port}"),
-            format!("http://[::1]:{port}"),
-        ]
-        .iter()
-        .any(|allowed| origin.eq_ignore_ascii_case(allowed)),
+        Some(origin) => {
+            let origin = origin.trim_end_matches('/');
+            let loopback = [
+                format!("http://127.0.0.1:{port}"),
+                format!("http://localhost:{port}"),
+                format!("http://[::1]:{port}"),
+            ];
+            loopback.iter().any(|a| origin.eq_ignore_ascii_case(a))
+                || extra_origins
+                    .iter()
+                    .any(|a| origin.eq_ignore_ascii_case(a.trim_end_matches('/')))
+        }
     }
 }
 
@@ -694,22 +726,43 @@ mod tests {
     #[test]
     fn ws_origin_allows_loopback_and_no_origin_rejects_cross_site() {
         let port = 7843;
+        let none: &[String] = &[];
         let head = |o: &str| format!("GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: {o}\r\n\r\n");
         // our own loopback origins on the bound port — allowed
-        assert!(ws_origin_allowed(&head("http://127.0.0.1:7843"), port));
-        assert!(ws_origin_allowed(&head("http://localhost:7843"), port));
-        assert!(ws_origin_allowed(&head("http://[::1]:7843"), port));
-        assert!(ws_origin_allowed(&head("HTTP://LOCALHOST:7843"), port)); // case-insensitive
+        assert!(ws_origin_allowed(&head("http://127.0.0.1:7843"), port, none));
+        assert!(ws_origin_allowed(&head("http://localhost:7843"), port, none));
+        assert!(ws_origin_allowed(&head("http://[::1]:7843"), port, none));
+        assert!(ws_origin_allowed(&head("HTTP://LOCALHOST:7843"), port, none)); // case-insensitive
         // non-browser client (no Origin) — allowed (inside the trust boundary)
-        assert!(ws_origin_allowed("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n", port));
+        assert!(ws_origin_allowed("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n", port, none));
         // CSWSH: a malicious page's real origin — rejected
-        assert!(!ws_origin_allowed(&head("http://evil.example"), port));
+        assert!(!ws_origin_allowed(&head("http://evil.example"), port, none));
         // DNS rebinding: attacker hostname resolving to 127.0.0.1 — rejected
-        assert!(!ws_origin_allowed(&head("http://attacker.test:7843"), port));
+        assert!(!ws_origin_allowed(&head("http://attacker.test:7843"), port, none));
         // wrong port (another local app) — rejected
-        assert!(!ws_origin_allowed(&head("http://127.0.0.1:9999"), port));
+        assert!(!ws_origin_allowed(&head("http://127.0.0.1:9999"), port, none));
         // sandboxed/file origin — rejected
-        assert!(!ws_origin_allowed(&head("null"), port));
+        assert!(!ws_origin_allowed(&head("null"), port, none));
+    }
+
+    #[test]
+    fn ws_origin_honors_configured_allowlist() {
+        // Chapter Harbor — an operator-configured origin is allowed in addition
+        // to loopback; everything else still rejected. Empty allowlist keeps the
+        // localhost-only posture (covered above).
+        let port = 7843;
+        let head = |o: &str| format!("GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: {o}\r\n\r\n");
+        let allow = vec!["https://studio.mybox.lan".to_string()];
+        // configured origin — allowed (trailing-slash + case insensitive)
+        assert!(ws_origin_allowed(&head("https://studio.mybox.lan"), port, &allow));
+        assert!(ws_origin_allowed(&head("https://studio.mybox.lan/"), port, &allow));
+        assert!(ws_origin_allowed(&head("HTTPS://Studio.MyBox.LAN"), port, &allow));
+        // loopback still allowed alongside the configured one
+        assert!(ws_origin_allowed(&head("http://localhost:7843"), port, &allow));
+        // a different host is still rejected
+        assert!(!ws_origin_allowed(&head("https://evil.example"), port, &allow));
+        // and an http:// variant of the https allowlisted host is NOT a match
+        assert!(!ws_origin_allowed(&head("http://studio.mybox.lan"), port, &allow));
     }
 
     #[test]

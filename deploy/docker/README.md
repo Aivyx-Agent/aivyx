@@ -39,11 +39,16 @@ State (config, encrypted store, audit chain, OAuth tokens) persists in the
 
 ## Notes & limits (this phase)
 
-- **Localhost only.** The compose publishes to `127.0.0.1:7843`. Remote access
-  needs the configurable Origin allowlist (HB.2) **and** TLS/auth in front —
-  don't just widen the port binding.
-- **Cloud provider first.** The `ollama` sibling service is wired but optional;
-  GPU passthrough is a later add-on (HB.2). Voice is out of scope.
+- **Localhost only by default.** The compose publishes to `127.0.0.1:7843`.
+  Remote access needs **both** `[daemon] web_ui_host = "0.0.0.0"` *and*
+  `[daemon] web_ui_allowed_origins = ["https://your-host"]` (the daemon rejects
+  off-host WS origins otherwise), plus TLS/auth in front — don't just widen the
+  port binding. The daemon prints a one-line exposure warning when it binds a
+  non-loopback host.
+- **Local models.** The `ollama` sibling service is optional
+  (`docker compose --profile ollama up`) and runs CPU-only by default. For
+  NVIDIA GPU passthrough, layer in `deploy/docker/compose.gpu.yml` (needs the
+  NVIDIA Container Toolkit on the host). Voice is out of scope.
 - **OAuth tools** (Gmail/Calendar/Drive/Contacts/…) are baked into the image but
   the in-container consent flow needs the published-callback recipe (HB.3).
 - **Verification.** This image hasn't been built in CI yet (HB.5). If `docker

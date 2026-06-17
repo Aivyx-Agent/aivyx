@@ -1035,6 +1035,13 @@ pub struct AivyxConfig {
     /// Binding beyond loopback is a deliberate network exposure — pair it
     /// with auth/TLS in front (see `docs/DOCKER.md`).
     pub web_ui_host: Option<std::net::IpAddr>,
+    /// Extra WS Origin allowlist entries beyond the built-in loopback origins
+    /// (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`).
+    /// Empty (default) keeps the localhost-only CSWSH/DNS-rebind posture. Chapter
+    /// Harbor: set `[daemon] web_ui_allowed_origins = ["https://studio.example"]`
+    /// to the scheme+host(+port) a remotely-exposed Studio is served at. Each
+    /// entry must be a bare origin (scheme://host[:port], no path).
+    pub web_ui_allowed_origins: Vec<String>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -3274,6 +3281,7 @@ struct RawDaemon {
     web_ui: Option<bool>,
     web_ui_port: Option<u16>,
     web_ui_host: Option<String>,
+    web_ui_allowed_origins: Option<Vec<String>>,
 }
 
 /// `[profile]` section in the TOML file. Phase 57 (PRODUCT.md P13).
@@ -6186,6 +6194,28 @@ impl AivyxConfig {
                         ),
                     }
                 })?),
+            },
+            web_ui_allowed_origins: {
+                let entries = toml.daemon.web_ui_allowed_origins.unwrap_or_default();
+                for o in &entries {
+                    // A bare origin: scheme://authority, no path/query/fragment.
+                    let authority = o.split_once("://").map(|(_, rest)| rest);
+                    let valid = matches!(authority, Some(a)
+                        if !a.is_empty()
+                            && !a.contains('/')
+                            && !a.contains('?')
+                            && !a.contains('#'));
+                    if !valid {
+                        return Err(ConfigError::Invalid {
+                            field: "daemon.web_ui_allowed_origins",
+                            reason: format!(
+                                "each entry must be a bare origin \
+                                 (scheme://host[:port], no path); got {o:?}"
+                            ),
+                        });
+                    }
+                }
+                entries
             },
         })
     }

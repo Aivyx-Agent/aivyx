@@ -3271,6 +3271,55 @@ fn daemon_web_ui_host_rejects_non_ip() {
     drop(env);
 }
 
+#[test]
+fn daemon_web_ui_allowed_origins_absent_is_empty() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[daemon]\nweb_ui = true\n", "origins-absent");
+    assert!(cfg.web_ui_allowed_origins.is_empty());
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_allowed_origins_parses_bare_origins() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui = true\nweb_ui_allowed_origins = [\"https://studio.example\", \"http://box.lan:7843\"]\n",
+        "origins-ok",
+    );
+    assert_eq!(
+        cfg.web_ui_allowed_origins,
+        vec!["https://studio.example".to_string(), "http://box.lan:7843".to_string()]
+    );
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_allowed_origins_rejects_path() {
+    // An entry with a path is not a bare origin → hard config error.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("origins-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[daemon]\nweb_ui_allowed_origins = [\"https://studio.example/app\"]\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must reject");
+    assert!(
+        err.to_string().contains("web_ui_allowed_origins"),
+        "error should name the field: {err}"
+    );
+    drop(env);
+}
+
 // ------------------------------------------------------------------
 // Phase 46: `bundled` flag on [[mcp_server]]
 // ------------------------------------------------------------------
