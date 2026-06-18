@@ -1,16 +1,20 @@
 # Containerized Deployment (Chapter Harbor)
 
-> **Status:** ✅ **usable from source** (Chapter Harbor HB.0–HB.4 complete; HB.5
-> CI image-publish pending). Aivyx ships as a **docker-compose appliance**: a
-> one-command, always-on daemon + Studio for a homelab box or VPS, no Rust
-> toolchain on the operator's machine. The two opt-in daemon changes
-> (`web_ui_host` §4.1, `web_ui_allowed_origins` §4.2) are in; the `Dockerfile` +
-> `docker-compose.yml` + baked appliance config are **built and run end-to-end**
-> (HB.1 §9), the OAuth-in-Docker recipe is documented (§7), and the operator
-> install steps live in [`INSTALL.md`](INSTALL.md#docker--the-server-appliance).
-> The only remainder is **HB.5** — publishing the image to a registry via CI so
-> users don't build from source. This document remains the locked design
-> reference (framing in §2, the security-sensitive daemon changes in §4).
+> **Status:** ✅ **shipped** (Chapter Harbor HB.0–HB.5 complete). Aivyx ships as a
+> **docker-compose appliance**: a one-command, always-on daemon + Studio for a
+> homelab box or VPS, no Rust toolchain on the operator's machine. The two opt-in
+> daemon changes (`web_ui_host` §4.1, `web_ui_allowed_origins` §4.2) are in; the
+> `Dockerfile` + `docker-compose.yml` + baked appliance config are **built and
+> run end-to-end** (HB.1 §9); the OAuth-in-Docker recipe is documented (§7); the
+> operator install steps live in
+> [`INSTALL.md`](INSTALL.md#docker--the-server-appliance); and a CI workflow
+> publishes the image to GHCR on each version tag (HB.5). This document remains
+> the locked design reference (framing in §2, the security-sensitive daemon
+> changes in §4).
+>
+> **Two confirmation steps remain operational, not design:** the CI workflow's
+> first tagged run is its green-light, and the GHCR package must be flipped to
+> **public** once (a one-time org setting) for users to pull without auth.
 
 ## 1. The gap — there is no "just run it" server deployment
 
@@ -233,7 +237,7 @@ cross-platform fix, and the host-networking dance retires. Tracked, not built.
 | **HB.2** | ✅ The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the F-4 non-loopback startup warning + the optional **Ollama sibling** (CPU default; opt-in GPU override `deploy/docker/compose.gpu.yml`). |
 | **HB.3** | ✅ The **OAuth-in-Docker recipe** (§7) — corrected from the original sketch: the callback listener binds container-loopback + Google mandates a loopback `redirect_uri`, so the flow uses **host networking** (Linux) / a host-run binary (Docker Desktop), tokens landing in the shared volume. Doc, not code. *Recipe is code-read-verified, not yet live-run against a real Google app.* |
 | **HB.4** | ✅ **Docs**: this file's status flipped to *usable from source* + an [INSTALL.md "Docker"](INSTALL.md#docker--the-server-appliance) section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, the Ollama/GPU + OAuth pointers, and the worked compose quick-start. |
-| **HB.5** | **CI image publish**: a workflow that builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (alongside the existing cargo-dist binaries). HB.1 is already locally `docker build`-verified (§9); HB.5 automates the publish. |
+| **HB.5** | ✅ **CI image publish**: `.github/workflows/docker-publish.yml` builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (same glob as the cargo-dist `release.yml`) + on `workflow_dispatch` (tag `edge`). Linux/amd64, buildx + GHA layer cache. *Workflow authored + locally lint-checked; the first tagged run (or a manual dispatch) is the green-light confirmation, and the GHCR package must be made **public** once (one-time org setting) for users to pull without auth.* |
 
 ## 10. Open questions (resolved)
 

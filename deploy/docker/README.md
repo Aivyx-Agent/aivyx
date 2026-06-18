@@ -53,5 +53,12 @@ State (config, encrypted store, audit chain, OAuth tokens) persists in the
   the in-container consent flow needs the published-callback recipe (HB.3).
 - **Verification.** Built + run end-to-end locally (Docker 29.5, legacy
   builder): image builds, daemon boots, Studio serves on `:7843`, state
-  persists across `down`/`up`. Not yet built in CI (HB.5). Uses the legacy
-  builder (no `buildx` needed); `DOCKER_BUILDKIT=0 docker build` is implied.
+  persists across `down`/`up`. Uses the legacy builder (no `buildx` needed);
+  `DOCKER_BUILDKIT=0 docker build` is implied.
+- **Published image (HB.5).** `.github/workflows/docker-publish.yml` pushes
+  `ghcr.io/aivyx-agent/aivyx` on each version tag (and `:edge` on manual
+  dispatch). To run from the published image instead of building, drop the
+  `build:` block in `docker-compose.yml` and set
+  `image: ghcr.io/aivyx-agent/aivyx:latest`. **One-time:** the GHCR package
+  starts private — make it public in the org's package settings so users can
+  pull without authenticating.

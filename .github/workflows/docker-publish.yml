@@ -1,0 +1,71 @@
+# Chapter Harbor HB.5 — build + publish the appliance image to GHCR.
+#
+# Runs alongside the cargo-dist `release.yml` (same version-tag trigger), so the
+# container image ships in lockstep with the native binaries. A separate
+# workflow because `release.yml` is cargo-dist-generated and must not be hand-
+# edited. Also `workflow_dispatch` so the pipeline can be exercised (tag `edge`)
+# without cutting a release.
+#
+# Image: ghcr.io/<owner>/aivyx (docker/metadata-action lowercases the owner).
+# Linux/amd64 only for now; multi-arch (arm64 via buildx+QEMU) is a follow-up —
+# emulated Rust workspace builds are too slow to enable by default.
+
+name: Docker Publish
+
+on:
+  push:
+    # Same semver-tag glob as the cargo-dist release workflow.
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          # Always build; push only on a real run (not a fork PR, which can't
+          # auth to GHCR). Tags/labels come from the metadata step.
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Speed up rebuilds via the GitHub Actions cache backend.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

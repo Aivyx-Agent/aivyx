@@ -12,6 +12,9 @@
 
 services:
   aivyx:
+    # Builds locally from source by default. To pull the published image
+    # instead (HB.5), delete the `build:` block and set:
+    #   image: ghcr.io/aivyx-agent/aivyx:latest
     build:
       context: .
       dockerfile: Dockerfile
