@@ -12,9 +12,10 @@
 > the locked design reference (framing in §2, the security-sensitive daemon
 > changes in §4).
 >
-> **Two confirmation steps remain operational, not design:** the CI workflow's
-> first tagged run is its green-light, and the GHCR package must be flipped to
-> **public** once (a one-time org setting) for users to pull without auth.
+> **CI verified** (a `workflow_dispatch` run built + pushed
+> `ghcr.io/aivyx-agent/aivyx:edge` green). **One operational TODO remains:** flip
+> the GHCR package to **public** once (a one-time org setting) so users can pull
+> without auth.
 
 ## 1. The gap — there is no "just run it" server deployment
 
@@ -237,7 +238,7 @@ cross-platform fix, and the host-networking dance retires. Tracked, not built.
 | **HB.2** | ✅ The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the F-4 non-loopback startup warning + the optional **Ollama sibling** (CPU default; opt-in GPU override `deploy/docker/compose.gpu.yml`). |
 | **HB.3** | ✅ The **OAuth-in-Docker recipe** (§7) — corrected from the original sketch: the callback listener binds container-loopback + Google mandates a loopback `redirect_uri`, so the flow uses **host networking** (Linux) / a host-run binary (Docker Desktop), tokens landing in the shared volume. Doc, not code. *Recipe is code-read-verified, not yet live-run against a real Google app.* |
 | **HB.4** | ✅ **Docs**: this file's status flipped to *usable from source* + an [INSTALL.md "Docker"](INSTALL.md#docker--the-server-appliance) section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, the Ollama/GPU + OAuth pointers, and the worked compose quick-start. |
-| **HB.5** | ✅ **CI image publish**: `.github/workflows/docker-publish.yml` builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (same glob as the cargo-dist `release.yml`) + on `workflow_dispatch` (tag `edge`). Linux/amd64, buildx + GHA layer cache. *Workflow authored + locally lint-checked; the first tagged run (or a manual dispatch) is the green-light confirmation, and the GHCR package must be made **public** once (one-time org setting) for users to pull without auth.* |
+| **HB.5** | ✅ **CI image publish**: `.github/workflows/docker-publish.yml` builds + pushes `ghcr.io/aivyx-agent/aivyx` on each version tag (same glob as the cargo-dist `release.yml`) + on `workflow_dispatch` (tag `edge`). Linux/amd64, buildx + GHA layer cache. **First run green** (manual dispatch, ~9.5 min cold cache): built + pushed `ghcr.io/aivyx-agent/aivyx:edge` with OCI source/revision labels. *One operational TODO: flip the GHCR package to **public** (one-time org setting) so users can pull without auth.* |
 
 ## 10. Open questions (resolved)
 
