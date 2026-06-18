@@ -1,6 +1,6 @@
 # Licensing & Commercial Model (Chapter Charter)
 
-> **Status:** 🧭 **design contract — CR.0 (not yet executed).** This document is
+> **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅.** This document is
 > the locked reference for moving Aivyx from **MIT** to the **Business Source
 > License 1.1 (BUSL-1.1)** going forward: **free for personal / individual /
 > non-commercial use, a paid commercial license for any business or production
@@ -113,7 +113,7 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **CR.0** | **This design contract** | locked reference; status banner flips per phase |
-| **CR.1** | **Dependency license audit** | `cargo-deny`/`cargo-license` over the tree; confirm **no copyleft (GPL/AGPL) dep** forces the whole work open and that BSL-on-our-code conflicts with nothing. Gate: must pass before CR.2. |
+| **CR.1** ✅ | **Dependency license audit** | DONE. `cargo deny check licenses` now passes against the **all-features** graph; the permissive allow-list + the documented exceptions are codified in `deny.toml`. Findings in §6.1. Gate is green; CR.2 unblocked. |
 | **CR.2** | **The LICENSE swap** | `LICENSE` → filled BUSL-1.1 text; preserve the MIT text as `LICENSES/MIT.txt` (the Change License + historical form); workspace `Cargo.toml` `license = "BUSL-1.1"` (or `license-file`); update any per-crate `license.workspace` consumers; add the standard BSL header note. |
 | **CR.3** | **Commercial-license path** | `COMMERCIAL.md`: precisely *what* needs a license (the §4 grant in plain English), *how* to obtain one (contact / email), and a pricing placeholder. The thing a commercial user lands on. |
 | **CR.4** | **Contributor terms** | `CONTRIBUTING.md` + a **DCO** (lightweight) or **CLA** (stronger) granting relicensing/commercial-sublicensing rights. **Must precede any external PR** (§3). |
@@ -123,6 +123,43 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 **Discipline:** CR.1 is a hard gate — if a dependency's license is incompatible
 with shipping the combined work under BSL, that's a blocker to resolve (swap the
 dep or carve it out) *before* the LICENSE swap, not after.
+
+### 6.1 CR.1 audit findings (the gate is green)
+
+Audited via `cargo deny check licenses` over the **all-features** graph (the
+`[graph] all-features = true` already required for advisories), so every optional
+provider/voice/web stack is evaluated, not just default features. The policy lives
+in `deny.toml` as a permissive-only `allow` list — anything not listed fails
+loudly, so a future copyleft dep can't slip in silently. Three categories surfaced:
+
+1. **MPL-2.0 — compatible, allowed.** ~14 crates: the `symphonia` audio stack, the
+   servo CSS stack pulled by Dioxus (`cssparser`/`cssparser-macros`/`selectors`/
+   `dtoa-short`), and `option-ext` (via `dirs`). MPL-2.0 is **file-level (weak)
+   copyleft**: it never relicenses the larger combined work — the only obligation
+   is sharing modifications to the MPL files themselves, which we never make. Added
+   to `allow`.
+2. **NCSA — permissive, allowed.** `libfuzzer-sys` (`(MIT OR Apache-2.0) AND
+   NCSA`), a dev/fuzz dependency. NCSA is BSD/MIT-style. Added to `allow`.
+3. **GPL-3.0-only — the one real risk, carved out as a scoped exception.**
+   `piper1-rs-sys` (Piper TTS bindings) is strong copyleft. It is pulled **only**
+   through the optional `aivyx-voice` → `piper1-rs` path behind the **opt-in
+   `channel-voice[-full]` feature**, which `aivyx-cli`'s `default = []` excludes.
+   **It is never in a distributed Aivyx binary:** cargo-dist uses `precise-builds =
+   true` and builds only `aivyx-cli` with its default features, so the official
+   release artifacts never compile or link it (this is the same reason the musl
+   release build skips ALSA — see `dist-workspace.toml`). The GPL combination only
+   exists in a binary a user builds from source with voice explicitly enabled —
+   their build, their GPL obligation, satisfied because they hold the source.
+   **Aivyx's own crates therefore relicense to BUSL-1.1 uncontaminated.** Encoded
+   as a per-crate `exceptions` entry scoped to `piper1-rs-sys` (not a blanket
+   GPL allowance) with the full rationale in `deny.toml`.
+
+**Live constraint this creates (carry into the Voice/release work, not a CR
+blocker):** because Piper is GPL-3.0, **voice cannot be shipped in an official
+BSL binary** without swapping Piper for a permissively-licensed TTS. Today that's
+fine — voice is a host-local, build-from-source, opt-in feature ([[chapter-voice]])
+— but the day we'd want voice in the cargo-dist artifacts, the TTS engine must
+change first. Recorded so it isn't rediscovered the hard way.
 
 ## 7. Open questions to resolve in-phase (not blockers to CR.0)
 

@@ -19,6 +19,71 @@
 [graph]
 all-features = true
 
+# License policy — Chapter Charter CR.1 (dependency license audit).
+#
+# Run: `cargo deny check licenses`
+#
+# Aivyx itself relicenses MIT → BUSL-1.1 (docs/LICENSING.md). For that to
+# be lawful, NO dependency may impose copyleft (GPL/LGPL-only/AGPL/MPL/
+# SSPL/EPL/CDDL) on the combined work. This allow-list is therefore
+# permissive-only and deliberately omits every copyleft license: cargo-deny
+# rejects anything not listed, so a future copyleft dep fails the gate
+# loudly instead of silently poisoning the relicense.
+#
+# The list is the exact set of permissive SPDX ids present across the
+# all-features build graph (verified green at CR.1). Notes:
+#   - "BSL-1.0" = the Boost Software License (permissive) — NOT the
+#     Business Source License (BUSL-1.1) Aivyx itself adopts; unrelated.
+#   - LGPL-2.1-or-later is intentionally ABSENT. It appears only as one
+#     option of r-efi's "MIT OR Apache-2.0 OR LGPL-2.1-or-later"; because
+#     MIT/Apache are allowed, the OR resolves to a permissive choice and
+#     the copyleft option is never taken. Proof the gate works as intended.
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "BSL-1.0",
+    "0BSD",
+    "Unlicense",
+    "WTFPL",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CDLA-Permissive-2.0",
+    "NCSA",
+    # MPL-2.0 is *file-level* (weak) copyleft: it never relicenses the larger
+    # combined work — the only obligation is to share modifications to the
+    # MPL-licensed files themselves, which we never touch (they are upstream
+    # crates: the symphonia audio stack, the servo CSS stack pulled by Dioxus
+    # — cssparser/selectors/dtoa-short — and option-ext via dirs). Fully
+    # compatible with shipping Aivyx under BUSL-1.1.
+    "MPL-2.0",
+]
+
+# Per-crate license exceptions (scoped — a NEW copyleft dep elsewhere still
+# fails the gate loudly; that is the point of not putting these in `allow`).
+exceptions = [
+    # piper1-rs-sys is GPL-3.0-only (Piper TTS bindings), pulled ONLY via the
+    # optional `aivyx-voice` → piper1-rs path behind the opt-in
+    # `channel-voice[-full]` feature. It is NEVER in a distributed Aivyx
+    # binary: cargo-dist uses `precise-builds = true` and aivyx-cli's default
+    # feature set excludes voice (see dist-workspace.toml), so release
+    # artifacts never compile or link it. The GPL combination only ever exists
+    # in a binary a user builds from source with voice explicitly enabled —
+    # their build, their GPL obligation, satisfied because they hold the
+    # source. Aivyx's own crates therefore relicense to BUSL-1.1 uncontaminated.
+    # (Revisit if voice is ever shipped in official binaries — that would need
+    # a permissively-licensed TTS in place of Piper. Tracked in docs/LICENSING.md.)
+    { allow = ["GPL-3.0-only"], crate = "piper1-rs-sys" },
+]
+
 [advisories]
 version = 2
 # Treat unmaintained advisories as findings (so new ones surface),
