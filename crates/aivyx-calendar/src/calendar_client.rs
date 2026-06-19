@@ -397,7 +397,6 @@ impl CalendarClient {
     }
 }
 
-#[allow(dead_code)]
 async fn decode_response<T: DeserializeOwned>(
     resp: reqwest::Response,
 ) -> Result<T, CalendarClientError> {

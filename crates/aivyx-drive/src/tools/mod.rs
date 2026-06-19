@@ -235,7 +235,6 @@ pub(crate) fn compose_recursive_parent_clause(folder_ids: &[String]) -> String {
 /// Drive tools. Drive file IDs are typically opaque
 /// alphanumeric tokens (no encoding needed), but we
 /// future-proof against IDs containing reserved chars.
-#[allow(dead_code)]
 pub(crate) fn drive_urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
