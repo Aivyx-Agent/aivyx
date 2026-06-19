@@ -1,0 +1,222 @@
+# Aivyx Tool Catalog
+
+> **Chapter Atlas (AT.1).** The reference for *what tools the agent has*, the
+> capability scope each needs, the minimum trust tier it's available at by default,
+> and where it's delivered from. Generated/curated against the authoritative
+> capability registry `KNOWN_BASES` (`crates/aivyx-capability/src/lib.rs`) and
+> **drift-guarded** by `tools_catalog_documents_every_known_base` — adding a new
+> capability base fails CI until it's documented here. For *building* a tool, see
+> [`TOOL_SDK.md`](TOOL_SDK.md); for the design rationale, [`ATLAS.md`](ATLAS.md).
+
+## How tools are delivered
+
+Every tool implements the `aivyx_core::Tool` trait: a **pure `required_scope(input)`**
+computes the capability the call needs, which the daemon enforces **before**
+`execute` runs. Tools arrive in four ways (PRODUCT.md **P10** governance):
+
+| Delivery | What | Where |
+|---|---|---|
+| **Substrate** | the irreducible in-process core, **capped at 13** (amendment-gated) | `aivyx-core` |
+| **Infrastructure** | in-process agent machinery (missions, schedules, reflection, …), uncapped | `aivyx-channel`, `aivyx-core` |
+| **Tool process** | out-of-process binaries over the Tool SDK; connected via `aivyx connect <x>` | `aivyx-gmail`, `aivyx-calendar`, … |
+| **MCP** | external Model Context Protocol servers, bridged through one `mcp.call` tool | operator-configured |
+
+## How to read the scope / tier columns
+
+- **Scope** is the tool's capability **base** (an entry in `KNOWN_BASES`). A `[role]`
+  grant of that base (optionally qualified) is what authorizes the tool.
+- **Min tier** is the lowest trust tier whose *default ceiling* includes the base.
+  **SemiTrusted** bases: `fs.metadata`, `net.fetch`, `net.dns`, `llm.call`,
+  `llm.embed`, `memory.read`, `memory.write`, `config.read`. **Untrusted** sees only
+  public `memory.read` + `audit.read`. Everything else is **Trusted+** by default
+  (write/personal-data/management surfaces), and a handful are **Kernel**-only
+  (`config.write`, `tool.allowlist`, `role.switch`, `role.update`). Operators can
+  narrow per role; they cannot widen past the tier ceiling.
+
+---
+
+## Filesystem & workspace (substrate)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `fs.read` | `fs.read` | Trusted | read a file within the access-scoped `fs_root` |
+| `fs.write` | `fs.write` | Trusted | write a file within `fs_root` |
+| `fs.delete` | `fs.delete` | Trusted | delete; Local-channel + confirm-first gated |
+| `fs.metadata` | `fs.metadata` | SemiTrusted | stat a path (size/kind/mtime) |
+| `workspace.read` / `.write` / `.list` / `.delete` / `.note` | `workspace` | Trusted | the agent's own private notebook dir (Chapter O), independent of `fs_root` |
+
+## Network & web (substrate)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `web.fetch` | `net.fetch` | SemiTrusted | HTTP GET a URL (read) |
+| `web.post` | `net.post` | Trusted | HTTP POST to a URL |
+| `net.dns` | `net.dns` | SemiTrusted | resolve a hostname |
+
+## Shell (substrate)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `shell.exec` | `shell.exec` | Trusted | run a command; Local-channel gated + sandboxable |
+| *(spawn)* | `shell.spawn` | Trusted | long-running spawn capability |
+
+## Git (substrate, read-only)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `git.status` | `git.read` | Trusted | working-tree status of a configured repo |
+| `git.diff` | `git.read` | Trusted | diff of a configured repo |
+
+*(A destructive `git.write` is a recorded future item — see `ATLAS.md` §6.)*
+
+## LLM (substrate)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `llm.call` | `llm.call` | SemiTrusted | sub-call to the configured LLM |
+| `llm.embed` | `llm.embed` | SemiTrusted | embeddings for semantic memory |
+
+## Memory (substrate)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `memory.read` | `memory.read` | SemiTrusted (public subset: Untrusted) | recall stored memories |
+| `memory.write` | `memory.write` | SemiTrusted | store a memory |
+| `memory.forget` | `memory.forget` | Trusted | delete a memory |
+| `memory.gc` | `memory.gc` | Trusted | retention sweep |
+
+## Channel & audit
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| *(send/receive)* | `channel.send`, `channel.receive` | Trusted | channel I/O capability |
+| `notify.send` | `notify.send` | Trusted | push a message to the operator (Trusted-only — cross-boundary leak guard) |
+| `turn.history` | `audit.read` | Trusted | read recent turn outcomes from the audit chain |
+| `daemon.state` | `audit.read` | Trusted | read daemon/agent status |
+
+## Config
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `config.read` | `config.read` | SemiTrusted | read effective config |
+| `config.write` | `config.write` | Kernel | rewrite a config section |
+| *(allowlist)* | `tool.allowlist` | Kernel | per-role tool allowlist (synthetic) |
+
+## Skills, reflection & persona (infrastructure)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `skills.list` / `skills.invoke` | `skills.list`, `skills.invoke` | Trusted | enumerate / run learned skills |
+| `skills.teach` / `skills.update` / `skills.forget` / `skills.propose` | `skills.write`, `skills.propose` | Trusted | manage learned skills |
+| `reflection.propose` / `reflection.apply` | `reflection.propose`, `reflection.apply` | Trusted | self-improvement proposals |
+| `persona.propose` | `persona.propose` | Trusted | persona-evolution proposals |
+| `role.switch` | `role.switch` | Kernel | sub-agent role switching |
+| `role.update` | `role.update` | Kernel | update a role definition |
+
+## Missions, scheduling & automation (infrastructure)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `mission.create` / `.gate` / `.list` / `.status` | `mission.create`, `mission.gate`, `mission.list`, `mission.status` | Trusted | Nonagon mission lifecycle |
+| `team.run` / `team.delegate` / `team.message` | `team.run`, `team.delegate`, `team.message` | Trusted | multi-agent team execution |
+| `schedule.create` / `.list` / `.delete` / `.update` | `schedule.create`, `schedule.list`, `schedule.delete`, `schedule.update` | Trusted | cron-style scheduled runs |
+| `webhook.create` / `.list` / `.delete` | `webhook.create`, `webhook.list`, `webhook.delete` | Trusted | inbound webhook triggers |
+| *(file-watch)* | `file_watch.create`, `file_watch.list`, `file_watch.delete` | Trusted | filesystem-change triggers |
+| `loop.next` / `.complete` / `.note` | `loop.next`, `loop.complete`, `loop.note` | Trusted | the autonomous (Ralph) loop |
+| `remind.set` / `.list` / `.cancel` | `remind.write`, `remind.read` | Trusted | reminders (everyday-PA) |
+| `mcp.call` | `mcp.call` | Trusted | bridge to an external MCP server tool (`<server>:<tool>`) |
+
+## Local-model management (infrastructure)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `ollama.list` / `ollama.show` / `ollama.pull` | `ollama.list`, `ollama.show`, `ollama.pull` | Trusted | manage local Ollama models |
+
+## Email — Gmail (tool process `aivyx-gmail`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `gmail.search` / `gmail.read` | `email.read` | Trusted | search / read mail |
+| `gmail.draft` | `email.write` | Trusted | create a draft |
+| `gmail.send` | `email.send` | Trusted | send mail |
+
+## Calendar (tool process `aivyx-calendar`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `calendar.list_events` / `calendar.get_event` | `calendar.read` | Trusted | read events |
+| `calendar.create_event` / `update_event` / `delete_event` | `calendar.write` | Trusted | manage events |
+
+## Drive (tool process `aivyx-drive`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `drive.search` / `get_metadata` / `list_folder` / `download_file` | `drive.read` | Trusted | read files/folders |
+| `drive.create_folder` / `upload_file` / `delete_file` | `drive.write` | Trusted | manage files |
+
+## Contacts (tool process `aivyx-contacts`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `contacts.search` / `list` / `get` | `contacts.read` | Trusted | read contacts |
+| `contacts.create` / `update` / `delete` | `contacts.write` | Trusted | manage contacts |
+
+## Notion (tool process `aivyx-notion`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `notion.search` / `get_page` / `list_database` | `notion.read` | Trusted | read pages/databases |
+| `notion.create_page` / `update_page_properties` | `notion.write` | Trusted | manage pages |
+
+## Obsidian (tool process `aivyx-obsidian`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `obsidian.search` / `get_note` / `list_folder` | `obsidian.read` | Trusted | read vault notes |
+| `obsidian.create_note` / `update_note` / `delete_note` | `obsidian.write` | Trusted | manage vault notes |
+
+## n8n workflows (tool process `aivyx-n8n`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| *(read tools)* | `n8n.read` | Trusted | list/inspect workflows |
+| `n8n.update_workflow` *(+ write tools)* | `n8n.write` | Trusted | manage workflows |
+
+## Personal-assistant toolkit (tool process `aivyx-toolkit`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `web.search` | `web.search` | Trusted | Brave Search |
+| `task.create` / `task.list` / `task.complete` / `task.delete` | `task.write`, `task.read` | Trusted | lightweight task list |
+| `health.check.add` / `health.check.list` / `recent_changes` | `health.write`, `health.read` | Trusted | personal health-check log |
+| `budget.record` / `budget.summary` | `budget.write`, `budget.read` | Trusted | personal budget tracking |
+
+## Kitchen vertical (tool process `aivyx-kitchen`)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `kitchen.read` / `kitchen.write` | `kitchen.read`, `kitchen.write` | Trusted | KitchenDB read/write |
+| `kitchen.order.send` | `kitchen.order.send` | Trusted | submit an order |
+| `kitchen.haccp.log` | `kitchen.haccp.log` | Trusted | HACCP compliance log |
+
+---
+
+## Tool-name → capability-scope mapping
+
+Most tool names match their scope base. These differ by design (the tool name is
+user-facing; the scope base groups capabilities):
+
+| Tool name(s) | Capability base | Why |
+|---|---|---|
+| `web.fetch` | `net.fetch` | "web" is the user-facing verb; the capability is generic outbound HTTP |
+| `web.post` | `net.post` | same |
+| `gmail.*` | `email.*` | the base is provider-neutral (`email.read/write/send`); Gmail is one implementation |
+| `git.status`, `git.diff` | `git.read` | one read base shared by both read tools (A12) |
+| `web.search` | `web.search` | (matches — listed for completeness) |
+
+---
+
+*This catalog is organized around `KNOWN_BASES`; the drift-guard test asserts every
+one of the 85 bases appears here. Runtime, per-instance tool introspection (live
+names + schemas the agent sees) is provided by the `tools.list` tool — Chapter Atlas
+AT.2.*

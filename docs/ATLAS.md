@@ -1,6 +1,6 @@
 # Tool System Audit & Catalog (Chapter Atlas)
 
-> **Status:** 🧭 **design contract — AT.0.** The locked reference for a
+> **Status:** 🧭 **design contract — AT.0 ✅ + AT.1 ✅.** The locked reference for a
 > **refinement + catalog** pass over Aivyx's tool system — *no new tool domains*
 > this chapter. It produces a generated, drift-guarded **`docs/TOOLS.md` catalog**,
 > a runtime **`tools.list` introspection tool**, a **schema/description/error-shape
@@ -106,7 +106,7 @@ can map grants to tools.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **AT.0** | **This design contract** | locked reference; banner flips per phase |
-| **AT.1** | **`aivyx tools` + `docs/TOOLS.md`** | enumerate `ToolRegistry::snapshot()`; render the catalog + name→scope table; commit `TOOLS.md`; add the **drift-guard test** |
+| **AT.1** ✅ | **`docs/TOOLS.md` + drift-guard** | DONE. Shipped [`docs/TOOLS.md`](TOOLS.md): all tools grouped by domain with scope base · min trust tier · delivery (substrate/infra/tool-process/MCP) · notes, plus the **name→scope mapping table** and a "how tools are delivered / how to read scopes" intro. **Approach adjustment (recorded honestly):** a *live* `ToolRegistry::snapshot()` generator proved impractical — the in-process tool vec is assembled inline + config-conditionally in `aivyx.rs`, the tool-process integrations are out-of-process (not deps of `aivyx-cli`, and wiring 9 in would undo the recent dep cleanup), and several integration tools can't be constructed without live clients/dirs/stores. So the catalog is organized around and **drift-guarded against `KNOWN_BASES`** (the *actual* single source of truth) via `tools_catalog_documents_every_known_base` in `aivyx-capability` — adding a capability base fails CI until it's documented here (all 85 currently covered; test green, clippy clean). The `aivyx tools` CLI command is dropped in favour of the AT.2 `tools.list` tool, which is where *live, per-instance* enumeration (names + schemas the agent actually sees) naturally belongs. |
 | **AT.2** | **`tools.list` introspection tool** | infrastructure-tier; build-time descriptor snapshot (no registry cycle); filter/detail inputs; wired into the agent's tool set; tested |
 | **AT.3** | **QA sweep** | the every-tool-has-name/description/schema invariant test + fixes; uniform error-shape pass |
 | **AT.4** | **Docs + Studio surface (optional)** | cross-link `TOOLS.md` from README/TOOL_SDK; *optionally* a read-only Studio "Tools" view over the same data (defer if it widens scope) |

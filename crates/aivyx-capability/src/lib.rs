@@ -1078,6 +1078,31 @@ mod tests {
         Scope::parse(x).expect("test scope must parse")
     }
 
+    // ---- Chapter Atlas (AT.1) — tool-catalog drift guard ----
+
+    /// `docs/TOOLS.md` is organized around `KNOWN_BASES`. This asserts every
+    /// capability base is documented there, so adding a new base (a new tool
+    /// surface) fails CI until the catalog is updated. The reverse direction
+    /// (no stale bases) is covered implicitly: a removed base that's still
+    /// documented is harmless prose, and removing one is rare + reviewed.
+    #[test]
+    fn tools_catalog_documents_every_known_base() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/TOOLS.md");
+        let catalog = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let missing: Vec<&str> = KNOWN_BASES
+            .iter()
+            .copied()
+            .filter(|base| !catalog.contains(*base))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "docs/TOOLS.md is missing {} capability base(s): {missing:?}\n\
+             Add them to the catalog (Chapter Atlas) when introducing a new tool surface.",
+            missing.len(),
+        );
+    }
+
     // ---- Scope::parse ----
 
     #[test]
