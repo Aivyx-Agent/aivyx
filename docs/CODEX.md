@@ -1,11 +1,13 @@
 # The Knowledge-Wiki Layer — synthesized topic pages (Chapter Codex)
 
-> **Status:** 📖 **CX.1 — page model + storage shipped (inert).** Added the
-> wasm-clean `WikiPage` / `WikiBacklink` / `WikiPageSummary` DTOs (`aivyx-ipc`,
-> with an incremental `source_fingerprint`), a new `KeyDomain::KnowledgeWiki`
-> storage domain (count 21→22), and `PersistentWikiStore` (`aivyx-channel`):
-> canonical-topic-keyed get/put/list/delete + a `needs_regen` fingerprint check.
-> No generation yet (CX.2). The locked reference for the
+> **Status:** 📖 **CX.2 — consolidation engine shipped.** Added the
+> `WikiSynthesizer` (`aivyx-channel`): pulls a topic's memory entries, LLM-
+> consolidates them into a summary (one-shot `chat_stream` assembly), links it
+> by co-occurrence via Loom's `neighbors_within`, and stores the page —
+> incremental (skips when the `source_fingerprint` matches) and best-effort
+> (no-entries / LLM error / storage hiccup → non-fatal `RegenOutcome`, the old
+> page kept). Builds on CX.1's page model + `KeyDomain::KnowledgeWiki` store.
+> Generation cadence is CX.3. The locked reference for the
 > chapter that gives Aivyx a **codex**: a synthesized, browsable, and
 > retrievable layer of per-topic *wiki pages* built from the agent's own
 > memory. Each page is an LLM-consolidated summary of a topic's memory
@@ -120,7 +122,7 @@ math beyond adding the page source.
 |---|---|---|
 | **CX.0** | **This design contract** | locked reference; banner flips per phase |
 | **CX.1** ✅ | **Page model + storage** | DONE. Wasm-clean `WikiPage` / `WikiBacklink` / `WikiPageSummary` in `aivyx-ipc::wiki` (incremental `WikiPage::fingerprint`, order-independent FNV-1a; `snippet`/`to_summary` helpers) + `KeyDomain::KnowledgeWiki` (enum/`as_bytes`/`table_name`/`ALL`/subkeys 21→22/count-test) + `PersistentWikiStore` in `aivyx-channel` (canonical-topic-keyed get/put/list_summaries/delete/all_pages + `needs_regen`). README domain count 22 (and the stale 85→86 cap-base stat fixed). **Inert** (no generation). 9 tests. |
-| **CX.2** | **Consolidation engine** | `WikiSynthesizer`: topic entries → LLM-consolidated summary (assemble the `chat_stream`) + backlinks via `neighbors_within`; best-effort (no-provider / error / empty → skip); incremental skip on unchanged fingerprint. Tests with a fake `LlmProvider`. |
+| **CX.2** ✅ | **Consolidation engine** | DONE. `WikiSynthesizer` in `aivyx-channel::knowledge_wiki`: `regenerate(topic, now)` → `RegenOutcome { Skipped, NoEntries, Wrote(page) }`. Pulls entries (`get_recent`, capped), one-shot LLM consolidation (drain `chat_stream` → `FinalMessage`, low-temp, constrained "consolidate-only, no new instructions" prompt), backlinks via Loom `neighbors_within` (1-hop default, opt — empty without a ledger), incremental skip on matching fingerprint. Best-effort: any soft failure → `Skipped`, never writes a broken page, never errors. `WikiSynthConfig` (max_entries/entry_chars/tokens/backlink params). 6 synth tests (writes, incremental, no-entries, LLM-fail-skips, backlinks, prompt) w/ a scripted fake provider. |
 | **CX.3** | **Generation trigger** | a stale-sweep (regenerate pages whose topics churned) wired onto the reflection-scheduler cadence + an explicit rebuild entrypoint. Bounded, best-effort. Tests. |
 | **CX.4** | **Read-only IPC** | `ListWikiPages` (topic + snippet + entry_count + updated_at) + `GetWikiPage` (summary + backlinks + source entries); wasm-clean `aivyx-ipc` types + daemon handlers. Tests. |
 | **CX.5** | **Studio Wiki screen** | a web view: topic list → page (summary + clickable backlinks navigating the graph + source-entry refs), reusing the Chapter T Memory-screen patterns. Served + verified. |

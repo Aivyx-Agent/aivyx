@@ -136,6 +136,229 @@ impl PersistentWikiStore {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WikiSynthesizer — Chapter Codex (CX.2)
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use aivyx_llm::{ContentBlock, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd};
+use aivyx_memory::{Memory, MemoryEntry};
+use aivyx_core::CancellationToken;
+
+use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+
+/// Tuning for page synthesis. Defaults aim for a tight, cheap page.
+#[derive(Debug, Clone)]
+pub struct WikiSynthConfig {
+    /// Newest entries (per topic) to consolidate into the summary.
+    pub max_entries: usize,
+    /// Per-entry body cap (chars) in the prompt, so one long note can't
+    /// blow the synthesis budget.
+    pub max_entry_chars: usize,
+    /// LLM token budget for the summary itself.
+    pub max_tokens: u32,
+    /// Graph-walk depth for backlinks (1 = direct co-occurrence siblings).
+    pub backlink_hops: u32,
+    pub backlink_decay: f32,
+    pub backlink_min_affinity: f32,
+    pub max_backlinks: usize,
+}
+
+impl Default for WikiSynthConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: 50,
+            max_entry_chars: 500,
+            max_tokens: 400,
+            backlink_hops: 1,
+            backlink_decay: 0.5,
+            backlink_min_affinity: 0.0,
+            max_backlinks: 8,
+        }
+    }
+}
+
+/// What a regeneration pass did for one topic.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegenOutcome {
+    /// The page was up to date (fingerprint matched) — nothing rewritten.
+    Skipped,
+    /// The topic has no entries to summarize.
+    NoEntries,
+    /// A fresh page was synthesized and stored.
+    Wrote(WikiPage),
+}
+
+/// Builds + refreshes [`WikiPage`]s from memory: consolidates a topic's
+/// entries into an LLM summary, links it by co-occurrence, and stores it.
+/// Everything is **best-effort** — any failure (no entries, an LLM error,
+/// a storage hiccup) leaves the existing page (and memory/recall)
+/// untouched and returns a non-fatal outcome.
+pub struct WikiSynthesizer {
+    memory: Arc<dyn Memory>,
+    provider: Arc<dyn LlmProvider>,
+    store: Arc<PersistentWikiStore>,
+    ledger: Option<Arc<PersistentCooccurrenceLedger>>,
+    model: String,
+    config: WikiSynthConfig,
+}
+
+impl WikiSynthesizer {
+    pub fn new(
+        memory: Arc<dyn Memory>,
+        provider: Arc<dyn LlmProvider>,
+        store: Arc<PersistentWikiStore>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            memory,
+            provider,
+            store,
+            ledger: None,
+            model: model.into(),
+            config: WikiSynthConfig::default(),
+        }
+    }
+
+    /// Attach the co-occurrence ledger so pages get backlinks. Without it,
+    /// pages synthesize fine but carry no links.
+    pub fn with_ledger(mut self, ledger: Arc<PersistentCooccurrenceLedger>) -> Self {
+        self.ledger = Some(ledger);
+        self
+    }
+
+    pub fn with_config(mut self, config: WikiSynthConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// The consolidation system prompt — constrains the model to
+    /// summarize only what the entries say, as background knowledge.
+    fn system_prompt() -> &'static str {
+        "You are consolidating an AI assistant's own memory notes about a \
+         single topic into a short reference summary. Write 2-4 sentences \
+         (or a few tight bullet points) capturing only what the notes \
+         actually say — the durable facts and state of this topic. Do NOT \
+         invent details not present in the notes, do NOT add new \
+         instructions, and do NOT address the user. Output only the \
+         summary text, no preamble."
+    }
+
+    /// Render the entries into the user prompt. Pure + testable.
+    fn user_prompt(&self, topic: &str, entries: &[MemoryEntry]) -> String {
+        let mut s = String::new();
+        s.push_str(&format!("Topic: {topic}\n\nNotes (newest first):\n"));
+        for e in entries {
+            let body: String = if e.body.chars().count() > self.config.max_entry_chars {
+                let head: String =
+                    e.body.chars().take(self.config.max_entry_chars).collect();
+                format!("{head}…")
+            } else {
+                e.body.clone()
+            };
+            // Single-line each so a note's newlines can't forge structure.
+            s.push_str(&format!("- {}\n", body.replace('\n', " ")));
+        }
+        s.push_str("\nWrite the consolidated summary now.");
+        s
+    }
+
+    /// One-shot LLM consolidation. Best-effort: any error or an empty/
+    /// tool-call response yields `None` (the caller keeps the old page).
+    async fn summarize(&self, topic: &str, entries: &[MemoryEntry]) -> Option<String> {
+        let user = self.user_prompt(topic, entries);
+        let messages = vec![LlmMessage::User {
+            content: vec![ContentBlock::Text { text: user }],
+        }];
+        let request = LlmRequest {
+            model: &self.model,
+            system: Some(Self::system_prompt()),
+            messages: &messages,
+            tools: &[],
+            max_tokens: self.config.max_tokens,
+            temperature: Some(0.2),
+        };
+        let token = CancellationToken::new();
+        let mut stream = self.provider.chat_stream(request, &token).await.ok()?;
+        // Text-only; drain mid-stream events.
+        while stream.next_event().await.ok()?.is_some() {}
+        let text = match stream.finish().await.ok()? {
+            LlmStepEnd::FinalMessage { text, .. } => text,
+            LlmStepEnd::ToolCalls { .. } => return None,
+        };
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
+    /// Co-occurrence backlinks for a topic via Loom's multi-hop walk.
+    /// Empty when no ledger is attached or the walk finds nothing.
+    async fn backlinks(&self, topic: &str, now_secs: u64) -> Vec<WikiBacklink> {
+        let Some(ledger) = &self.ledger else {
+            return Vec::new();
+        };
+        let neighbors = ledger
+            .neighbors_within(
+                topic,
+                now_secs,
+                self.config.backlink_hops,
+                self.config.backlink_decay,
+                self.config.backlink_min_affinity,
+                self.config.max_backlinks,
+            )
+            .await
+            .unwrap_or_default();
+        neighbors
+            .into_iter()
+            .map(|n| WikiBacklink {
+                topic: n.topic,
+                affinity: n.affinity,
+                hops: n.hops,
+            })
+            .collect()
+    }
+
+    /// Make a topic's page current. Pulls its entries, skips when the
+    /// fingerprint already matches (incremental), otherwise synthesizes a
+    /// summary + backlinks and stores the page. Best-effort: returns
+    /// [`RegenOutcome::Skipped`] on any soft failure rather than erroring.
+    pub async fn regenerate(&self, topic: &str, now_secs: u64) -> RegenOutcome {
+        let entries = match self.memory.get_recent(topic, self.config.max_entries).await {
+            Ok(e) => e,
+            Err(_) => return RegenOutcome::Skipped,
+        };
+        if entries.is_empty() {
+            return RegenOutcome::NoEntries;
+        }
+        let seqs: Vec<u64> = entries.iter().map(|e| e.seq).collect();
+        // Incremental: unchanged source ⇒ keep the existing page.
+        if !self.store.needs_regen(topic, &seqs).await {
+            return RegenOutcome::Skipped;
+        }
+        let Some(summary) = self.summarize(topic, &entries).await else {
+            return RegenOutcome::Skipped;
+        };
+        let backlinks = self.backlinks(topic, now_secs).await;
+        let page = WikiPage {
+            topic: topic.to_string(),
+            summary,
+            entry_count: seqs.len() as u32,
+            source_fingerprint: WikiPage::fingerprint(&seqs),
+            source_seqs: seqs,
+            backlinks,
+            updated_at: now_secs,
+        };
+        match self.store.put_page(&page).await {
+            Ok(()) => RegenOutcome::Wrote(page),
+            Err(_) => RegenOutcome::Skipped,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +444,180 @@ mod tests {
         assert!(!s.needs_regen("deploy", &[2, 1]).await); // order-independent
         // A new entry → stale.
         assert!(s.needs_regen("deploy", &[1, 2, 3]).await);
+    }
+
+    // ---- CX.2 — WikiSynthesizer -------------------------------------
+
+    use aivyx_llm::{
+        LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    };
+    use aivyx_memory::InMemoryMemory;
+    use async_trait::async_trait;
+    use aivyx_core::CancellationToken;
+
+    /// A provider that returns one scripted `FinalMessage`, or fails the
+    /// stream open when `fail` is set.
+    struct ScriptedProvider {
+        text: String,
+        fail: bool,
+    }
+    struct ScriptedStream {
+        text: String,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            if self.fail {
+                return Err(LlmError::Transport("scripted failure".into()));
+            }
+            Ok(Box::new(ScriptedStream { text: self.text.clone() }))
+        }
+    }
+
+    #[async_trait]
+    impl LlmStream for ScriptedStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(None)
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            Ok(LlmStepEnd::FinalMessage { text: self.text, usage: LlmUsage::default() })
+        }
+    }
+
+    fn synth(
+        memory: Arc<dyn Memory>,
+        store: Arc<PersistentWikiStore>,
+        text: &str,
+        fail: bool,
+    ) -> WikiSynthesizer {
+        WikiSynthesizer::new(
+            memory,
+            Arc::new(ScriptedProvider { text: text.into(), fail }),
+            store,
+            "fake-model",
+        )
+    }
+
+    #[tokio::test]
+    async fn regenerate_writes_a_page_from_entries() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "we ship via the ci pipeline").await.unwrap();
+        mem.put("deploy", "rollbacks use the previous image tag").await.unwrap();
+        let store = Arc::new(store().await);
+        let s = synth(Arc::clone(&mem), Arc::clone(&store), "Deploy ships via CI; rollback by image tag.", false);
+
+        let outcome = s.regenerate("deploy", 1000).await;
+        match outcome {
+            RegenOutcome::Wrote(p) => {
+                assert_eq!(p.summary, "Deploy ships via CI; rollback by image tag.");
+                assert_eq!(p.entry_count, 2);
+                assert_eq!(p.updated_at, 1000);
+            }
+            other => panic!("expected Wrote, got {other:?}"),
+        }
+        // And it's persisted.
+        assert!(store.get_page("deploy").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn regenerate_is_incremental_second_pass_skips() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "note one").await.unwrap();
+        let store = Arc::new(store().await);
+        let s = synth(Arc::clone(&mem), Arc::clone(&store), "a summary", false);
+
+        assert!(matches!(s.regenerate("deploy", 1).await, RegenOutcome::Wrote(_)));
+        // No new entries → fingerprint unchanged → skipped.
+        assert_eq!(s.regenerate("deploy", 2).await, RegenOutcome::Skipped);
+        // A new entry → regenerates.
+        mem.put("deploy", "note two").await.unwrap();
+        assert!(matches!(s.regenerate("deploy", 3).await, RegenOutcome::Wrote(_)));
+    }
+
+    #[tokio::test]
+    async fn regenerate_no_entries_is_noentries() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let store = Arc::new(store().await);
+        let s = synth(mem, Arc::clone(&store), "x", false);
+        assert_eq!(s.regenerate("never-written", 1).await, RegenOutcome::NoEntries);
+        assert!(store.get_page("never-written").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn regenerate_llm_failure_skips_without_writing() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "note").await.unwrap();
+        let store = Arc::new(store().await);
+        let s = synth(Arc::clone(&mem), Arc::clone(&store), "", true); // provider fails
+
+        assert_eq!(s.regenerate("deploy", 1).await, RegenOutcome::Skipped);
+        // Best-effort: no broken page written.
+        assert!(store.get_page("deploy").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn regenerate_attaches_cooccurrence_backlinks() {
+        use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-wiki-synth-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let st: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("s.redb")),
+            MasterKey::from_raw([68u8; 32]),
+        )
+        .await
+        .unwrap();
+        let cooc = Arc::new(PersistentCooccurrenceLedger::new(
+            st.domain(KeyDomain::CooccurrenceLedger),
+        ));
+        cooc.record_window(&[(("deploy".into(), "ci".into()), 6.0)], 100)
+            .await
+            .unwrap();
+        let wiki_store = Arc::new(PersistentWikiStore::new(st.domain(KeyDomain::KnowledgeWiki)));
+
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "ships via ci").await.unwrap();
+
+        let s = synth(mem, Arc::clone(&wiki_store), "summary", false)
+            .with_ledger(Arc::clone(&cooc));
+        match s.regenerate("deploy", 100).await {
+            RegenOutcome::Wrote(p) => {
+                assert_eq!(p.backlinks.len(), 1);
+                assert_eq!(p.backlinks[0].topic, "ci");
+                assert_eq!(p.backlinks[0].hops, 1);
+            }
+            other => panic!("expected Wrote, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn user_prompt_lists_entries_and_caps_bodies() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let cfg = WikiSynthConfig { max_entry_chars: 5, ..Default::default() };
+        let s = WikiSynthesizer::new(
+            Arc::clone(&mem),
+            Arc::new(ScriptedProvider { text: "x".into(), fail: false }),
+            Arc::new(store().await),
+            "m",
+        )
+        .with_config(cfg);
+        let entries = vec![MemoryEntry {
+            topic: "deploy".into(),
+            body: "abcdefghij".into(),
+            seq: 1,
+            created_at_secs: 0,
+            last_read_at_secs: 0,
+        }];
+        let p = s.user_prompt("deploy", &entries);
+        assert!(p.contains("Topic: deploy"));
+        assert!(p.contains("abcde…"), "body capped at 5 chars: {p}");
     }
 }
