@@ -234,13 +234,19 @@ OAuth substrate.
 - [`examples/`](examples/) — worked TOML configs for Ollama,
   Anthropic, and the SemiTrusted (Telegram) tier.
 
+**For users & operators** wanting to know what the agent can do:
+- [`docs/TOOLS.md`](docs/TOOLS.md) — the **tool catalog**: every tool, its
+  capability scope, minimum trust tier, and how it's delivered (the agent can
+  also enumerate its own tools at runtime via the `tools.list` tool).
+
 **For contributors** adding channels, tools, or capabilities:
 - [`docs/CHANNEL_SDK.md`](docs/CHANNEL_SDK.md) — v0 contract for
   writing a channel adapter (in any language; see
   [`examples/python-channel/`](examples/python-channel/)).
 - [`docs/TOOL_SDK.md`](docs/TOOL_SDK.md) — v0 contract for
   writing a tool process (in any language; see
-  [`examples/python-tool/`](examples/python-tool/)).
+  [`examples/python-tool/`](examples/python-tool/)); for the catalog of tools
+  that *already exist*, see [`docs/TOOLS.md`](docs/TOOLS.md).
 - [`docs/ADAPTER_PATTERN.md`](docs/ADAPTER_PATTERN.md) — checklist
   for in-tree adapters.
 - [`docs/DAEMON_IPC.md`](docs/DAEMON_IPC.md) — wire format for

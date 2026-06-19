@@ -91,6 +91,11 @@ edited freely when a new adapter or subsystem teaches us something new.
   (Chapter Throttle): the per-tool / per-turn / sliding-window gate that bounds
   *how often* tools run — the budget gate's sibling for call counts; closes
   audit F2. ✅ shipped.
+- [`TOOLS.md`](TOOLS.md) — the **tool catalog** (Chapter Atlas): every tool, its
+  capability scope base, minimum trust tier, and delivery tier
+  (substrate / infrastructure / tool-process / MCP) + the name→scope mapping.
+  Drift-guarded against `KNOWN_BASES`; the agent enumerates its own tools at
+  runtime via `tools.list`. ✅ shipped.
 
 ## Archive
 

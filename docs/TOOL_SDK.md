@@ -11,6 +11,11 @@ This document is the third-party contract for building an Aivyx
 that registers one or more tools and answers invocation requests
 during agent turns.
 
+> **Looking for the tools that already exist?** See the
+> [tool catalog (`TOOLS.md`)](TOOLS.md) — every tool, its capability scope,
+> trust tier, and delivery tier. At runtime the agent can enumerate its own
+> tools via the `tools.list` tool.
+
 It is the operator-facing sibling of the channel SDK:
 
 | Doc | Audience | What it covers |
