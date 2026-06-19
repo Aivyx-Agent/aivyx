@@ -15,7 +15,10 @@
 //!   Silero VAD + PCM streaming).
 //! - [`tts`] — Text-to-Speech. Agent emits text; the
 //!   engine produces PCM samples played through the
-//!   speakers. Phase 135 ships Piper via `piper1-rs`.
+//!   speakers. Ships the permissive Kokoro engine
+//!   (`tts-kokoro`: Kokoro-82M via `ort` + `voice-g2p`,
+//!   Apache/MIT). The GPL Piper engine was removed in
+//!   Chapter Timbre (docs/TIMBRE.md).
 //! - [`channel`] — `VoiceChannel`, the
 //!   `aivyx_core::ChannelContext` impl that wires the
 //!   push-to-talk loop: mic capture → ASR → agent

@@ -3582,15 +3582,15 @@ url_retry_jitter_ms = 250
     fn asr_and_tts_configs_compose_into_voice_channel_config() {
         let cfg = VoiceChannelConfig {
             asr_engine: Some("whisper-rs".to_string()),
-            tts_engine: Some("piper".to_string()),
+            tts_engine: Some("kokoro".to_string()),
             asr: AsrConfig {
                 model_path: Some("/m/whisper.bin".into()),
                 language: Some("en".to_string()),
                 beam_size: Some(5),
             },
             tts: TtsConfig {
-                voice_path: Some("/m/piper.onnx".into()),
-                speaker_id: Some(0),
+                model_dir: Some("/m/kokoro".into()),
+                voice_name: Some("af_heart".to_string()),
                 ..Default::default()
             },
             input_device: None,
@@ -3602,6 +3602,6 @@ url_retry_jitter_ms = 250
             abort_double_enter_window_ms: 800,
         };
         assert_eq!(cfg.asr.beam_size, Some(5));
-        assert_eq!(cfg.tts.speaker_id, Some(0));
+        assert_eq!(cfg.tts.voice_name.as_deref(), Some("af_heart"));
     }
 }

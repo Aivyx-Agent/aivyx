@@ -2,20 +2,17 @@
 //! loop.
 //!
 //! The [`TtsEngine`] trait is the seam Aivyx's
-//! `VoiceChannel` consumes. One implementation ships in
-//! Phase 135 (gated by `tts-piper`):
+//! `VoiceChannel` consumes. The shipping backend is the
+//! permissive **Kokoro** engine (Chapter Timbre):
 //!
-//! - `tts-piper` (default) → [`piper`] module.
+//! - `tts-kokoro` → [`kokoro`] module (Kokoro-82M via
+//!   `ort` + `voice-g2p`; Apache/MIT, no espeak-ng).
 //!
-//! Higher-quality alternatives (Kokoro, F5-TTS,
-//! Chatterbox) are Phase 136+ candidates after
-//! operators validate the Piper baseline.
+//! The original Piper engine (GPL-3.0 via espeak-ng) was
+//! removed in Chapter Timbre TB.3; see `docs/TIMBRE.md`.
 
 use async_trait::async_trait;
 use thiserror::Error;
-
-#[cfg(feature = "tts-piper")]
-pub mod piper;
 
 #[cfg(feature = "tts-kokoro")]
 pub mod kokoro;
@@ -91,33 +88,22 @@ pub trait TtsEngine: Send + Sync {
     fn native_sample_rate(&self) -> u32;
 }
 
-/// Operator-supplied TTS configuration — the engine-neutral
-/// superset; each backend's `config_from_generic` reads the
-/// fields it needs.
+/// Operator-supplied TTS configuration. Engine-facing; the
+/// Kokoro backend's `config_from_generic` reads these.
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct TtsConfig {
-    /// Absolute path to the voice model `.onnx` file.
-    /// Piper-only (removed with Piper in Chapter Timbre TB.3).
-    #[serde(default)]
-    pub voice_path: Option<std::path::PathBuf>,
-
-    /// Optional speaker id for multi-speaker voice models.
-    /// Piper-only (removed with Piper in TB.3).
-    #[serde(default)]
-    pub speaker_id: Option<u32>,
-
-    /// Chapter Timbre — Kokoro model directory (holds the
-    /// `.onnx`, `voices-*.bin`, and optional `config.json`).
+    /// Kokoro model directory (holds the `.onnx`,
+    /// `voices-*.bin`, and optional `config.json`).
     #[serde(default)]
     pub model_dir: Option<std::path::PathBuf>,
 
-    /// Chapter Timbre — Kokoro voice name (e.g. `af_heart`).
-    /// Defaults to the engine's default voice when omitted.
+    /// Kokoro voice name (e.g. `af_heart`). Defaults to the
+    /// engine's default voice when omitted.
     #[serde(default)]
     pub voice_name: Option<String>,
 
-    /// Chapter Timbre — Kokoro speaking-rate multiplier
-    /// (1.0 = normal). Defaults to 1.0 when omitted.
+    /// Kokoro speaking-rate multiplier (1.0 = normal).
+    /// Defaults to 1.0 when omitted.
     #[serde(default)]
     pub speed: Option<f32>,
 }
@@ -301,15 +287,17 @@ mod tests {
     #[test]
     fn tts_config_deserializes_from_toml() {
         let toml = r#"
-voice_path = "/models/en_US-amy-medium.onnx"
-speaker_id = 0
+model_dir = "/models/kokoro"
+voice_name = "af_heart"
+speed = 1.25
 "#;
         let cfg: TtsConfig = toml::from_str(toml).expect("parse");
         assert_eq!(
-            cfg.voice_path.as_deref(),
-            Some(std::path::Path::new("/models/en_US-amy-medium.onnx"))
+            cfg.model_dir.as_deref(),
+            Some(std::path::Path::new("/models/kokoro"))
         );
-        assert_eq!(cfg.speaker_id, Some(0));
+        assert_eq!(cfg.voice_name.as_deref(), Some("af_heart"));
+        assert_eq!(cfg.speed, Some(1.25));
     }
 
     // ----- chunk_into_sentences ------------------------------------------

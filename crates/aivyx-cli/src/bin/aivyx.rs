@@ -7689,15 +7689,15 @@ async fn run_async(
             // Cargo.toml) bundles `channel-voice` plus the
             // engines via `aivyx-voice/recommended-voice`, so
             // gating on it transitively guarantees both
-            // `asr-whisper-rs` and `tts-piper` are compiled.
+            // `asr-whisper-rs` and `tts-kokoro` are compiled.
             // The lean `channel-voice` alone pulls in the
-            // substrate without engines — useful for Phase 137+
+            // substrate without engines — useful for
             // alternative-engine wiring; not enough for the
             // binary's default loop here.
             #[cfg(feature = "channel-voice-full")]
             {
                 use aivyx_voice::asr::whisper_rs::WhisperRsEngine;
-                use aivyx_voice::tts::{kokoro, piper};
+                use aivyx_voice::tts::kokoro;
                 use aivyx_voice::{
                     run_push_to_talk_loop_streaming, VoiceChannel, VoiceChannelConfig,
                 };
@@ -7748,7 +7748,7 @@ async fn run_async(
                         )
                     });
 
-                let agent_spec = aivyx_channel::session::AgentStackSpec {
+                let agent_spec = aivyx_channel::AgentStackSpec {
                     model: model.clone(),
                     system_prompt: system_prompt.clone(),
                     max_tokens: DEFAULT_MAX_TOKENS,
@@ -7784,7 +7784,7 @@ async fn run_async(
                         config_rate_limit.clone(),
                     ),
                 };
-                let agent = aivyx_channel::session::build_agent_stack(
+                let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),
                     Arc::clone(&audit),
                     agent_spec,
@@ -7801,45 +7801,29 @@ async fn run_async(
                 let asr_engine = WhisperRsEngine::new(asr_cfg).map_err(|e| {
                     format!("voice: build WhisperRsEngine: {e}")
                 })?;
-                // Engine-neutral TTS config; each backend reads the
-                // fields it needs (Piper: voice_path + espeak; Kokoro:
-                // model_dir + voice_name + speed).
+                // Chapter Timbre — the TTS engine is the permissive
+                // Kokoro stack. `[voice] tts_engine` may be unset or
+                // "kokoro"; any other value is rejected (Piper was
+                // removed in TB.3).
+                if let Some(other) = v.tts_engine.as_deref() {
+                    if other != "kokoro" {
+                        return Err(format!(
+                            "voice: [voice] tts_engine = {other:?} is not supported — \
+                             the only TTS engine is \"kokoro\" (set tts_engine = \"kokoro\" \
+                             or leave it unset)"
+                        ));
+                    }
+                }
                 let tts_cfg = aivyx_voice::tts::TtsConfig {
-                    voice_path: v.tts_voice_path.clone(),
-                    speaker_id: None,
                     model_dir: v.tts_model_dir.clone(),
                     voice_name: v.tts_voice_name.clone(),
                     speed: v.tts_speed,
                 };
-
-                // Chapter Timbre — select the TTS engine from
-                // `[voice] tts_engine`. "kokoro" → the permissive
-                // Kokoro stack; anything else (incl. unset) → the
-                // legacy Piper engine, retired in TB.3.
-                let tts_dyn: Arc<dyn aivyx_voice::tts::TtsEngine> =
-                    match v.tts_engine.as_deref() {
-                        Some("kokoro") => {
-                            let kcfg = kokoro::config_from_generic(&tts_cfg)
-                                .map_err(|e| format!("voice: build Kokoro config: {e}"))?;
-                            let eng = kokoro::KokoroEngine::new(kcfg)
-                                .map_err(|e| format!("voice: build KokoroEngine: {e}"))?;
-                            Arc::new(eng)
-                        }
-                        _ => {
-                            let espeak_path =
-                                v.tts_espeak_data_path.clone().ok_or_else(|| {
-                                    "voice: [voice] tts_espeak_data_path is required for Piper TTS. \
-                                     Linux: `/usr/share/espeak-ng-data` (apt install espeak-ng-data). \
-                                     macOS: `/opt/homebrew/share/espeak-ng-data` (brew install espeak-ng)."
-                                        .to_string()
-                                })?;
-                            let piper_cfg = piper::config_from_generic(&tts_cfg, espeak_path)
-                                .map_err(|e| format!("voice: build PiperEngine config: {e}"))?;
-                            let eng = piper::PiperEngine::new(piper_cfg)
-                                .map_err(|e| format!("voice: build PiperEngine: {e}"))?;
-                            Arc::new(eng)
-                        }
-                    };
+                let kcfg = kokoro::config_from_generic(&tts_cfg)
+                    .map_err(|e| format!("voice: build Kokoro config: {e}"))?;
+                let kokoro_engine = kokoro::KokoroEngine::new(kcfg)
+                    .map_err(|e| format!("voice: build KokoroEngine: {e}"))?;
+                let tts_dyn: Arc<dyn aivyx_voice::tts::TtsEngine> = Arc::new(kokoro_engine);
 
                 let channel_cfg = VoiceChannelConfig {
                     asr_engine: v.asr_engine.clone(),
@@ -7853,6 +7837,10 @@ async fn run_async(
                     input_device: v.input_device.clone(),
                     output_device: v.output_device.clone(),
                     capture_debug_path: None,
+                    // VAD / image / abort knobs keep their documented
+                    // defaults here (operators tune them via the
+                    // daemon `[voice]` config, not this CLI loop).
+                    ..Default::default()
                 };
                 let channel = Arc::new(VoiceChannel::new(channel_cfg));
 
@@ -7867,11 +7855,11 @@ async fn run_async(
                 let _ = &config_voice_options;
                 Err(
                     "aivyx voice: this binary was built without the `channel-voice-full` \
-                     feature (which bundles channel-voice + whisper-rs ASR + Piper TTS). \
+                     feature (which bundles channel-voice + whisper-rs ASR + Kokoro TTS). \
                      Rebuild with `cargo install --features \
                      aivyx-channel/channel-voice-full aivyx-channel`. See INSTALL.md \
-                     Phase 135 voice section for prerequisites (ONNX runtime,
-                     espeak-ng) and Phase 136 for the integrated loop."
+                     for the voice prerequisites (the Kokoro model files) and the \
+                     integrated loop."
                         .to_string(),
                 )
             }

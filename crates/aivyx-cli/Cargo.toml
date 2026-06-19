@@ -40,11 +40,8 @@ channel-voice = ["aivyx-channel/channel-voice", "dep:aivyx-voice"]
 channel-voice-full = [
     "channel-voice",
     "aivyx-channel/channel-voice-full",
+    # whisper-rs STT + the permissive Kokoro TTS (Chapter Timbre).
     "aivyx-voice/recommended-voice",
-    # Chapter Timbre — compile the permissive Kokoro engine alongside
-    # the legacy Piper one so `tts_engine = "kokoro"` is selectable
-    # during the swap. TB.3 makes Kokoro the only/default TTS.
-    "aivyx-voice/tts-kokoro",
 ]
 
 [dependencies]

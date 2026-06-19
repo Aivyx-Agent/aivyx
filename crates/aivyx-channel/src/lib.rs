@@ -172,4 +172,6 @@ pub use profile_prompt::assemble_session_prompt;
 pub use role_envelope::{assemble_role_envelope, MAX_INHERITANCE_DEPTH};
 pub use role_render::{render_role_envelope, ChannelKind};
 pub use daemon_session::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};
-pub use session::{run_session, SessionConfig, SessionReport};
+pub use session::{
+    build_agent_stack, run_session, AgentStackSpec, SessionConfig, SessionReport,
+};

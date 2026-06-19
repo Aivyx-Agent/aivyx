@@ -40,27 +40,23 @@ asr-whisper-rs = ["dep:whisper-rs"]
 # (rwhisper, whisper-stream-rs, etc.).
 asr-whisper-cpp-plus = []
 
-# TTS backends.
+# TTS backend — the permissive Kokoro stack (Chapter Timbre).
 #
-# `tts-piper` (GPL-3.0 via piper1-rs-sys → espeak-ng) is being
-# retired in Chapter Timbre (docs/TIMBRE.md) for the permissive
-# Kokoro stack below. It stays wired through TB.2 so engine
-# selection has both during the swap; TB.3 deletes it + the
-# piper1-rs dep entirely. piper1-rs's build needs ONNX headers.
-tts-piper = ["dep:piper1-rs"]
-
-# Chapter Timbre (TB.1) — the permissive replacement: Kokoro-82M
-# (Apache-2.0 weights) via `ort` (ONNX Runtime, Apache/MIT) with
-# `voice-g2p` (MIT, dictionary-based, **espeak-free**) G2P. No GPL
-# anywhere in this path; `ort`'s default `download-binaries`
-# fetches a prebuilt ONNX Runtime at build time, so — unlike Piper
-# — there are no system ONNX headers or espeak-ng prereqs. `zip`
-# parses the Kokoro `voices-*.bin` (an npz archive).
+# Kokoro-82M (Apache-2.0 weights) via `ort` (ONNX Runtime,
+# Apache/MIT) with `voice-g2p` (MIT, dictionary-based,
+# **espeak-free**) G2P. No GPL anywhere; `ort`'s default
+# `download-binaries` fetches a prebuilt ONNX Runtime at build
+# time, so there are no system ONNX headers or espeak-ng
+# prereqs. `zip` parses the Kokoro `voices-*.bin` npz.
+#
+# (The GPL-3.0 Piper engine — piper1-rs → espeak-ng — was removed
+# in TB.3; see docs/TIMBRE.md.)
 tts-kokoro = ["dep:ort", "dep:ndarray", "dep:zip", "dep:voice-g2p"]
 
-# Convenience meta-feature: the recommended voice loop. Still
-# whisper-rs STT + Piper TTS until TB.3 flips TTS to `tts-kokoro`.
-recommended-voice = ["asr-whisper-rs", "tts-piper"]
+# Convenience meta-feature: the recommended voice loop —
+# whisper-rs STT + Kokoro TTS. `cargo install` users pull this
+# through `aivyx-channel/channel-voice-full`.
+recommended-voice = ["asr-whisper-rs", "tts-kokoro"]
 
 [dependencies]
 # Aivyx substrate.
@@ -122,13 +118,7 @@ whisper-rs = { version = "0.16", optional = true }
 # scope-adjustment rationale. Re-enable when an
 # upstream fix lands.
 
-# Optional TTS backend. piper1-rs requires ONNX runtime
-# headers at build time (`ONNX_RUNTIME_DIR`,
-# `ONNX_INCLUDE_PATH`); see INSTALL.md for per-OS setup.
-# (GPL-3.0 — removed in Chapter Timbre TB.3.)
-piper1-rs = { version = "0.1", optional = true }
-
-# Chapter Timbre (TB.1) — permissive Kokoro TTS stack. All MIT /
+# Chapter Timbre — permissive Kokoro TTS stack. All MIT /
 # Apache-2.0; no espeak-ng, no GPL. Pinned to the rc the engine
 # was written against (the ort 2.0 pre-release API still moves
 # between rc's). `ort` default features include `download-binaries`

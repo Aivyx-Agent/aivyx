@@ -32,8 +32,8 @@ pub struct VoiceChannelConfig {
     /// error at channel-construction time.
     #[serde(default)]
     pub asr_engine: Option<String>,
-    /// TTS engine selection. Aivyx supports `"piper"`
-    /// in Phase 135.
+    /// TTS engine selection. `"kokoro"` (the permissive
+    /// default; Chapter Timbre). Unset selects Kokoro.
     #[serde(default)]
     pub tts_engine: Option<String>,
     /// ASR config (model path + tuning).
@@ -388,7 +388,7 @@ mod tests {
     fn voice_channel_config_deserializes_full_section() {
         let toml = r#"
 asr_engine = "whisper-rs"
-tts_engine = "piper"
+tts_engine = "kokoro"
 input_device = "USB Mic"
 output_device = "Default"
 
@@ -397,15 +397,17 @@ model_path = "/models/ggml-base.en.bin"
 language = "en"
 
 [tts]
-voice_path = "/models/en_US-amy-medium.onnx"
+model_dir = "/models/kokoro"
+voice_name = "af_heart"
 "#;
         let cfg: VoiceChannelConfig = toml::from_str(toml).expect("parse");
         assert_eq!(cfg.asr_engine.as_deref(), Some("whisper-rs"));
-        assert_eq!(cfg.tts_engine.as_deref(), Some("piper"));
+        assert_eq!(cfg.tts_engine.as_deref(), Some("kokoro"));
         assert_eq!(cfg.input_device.as_deref(), Some("USB Mic"));
         assert_eq!(cfg.output_device.as_deref(), Some("Default"));
         assert!(cfg.asr.model_path.is_some());
-        assert!(cfg.tts.voice_path.is_some());
+        assert!(cfg.tts.model_dir.is_some());
+        assert_eq!(cfg.tts.voice_name.as_deref(), Some("af_heart"));
     }
 
     #[test]
@@ -416,7 +418,7 @@ voice_path = "/models/en_US-amy-medium.onnx"
         // `VoiceChannelConfig` shape.
         let toml = r#"
 asr_engine = "whisper-rs"
-tts_engine = "piper"
+tts_engine = "kokoro"
 
 [vad]
 threshold_rms = 0.02
@@ -426,7 +428,7 @@ dwell_secs    = 2.5
 model_path = "/m/w.bin"
 
 [tts]
-voice_path = "/m/p.onnx"
+model_dir = "/m/kokoro"
 "#;
         let cfg: VoiceChannelConfig = toml::from_str(toml).expect("parse");
         assert!((cfg.vad.threshold_rms - 0.02).abs() < f32::EPSILON);
@@ -663,7 +665,7 @@ voice_path = "/m/p.onnx"
     fn voice_channel_config_parses_abort_knobs() {
         let toml = r#"
 asr_engine = "whisper-rs"
-tts_engine = "piper"
+tts_engine = "kokoro"
 abort_requires_double_enter = true
 abort_double_enter_window_ms = 1200
 
@@ -671,7 +673,7 @@ abort_double_enter_window_ms = 1200
 model_path = "/m/w.bin"
 
 [tts]
-voice_path = "/m/p.onnx"
+model_dir = "/m/kokoro"
 "#;
         let cfg: VoiceChannelConfig = toml::from_str(toml).expect("parse");
         assert!(cfg.abort_requires_double_enter);
