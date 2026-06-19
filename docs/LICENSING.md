@@ -1,18 +1,19 @@
 # Licensing & Commercial Model (Chapter Charter)
 
-> **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅ + CR.2 ✅ + CR.3 ✅ + CR.4
-> ✅ + CR.5 ✅.** This document is the locked reference for moving Aivyx from
-> **MIT** to the **Business Source License 1.1 (BUSL-1.1)** going forward: **free
-> for personal / individual / non-commercial use, a paid commercial license for
-> any business or production use,** auto-converting back to MIT after a fixed
-> term. As of CR.2 the **tree carries the BUSL-1.1 `LICENSE`** (MIT preserved as
-> the Change License at `LICENSES/MIT.txt`); CR.3 documented the **commercial
-> path** ([`COMMERCIAL.md`](../COMMERCIAL.md)); CR.4 added the **contributor gate**
-> ([`CONTRIBUTING.md`](../CONTRIBUTING.md) + the **CLA**, [`CLA.md`](../CLA.md));
-> CR.5 **refreshed positioning** — every "open source"/"MIT" claim for Aivyx's own
-> code is now "source-available under BUSL-1.1" (README, DESIGN via Amendment A14,
-> TRADEMARK), and a licensing FAQ is in §8. The **first BSL release (CR.6)** is
-> the only phase remaining. Decisions locked by the
+> **Status:** ✅ **CHAPTER COMPLETE — CR.0–CR.6 all ✅.** Aivyx has moved from
+> **MIT** to the **Business Source License 1.1 (BUSL-1.1)**: **free for personal /
+> individual / non-commercial use, a paid commercial license for any business or
+> production use,** auto-converting back to MIT four years after each release. The
+> tree carries the BUSL-1.1 `LICENSE` (CR.2; MIT preserved as the Change License
+> at `LICENSES/MIT.txt`); the **commercial path** is in
+> [`COMMERCIAL.md`](../COMMERCIAL.md) (CR.3); the **contributor gate** is
+> [`CONTRIBUTING.md`](../CONTRIBUTING.md) + the **CLA** [`CLA.md`](../CLA.md)
+> (CR.4); positioning is refreshed to "source-available" everywhere + a licensing
+> FAQ in §8 (CR.5); and the **first BSL release —
+> [v0.3.0](https://github.com/Aivyx-Agent/aivyx/releases/tag/v0.3.0) — is live**
+> (CR.6). *(Carried follow-ups, not blockers: lawyer-review `CLA.md` before the
+> first external PR merge; swap Piper for a permissive TTS before shipping voice
+> in an official binary.)* Decisions locked by the
 > operator: (1) **BSL**, not FSL/AGPL — the gate is *commercial vs. personal*,
 > not *competing vs. not* and not *SaaS vs. internal*; (2) the **whole public
 > repo** moves (engine + public tool crates), with verticals staying private as
@@ -124,7 +125,7 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 | **CR.3** ✅ | **Commercial-license path** | DONE. [`COMMERCIAL.md`](../COMMERCIAL.md) at the repo root: the §4 grant restated in plain English (free: individuals, non-commercial, non-profits, education; paid: any for-profit/internal/production/revenue/resale use), a quick-check table, the 4-year→MIT reassurance, the **aivyx@aivyx-studio.com** contact path with what to include, and a per-engagement pricing placeholder. `LICENSE` already points here. |
 | **CR.4** ✅ | **Contributor terms** | DONE. Operator chose the **CLA** (stronger) over a DCO — a plain DCO certifies origin only and does **not** grant commercial-sublicensing rights, which the paid-license model requires. Shipped [`CLA.md`](../CLA.md) (v1.0: a *license grant*, not assignment — contributor keeps copyright, grants the Licensor a perpetual/irrevocable right to relicense **and commercially sublicense** Contributions; Apache-ICLA-shaped + employer/patent/third-party clauses) and [`CONTRIBUTING.md`](../CONTRIBUTING.md) (the contributor entry point). **Acceptance = `git commit -s` sign-off**, which certifies the DCO *and* accepts the CLA per-contribution; maintainers can't merge un-signed-off commits. The gate now **precedes** any external PR (§3). |
 | **CR.5** ✅ | **Positioning & docs refresh** | DONE. Corrected every "open source"/"MIT" claim about *Aivyx's own code* to "source-available under BUSL-1.1": `README.md` (License & trademark section + Contributing note pointing at the CLA), `TRADEMARK.md` (incl. fixing "use it commercially" → needs a commercial license), and `DESIGN.md` "Deliverable 2 — The Open-Core Line" via an inline note + **[Amendment A14](amendments/2026-06-19-busl-relicense.md)** (a LOCKED contract section can't be corrected by prose alone). Added the licensing **FAQ (§8)** cross-linking `COMMERCIAL.md`. Left third-party MIT mentions alone (Ollama/llama.cpp in INSTALL, Hermes in ROADMAP — those *are* MIT). PRODUCT.md carries no licensing clause → untouched. GitHub repo description is currently empty (no "open source" claim to correct); when one is set, phrase it "source-available." |
-| **CR.6** 🚢 | **First BSL release** | IN FLIGHT. Operator chose **v0.3.0** (incremental; v1.0 held for a real stability milestone). Workspace version bumped 0.2.0 → 0.3.0 (Cargo.toml + Cargo.lock); `CHANGELOG.md` 0.3.0 section **leads with the license change** (then Contacts/Genesis/Harbor/Throttle since the Studio) — cargo-dist sources release notes from it. Tag `v0.3.0` (annotated) triggers `release.yml` → the quality-gate-gated cargo-dist pipeline builds the 4 musl/darwin binaries + shell installer and publishes the GitHub release. **Record the green release run here once it lands.** |
+| **CR.6** ✅ | **First BSL release** | DONE. Operator chose **v0.3.0** (incremental; v1.0 held for a real stability milestone). Workspace bumped 0.2.0 → 0.3.0; `CHANGELOG.md` 0.3.0 section **leads with the license change** (then Contacts/Genesis/Harbor/Throttle). **Release [v0.3.0](https://github.com/Aivyx-Agent/aivyx/releases/tag/v0.3.0) is live** — green run `27799155867`: all 4 musl/darwin tarballs + checksums + shell installer + source archive published. Two pre-green failures, both fixed/transient (see §6.3). |
 
 **Discipline:** CR.1 is a hard gate — if a dependency's license is incompatible
 with shipping the combined work under BSL, that's a blocker to resolve (swap the
@@ -200,6 +201,31 @@ change first. Recorded so it isn't rediscovered the hard way.
   them. `publish = false` is independently honest: Aivyx never ships to crates.io
   (releases are cargo-dist binaries + GHCR images), and it guards against an
   accidental `cargo publish`. The gate's copyleft tripwire is fully intact.
+
+### 6.3 CR.6 release notes (two failures before green)
+
+The v0.3.0 release pipeline took three runs to go green. Both early failures are
+recorded so they aren't rediscovered:
+
+1. **cargo-dist `plan` failed — `publish = false` hid the binary.** *"This
+   workspace doesn't have anything for dist to Release!"* The CR.2
+   workspace-wide `publish = false` (added so cargo-deny's `private.ignore` skips
+   our BUSL crates — §6.2) **also** makes cargo-dist skip every crate by default.
+   Fix: add `[package.metadata.dist] dist = true` to **`aivyx-cli`** (the only
+   crate that ships a release binary; `precise-builds = true`). This re-includes
+   it in dist **without** re-enabling `cargo publish`. Verify locally with
+   `dist plan` (the CLI is `dist`, not `cargo dist`). A genuine
+   `publish=false`-vs-dist interaction — see [[cargo-dist-publish-false]].
+2. **Quality-gate runner crashed — "No space left on device."** A transient
+   GitHub-runner disk-exhaustion during `cargo test`/`clippy` (the prior run's
+   identical quality-gate had passed; CI on the same commit was green). Note the
+   pipeline still *published a release* from the `host` job even though the gate
+   failed and the build jobs were skipped — i.e. a **binary-less release** (only
+   `dist-manifest.json`). That broken release + tag were deleted and the tag
+   re-pushed; the clean re-run (`27799155867`) went green with all 4
+   musl/darwin tarballs + checksums + installer + source archive. *(If the
+   disk-exhaustion recurs, add a free-disk-space step to the quality-gate
+   workflow; it was a one-off here.)*
 
 ## 7. Open questions to resolve in-phase (not blockers to CR.0)
 
