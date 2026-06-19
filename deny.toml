@@ -73,22 +73,13 @@ allow = [
     "MPL-2.0",
 ]
 
-# Per-crate license exceptions (scoped — a NEW copyleft dep elsewhere still
-# fails the gate loudly; that is the point of not putting these in `allow`).
-exceptions = [
-    # piper1-rs-sys is GPL-3.0-only (Piper TTS bindings), pulled ONLY via the
-    # optional `aivyx-voice` → piper1-rs path behind the opt-in
-    # `channel-voice[-full]` feature. It is NEVER in a distributed Aivyx
-    # binary: cargo-dist uses `precise-builds = true` and aivyx-cli's default
-    # feature set excludes voice (see dist-workspace.toml), so release
-    # artifacts never compile or link it. The GPL combination only ever exists
-    # in a binary a user builds from source with voice explicitly enabled —
-    # their build, their GPL obligation, satisfied because they hold the
-    # source. Aivyx's own crates therefore relicense to BUSL-1.1 uncontaminated.
-    # (Revisit if voice is ever shipped in official binaries — that would need
-    # a permissively-licensed TTS in place of Piper. Tracked in docs/LICENSING.md.)
-    { allow = ["GPL-3.0-only"], crate = "piper1-rs-sys" },
-]
+# No per-crate license exceptions. The lone exception — GPL-3.0-only
+# `piper1-rs-sys` (Piper TTS → espeak-ng) — was eliminated in Chapter Timbre
+# (docs/TIMBRE.md TB.3/TB.4): Piper was replaced by the permissive Kokoro stack
+# (Kokoro-82M Apache-2.0 + `voice-g2p` MIT + `ort` Apache/MIT, espeak-free), so
+# there is **zero GPL anywhere in the dependency graph**, including the optional
+# `tts-kokoro` voice feature. `cargo deny check licenses` (all-features) is green
+# with no exceptions — any future copyleft dep now fails the gate loudly.
 
 [advisories]
 version = 2
