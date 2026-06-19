@@ -454,8 +454,9 @@ pub enum QueryPayload {
         behavioral_constraints: Option<Vec<String>>,
     },
     /// Chapter Voice — read the daemon's `[voice]` config snapshot for the
-    /// Voice screen: the nine options + a **readiness** check (the daemon stats
-    /// the Whisper model, Piper voice, and espeak-ng data paths). Read-only.
+    /// Voice screen: the options + a **readiness** check (the daemon stats the
+    /// Whisper model and scans the Kokoro model directory for the `.onnx` model
+    /// and `voices-*.bin`). Read-only.
     /// Responds with [`QueryResponsePayload::GetVoiceSettings`].
     GetVoiceSettings,
     /// Chapter Voice — rewrite the `[voice]` section of `aivyx.toml`. All fields
@@ -475,9 +476,11 @@ pub enum QueryPayload {
         #[serde(default)]
         asr_beam_size: Option<u32>,
         #[serde(default)]
-        tts_voice_path: Option<String>,
+        tts_model_dir: Option<String>,
         #[serde(default)]
-        tts_espeak_data_path: Option<String>,
+        tts_voice_name: Option<String>,
+        #[serde(default)]
+        tts_speed: Option<f32>,
         #[serde(default)]
         input_device: Option<String>,
         #[serde(default)]
@@ -894,25 +897,27 @@ pub enum QueryResponsePayload {
 
 /// Chapter Voice — the daemon's `[voice]` config + readiness snapshot for the
 /// Voice screen. Wasm-clean plain-field mirror of `aivyx_config::VoiceOptions`
-/// (paths as strings) plus three readiness flags the daemon computes by
-/// `stat`ing the model prerequisites.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// (paths as strings) plus readiness flags the daemon computes by `stat`ing the
+/// model prerequisites. (Chapter Timbre: the TTS prereqs are the Kokoro model
+/// directory's `.onnx` + `voices-*.bin`, not the old Piper voice/espeak paths.)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct VoiceSettingsSnapshot {
     pub asr_engine: Option<String>,
     pub tts_engine: Option<String>,
     pub asr_model_path: Option<String>,
     pub asr_language: Option<String>,
     pub asr_beam_size: Option<u32>,
-    pub tts_voice_path: Option<String>,
-    pub tts_espeak_data_path: Option<String>,
+    pub tts_model_dir: Option<String>,
+    pub tts_voice_name: Option<String>,
+    pub tts_speed: Option<f32>,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
     /// `"present" | "missing" | "unset"` for the Whisper `.bin` model.
     pub asr_model_status: String,
-    /// `"present" | "missing" | "unset"` for the Piper `.onnx` voice.
-    pub tts_voice_status: String,
-    /// `"present" | "missing" | "unset"` for the espeak-ng data directory.
-    pub espeak_status: String,
+    /// `"present" | "missing" | "unset"` for a `*.onnx` in the Kokoro model dir.
+    pub tts_model_status: String,
+    /// `"present" | "missing" | "unset"` for a `voices-*.bin` in the model dir.
+    pub tts_voices_status: String,
 }
 
 /// Chapter U — the daemon's effective config snapshot for the Settings screen.
@@ -2961,12 +2966,13 @@ mod tests {
             QueryPayload::GetVoiceSettings,
             QueryPayload::SetVoice {
                 asr_engine: Some("whisper-rs".into()),
-                tts_engine: Some("piper".into()),
+                tts_engine: Some("kokoro".into()),
                 asr_model_path: Some("/m/whisper.bin".into()),
                 asr_language: Some("en".into()),
                 asr_beam_size: Some(5),
-                tts_voice_path: Some("/m/voice.onnx".into()),
-                tts_espeak_data_path: Some("/usr/share/espeak-ng-data".into()),
+                tts_model_dir: Some("/m/kokoro".into()),
+                tts_voice_name: Some("af_heart".into()),
+                tts_speed: Some(1.0),
                 input_device: None,
                 output_device: None,
             },
@@ -2981,9 +2987,12 @@ mod tests {
         let snap = VoiceSettingsSnapshot {
             asr_model_path: Some("/m/whisper.bin".into()),
             asr_beam_size: Some(5),
+            tts_model_dir: Some("/m/kokoro".into()),
+            tts_voice_name: Some("af_heart".into()),
+            tts_speed: Some(1.0),
             asr_model_status: "present".into(),
-            tts_voice_status: "missing".into(),
-            espeak_status: "unset".into(),
+            tts_model_status: "present".into(),
+            tts_voices_status: "missing".into(),
             ..Default::default()
         };
         for resp in [

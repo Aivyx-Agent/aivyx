@@ -147,8 +147,9 @@ loudly, so a future copyleft dep can't slip in silently. Three categories surfac
    to `allow`.
 2. **NCSA — permissive, allowed.** `libfuzzer-sys` (`(MIT OR Apache-2.0) AND
    NCSA`), a dev/fuzz dependency. NCSA is BSD/MIT-style. Added to `allow`.
-3. **GPL-3.0-only — the one real risk, carved out as a scoped exception.**
-   `piper1-rs-sys` (Piper TTS bindings) is strong copyleft. It is pulled **only**
+3. **GPL-3.0-only — the one real risk, carved out then ✅ eliminated.**
+   *(Resolved in [[chapter-timbre]] — see the Live-constraint note below.)*
+   `piper1-rs-sys` (Piper TTS bindings) is strong copyleft. It was pulled **only**
    through the optional `aivyx-voice` → `piper1-rs` path behind the **opt-in
    `channel-voice[-full]` feature**, which `aivyx-cli`'s `default = []` excludes.
    **It is never in a distributed Aivyx binary:** cargo-dist uses `precise-builds =
@@ -161,12 +162,17 @@ loudly, so a future copyleft dep can't slip in silently. Three categories surfac
    as a per-crate `exceptions` entry scoped to `piper1-rs-sys` (not a blanket
    GPL allowance) with the full rationale in `deny.toml`.
 
-**Live constraint this creates (carry into the Voice/release work, not a CR
-blocker):** because Piper is GPL-3.0, **voice cannot be shipped in an official
-BSL binary** without swapping Piper for a permissively-licensed TTS. Today that's
-fine — voice is a host-local, build-from-source, opt-in feature ([[chapter-voice]])
-— but the day we'd want voice in the cargo-dist artifacts, the TTS engine must
-change first. Recorded so it isn't rediscovered the hard way.
+**Live constraint this created — ✅ RESOLVED in [[chapter-timbre]].** The CR.1
+finding was: because Piper is GPL-3.0, voice could not ship in an official BSL
+binary without swapping the TTS engine. **Chapter Timbre did exactly that** —
+Piper was removed and replaced by the permissive **Kokoro** stack (Kokoro-82M
+Apache-2.0 + `voice-g2p` MIT + `ort` Apache/MIT, espeak-free), and the
+`piper1-rs-sys` exception was deleted from `deny.toml` (TB.4). The dependency
+graph now has **zero GPL**, so voice is license-clean for everyone who builds it.
+One *non-licensing* blocker remains for putting voice in the official **Linux**
+binaries: the musl-static release can't compile `cpal`/ALSA (the same reason the
+musl build skips ALSA). macOS official binaries have no such issue. Tracked in
+`docs/TIMBRE.md` §4.
 
 ### 6.2 CR.2 swap notes (what the relicense commit actually did)
 

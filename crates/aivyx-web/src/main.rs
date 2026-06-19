@@ -1467,8 +1467,9 @@ fn VoicePanel() -> Element {
     let mut asr_model_path = use_signal(String::new);
     let mut asr_language = use_signal(String::new);
     let mut asr_beam_size = use_signal(String::new);
-    let mut tts_voice_path = use_signal(String::new);
-    let mut tts_espeak_data_path = use_signal(String::new);
+    let mut tts_model_dir = use_signal(String::new);
+    let mut tts_voice_name = use_signal(String::new);
+    let mut tts_speed = use_signal(String::new);
     let mut input_device = use_signal(String::new);
     let mut output_device = use_signal(String::new);
     let mut last_seed = use_signal(|| None::<VoiceSettingsSnapshot>);
@@ -1488,8 +1489,9 @@ fn VoicePanel() -> Element {
                 asr_model_path.set(s.asr_model_path.clone().unwrap_or_default());
                 asr_language.set(s.asr_language.clone().unwrap_or_default());
                 asr_beam_size.set(s.asr_beam_size.map(|n| n.to_string()).unwrap_or_default());
-                tts_voice_path.set(s.tts_voice_path.clone().unwrap_or_default());
-                tts_espeak_data_path.set(s.tts_espeak_data_path.clone().unwrap_or_default());
+                tts_model_dir.set(s.tts_model_dir.clone().unwrap_or_default());
+                tts_voice_name.set(s.tts_voice_name.clone().unwrap_or_default());
+                tts_speed.set(s.tts_speed.map(|n| n.to_string()).unwrap_or_default());
                 input_device.set(s.input_device.clone().unwrap_or_default());
                 output_device.set(s.output_device.clone().unwrap_or_default());
             }
@@ -1533,8 +1535,8 @@ fn VoicePanel() -> Element {
                 }
                 div { class: "kv-grid",
                     ReadinessRow { label: "Whisper model", status: snap.asr_model_status.clone() }
-                    ReadinessRow { label: "Piper voice", status: snap.tts_voice_status.clone() }
-                    ReadinessRow { label: "espeak-ng data", status: snap.espeak_status.clone() }
+                    ReadinessRow { label: "Kokoro model (.onnx)", status: snap.tts_model_status.clone() }
+                    ReadinessRow { label: "Kokoro voices (.bin)", status: snap.tts_voices_status.clone() }
                 }
             }
 
@@ -1557,19 +1559,24 @@ fn VoicePanel() -> Element {
                 div { class: "field-row",
                     label { class: "label-tech", "TTS engine" }
                     select { class: "input", value: "{tts_engine}", onchange: move |e| tts_engine.set(e.value()),
-                        option { value: "", "default (piper)" }
-                        option { value: "piper", "piper" }
+                        option { value: "", "default (kokoro)" }
+                        option { value: "kokoro", "kokoro" }
                     }
                 }
                 div { class: "field-row",
-                    label { class: "label-tech", "Piper voice" }
-                    input { class: "input", placeholder: "/path/to/voice.onnx",
-                        value: "{tts_voice_path}", oninput: move |e| tts_voice_path.set(e.value()) }
+                    label { class: "label-tech", "Kokoro model dir" }
+                    input { class: "input", placeholder: "/path/to/kokoro (holds the .onnx + voices-*.bin)",
+                        value: "{tts_model_dir}", oninput: move |e| tts_model_dir.set(e.value()) }
                 }
                 div { class: "field-row",
-                    label { class: "label-tech", "espeak-ng data" }
-                    input { class: "input", placeholder: "/usr/share/espeak-ng-data",
-                        value: "{tts_espeak_data_path}", oninput: move |e| tts_espeak_data_path.set(e.value()) }
+                    label { class: "label-tech", "Kokoro voice" }
+                    input { class: "input", placeholder: "af_heart",
+                        value: "{tts_voice_name}", oninput: move |e| tts_voice_name.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Speaking rate" }
+                    input { class: "input", r#type: "number", placeholder: "1.0",
+                        value: "{tts_speed}", oninput: move |e| tts_speed.set(e.value()) }
                 }
                 div { class: "field-row",
                     label { class: "label-tech", "ASR language" }
@@ -1603,7 +1610,7 @@ fn VoicePanel() -> Element {
                 div { class: "panel-head", h3 { "Launch" } }
                 p { class: "label-tech", "Start voice as its own foreground process on this machine:" }
                 pre { class: "launch-cmd", "aivyx --channel voice" }
-                p { class: "label-tech sub", "The audio loop (mic → Whisper → agent → Piper → speakers) runs on the host, not in the browser." }
+                p { class: "label-tech sub", "The audio loop (mic → Whisper → agent → Kokoro → speakers) runs on the host, not in the browser." }
             }
 
             div { class: "actions sticky-save",
@@ -1611,8 +1618,9 @@ fn VoicePanel() -> Element {
                     class: "btn btn-primary",
                     onclick: move |_| ws.send(set_voice_query(
                         opt_str(&asr_engine()), opt_str(&tts_engine()), opt_str(&asr_model_path()),
-                        opt_str(&asr_language()), parse_opt_u32(&asr_beam_size()), opt_str(&tts_voice_path()),
-                        opt_str(&tts_espeak_data_path()), opt_str(&input_device()), opt_str(&output_device()),
+                        opt_str(&asr_language()), parse_opt_u32(&asr_beam_size()), opt_str(&tts_model_dir()),
+                        opt_str(&tts_voice_name()), parse_opt_f32(&tts_speed()),
+                        opt_str(&input_device()), opt_str(&output_device()),
                     )),
                     "Save voice config"
                 }
@@ -1652,8 +1660,9 @@ fn set_voice_query(
     asr_model_path: Option<String>,
     asr_language: Option<String>,
     asr_beam_size: Option<u32>,
-    tts_voice_path: Option<String>,
-    tts_espeak_data_path: Option<String>,
+    tts_model_dir: Option<String>,
+    tts_voice_name: Option<String>,
+    tts_speed: Option<f32>,
     input_device: Option<String>,
     output_device: Option<String>,
 ) -> FrontendMessage {
@@ -1665,8 +1674,9 @@ fn set_voice_query(
             asr_model_path,
             asr_language,
             asr_beam_size,
-            tts_voice_path,
-            tts_espeak_data_path,
+            tts_model_dir,
+            tts_voice_name,
+            tts_speed,
             input_device,
             output_device,
         },
@@ -1675,6 +1685,16 @@ fn set_voice_query(
 
 /// Parse a numeric form field to `Option<u32>` (blank / unparseable ⇒ `None`).
 fn parse_opt_u32(s: &str) -> Option<u32> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse().ok()
+    }
+}
+
+/// Parse a numeric form field to `Option<f32>` (blank / unparseable ⇒ `None`).
+fn parse_opt_f32(s: &str) -> Option<f32> {
     let t = s.trim();
     if t.is_empty() {
         None

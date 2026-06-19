@@ -257,15 +257,16 @@ fn remove_profile_key(doc: &mut DocumentMut, key: &str) {
 /// key (the voice loader's default then applies). Strings are trimmed (an
 /// all-whitespace value clears the key); paths are carried as strings (TOML
 /// stores them as strings regardless).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct VoiceWrite {
     pub asr_engine: Option<String>,
     pub tts_engine: Option<String>,
     pub asr_model_path: Option<String>,
     pub asr_language: Option<String>,
     pub asr_beam_size: Option<u32>,
-    pub tts_voice_path: Option<String>,
-    pub tts_espeak_data_path: Option<String>,
+    pub tts_model_dir: Option<String>,
+    pub tts_voice_name: Option<String>,
+    pub tts_speed: Option<f32>,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
 }
@@ -289,12 +290,12 @@ pub fn write_voice_section(path: &Path, voice: &VoiceWrite) -> Result<(), Config
         Some(n) => doc["voice"]["asr_beam_size"] = value(n as i64),
         None => remove_voice_key(&mut doc, "asr_beam_size"),
     }
-    set_or_clear_voice_str(&mut doc, "tts_voice_path", voice.tts_voice_path.as_deref());
-    set_or_clear_voice_str(
-        &mut doc,
-        "tts_espeak_data_path",
-        voice.tts_espeak_data_path.as_deref(),
-    );
+    set_or_clear_voice_str(&mut doc, "tts_model_dir", voice.tts_model_dir.as_deref());
+    set_or_clear_voice_str(&mut doc, "tts_voice_name", voice.tts_voice_name.as_deref());
+    match voice.tts_speed {
+        Some(s) => doc["voice"]["tts_speed"] = value(s as f64),
+        None => remove_voice_key(&mut doc, "tts_speed"),
+    }
     set_or_clear_voice_str(&mut doc, "input_device", voice.input_device.as_deref());
     set_or_clear_voice_str(&mut doc, "output_device", voice.output_device.as_deref());
 
@@ -635,12 +636,13 @@ mod tests {
         let path = temp_toml("voice");
         let v = VoiceWrite {
             asr_engine: Some("whisper-rs".to_string()),
-            tts_engine: Some("piper".to_string()),
+            tts_engine: Some("kokoro".to_string()),
             asr_model_path: Some("/models/whisper.bin".to_string()),
             asr_language: Some("en".to_string()),
             asr_beam_size: Some(5),
-            tts_voice_path: Some("/models/voice.onnx".to_string()),
-            tts_espeak_data_path: Some("/usr/share/espeak-ng-data".to_string()),
+            tts_model_dir: Some("/models/kokoro".to_string()),
+            tts_voice_name: Some("af_heart".to_string()),
+            tts_speed: Some(1.25),
             input_device: None,
             output_device: None,
         };
@@ -649,7 +651,9 @@ mod tests {
         assert!(out.contains("asr_engine = \"whisper-rs\""), "{out}");
         assert!(out.contains("asr_model_path = \"/models/whisper.bin\""), "{out}");
         assert!(out.contains("asr_beam_size = 5"), "{out}");
-        assert!(out.contains("tts_voice_path = \"/models/voice.onnx\""), "{out}");
+        assert!(out.contains("tts_model_dir = \"/models/kokoro\""), "{out}");
+        assert!(out.contains("tts_voice_name = \"af_heart\""), "{out}");
+        assert!(out.contains("tts_speed = 1.25"), "{out}");
         assert!(!out.contains("input_device"), "None device must be absent: {out}");
         std::fs::remove_file(&path).ok();
     }
@@ -680,14 +684,14 @@ mod tests {
         let path = temp_toml("voice-preserve");
         std::fs::write(&path, "# cfg\n[agent]\nprovider = \"ollama\"\n").unwrap();
         let v = VoiceWrite {
-            tts_engine: Some("piper".to_string()),
+            tts_engine: Some("kokoro".to_string()),
             ..Default::default()
         };
         write_voice_section(&path, &v).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("# cfg"), "comment preserved: {out}");
         assert!(out.contains("provider = \"ollama\""), "[agent] preserved: {out}");
-        assert!(out.contains("tts_engine = \"piper\""), "{out}");
+        assert!(out.contains("tts_engine = \"kokoro\""), "{out}");
         std::fs::remove_file(&path).ok();
     }
 

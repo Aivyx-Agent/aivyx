@@ -4184,8 +4184,9 @@ async fn handle_query(
             asr_model_path,
             asr_language,
             asr_beam_size,
-            tts_voice_path,
-            tts_espeak_data_path,
+            tts_model_dir,
+            tts_voice_name,
+            tts_speed,
             input_device,
             output_device,
         } => {
@@ -4199,8 +4200,9 @@ async fn handle_query(
                 asr_model_path,
                 asr_language,
                 asr_beam_size,
-                tts_voice_path,
-                tts_espeak_data_path,
+                tts_model_dir,
+                tts_voice_name,
+                tts_speed,
                 input_device,
                 output_device,
             };
@@ -4309,9 +4311,10 @@ fn profile_change_summary(w: &aivyx_config::ProfileWrite) -> String {
     .join(", ")
 }
 
-/// Chapter Voice — build the `[voice]` wire snapshot (the nine options +
-/// readiness) from a loaded config. Readiness is a `stat`: the Whisper model +
-/// Piper voice must be **files**, the espeak data path a **directory**.
+/// Chapter Voice — build the `[voice]` wire snapshot (options + readiness) from
+/// a loaded config. Readiness is a `stat`: the Whisper model is a **file**, and
+/// the Kokoro TTS prereqs are a `*.onnx` and a `voices-*.bin` inside the model
+/// **directory** (Chapter Timbre).
 fn voice_snapshot(cfg: &aivyx_config::AivyxConfig) -> aivyx_ipc::protocol::VoiceSettingsSnapshot {
     let v = &cfg.voice_options;
     let as_str = |p: &Option<std::path::PathBuf>| p.as_ref().map(|x| x.display().to_string());
@@ -4321,14 +4324,29 @@ fn voice_snapshot(cfg: &aivyx_config::AivyxConfig) -> aivyx_ipc::protocol::Voice
         asr_model_path: as_str(&v.asr_model_path),
         asr_language: v.asr_language.clone(),
         asr_beam_size: v.asr_beam_size.map(|n| n as u32),
-        tts_voice_path: as_str(&v.tts_voice_path),
-        tts_espeak_data_path: as_str(&v.tts_espeak_data_path),
+        tts_model_dir: as_str(&v.tts_model_dir),
+        tts_voice_name: v.tts_voice_name.clone(),
+        tts_speed: v.tts_speed,
         input_device: v.input_device.clone(),
         output_device: v.output_device.clone(),
         asr_model_status: path_status(v.asr_model_path.as_deref(), false),
-        tts_voice_status: path_status(v.tts_voice_path.as_deref(), false),
-        espeak_status: path_status(v.tts_espeak_data_path.as_deref(), true),
+        tts_model_status: model_dir_status(v.tts_model_dir.as_deref(), |n| n.ends_with(".onnx")),
+        tts_voices_status: model_dir_status(v.tts_model_dir.as_deref(), |n| {
+            n.starts_with("voices") && n.ends_with(".bin")
+        }),
     }
+}
+
+/// Chapter Timbre — readiness for a file *inside* the Kokoro model directory:
+/// `"unset"` (no dir configured), `"present"` (the dir holds an entry matching
+/// `pred`), or `"missing"` (no dir, or no matching entry).
+fn model_dir_status(dir: Option<&Path>, pred: impl Fn(&str) -> bool) -> String {
+    let Some(dir) = dir else { return "unset".to_string() };
+    let found = std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| e.file_name().to_str().is_some_and(&pred))
+    });
+    if found { "present" } else { "missing" }.to_string()
 }
 
 /// Chapter Voice — readiness for one prerequisite path: `"unset"` (no path),
@@ -4378,8 +4396,9 @@ fn voice_change_summary(w: &aivyx_config::VoiceWrite) -> String {
         s("asr_model_path", nonblank(&w.asr_model_path)),
         s("asr_language", nonblank(&w.asr_language)),
         s("asr_beam_size", w.asr_beam_size.is_some()),
-        s("tts_voice_path", nonblank(&w.tts_voice_path)),
-        s("tts_espeak_data_path", nonblank(&w.tts_espeak_data_path)),
+        s("tts_model_dir", nonblank(&w.tts_model_dir)),
+        s("tts_voice_name", nonblank(&w.tts_voice_name)),
+        s("tts_speed", w.tts_speed.is_some()),
         s("input_device", nonblank(&w.input_device)),
         s("output_device", nonblank(&w.output_device)),
     ]
@@ -5995,18 +6014,22 @@ mod tests {
 
     #[test]
     fn voice_snapshot_reflects_config_and_readiness() {
-        // A real Whisper model file (present), a bogus Piper path (missing),
-        // espeak left unset.
+        // A real Whisper model file (present) + a Kokoro model dir that holds a
+        // `.onnx` (model present) but no `voices-*.bin` (voices missing).
         let dir = test_dir("voice-snapshot");
         let model = dir.join("whisper.bin");
         std::fs::write(&model, b"x").unwrap();
+        let kokoro_dir = dir.join("kokoro");
+        std::fs::create_dir_all(&kokoro_dir).unwrap();
+        std::fs::write(kokoro_dir.join("kokoro.onnx"), b"x").unwrap();
         let path = settings_toml(
             "voice-snapshot",
             &format!(
                 "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\n\
                  [voice]\nasr_engine = \"whisper-rs\"\nasr_model_path = \"{}\"\n\
-                 asr_beam_size = 5\ntts_voice_path = \"/nope/voice.onnx\"\n",
+                 asr_beam_size = 5\ntts_engine = \"kokoro\"\ntts_model_dir = \"{}\"\n",
                 model.display(),
+                kokoro_dir.display(),
             ),
         );
         let cfg = load_settings_config(&path).expect("load");
@@ -6014,8 +6037,8 @@ mod tests {
         assert_eq!(snap.asr_engine.as_deref(), Some("whisper-rs"));
         assert_eq!(snap.asr_beam_size, Some(5));
         assert_eq!(snap.asr_model_status, "present", "model file exists");
-        assert_eq!(snap.tts_voice_status, "missing", "voice path set but absent");
-        assert_eq!(snap.espeak_status, "unset", "no espeak path");
+        assert_eq!(snap.tts_model_status, "present", "kokoro .onnx present in dir");
+        assert_eq!(snap.tts_voices_status, "missing", "no voices-*.bin in dir");
     }
 
     #[tokio::test]
@@ -6046,7 +6069,7 @@ mod tests {
         assert!(s.contains("asr_engine = set"), "{s}");
         assert!(s.contains("asr_model_path = cleared"), "{s}");
         assert!(s.contains("asr_beam_size = set"), "{s}");
-        assert!(s.contains("tts_voice_path = cleared"), "{s}");
+        assert!(s.contains("tts_model_dir = cleared"), "{s}");
         assert!(!s.contains("whisper-rs"), "summary must not carry values: {s}");
     }
 

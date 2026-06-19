@@ -1548,21 +1548,27 @@ working sets.
 
 ## Voice channel: talk to the agent, agent talks back (Phase 135)
 
-Phase 135 ships **voice I/O** — Aivyx's eighth
-channel adapter. The operator speaks into the
-microphone; Whisper transcribes; the agent runs the
-turn; Piper synthesizes the response; the operator
-hears it through the speakers. **Everything runs
-in-process on the operator's machine; zero outbound
-network calls during inference.** Same local-privacy
-posture as Phase 134's embedded LLM, extended end-
-to-end.
+Aivyx ships **voice I/O** — its eighth channel adapter.
+The operator speaks into the microphone; Whisper
+transcribes; the agent runs the turn; **Kokoro**
+synthesizes the response; the operator hears it through
+the speakers. **Everything runs in-process on the
+operator's machine; zero outbound network calls during
+inference.** Same local-privacy posture as the embedded
+LLM, extended end-to-end.
+
+> **Permissive voice (Chapter Timbre, `docs/TIMBRE.md`).** The TTS engine is the
+> Apache/MIT **Kokoro** stack (Kokoro-82M via `ort` + `voice-g2p`). The earlier
+> GPL-3.0 Piper engine — which dragged in espeak-ng and required system ONNX
+> runtime headers — was removed. Voice no longer needs any espeak-ng or
+> ONNX-headers prerequisites: `ort` fetches a prebuilt ONNX Runtime at build
+> time.
 
 ### Building with the voice channel
 
 ```bash
 # Recommended one-liner — voice channel with the
-# bundled whisper-rs (STT) + Piper (TTS) engines:
+# bundled whisper-rs (STT) + Kokoro (TTS) engines:
 $ cargo install --features channel-voice-full aivyx-channel
 
 # Bare voice channel (no engines). Useful for
@@ -1580,8 +1586,7 @@ $ cargo install aivyx-channel
 | Component | What it needs | Per-OS install |
 |---|---|---|
 | `whisper-rs` (STT) | C++ compiler | usually pre-installed; Linux: `apt install build-essential` |
-| `piper1-rs` (TTS) | ONNX runtime headers | Linux: `apt install libonnxruntime-dev`; macOS: `brew install onnxruntime`; Windows: download from [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) and set `ONNX_RUNTIME_DIR` |
-| `piper1-rs` (runtime) | espeak-ng data dir | Linux: `apt install espeak-ng-data`; macOS: `brew install espeak-ng`; Windows: download from [espeak-ng releases](https://github.com/espeak-ng/espeak-ng/releases) |
+| `ort` (Kokoro TTS) | nothing extra | `ort`'s default `download-binaries` fetches a prebuilt ONNX Runtime at build time — **no system ONNX headers, no espeak-ng** |
 | `cpal` + `rodio` | OS audio API | always installed (ALSA / PipeWire / CoreAudio / WASAPI come with the OS) |
 
 ### `aivyx.toml` snippet
@@ -1598,8 +1603,9 @@ model    = "qwen3:32b"
 # Phase 135 exit doc).
 asr_engine = "whisper-rs"
 
-# Pick the TTS engine — currently "piper".
-tts_engine = "piper"
+# Pick the TTS engine — "kokoro" (the permissive
+# default; unset also selects Kokoro).
+tts_engine = "kokoro"
 
 # Optional cpal input/output device override. Empty
 # = system default.
@@ -1617,13 +1623,17 @@ language = "en"
 beam_size = 5
 
 [voice.tts]
-# REQUIRED — absolute path to a Piper .onnx voice
-# model. Piper expects a matching .onnx.json config
-# to live next to it.
-voice_path = "/home/operator/voices/en_US-amy-medium.onnx"
-# Optional — speaker id for multi-speaker voices.
-# Defaults to 0.
-speaker_id = 0
+# REQUIRED — absolute path to the Kokoro model
+# directory. It must hold the Kokoro `.onnx` model and
+# a `voices-*.bin` archive (and may hold a config.json
+# with the phoneme vocab; a built-in vocab is used
+# otherwise).
+model_dir = "/home/operator/models/kokoro"
+# Optional — voice name (an entry in voices-*.bin).
+# Defaults to "af_heart".
+voice_name = "af_heart"
+# Optional — speaking-rate multiplier. Defaults to 1.0.
+speed = 1.0
 ```
 
 ### Recommended models
@@ -1642,22 +1652,29 @@ Download from [HuggingFace ggerganov/whisper.cpp](https://huggingface.co/ggergan
 $ wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 ```
 
-#### Piper TTS voices
+#### Kokoro TTS model + voices
 
-| Voice | Quality | Size | Note |
-|---|---|---|---|
-| **en_US-amy-medium** | Medium | ~63MB | Female, neutral US English. Most common default. |
-| **en_US-ryan-medium** | Medium | ~63MB | Male, neutral US English. |
-| **en_US-lessac-medium** | Medium | ~63MB | Female, news-anchor style. |
-| **en_GB-northern_english_male-medium** | Medium | ~63MB | Male, Northern English accent. |
+Kokoro-82M is **Apache-2.0** licensed (model + weights), neural quality, 24 kHz,
+English. The voice channel needs two files in the `model_dir`:
 
-Piper voices are organized by language code + speaker name + quality tier. Browse the [Piper voices catalog](https://github.com/rhasspy/piper/blob/master/VOICES.md) for 30+ other languages.
+| File | What it is | Note |
+|---|---|---|
+| `kokoro*.onnx` | the acoustic model | fp32 (~330 MB) or a quantized export (~80–170 MB); either works |
+| `voices-*.bin` | the bundled voices (e.g. `af_heart`, `bf_emma`) | ~26 voices in one archive |
 
-Download a voice (one `.onnx` + one `.onnx.json` file):
+Download both into one directory and point `model_dir` at it, for example from the
+ONNX community release of Kokoro
+([hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) and the
+`kokoro-onnx` releases):
 ```bash
-$ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
-$ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+$ mkdir -p ~/models/kokoro && cd ~/models/kokoro
+$ wget https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+$ wget https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 ```
+
+> G2P (grapheme→phoneme) is done by the bundled MIT `voice-g2p` — **no espeak-ng
+> install required**. Kokoro is English-only today (parity with the old Piper
+> English default).
 
 ### Running it
 
