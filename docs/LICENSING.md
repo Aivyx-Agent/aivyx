@@ -1,15 +1,17 @@
 # Licensing & Commercial Model (Chapter Charter)
 
-> **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅ + CR.2 ✅ + CR.3 ✅.** This
-> document is the locked reference for moving Aivyx from **MIT** to the **Business
-> Source License 1.1 (BUSL-1.1)** going forward: **free for personal / individual
-> / non-commercial use, a paid commercial license for any business or production
-> use,** auto-converting back to MIT after a fixed term. As of CR.2 the **tree
-> carries the BUSL-1.1 `LICENSE`** (MIT preserved as the Change License at
+> **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅ + CR.2 ✅ + CR.3 ✅ + CR.4
+> ✅.** This document is the locked reference for moving Aivyx from **MIT** to the
+> **Business Source License 1.1 (BUSL-1.1)** going forward: **free for personal /
+> individual / non-commercial use, a paid commercial license for any business or
+> production use,** auto-converting back to MIT after a fixed term. As of CR.2 the
+> **tree carries the BUSL-1.1 `LICENSE`** (MIT preserved as the Change License at
 > `LICENSES/MIT.txt`); as of CR.3 the **commercial path is documented in
-> [`COMMERCIAL.md`](../COMMERCIAL.md)** (what needs a license, the free/paid line
-> in plain English, how to buy). The contributor terms and the docs refresh are
-> the remaining phases below (CR.4–CR.6). Decisions locked by the
+> [`COMMERCIAL.md`](../COMMERCIAL.md)**; as of CR.4 the **contributor gate is in
+> place** ([`CONTRIBUTING.md`](../CONTRIBUTING.md) + a **CLA**,
+> [`CLA.md`](../CLA.md)) so external PRs can be accepted without breaking the
+> relicense. The positioning/docs refresh and the first BSL release are the
+> remaining phases below (CR.5–CR.6). Decisions locked by the
 > operator: (1) **BSL**, not FSL/AGPL — the gate is *commercial vs. personal*,
 > not *competing vs. not* and not *SaaS vs. internal*; (2) the **whole public
 > repo** moves (engine + public tool crates), with verticals staying private as
@@ -119,7 +121,7 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 | **CR.1** ✅ | **Dependency license audit** | DONE. `cargo deny check licenses` now passes against the **all-features** graph; the permissive allow-list + the documented exceptions are codified in `deny.toml`. Findings in §6.1. Gate is green; CR.2 unblocked. |
 | **CR.2** ✅ | **The LICENSE swap** | DONE. `LICENSE` is now the filled canonical BUSL-1.1 (full Terms + Covenants + Notice; Parameters per §4 — Change License = MIT, per-release 4-year Change Date, personal/non-commercial Additional Use Grant). MIT preserved verbatim as `LICENSES/MIT.txt` (the Change License + historical form). Workspace `Cargo.toml` `license = "BUSL-1.1"` (SPDX-parseable; the non-standard grant lives in `LICENSE`). All 33 crates inherit it via `license.workspace`. Set `publish = false` workspace-wide (no crates.io distribution) so `cargo deny`'s `private.ignore` skips our own first-party BUSL crates — **`cargo deny check licenses` stays green** (a third-party copyleft/BUSL dep still fails loudly). Findings in §6.2. |
 | **CR.3** ✅ | **Commercial-license path** | DONE. [`COMMERCIAL.md`](../COMMERCIAL.md) at the repo root: the §4 grant restated in plain English (free: individuals, non-commercial, non-profits, education; paid: any for-profit/internal/production/revenue/resale use), a quick-check table, the 4-year→MIT reassurance, the **aivyx@aivyx-studio.com** contact path with what to include, and a per-engagement pricing placeholder. `LICENSE` already points here. |
-| **CR.4** | **Contributor terms** | `CONTRIBUTING.md` + a **DCO** (lightweight) or **CLA** (stronger) granting relicensing/commercial-sublicensing rights. **Must precede any external PR** (§3). |
+| **CR.4** ✅ | **Contributor terms** | DONE. Operator chose the **CLA** (stronger) over a DCO — a plain DCO certifies origin only and does **not** grant commercial-sublicensing rights, which the paid-license model requires. Shipped [`CLA.md`](../CLA.md) (v1.0: a *license grant*, not assignment — contributor keeps copyright, grants the Licensor a perpetual/irrevocable right to relicense **and commercially sublicense** Contributions; Apache-ICLA-shaped + employer/patent/third-party clauses) and [`CONTRIBUTING.md`](../CONTRIBUTING.md) (the contributor entry point). **Acceptance = `git commit -s` sign-off**, which certifies the DCO *and* accepts the CLA per-contribution; maintainers can't merge un-signed-off commits. The gate now **precedes** any external PR (§3). |
 | **CR.5** | **Positioning & docs refresh** | Correct every "open source" → "source-available" (README, INSTALL, DESIGN, ROADMAP, this repo's description); add a licensing FAQ ("can I use it at work?", "what counts as commercial?", "when does it become MIT?"); cross-link COMMERCIAL.md. |
 | **CR.6** | **First BSL release** | Tag the first version under BSL (**v0.3.0** or **v1.0** — operator's call at the time); cargo-dist release notes lead with the license change; record the green release run. |
 
@@ -202,8 +204,12 @@ change first. Recorded so it isn't rediscovered the hard way.
 
 - **Change Date granularity** — per-release 4-year clocks (chosen above) vs. a
   single global date. Per-release is the MariaDB/Sentry norm and is assumed.
-- **DCO vs. CLA** (CR.4) — DCO is frictionless but a weaker rights grant; a CLA is
-  stronger but adds contributor friction. Decide when contributions become real.
+- **DCO vs. CLA** (CR.4) — ✅ **RESOLVED: CLA.** A plain DCO certifies origin only
+  and grants no commercial-sublicensing right, so it cannot support the paid-license
+  model; the CLA does. Acceptance is folded into the `git commit -s` sign-off (one
+  trailer certifies the DCO *and* accepts the CLA), keeping friction near-DCO-low.
+  *Open follow-up:* have a lawyer review `CLA.md` before the first external PR is
+  actually merged — it is a sound Apache-ICLA-derived draft, not legal advice.
 - **First BSL version number** (CR.6) — v0.3.0 (incremental) vs. v1.0 (signals the
   model is set). Operator's call at release time.
 - **crates.io** — not currently a distribution channel (releases are cargo-dist
