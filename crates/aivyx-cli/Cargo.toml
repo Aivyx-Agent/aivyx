@@ -10,6 +10,14 @@ authors.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+# CR.6: the workspace is `publish = false` (BUSL-1.1, never on crates.io — see
+# the root Cargo.toml), which by default hides every crate from cargo-dist too.
+# aivyx-cli is the ONE crate that ships a release binary (`aivyx`), so opt it
+# back into dist explicitly. This does NOT re-enable `cargo publish`; it only
+# tells cargo-dist this package is distable.
+[package.metadata.dist]
+dist = true
+
 [[bin]]
 name = "aivyx"
 path = "src/bin/aivyx.rs"
