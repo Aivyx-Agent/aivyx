@@ -1,11 +1,11 @@
 # New Tools — `web.extract` + `git.write` (Chapter Forge)
 
-> **Status:** 🔨 **FG.4 — both tools wired + legible.** `web.extract` registers
-> for all channels (reuses `net.fetch`); `git.commit` registers from the `[git]
-> repos` allow-set with confirm-first from `[access] confirm_destructive`.
-> `docs/TOOLS.md` rows + name→scope map + the `check_tool_quality` sweep +
-> README updated; registration test added. FG.1–FG.3 shipped. Only FG.5
-> (finalize) remains. The locked reference for the first
+> **Status:** ✅ **COMPLETE (FG.0–FG.5).** Both substrate tools shipped, wired,
+> and finalized: **`web.extract`** (readability over the existing `net.fetch`
+> base, `dom_smoothie`) and **`git.commit`** (new `git.write` base + Amendment
+> A13, confirm-first, Trusted-only, reusing the `[git] repos` allow-set). P10 is
+> now **fifteen tools**; `KNOWN_BASES` is 86. Full workspace suite + clippy +
+> `cargo deny` (licenses + advisories) green. The locked reference for the first
 > **new-tools breadth** chapter after Atlas. It adds two substrate capabilities —
 > **`web.extract`** (fetch a URL → clean readable text) and **`git.write`**
 > (commit/stage in an allowed repo) — the two the operator picked from the Atlas
@@ -84,12 +84,12 @@ security model, trust tiers, or sandboxing beyond the new base's tier placement.
 
 | Phase | Deliverable | Notes |
 |---|---|---|
-| **FG.0** | **This design contract** | locked reference; banner flips per phase |
-| **FG.1** | **`web.extract`** | new substrate tool in `aivyx-core/tools/web_fetch.rs`: reuse the hardened client + SSRF/redirect/size guards; add a permissive readability dep; output `{ title, text, word_count, url }`. Reuses scope `net.fetch`. Tests (incl. quality sweep + a fixture HTML→text case). |
-| **FG.2** | **`git.write` base + amendment** | add `git.write` to `KNOWN_BASES` + `CEILING_TRUSTED` + `docs/TOOLS.md`; the capability-base + substrate-count **amendment** (PRODUCT.md P10 + DESIGN Deliverable 4), modeled on A12. The drift-guard then *requires* the base be documented. |
-| **FG.3** | **`git.commit` (+ `git.add`?) tool** | shell-out in `aivyx-core/tools/git.rs`; repo-allowlist gated (reuse `GitReadToolConfig`'s pattern → a write config); confirm-first when `confirm_destructive`; Trusted-only. Tests (allowlist denial, confirm gate, happy path against a temp repo). |
-| **FG.4** | **Legibility + wiring** | register both tools in the agent's `tool_list` (`aivyx.rs`); update the substrate `check_tool_quality` sweep; `docs/TOOLS.md` rows; README. |
-| **FG.5** | **Finalize** | full suite + clippy + `cargo deny` green; status flip; record. |
+| **FG.0** ✅ | **This design contract** | locked reference; banner flips per phase. DONE. |
+| **FG.1** ✅ | **`web.extract`** | DONE. New substrate tool in `aivyx-core/tools/web_fetch.rs` reusing the hardened redirect-free client (factored to `build_redirect_free_client`) + SSRF/size guards; `dom_smoothie` (MIT) readability dep; output `{ title, byline, text, word_count, url, extractable }`; non-article/non-UTF8/redirect → `extractable:false` pointing at `web.fetch`. Reuses `net.fetch`. 4 tests + quality sweep. |
+| **FG.2** ✅ | **`git.write` base + amendment** | DONE. Added `git.write` to `KNOWN_BASES` (85→86) + `CEILING_TRUSTED` + `docs/TOOLS.md`; **Amendment A13** (PRODUCT.md P10 thirteen→fifteen + DESIGN Deliverable 4 row + taxonomy-growth addendum), modeled on A12. Count-pin + drift-guard updated. |
+| **FG.3** ✅ | **`git.commit` tool** | DONE. Shell-out in `aivyx-core/tools/git.rs`; repo-allowlist gated (shared `canonicalize_repo_allow_set` with the read config); stages explicit repo-relative `paths` + commits a `message`; confirm-first via `confirm_destructive`; Trusted-only. 8 tests incl. real-tmpdir happy path / denial / confirm gate / traversal (single `git.commit`, no `git.add`). |
+| **FG.4** ✅ | **Legibility + wiring** | DONE. Registered both in the agent `tool_list` (`aivyx.rs`): `web.extract` all-channels, `git.commit` from `[git] repos` + `confirm_destructive`; extended `check_tool_quality` sweep; `docs/TOOLS.md` rows + name→scope map; README 13→15; registration test. |
+| **FG.5** ✅ | **Finalize** | DONE. Full workspace suite + clippy + `cargo deny` (licenses + advisories) green; ATLAS §6 backlog items struck; status flipped to COMPLETE; chapter recorded. |
 
 **Discipline:** FG.2's amendment is the governance gate — the `git.write` base and
 the substrate-count bump are contract changes; they land *before/with* the tool
