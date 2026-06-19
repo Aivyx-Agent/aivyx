@@ -1,12 +1,13 @@
 # Licensing & Commercial Model (Chapter Charter)
 
-> **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅.** This document is
-> the locked reference for moving Aivyx from **MIT** to the **Business Source
+> **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅ + CR.2 ✅.** This document
+> is the locked reference for moving Aivyx from **MIT** to the **Business Source
 > License 1.1 (BUSL-1.1)** going forward: **free for personal / individual /
 > non-commercial use, a paid commercial license for any business or production
-> use,** auto-converting back to MIT after a fixed term. Nothing in the tree has
-> changed yet — the LICENSE swap, the dependency audit, the commercial path, and
-> the contributor terms are the phases below (CR.1–CR.6). Decisions locked by the
+> use,** auto-converting back to MIT after a fixed term. As of CR.2 the **tree
+> now carries the BUSL-1.1 `LICENSE`** (MIT preserved as the Change License at
+> `LICENSES/MIT.txt`); the commercial path and the contributor terms are the
+> remaining phases below (CR.3–CR.6). Decisions locked by the
 > operator: (1) **BSL**, not FSL/AGPL — the gate is *commercial vs. personal*,
 > not *competing vs. not* and not *SaaS vs. internal*; (2) the **whole public
 > repo** moves (engine + public tool crates), with verticals staying private as
@@ -114,7 +115,7 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 |---|---|---|
 | **CR.0** | **This design contract** | locked reference; status banner flips per phase |
 | **CR.1** ✅ | **Dependency license audit** | DONE. `cargo deny check licenses` now passes against the **all-features** graph; the permissive allow-list + the documented exceptions are codified in `deny.toml`. Findings in §6.1. Gate is green; CR.2 unblocked. |
-| **CR.2** | **The LICENSE swap** | `LICENSE` → filled BUSL-1.1 text; preserve the MIT text as `LICENSES/MIT.txt` (the Change License + historical form); workspace `Cargo.toml` `license = "BUSL-1.1"` (or `license-file`); update any per-crate `license.workspace` consumers; add the standard BSL header note. |
+| **CR.2** ✅ | **The LICENSE swap** | DONE. `LICENSE` is now the filled canonical BUSL-1.1 (full Terms + Covenants + Notice; Parameters per §4 — Change License = MIT, per-release 4-year Change Date, personal/non-commercial Additional Use Grant). MIT preserved verbatim as `LICENSES/MIT.txt` (the Change License + historical form). Workspace `Cargo.toml` `license = "BUSL-1.1"` (SPDX-parseable; the non-standard grant lives in `LICENSE`). All 33 crates inherit it via `license.workspace`. Set `publish = false` workspace-wide (no crates.io distribution) so `cargo deny`'s `private.ignore` skips our own first-party BUSL crates — **`cargo deny check licenses` stays green** (a third-party copyleft/BUSL dep still fails loudly). Findings in §6.2. |
 | **CR.3** | **Commercial-license path** | `COMMERCIAL.md`: precisely *what* needs a license (the §4 grant in plain English), *how* to obtain one (contact / email), and a pricing placeholder. The thing a commercial user lands on. |
 | **CR.4** | **Contributor terms** | `CONTRIBUTING.md` + a **DCO** (lightweight) or **CLA** (stronger) granting relicensing/commercial-sublicensing rights. **Must precede any external PR** (§3). |
 | **CR.5** | **Positioning & docs refresh** | Correct every "open source" → "source-available" (README, INSTALL, DESIGN, ROADMAP, this repo's description); add a licensing FAQ ("can I use it at work?", "what counts as commercial?", "when does it become MIT?"); cross-link COMMERCIAL.md. |
@@ -160,6 +161,40 @@ BSL binary** without swapping Piper for a permissively-licensed TTS. Today that'
 fine — voice is a host-local, build-from-source, opt-in feature ([[chapter-voice]])
 — but the day we'd want voice in the cargo-dist artifacts, the TTS engine must
 change first. Recorded so it isn't rediscovered the hard way.
+
+### 6.2 CR.2 swap notes (what the relicense commit actually did)
+
+- **`LICENSE`** is the **full canonical MariaDB BUSL-1.1 template** — not a
+  trimmed copy. It carries the Parameters block, the complete **Terms**, the
+  **Covenants of Licensor** (1–4), and the **Notice** ("not an Open Source
+  license"). Keeping the Covenants matters: Covenant #4 is "Not to modify this
+  License in any other way," so only the four Parameters are filled.
+- **Change License = MIT satisfies Covenant #1.** Covenant #1 requires the
+  Change License to be GPL-2.0-compatible; **MIT is GPL-compatible**, so naming
+  MIT as the revert license is valid under the template (and gives continuity
+  with Aivyx's MIT origin).
+- **Parameters as filled:** Licensor = Julian (Aivyx) / Aivyx-Agent; Licensed
+  Work = "Aivyx, the first version released under this License and all later
+  versions" (version-number-agnostic until CR.6 picks the tag); Additional Use
+  Grant = the §4 personal/non-commercial wording; Change Date = four years per
+  released version (per-release clock, matching the Terms' "applies separately
+  for each version"); Change License = MIT (`LICENSES/MIT.txt`).
+- **MIT is preserved, not deleted.** `LICENSES/MIT.txt` is the byte-for-byte
+  prior `LICENSE`. It is both the historical record (v0.2.0 and earlier are MIT
+  in perpetuity, §2) and the literal text each version reverts to on its Change
+  Date.
+- **Cargo metadata:** `[workspace.package] license = "BUSL-1.1"` (the SPDX id,
+  so `cargo`/`cargo-deny`/scanners parse it — the personal-use grant is a BUSL
+  *parameter*, not a change to the identifier, so `license-file` was not needed).
+  All 33 member crates already inherit via `license.workspace = true`.
+- **Why `publish = false` workspace-wide.** cargo-deny audits *every* crate in
+  the graph, including ours; once our crates are BUSL-1.1 they'd trip the
+  permissive-only allow-list. The correct fix is not to widen the allow-list
+  (that would let a *third-party* BUSL/copyleft dep pass silently) but to mark
+  our crates first-party-and-unpublished and let `private.ignore = true` skip
+  them. `publish = false` is independently honest: Aivyx never ships to crates.io
+  (releases are cargo-dist binaries + GHCR images), and it guards against an
+  accidental `cargo publish`. The gate's copyleft tripwire is fully intact.
 
 ## 7. Open questions to resolve in-phase (not blockers to CR.0)
 

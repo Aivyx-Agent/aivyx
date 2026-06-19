@@ -81,7 +81,15 @@ default-members = [
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
-license = "MIT"
+# Chapter Charter (CR.2): relicensed MIT -> BUSL-1.1 (docs/LICENSING.md).
+# SPDX id is BUSL-1.1 (not "BSL-1.1") so cargo/cargo-deny/scanners parse it;
+# the personal-use Additional Use Grant + full terms live in ./LICENSE.
+license = "BUSL-1.1"
+# Not a crates.io distribution: Aivyx ships as cargo-dist binaries + GHCR
+# images, never published crates. publish = false makes that explicit (guards
+# against accidental `cargo publish`) and lets cargo-deny's private.ignore skip
+# these first-party BUSL-1.1 crates when auditing dependency licenses.
+publish = false
 authors = ["Aivyx <aivyx@aivyx-studio.com>"]
 repository = "https://github.com/Aivyx-Agent/aivyx"
 readme = "README.md"

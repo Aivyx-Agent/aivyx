@@ -40,6 +40,12 @@ all-features = true
 #     the copyleft option is never taken. Proof the gate works as intended.
 [licenses]
 version = 2
+# Skip Aivyx's OWN workspace crates: they relicense to BUSL-1.1 (this gate's
+# whole purpose), so they must not be measured against the dependency
+# allow-list below. This is scoped to first-party crates marked publish = false
+# (see [workspace.package]); a THIRD-PARTY crate under BUSL/any copyleft still
+# fails loudly, which is the point.
+private = { ignore = true }
 allow = [
     "MIT",
     "MIT-0",
