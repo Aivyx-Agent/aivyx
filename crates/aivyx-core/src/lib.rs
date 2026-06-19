@@ -48,8 +48,9 @@ pub use planner::{
 };
 pub use tools::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
-    FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitDiffTool, GitReadToolConfig,
-    GitStatusTool, NetDnsTool, ShellExecTool, ShellExecToolConfig, SkillReader,
+    FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitCommitTool, GitDiffTool,
+    GitReadToolConfig, GitStatusTool, GitWriteToolConfig, NetDnsTool, ShellExecTool,
+    ShellExecToolConfig, SkillReader,
     SkillsInvokeTool, SkillsListTool, WebFetchTool, WebFetchToolConfig, WebPostTool,
     WebPostToolConfig,
 };

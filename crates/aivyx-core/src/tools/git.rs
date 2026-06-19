@@ -1,6 +1,17 @@
 //! Phase 109 — `git.status` and `git.diff` substrate tools.
+//! Chapter Forge (FG.3) — `git.commit`, the destructive sibling.
 //!
-//! Both tools share a single `git.read` scope base qualified
+//! The read tools (`git.status` / `git.diff`) share the `git.read`
+//! scope base; `git.commit` is gated by the separate `git.write`
+//! base added at Chapter Forge FG.2 (Amendment A13). Writing repo
+//! history is at least as sensitive as `shell.exec` / `fs.delete`,
+//! so `git.write` is Trusted-tier only and `git.commit` is
+//! confirm-first when the operator enables `[access]
+//! confirm_destructive`. The write tool reuses the **same**
+//! operator `[git] repos` allow-set the read tools gate against —
+//! a commit is only allowed inside a configured repo.
+//!
+//! Both tool families share a single `git.read` scope base qualified
 //! by repo path. The shared-scope design is documented in
 //! Amendment A12 (`docs/amendments/2026-05-28-substrate-tool-count-thirteen.md`):
 //! `git.status` and `git.diff` are both read-only inspection
@@ -77,28 +88,7 @@ impl GitReadToolConfig {
     /// two tools register independently in the dispatch registry
     /// while still gating against the same allow-set.
     pub fn build(self) -> Result<(GitStatusTool, GitDiffTool), AivyxError> {
-        let mut canonical = Vec::with_capacity(self.repos.len());
-        for repo in self.repos {
-            let abs = std::fs::canonicalize(&repo).map_err(|e| {
-                AivyxError::Config(format!(
-                    "git.read allow-set entry {repo:?} cannot be canonicalized: {e}"
-                ))
-            })?;
-            if !abs.is_dir() {
-                return Err(AivyxError::Config(format!(
-                    "git.read allow-set entry {abs:?} is not a directory"
-                )));
-            }
-            let dot_git = abs.join(".git");
-            if !dot_git.exists() {
-                return Err(AivyxError::Config(format!(
-                    "git.read allow-set entry {abs:?} is not a git repo \
-                     (no .git/ entry)"
-                )));
-            }
-            canonical.push(abs);
-        }
-        let allow_set: Arc<[PathBuf]> = canonical.into();
+        let allow_set: Arc<[PathBuf]> = canonicalize_repo_allow_set(self.repos, "git.read")?.into();
         Ok((
             GitStatusTool {
                 id: ToolId::new(),
@@ -111,6 +101,49 @@ impl GitReadToolConfig {
                 schema: diff_input_schema(),
             },
         ))
+    }
+}
+
+/// Construction inputs for [`GitCommitTool`] — Chapter Forge (FG.3).
+/// Mirrors [`GitReadToolConfig`] (same canonicalized repo allow-set)
+/// but carries the `confirm_destructive` flag, since a commit is an
+/// irreversible write of repo history.
+pub struct GitWriteToolConfig {
+    repos: Vec<PathBuf>,
+    confirm_destructive: bool,
+}
+
+impl GitWriteToolConfig {
+    /// Construct from an operator-supplied list of repo paths — the
+    /// **same** `[git] repos` allow-set the read tools gate against.
+    pub fn new(repos: impl IntoIterator<Item = PathBuf>) -> Self {
+        GitWriteToolConfig {
+            repos: repos.into_iter().collect(),
+            confirm_destructive: false,
+        }
+    }
+
+    /// Enable confirm-first gating: when on, `git.commit` refuses to
+    /// run without `confirmed: true` in its input, matching the
+    /// `fs.delete` / `fs.write`-overwrite confirm-first pattern
+    /// (Chapter N). Wired from `[access] confirm_destructive`.
+    pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
+        self.confirm_destructive = confirm;
+        self
+    }
+
+    /// Canonicalize the allow-set (same validation as the read pair —
+    /// each entry must be a directory containing a `.git/`) and return
+    /// a ready-to-register [`GitCommitTool`].
+    pub fn build(self) -> Result<GitCommitTool, AivyxError> {
+        let allow_set: Arc<[PathBuf]> =
+            canonicalize_repo_allow_set(self.repos, "git.write")?.into();
+        Ok(GitCommitTool {
+            id: ToolId::new(),
+            repos: allow_set,
+            confirm_destructive: self.confirm_destructive,
+            schema: commit_input_schema(),
+        })
     }
 }
 
@@ -347,8 +380,280 @@ impl Tool for GitDiffTool {
 }
 
 // ---------------------------------------------------------------------------
+// Tool: git.commit — Chapter Forge (FG.3)
+// ---------------------------------------------------------------------------
+
+/// `git.commit` — stages the given repo-relative paths and commits
+/// them with a message inside an operator-allowed repo. The
+/// destructive sibling to `git.status` / `git.diff`: gated by the
+/// `git.write` scope (Trusted-tier only) and confirm-first when the
+/// operator enables `[access] confirm_destructive`. Shells out to the
+/// system `git` (same as the read tools — no `git2` dep).
+#[derive(Debug)]
+pub struct GitCommitTool {
+    id: ToolId,
+    repos: Arc<[PathBuf]>,
+    confirm_destructive: bool,
+    schema: Value,
+}
+
+impl GitCommitTool {
+    /// The canonical allow-set this tool gates against.
+    pub fn repos(&self) -> &[PathBuf] {
+        &self.repos
+    }
+}
+
+#[async_trait]
+impl Tool for GitCommitTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "git.commit"
+    }
+
+    fn description(&self) -> &str {
+        "Stage the given paths and create a commit in a configured \
+         repo. Input is a JSON object with a `repo` field naming one \
+         of the operator's allowed git repos (canonical path match), \
+         a `message` string (the commit message), and a `paths` array \
+         of repo-relative file paths to stage (each must not start \
+         with `/` or contain `..`). When the operator has enabled \
+         confirm-first for destructive ops, also pass `confirmed: \
+         true` after showing them what will be committed. Returns the \
+         new commit hash. Writing history is irreversible — Trusted \
+         tier only."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        match resolve_repo(input, &self.repos) {
+            Some(abs) => Scope::parse(&format!("git.write:{}", abs.display()))
+                .unwrap_or_else(write_deny_scope),
+            None => write_deny_scope(),
+        }
+    }
+
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let repo = match resolve_repo(&input, &self.repos) {
+            Some(p) => p,
+            None => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "git.commit: `repo` field missing or not in allow-set"
+                        .to_string(),
+                });
+            }
+        };
+
+        let message = match input.get("message").and_then(|v| v.as_str()) {
+            Some(m) if !m.trim().is_empty() => m,
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "git.commit: `message` must be a non-empty string".to_string(),
+                });
+            }
+        };
+
+        // Collect + validate the repo-relative paths to stage. At
+        // least one is required: we stage explicit paths rather than
+        // `git commit -a` so a hallucinated catch-all can't sweep
+        // unintended changes into a commit.
+        let paths: Vec<&str> = match input.get("paths").and_then(|v| v.as_array()) {
+            Some(arr) if !arr.is_empty() => {
+                let mut out = Vec::with_capacity(arr.len());
+                for item in arr {
+                    let Some(p) = item.as_str() else {
+                        return ToolOutcome::Failed(AivyxError::Tool {
+                            tool: self.id,
+                            detail: "git.commit: every entry in `paths` must be a string"
+                                .to_string(),
+                        });
+                    };
+                    // Same traversal guard as `git.diff`'s `path`:
+                    // `git add` would happily stage `../sibling/x`
+                    // outside the configured repo.
+                    if p.starts_with('/') || p.contains("..") {
+                        return ToolOutcome::Failed(AivyxError::Tool {
+                            tool: self.id,
+                            detail: format!(
+                                "git.commit: each `paths` entry must be repo-relative \
+                                 and must not contain `..`; got {p:?}"
+                            ),
+                        });
+                    }
+                    out.push(p);
+                }
+                out
+            }
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "git.commit: `paths` must be a non-empty array of \
+                             repo-relative file paths to stage"
+                        .to_string(),
+                });
+            }
+        };
+
+        // ---- Chapter N confirm-first: refuse an unconfirmed commit
+        // when the operator enabled `[access] confirm_destructive`. ----
+        if self.confirm_destructive && !git_is_confirmed(&input) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "git.commit: refusing to commit {} path(s) to {} without confirmation. \
+                     This writes repo history and the operator enabled confirm-first \
+                     (`[access] confirm_destructive`). Show the operator the paths and \
+                     message, get approval, then re-call with `confirmed: true`.",
+                    paths.len(),
+                    repo.display(),
+                ),
+            });
+        }
+
+        // Stage: `git -C <repo> add -- <paths...>`.
+        let mut add_cmd = tokio::process::Command::new("git");
+        add_cmd.arg("-C").arg(&repo).arg("add").arg("--");
+        for p in &paths {
+            add_cmd.arg(p);
+        }
+        match add_cmd.output().await {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!(
+                        "git.commit: `git add` exit code {:?}: {}",
+                        o.status.code(),
+                        stderr.trim()
+                    ),
+                });
+            }
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("git.commit: `git add` spawn failed: {e}"),
+                });
+            }
+        }
+
+        // Commit: `git -C <repo> commit -m <message>`. Author identity
+        // comes from the repo's own git config (operator-owned), same
+        // as a manual commit.
+        let commit_out = match tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("commit")
+            .arg("-m")
+            .arg(message)
+            .output()
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("git.commit: `git commit` spawn failed: {e}"),
+                });
+            }
+        };
+        if !commit_out.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_out.stderr).to_string();
+            let stdout = String::from_utf8_lossy(&commit_out.stdout).to_string();
+            // `git commit` writes "nothing to commit" to stdout, the
+            // real errors (missing identity, etc.) to stderr — surface
+            // both so the agent can act on it.
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "git.commit: `git commit` exit code {:?}: {}",
+                    commit_out.status.code(),
+                    if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() }
+                ),
+            });
+        }
+
+        // Resolve the new HEAD so the caller gets the commit hash.
+        let commit_hash = match tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).trim().to_string()
+            }
+            // The commit succeeded; failing to read HEAD back is
+            // non-fatal — report the commit without the hash rather
+            // than a false failure.
+            _ => String::new(),
+        };
+
+        ToolOutcome::Completed {
+            output: json!({
+                "repo": repo.display().to_string(),
+                "committed": true,
+                "commit": commit_hash,
+                "paths": paths,
+                "message": message,
+            }),
+            verified: Verification::Verified,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/// Canonicalize an operator repo allow-set: each entry must
+/// canonicalize, be a directory, and contain a `.git/` entry.
+/// Shared by [`GitReadToolConfig`] and [`GitWriteToolConfig`] so the
+/// read and write tools validate the **same** `[git] repos` list
+/// identically. `label` names the scope base in the error so a
+/// startup misconfig is attributable.
+fn canonicalize_repo_allow_set(
+    repos: Vec<PathBuf>,
+    label: &str,
+) -> Result<Vec<PathBuf>, AivyxError> {
+    let mut canonical = Vec::with_capacity(repos.len());
+    for repo in repos {
+        let abs = std::fs::canonicalize(&repo).map_err(|e| {
+            AivyxError::Config(format!(
+                "{label} allow-set entry {repo:?} cannot be canonicalized: {e}"
+            ))
+        })?;
+        if !abs.is_dir() {
+            return Err(AivyxError::Config(format!(
+                "{label} allow-set entry {abs:?} is not a directory"
+            )));
+        }
+        if !abs.join(".git").exists() {
+            return Err(AivyxError::Config(format!(
+                "{label} allow-set entry {abs:?} is not a git repo (no .git/ entry)"
+            )));
+        }
+        canonical.push(abs);
+    }
+    Ok(canonical)
+}
+
+/// Confirm-first check for `git.commit`, matching `fs`'s `is_confirmed`
+/// (the `confirmed: true` convention shared by every confirm-first
+/// tool so the model's learned behavior transfers).
+fn git_is_confirmed(input: &Value) -> bool {
+    input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
+}
 
 /// Resolve the `repo` input field against the allow-set. Returns
 /// the canonical path if the input names an allowed repo;
@@ -397,6 +702,16 @@ fn deny_scope() -> Scope {
     )
 }
 
+/// `git.write` counterpart to [`deny_scope`] — an unsatisfiable
+/// `git.write` scope used when `git.commit`'s input is malformed, so
+/// the deny is on the write base (no `git.read` grant could satisfy it
+/// either).
+fn write_deny_scope() -> Scope {
+    Scope::parse("git.write:/__aivyx_unresolvable__").expect(
+        "git.write:/__aivyx_unresolvable__ must parse — `git.write` is in KNOWN_BASES",
+    )
+}
+
 fn status_input_schema() -> Value {
     json!({
         "type": "object",
@@ -434,6 +749,36 @@ fn diff_input_schema() -> Value {
     })
 }
 
+fn commit_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "repo": {
+                "type": "string",
+                "description": "Path to a configured allowed git repo."
+            },
+            "message": {
+                "type": "string",
+                "description": "Commit message. Must be non-empty."
+            },
+            "paths": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "description": "Repo-relative file paths to stage and commit. Each \
+                                must not start with `/` and must not contain `..`."
+            },
+            "confirmed": {
+                "type": "boolean",
+                "description": "Set to `true` ONLY after the operator has approved this \
+                                specific commit. Required when the operator has enabled \
+                                confirm-first for destructive operations."
+            }
+        },
+        "required": ["repo", "message", "paths"]
+    })
+}
+
 // Suppress unused warning on CapabilitySet — it's pulled in by
 // the `Tool` trait bound chain but not referenced directly here
 // since `required_scope` returns a single `Scope` rather than a
@@ -449,6 +794,64 @@ fn _unused_capability_set_ref(_cs: &CapabilitySet) {}
 #[cfg(test)]
 mod git_tests {
     use super::*;
+    use crate::{
+        AgentId, ChannelContext, ChannelError, ChannelPlatform, NullAuditHook, SessionId,
+        StreamEvent, TurnId, TurnOutcome,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    // Minimal ChannelContext fake so the git.commit tests can build a
+    // `ToolContext` (git.commit ignores it, but `execute` requires one).
+    struct NoopChannel {
+        session: SessionId,
+        token: CancellationToken,
+    }
+
+    #[async_trait]
+    impl ChannelContext for NoopChannel {
+        fn channel_name(&self) -> &str {
+            "test"
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn trust_tier(&self) -> aivyx_capability::TrustTier {
+            aivyx_capability::TrustTier::Trusted
+        }
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+
+    fn fresh_channel() -> NoopChannel {
+        NoopChannel {
+            session: SessionId::new(),
+            token: CancellationToken::new(),
+        }
+    }
+
+    fn make_ctx<'a>(
+        channel: &'a NoopChannel,
+        audit: &'a dyn crate::AuditHook,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: AgentId::new(),
+            session_id: channel.session,
+            turn_id: TurnId::new(),
+            channel,
+            audit,
+            cancellation: &channel.token,
+        }
+    }
 
     #[test]
     fn parse_porcelain_handles_typical_status_lines() {
@@ -558,4 +961,196 @@ mod git_tests {
     // test fragile across operator environments. The integration
     // test in Task 5 covers the success path via a real tmpdir
     // `git init` setup.
+
+    // ---- git.commit (Chapter Forge FG.3) ----
+
+    #[test]
+    fn write_deny_scope_is_git_write_and_unsatisfiable() {
+        let scope = write_deny_scope();
+        assert_eq!(scope.base(), "git.write");
+        // A normal git.write grant for a real repo does not grant the
+        // unresolvable sentinel.
+        let real = Scope::parse("git.write:/home/me/projects/aivyx").unwrap();
+        assert!(!scope.is_granted_by(&real));
+        // Nor does any git.read grant — different base.
+        let read = Scope::parse("git.read:/home/me/projects/aivyx").unwrap();
+        assert!(!scope.is_granted_by(&read));
+    }
+
+    #[test]
+    fn commit_input_schema_requires_repo_message_and_paths() {
+        let s = commit_input_schema();
+        let required: Vec<&str> =
+            s["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(required.contains(&"repo"));
+        assert!(required.contains(&"message"));
+        assert!(required.contains(&"paths"));
+        assert!(s["properties"].as_object().unwrap().contains_key("confirmed"));
+    }
+
+    #[test]
+    fn write_config_rejects_non_repo_dir() {
+        let tmp = std::env::temp_dir();
+        let err = GitWriteToolConfig::new(vec![tmp]).build().expect_err("non-repo must error");
+        match err {
+            AivyxError::Config(msg) => assert!(msg.contains("not a git repo"), "got: {msg}"),
+            other => panic!("expected Config, got {other:?}"),
+        }
+    }
+
+    // ---- Integration: a real tmpdir git repo ----
+
+    /// `git init` a fresh repo under a unique tmp dir with a committable
+    /// identity, returning its path. Skips (returns None) if `git` isn't
+    /// on PATH so the suite stays green on a git-less CI image.
+    fn init_temp_repo() -> Option<PathBuf> {
+        use std::process::Command;
+        if Command::new("git").arg("--version").output().is_err() {
+            return None;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-git-commit-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap()
+        };
+        assert!(run(&["init"]).status.success());
+        assert!(run(&["config", "user.email", "test@aivyx.local"]).status.success());
+        assert!(run(&["config", "user.name", "Aivyx Test"]).status.success());
+        // canonicalize so it matches the allow-set form.
+        Some(std::fs::canonicalize(&dir).unwrap())
+    }
+
+    fn ctx_less_outcome_detail(outcome: &ToolOutcome) -> String {
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => detail.clone(),
+            other => panic!("expected Failed(Tool), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_happy_path_stages_and_commits() {
+        let Some(repo) = init_temp_repo() else { return };
+        std::fs::write(repo.join("hello.txt"), b"hi\n").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()]).build().expect("build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({
+                    "repo": repo.display().to_string(),
+                    "message": "add hello",
+                    "paths": ["hello.txt"],
+                }),
+                &ctx,
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["committed"], true);
+                assert!(output["commit"].as_str().unwrap().len() >= 7, "expected a hash");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        // The working tree should now be clean (the file is committed).
+        let st = std::process::Command::new("git")
+            .arg("-C").arg(&repo).arg("status").arg("--porcelain")
+            .output().unwrap();
+        assert!(String::from_utf8_lossy(&st.stdout).trim().is_empty(), "tree not clean");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[tokio::test]
+    async fn commit_denied_for_repo_outside_allow_set() {
+        let Some(repo) = init_temp_repo() else { return };
+        // Build with an EMPTY allow-set (well: a different, unrelated
+        // repo would also work; empty is simplest and still valid).
+        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new()).build().expect("build");
+        // required_scope must deny (sentinel) for a repo not on the list.
+        let scope = tool.required_scope(&json!({ "repo": repo.display().to_string() }));
+        assert_eq!(format!("{scope:?}"), format!("{:?}", write_deny_scope()));
+        // And execute refuses with the allow-set message.
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "x", "paths": ["a"] }),
+                &ctx,
+            )
+            .await;
+        assert!(ctx_less_outcome_detail(&outcome).contains("not in allow-set"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[tokio::test]
+    async fn commit_confirm_first_refuses_without_confirmation() {
+        let Some(repo) = init_temp_repo() else { return };
+        std::fs::write(repo.join("f.txt"), b"x\n").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .with_confirm_destructive(true)
+            .build()
+            .expect("build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        // No `confirmed` → refused.
+        let refused = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["f.txt"] }),
+                &ctx,
+            )
+            .await;
+        assert!(ctx_less_outcome_detail(&refused).contains("without confirmation"));
+        // With `confirmed: true` → commits.
+        let ok = tool
+            .execute(
+                json!({
+                    "repo": repo.display().to_string(),
+                    "message": "m",
+                    "paths": ["f.txt"],
+                    "confirmed": true,
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(ok, ToolOutcome::Completed { .. }), "expected Completed, got {ok:?}");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_path_traversal_and_empty_inputs() {
+        let Some(repo) = init_temp_repo() else { return };
+        let tool = GitWriteToolConfig::new(vec![repo.clone()]).build().expect("build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let base = repo.display().to_string();
+
+        let traversal = tool
+            .execute(
+                json!({ "repo": base, "message": "m", "paths": ["../escape.txt"] }),
+                &ctx,
+            )
+            .await;
+        assert!(ctx_less_outcome_detail(&traversal).contains("must not contain"));
+
+        let empty_msg = tool
+            .execute(json!({ "repo": base, "message": "  ", "paths": ["a"] }), &ctx)
+            .await;
+        assert!(ctx_less_outcome_detail(&empty_msg).contains("message"));
+
+        let no_paths = tool
+            .execute(json!({ "repo": base, "message": "m", "paths": [] }), &ctx)
+            .await;
+        assert!(ctx_less_outcome_detail(&no_paths).contains("paths"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
 }

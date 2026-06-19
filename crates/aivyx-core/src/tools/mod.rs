@@ -38,7 +38,9 @@ pub use fs::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig,
 };
-pub use git::{GitDiffTool, GitReadToolConfig, GitStatusTool};
+pub use git::{
+    GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig,
+};
 pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
