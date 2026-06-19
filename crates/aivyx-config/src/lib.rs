@@ -1913,7 +1913,41 @@ pub struct EmbeddingConfig {
     /// rare-term queries (acronyms, proper nouns, code
     /// identifiers) that pure semantic search misses.
     pub recall_hybrid: bool,
+    /// Chapter Loom (LM.4) — weight of the BM25 **lexical** ranker in the
+    /// hybrid RRF fusion. `1.0` (default) weights it equally with the
+    /// semantic ranker; raise it to bias toward exact-term recall
+    /// (acronyms, codenames, identifiers). Only consulted when
+    /// `recall_hybrid = true`. Defended to `>= 0` (negative silences the
+    /// ranker).
+    pub recall_lexical_weight: f32,
+    /// Chapter Loom (LM.4) — number of hops for the co-occurrence
+    /// **graph-walk** fusion source. `0` (default) disables the graph
+    /// source — recall fuses semantic + lexical only (byte-identical to
+    /// pre-Loom hybrid). `>= 1` adds a third ranker that walks the Phase
+    /// 83 ledger from the semantic top-K topics. Requires `recall_hybrid`
+    /// and an attached co-occurrence ledger; `1` reproduces a single-hop
+    /// sibling expansion as a *fusion* input.
+    pub recall_graph_hops: u32,
+    /// Chapter Loom (LM.4) — per-hop affinity decay for the graph-walk
+    /// source. `0.5` (default) halves a path's strength each hop; `1.0`
+    /// disables decay. Clamped to `[0, 1]`. Ignored when
+    /// `recall_graph_hops = 0`.
+    pub recall_graph_decay: f32,
+    /// Chapter Loom (LM.4) — weight of the graph-walk ranker in the
+    /// hybrid RRF fusion. `1.0` (default) weights it equally with the
+    /// semantic + lexical rankers; lower it to make associative recall a
+    /// gentler nudge. Defended to `>= 0`. Ignored when
+    /// `recall_graph_hops = 0`.
+    pub recall_graph_weight: f32,
 }
+
+/// Chapter Loom (LM.4) — recall-fusion defaults. All chosen so the
+/// out-of-the-box behavior is byte-identical to pre-Loom: the graph
+/// source is off (`hops = 0`) and the lexical ranker is weighted equally.
+pub const DEFAULT_RECALL_LEXICAL_WEIGHT: f32 = 1.0;
+pub const DEFAULT_RECALL_GRAPH_HOPS: u32 = 0;
+pub const DEFAULT_RECALL_GRAPH_DECAY: f32 = 0.5;
+pub const DEFAULT_RECALL_GRAPH_WEIGHT: f32 = 1.0;
 
 /// Default embeddings endpoint — the OpenAI public API. An
 /// operator who wants on-device embedding overrides this with
@@ -3919,6 +3953,16 @@ struct RawEmbedding {
     /// identical to pre-Phase-98).
     #[serde(default)]
     recall_hybrid: Option<bool>,
+    /// Chapter Loom (LM.4) — recall-fusion tuning. All absent → the
+    /// pre-Loom hybrid (graph off, lexical weight 1.0).
+    #[serde(default)]
+    recall_lexical_weight: Option<f32>,
+    #[serde(default)]
+    recall_graph_hops: Option<u32>,
+    #[serde(default)]
+    recall_graph_decay: Option<f32>,
+    #[serde(default)]
+    recall_graph_weight: Option<f32>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -7145,6 +7189,25 @@ fn build_embedding_config(
     // no bounds; default false.
     let recall_hybrid = raw.recall_hybrid.unwrap_or(false);
 
+    // Chapter Loom (LM.4) — recall-fusion tuning. Defaults preserve the
+    // pre-Loom hybrid (graph off; lexical weight 1.0). Weights clamp at
+    // 0 (negative would silence a ranker, never subtract); decay clamps
+    // to [0, 1]. Unvalidated otherwise, per the established knob pattern.
+    let recall_lexical_weight = raw
+        .recall_lexical_weight
+        .unwrap_or(DEFAULT_RECALL_LEXICAL_WEIGHT)
+        .max(0.0);
+    let recall_graph_hops =
+        raw.recall_graph_hops.unwrap_or(DEFAULT_RECALL_GRAPH_HOPS);
+    let recall_graph_decay = raw
+        .recall_graph_decay
+        .unwrap_or(DEFAULT_RECALL_GRAPH_DECAY)
+        .clamp(0.0, 1.0);
+    let recall_graph_weight = raw
+        .recall_graph_weight
+        .unwrap_or(DEFAULT_RECALL_GRAPH_WEIGHT)
+        .max(0.0);
+
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
         .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -7170,6 +7233,10 @@ fn build_embedding_config(
         ann_rebuild_threshold,
         recall_token_budget,
         recall_hybrid,
+        recall_lexical_weight,
+        recall_graph_hops,
+        recall_graph_decay,
+        recall_graph_weight,
     }))
 }
 

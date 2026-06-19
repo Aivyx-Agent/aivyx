@@ -4943,6 +4943,16 @@ async fn run_async(
             // Default `false` is byte-identical to
             // pre-Phase-98 semantic-only.
             sc = sc.with_recall_hybrid(cfg.recall_hybrid);
+            // Chapter Loom (LM.4) — recall-fusion tuning. Defaults
+            // (lexical_weight 1.0, graph_hops 0) keep the hybrid path
+            // the pre-Loom two-ranker fusion; the graph source arms
+            // only when graph_hops >= 1 and a ledger is attached.
+            sc = sc.with_recall_fusion(
+                cfg.recall_lexical_weight,
+                cfg.recall_graph_hops,
+                cfg.recall_graph_decay,
+                cfg.recall_graph_weight,
+            );
             Some(Arc::new(sc))
         }
         _ => None,

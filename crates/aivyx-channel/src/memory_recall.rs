@@ -11,7 +11,7 @@
 //! which leaves the turn byte-identical to pre-Phase-76
 //! behavior — recall never errors a turn.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // moved to the wasm-clean aivyx-ipc crate (Chapter M.2d-2); re-exported here.
 pub use aivyx_ipc::insights::{RecallClusterStat};
@@ -123,6 +123,20 @@ pub struct SemanticMemoryContext {
     /// proper nouns, code identifiers) that pure semantic
     /// search misses.
     recall_hybrid: bool,
+    /// Chapter Loom (LM.4) — weight of the BM25 lexical ranker in the
+    /// hybrid RRF fusion. `1.0` (default) = equal with semantic.
+    recall_lexical_weight: f32,
+    /// Chapter Loom (LM.4) — hops for the co-occurrence graph-walk
+    /// fusion source. `0` (default) = graph source off (semantic +
+    /// lexical only). `>= 1` adds the `neighbors_within` walk (from the
+    /// semantic top-K topics) as a third RRF ranker — but only when
+    /// `recall_hybrid` is on and a ledger is attached.
+    recall_graph_hops: u32,
+    /// Chapter Loom (LM.4) — per-hop decay for the graph-walk source.
+    recall_graph_decay: f32,
+    /// Chapter Loom (LM.4) — weight of the graph-walk ranker in the
+    /// hybrid RRF fusion.
+    recall_graph_weight: f32,
 }
 
 impl SemanticMemoryContext {
@@ -148,7 +162,30 @@ impl SemanticMemoryContext {
             ann_rebuild_threshold: 100,
             recall_token_budget: 0,
             recall_hybrid: false,
+            recall_lexical_weight: 1.0,
+            recall_graph_hops: 0,
+            recall_graph_decay: 0.5,
+            recall_graph_weight: 1.0,
         }
+    }
+
+    /// Chapter Loom (LM.4) — set the recall-fusion tuning. Builder; the
+    /// binary calls this with the `[embedding]` Loom knobs. With the
+    /// defaults (`lexical_weight = 1.0`, `graph_hops = 0`) the hybrid
+    /// path is the pre-Loom two-ranker fusion (graph source off); the
+    /// non-hybrid path is untouched either way.
+    pub fn with_recall_fusion(
+        mut self,
+        lexical_weight: f32,
+        graph_hops: u32,
+        graph_decay: f32,
+        graph_weight: f32,
+    ) -> Self {
+        self.recall_lexical_weight = lexical_weight;
+        self.recall_graph_hops = graph_hops;
+        self.recall_graph_decay = graph_decay;
+        self.recall_graph_weight = graph_weight;
+        self
     }
 
     /// Phase 98 — set the hybrid keyword+semantic recall
@@ -357,6 +394,14 @@ impl ContextProvider for SemanticMemoryContext {
         // attached to each entry in `scored` is the
         // semantic cosine in the non-hybrid path and the
         // fused RRF score in the hybrid path.
+        // Chapter Loom (LM.4) — when the graph-walk source is armed
+        // (hybrid + hops + ledger), the co-occurrence graph enters recall
+        // as a *fused ranker* below; the Phase 84 displacement expansion
+        // is then skipped so siblings aren't injected twice.
+        let graph_fused = self.recall_hybrid
+            && self.recall_graph_hops > 0
+            && self.cooccurrence_ledger.is_some();
+
         let scored = if self.recall_hybrid {
             let semantic = match self
                 .memory
@@ -366,39 +411,119 @@ impl ContextProvider for SemanticMemoryContext {
                 Ok(s) => s,
                 Err(_) => return None,
             };
-            let keyword = match self
+            // Chapter Loom (LM.2) — the lexical ranker is now BM25-scored
+            // (`lexical_search_scored`), replacing Phase 98's unscored
+            // substring `search`: a rare query term outranks a common
+            // one. Best-effort — a lexical failure degrades to
+            // semantic-only fusion, never errors the turn.
+            let lexical = self
                 .memory
-                .search(&query_text, self.rag_top_k)
+                .lexical_search_scored(&query_text, self.rag_top_k)
                 .await
-            {
-                Ok(k) => k,
-                Err(_) => return None,
-            };
+                .unwrap_or_default();
 
-            // Build the two (topic, seq) rankings RRF
-            // expects, plus a lookup so we can recover
-            // the entry bodies for the fused result.
+            // Build the (topic, seq) rankings RRF expects, plus a lookup
+            // so we can recover the entry bodies for the fused result.
             let semantic_ranks: Vec<(String, u64)> = semantic
                 .iter()
                 .map(|(e, _)| (e.topic.clone(), e.seq))
                 .collect();
-            let keyword_ranks: Vec<(String, u64)> = keyword
+            let lexical_ranks: Vec<(String, u64)> = lexical
                 .iter()
-                .map(|e| (e.topic.clone(), e.seq))
+                .map(|(e, _)| (e.topic.clone(), e.seq))
                 .collect();
             let mut lookup: HashMap<(String, u64), MemoryEntry> =
                 HashMap::new();
             for (e, _) in &semantic {
                 lookup.insert((e.topic.clone(), e.seq), e.clone());
             }
-            for e in &keyword {
+            for (e, _) in &lexical {
                 lookup
                     .entry((e.topic.clone(), e.seq))
                     .or_insert_with(|| e.clone());
             }
 
-            let fused = crate::recall_fusion::reciprocal_rank_fusion(
-                &[semantic_ranks, keyword_ranks],
+            // Chapter Loom (LM.1) — weighted sources. Semantic anchors at
+            // 1.0; the operator tunes lexical / graph weight.
+            let mut sources: Vec<(f32, Vec<(String, u64)>)> = vec![
+                (1.0, semantic_ranks),
+                (self.recall_lexical_weight, lexical_ranks),
+            ];
+
+            // Chapter Loom (LM.3) — the graph-walk ranker. Walk the
+            // co-occurrence ledger from each semantic seed topic, merge
+            // neighbors by best affinity, and pull one representative
+            // entry per neighbor topic. Reuses `[recall_cluster]`'s
+            // min_affinity / max_siblings as the walk's floor / cap when
+            // present. Best-effort throughout.
+            if graph_fused {
+                if let Some(ledger) = &self.cooccurrence_ledger {
+                    let (min_aff, cap) = self
+                        .recall_cluster
+                        .as_ref()
+                        .map(|c| (c.min_affinity, c.max_siblings as usize))
+                        .unwrap_or((0.0, self.rag_top_k));
+                    let now = now_secs();
+                    let seed_topics: HashSet<String> =
+                        semantic.iter().map(|(e, _)| e.topic.clone()).collect();
+                    let mut best_neighbor: HashMap<String, f32> = HashMap::new();
+                    for topic in &seed_topics {
+                        let Ok(neighbors) = ledger
+                            .neighbors_within(
+                                topic,
+                                now,
+                                self.recall_graph_hops,
+                                self.recall_graph_decay,
+                                min_aff,
+                                cap,
+                            )
+                            .await
+                        else {
+                            continue;
+                        };
+                        for n in neighbors {
+                            // Don't re-promote a topic already in the
+                            // semantic set — it's already represented.
+                            if seed_topics.contains(&n.topic) {
+                                continue;
+                            }
+                            best_neighbor
+                                .entry(n.topic)
+                                .and_modify(|a| {
+                                    if n.affinity > *a {
+                                        *a = n.affinity;
+                                    }
+                                })
+                                .or_insert(n.affinity);
+                        }
+                    }
+                    // Affinity-desc (then topic) → one entry per neighbor.
+                    let mut neigh: Vec<(String, f32)> =
+                        best_neighbor.into_iter().collect();
+                    neigh.sort_by(|a, b| {
+                        b.1.partial_cmp(&a.1)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.0.cmp(&b.0))
+                    });
+                    let mut graph_ranks: Vec<(String, u64)> = Vec::new();
+                    for (topic, _aff) in neigh.into_iter().take(cap) {
+                        if let Ok(mut es) = self.memory.get_recent(&topic, 1).await {
+                            if let Some(mem) = es.pop() {
+                                graph_ranks.push((mem.topic.clone(), mem.seq));
+                                lookup
+                                    .entry((mem.topic.clone(), mem.seq))
+                                    .or_insert(mem);
+                            }
+                        }
+                    }
+                    if !graph_ranks.is_empty() {
+                        sources.push((self.recall_graph_weight, graph_ranks));
+                    }
+                }
+            }
+
+            let fused = crate::recall_fusion::reciprocal_rank_fusion_weighted(
+                &sources,
                 crate::recall_fusion::RRF_K,
                 self.rag_top_k,
             );
@@ -461,7 +586,11 @@ impl ContextProvider for SemanticMemoryContext {
         // (driver_topic, sibling_topic), aligned 1:1 with
         // `sibs`, for the Phase 78 stat.
         let mut sib_pairs: Vec<(String, String)> = Vec::new();
-        if let (Some(cfg), Some(ledger)) = (
+        // Chapter Loom (LM.4) — skip the Phase 84 displacement expansion
+        // when the graph is already a fused ranker above; otherwise it is
+        // the (unchanged) 1-hop co-recall path.
+        if let (false, Some(cfg), Some(ledger)) = (
+            graph_fused,
             self.recall_cluster.as_ref(),
             self.cooccurrence_ledger.as_ref(),
         ) {
@@ -1521,5 +1650,120 @@ mod tests {
 
         let block = ctx.recall("anything", sid()).await;
         assert!(block.is_none());
+    }
+
+    // ---- Chapter Loom (LM.4) — fused graph-walk recall ----------
+
+    /// Build a redb-backed co-occurrence ledger + recall log in a temp
+    /// dir, for the graph-fusion tests.
+    async fn loom_store() -> (
+        Arc<crate::cooccurrence_ledger::PersistentCooccurrenceLedger>,
+        Arc<crate::recall_log::PersistentRecallLog>,
+    ) {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-loom-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([76u8; 32]),
+        )
+        .await
+        .unwrap();
+        let cooc = Arc::new(
+            crate::cooccurrence_ledger::PersistentCooccurrenceLedger::new(
+                store.domain(KeyDomain::CooccurrenceLedger),
+            ),
+        );
+        let log = Arc::new(crate::recall_log::PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        (cooc, log)
+    }
+
+    /// With the graph source armed (`recall_hybrid` + `graph_hops >= 1`),
+    /// a topic the query can't reach semantically or lexically is pulled
+    /// into recall by walking the co-occurrence edge from the literal
+    /// hit — and it arrives as a **fused** hit (`cluster == false`), not
+    /// a Phase 84 displacement injection.
+    #[tokio::test]
+    async fn graph_fusion_injects_associated_topic_as_fused_hit() {
+        use aivyx_config::RecallClusterConfig;
+        let (cooc, log) = loom_store().await;
+        let now = now_secs();
+        cooc.record_window(&[(("notes".into(), "deploy".into()), 5.0)], now)
+            .await
+            .unwrap();
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let ns = memory.put("notes", "favorite color is purple").await.unwrap();
+        memory.put_vector("notes", ns, vec![1.0, 1.0]).await.unwrap();
+        // "deploy" has no vector and shares no query words → only the
+        // graph can reach it.
+        memory.put("deploy", "deploy runbook lives in the wiki").await.unwrap();
+
+        let cfg = RecallClusterConfig { enabled: true, max_siblings: 2, min_affinity: 1.0 };
+        let ctx = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_log(Arc::clone(&log))
+        .with_cluster(Arc::clone(&cooc), cfg)
+        .with_recall_hybrid(true)
+        .with_recall_fusion(1.0, 1, 0.5, 1.0); // graph_hops = 1
+
+        let block = ctx
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("a block is produced");
+        assert!(block.contains("deploy runbook"), "graph pulled in deploy: {block}");
+
+        // The deploy hit is a fused result, NOT a Phase 84 displacement
+        // sibling (which would set cluster = true).
+        let ev = log.events_since(0).await.unwrap();
+        let deploy = ev[0]
+            .hits
+            .iter()
+            .find(|h| h.topic == "deploy")
+            .expect("deploy recalled");
+        assert!(!deploy.cluster, "graph hit must arrive via fusion, not displacement");
+    }
+
+    /// `graph_hops = 0` (the default) keeps the graph source off: the
+    /// associated topic is NOT pulled in by fusion. (Phase 84 cluster
+    /// expansion — a separate opt-in — is what would inject it, and is
+    /// unchanged.)
+    #[tokio::test]
+    async fn graph_hops_zero_leaves_graph_source_off() {
+        let (cooc, _log) = loom_store().await;
+        let now = now_secs();
+        cooc.record_window(&[(("notes".into(), "deploy".into()), 5.0)], now)
+            .await
+            .unwrap();
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let ns = memory.put("notes", "favorite color is purple").await.unwrap();
+        memory.put_vector("notes", ns, vec![1.0, 1.0]).await.unwrap();
+        memory.put("deploy", "deploy runbook lives in the wiki").await.unwrap();
+
+        // Ledger attached but NO recall_cluster + graph_hops = 0 → graph
+        // source off, no Phase 84 expansion → deploy stays out.
+        let ctx = SemanticMemoryContext::new(
+            Arc::clone(&memory),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_hybrid(true)
+        .with_recall_fusion(1.0, 0, 0.5, 1.0); // graph_hops = 0
+
+        let block = ctx
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("a block is produced");
+        assert!(!block.contains("deploy runbook"), "graph off → no deploy: {block}");
     }
 }
