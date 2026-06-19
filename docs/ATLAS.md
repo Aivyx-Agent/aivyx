@@ -1,6 +1,6 @@
 # Tool System Audit & Catalog (Chapter Atlas)
 
-> **Status:** 🧭 **design contract — AT.0 ✅ + AT.1 ✅ + AT.2 ✅ + AT.3 ✅.** The locked reference for a
+> **Status:** ✅ **CHAPTER COMPLETE — AT.0–AT.5 done.** The locked reference for a
 > **refinement + catalog** pass over Aivyx's tool system — *no new tool domains*
 > this chapter. It produces a generated, drift-guarded **`docs/TOOLS.md` catalog**,
 > a runtime **`tools.list` introspection tool**, a **schema/description/error-shape
@@ -110,7 +110,7 @@ can map grants to tools.
 | **AT.2** ✅ | **`tools.list` introspection tool** | DONE. `aivyx-channel/src/tools_list_tool.rs`: infrastructure-tier, read-only; returns the agent's own tools (name + description, `detail=true` adds input schemas, optional case-insensitive `filter`). Built from a **precomputed `Vec<ToolInfo>` snapshot** captured in `aivyx.rs` after the tool list is assembled (no registry self-reference cycle), incl. a self-entry so it lists itself. Reuses scope **`audit.read`** (the existing self-introspection base — no new base/ceiling churn). Targets the local-model tool-name hallucination problem. 5 unit tests green; clippy clean; catalog row added to `docs/TOOLS.md` (drift-guard still green). |
 | **AT.3** ✅ | **QA sweep** | DONE. Added reusable `aivyx_core::tools::check_tool_quality(&dyn Tool) -> Vec<String>` — the correctness floor on the metadata the LLM reads: non-empty **dotted** name, real (≥10-char) description, `input_schema` an object with `type:"object"` (+ object `properties` if present). Swept the in-process tiers: **substrate** (aivyx-core test over all cheaply-constructible core tools) and **infrastructure** (aivyx-channel integration test over a representative tool per module + `tools.list`), plus a guard-the-guard test proving the helper catches bad metadata. **Finding: zero issues — existing tool metadata already meets the floor; no fixes needed.** The value is the regression guard. Tool-process integration tools are covered by their own per-tool tests; the helper is `pub` for any crate to adopt (recommended in §6). |
 | **AT.4** ✅ | **Docs cross-links** | DONE. `docs/TOOLS.md` cross-linked from `README.md` (new "For users & operators" entry + a pointer from the TOOL_SDK line), `docs/TOOL_SDK.md` (a "looking for tools that exist?" callout), and the `docs/README.md` reference-docs index. The optional read-only **Studio "Tools" view** was deferred (it widens scope into the web; the catalog + `tools.list` already cover discoverability — a future Studio chapter can add it). |
-| **AT.5** | **Finalize** | record audit conclusions, the recommended-but-deferred backlog (§6), status flip |
+| **AT.5** ✅ | **Finalize** | DONE. Audit conclusions recorded (§7); the deferred new-tools backlog (§6) stands as the next chapter; chapter flipped to COMPLETE. |
 
 **Discipline:** AT.1's drift-guard is the chapter's spine — once `TOOLS.md` is
 generated-and-guarded, it stays true for free forever, and every later tool change
@@ -131,7 +131,36 @@ chapter, gated by the substrate cap / its own base + amendment where applicable:
 - **Integrations** (tool processes, need keys): GitHub/GitLab, weather, maps/places,
   Google Tasks/Keep, Microsoft 365.
 
-## 7. Open questions (resolve in-phase, not blockers to AT.0)
+## 7. Audit conclusions
+
+The tool system entered this chapter **capability-rich and security-sound** and
+leaves it **legible**. Findings:
+
+- **Security model is strong and needs no change.** The pure
+  `required_scope(input)` → capability gate before `execute`, the 85-base
+  `KNOWN_BASES` registry, the four trust tiers, and per-tool-process sandboxing
+  are coherent and were not touched.
+- **All four legibility gaps are closed.** The catalog (`docs/TOOLS.md`, AT.1)
+  answers "what can the agent do?"; `tools.list` (AT.2) gives the agent runtime
+  ground truth (the local-model hallucination fix); the schema/description QA
+  invariant (AT.3) guards the metadata the LLM reads; the name→scope mapping is
+  documented (AT.1).
+- **Metadata quality was already high.** The AT.3 sweep across the substrate +
+  infrastructure tiers found **zero** issues — no thin descriptions, no malformed
+  schemas. The deliverable's value is forward regression protection, not cleanup.
+- **Two drift-guards now hold the surface honest going forward:**
+  `tools_catalog_documents_every_known_base` (a new base must be documented) and
+  `check_tool_quality` sweeps (a new tool must have sound metadata).
+- **No new capability was added** — the chapter respected the substrate cap and
+  added only one infrastructure tool (`tools.list`, reusing `audit.read`).
+
+**The next chapter is breadth, not refinement:** the §6 backlog (`git.write`, a
+utilities pack, `web.extract`, structured-data readers, and new integrations) is
+the recorded "new tools" follow-on. *Recommended adoption:* integration
+tool-process crates should call `check_tool_quality` in their own tests (the
+helper is `pub`), extending the AT.3 guard to the out-of-process tiers.
+
+## 8. Open questions (resolved in-phase / deferred)
 
 - **Catalog generator home** — an `aivyx tools` subcommand (operator-runnable, doubles
   as the drift-guard's generator) vs. a test-only generator. Lean `aivyx tools` (AT.1).
