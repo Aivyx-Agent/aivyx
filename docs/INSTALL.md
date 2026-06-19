@@ -2196,7 +2196,7 @@ end:
    dispatches the agent turn.
 6. As the agent streams text back, Aivyx buffers it.
 7. On turn completion, Aivyx chunks the response at
-   sentence boundaries; Piper synthesizes each
+   sentence boundaries; Kokoro synthesizes each
    sentence to PCM; rodio queues them on the
    speakers.
 8. Aivyx waits for playback to finish, then loops.
@@ -2214,11 +2214,13 @@ shapes are:
   Errors as
   `audio device error: input: no default input
   device — check OS audio settings`.
-- **espeak-ng-data not found:** Piper init fails
-  at engine construction. Errors as
-  `failed to build PiperEngine: voice_path is not
-  valid UTF-8` or similar; double-check
-  `[voice] tts_espeak_data_path`.
+- **Kokoro model dir wrong / incomplete:** engine
+  construction fails when `[voice.tts] model_dir`
+  is unset or doesn't hold a `.onnx` + a
+  `voices-*.bin`. Errors as
+  `failed to build KokoroEngine: …no .onnx model
+  found…` / `…no voices-*.bin…`; double-check
+  `[voice.tts] model_dir`.
 - **Whisper model wrong format:** `whisper-rs`
   surfaces this from the `.bin` parse. Errors as
   `failed to build WhisperRsEngine: ASR model load

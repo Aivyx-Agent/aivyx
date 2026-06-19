@@ -12,16 +12,16 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (v0.2.0 — the Studio + post-Studio chapters, 2026-06-17)
+## Status (v0.3.0 — source-available, BUSL-1.1, 2026-06-19)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), and Genesis (unified CLI + web agent onboarding) — and 13 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), and Timbre (permissive Kokoro voice, GPL-free) — and 14 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.2.0`** (early pre-release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
+| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.3.0`** (the first BUSL-1.1 release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 33 |
-| Rust tests | 4,791 passing |
+| Rust tests | 4,798 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 85 |
@@ -247,7 +247,7 @@ OAuth substrate.
   the daemon's IPC protocol.
 
 **For architects** wanting to understand the design:
-- [`DESIGN.md`](DESIGN.md) — locked technical contract (13 amendments)
+- [`DESIGN.md`](DESIGN.md) — locked technical contract (14 amendments)
 - [`PRODUCT.md`](PRODUCT.md) — locked product contract (P1–P14)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase-by-phase narrative
 - [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md) — product-shape milestone narrative
@@ -284,7 +284,7 @@ under BUSL-1.1, so a short [CLA](CLA.md) (accepted via a
 `git commit -s` sign-off) is required.
 
 Architectural changes that touch DESIGN.md or PRODUCT.md require
-a formal amendment under `docs/amendments/` — thirteen have been
+a formal amendment under `docs/amendments/` — fourteen have been
 filed across the arc; the process is established. (The two
 contracts have otherwise held untouched for many phases — a
 tracked stability discipline.)

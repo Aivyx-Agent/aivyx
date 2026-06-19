@@ -490,7 +490,7 @@ write/rename, a tree pane, syntax highlighting.
 
 The final roadmap screen — and a deliberately **honest** one. Aivyx's voice is a
 **host-local CLI loop**: `aivyx --channel voice` runs an in-process
-mic → Whisper ASR → agent turn → Piper TTS → speakers loop on the operator's
+mic → Whisper ASR → agent turn → Kokoro TTS → speakers loop on the operator's
 machine (`cpal`/`rodio`), configured by a `[voice]` TOML section. *"The audio
 loop never leaves the host."* The daemon doesn't run it and the browser can't
 reach the host microphone — so the Studio's Voice screen is **not** a live voice
@@ -502,20 +502,22 @@ larger, separate effort, deliberately out of scope.)
 ### 12.1 What it edits (the `[voice]` section)
 
 `aivyx_config::VoiceOptions` is the direct `[voice]` parse target — all keys
-optional: `asr_engine` (`whisper-rs`), `tts_engine` (`piper`), `asr_model_path`
-(the Whisper `.bin`), `asr_language`, `asr_beam_size`, `tts_voice_path` (the
-Piper `.onnx`), `tts_espeak_data_path` (espeak-ng phonemizer data),
-`input_device` / `output_device` (cpal/rodio overrides). The two model paths +
-espeak data are what make-or-break a launch.
+optional: `asr_engine` (`whisper-rs`), `tts_engine` (`kokoro`), `asr_model_path`
+(the Whisper `.bin`), `asr_language`, `asr_beam_size`, `tts_model_dir` (the
+Kokoro model directory — holds the `.onnx` + `voices-*.bin`), `tts_voice_name`
+(e.g. `af_heart`), `tts_speed`, `input_device` / `output_device` (cpal/rodio
+overrides). The Whisper model + the Kokoro model dir are what make-or-break a
+launch. *(Chapter Timbre replaced the GPL Piper engine — and its `voice_path` +
+`espeak_data_path` keys — with the permissive Kokoro stack.)*
 
 ### 12.2 Readiness (computed daemon-side)
 
-The screen's value beyond an editor: a **readiness check**. The daemon `stat`s
-the three filesystem prerequisites — `asr_model_path`, `tts_voice_path`,
-`tts_espeak_data_path` — and reports each `present | missing | unset`, so the
-operator sees *"✓ Whisper model, ✗ Piper voice (path set but file missing)"*
-before they ever run the command. Read-only inspection; the daemon never loads
-the audio stack.
+The screen's value beyond an editor: a **readiness check**. The daemon checks
+the filesystem prerequisites — `asr_model_path` (a file), plus a `*.onnx` and a
+`voices-*.bin` **inside** `tts_model_dir` — and reports each
+`present | missing | unset`, so the operator sees *"✓ Whisper model, ✗ Kokoro
+voices (.bin) (none in the model dir)"* before they ever run the command.
+Read-only inspection; the daemon never loads the audio stack.
 
 ### 12.3 New IPC (mirrors Settings, Chapter U)
 
