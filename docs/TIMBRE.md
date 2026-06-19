@@ -1,6 +1,7 @@
 # Permissive Voice / TTS (Chapter Timbre)
 
-> **Status:** 🧭 **design contract — TB.0 ✅ + TB.1 ✅ + TB.2 ✅ + TB.3 ✅ + TB.4 ✅ + TB.5 ✅.** This is the locked reference for
+> **Status:** ✅ **CHAPTER COMPLETE (code) — TB.0–TB.6 done; one operator audio
+> speak-test pending (§7).** This is the locked reference for
 > replacing the voice channel's **GPL-3.0 Piper TTS** with a **fully permissive
 > (Apache-2.0 / MIT) Kokoro stack**, so voice is license-clean for everyone who
 > builds Aivyx and can ship in official binaries. Nothing in the TTS code has
@@ -118,7 +119,7 @@ the tree.
 | **TB.3** ✅ | **Remove Piper** | DONE. Deleted the `tts-piper` feature, the `piper1-rs` dep, and `tts/piper.rs`; `recommended-voice` → `asr-whisper-rs` + `tts-kokoro`; the engine-facing `TtsConfig` is now Kokoro-only (`model_dir`/`voice_name`/`speed`); the CLI loop builds Kokoro unconditionally (rejects any non-`kokoro` `tts_engine`). **Removing Piper let the `channel-voice-full` CLI voice path compile for the first time** (it had bit-rotted unseen — no CI coverage + Piper's build prereqs blocked local builds): fixed by re-exporting `build_agent_stack`/`AgentStackSpec` from `aivyx-channel` and filling the `VoiceChannelConfig` literal's newer fields (vad/image/abort). **Verified:** `aivyx-cli --features channel-voice-full` compiles + clippy clean (`-D warnings`); 204 `aivyx-voice` tests pass; default workspace compiles. Vestigial `[voice] tts_voice_path`/`tts_espeak_data_path` + the Studio readiness check are cleaned in TB.5; the `deny.toml` GPL exception drops in TB.4. |
 | **TB.4** ✅ | **Flip the license gate** | DONE. Removed the `piper1-rs-sys` GPL-3.0 exception from `deny.toml` (the lone exception — the block is now empty, with a note recording why). `cargo deny check licenses` (all-features, so the optional `tts-kokoro` stack is evaluated) is **green, exit 0, with no exceptions**. Verified the all-features graph has **zero GPL-3.0, no `piper`, no `espeak`** — the only copyleft id that even appears is `r-efi`'s `MIT OR Apache-2.0 OR LGPL-2.1-or-later`, where the OR resolves to a permissive option (the documented CR.1 case). The relicense's hard gate is satisfied: a future copyleft dep now fails loudly with nothing carved out. |
 | **TB.5** ✅ | **Docs + Studio + vestigial config cleanup** | DONE. Rewrote `docs/INSTALL.md`'s voice section (Kokoro model+voices download; dropped the espeak-ng/ONNX-headers prereqs — `ort` self-fetches its runtime); flipped `docs/LICENSING.md` §6.1's live-constraint to ✅ RESOLVED (records the Linux-musl audio caveat). Replaced the vestigial Piper config end-to-end: `VoiceOptions` + `VoiceWrite` (`tts_voice_path`/`tts_espeak_data_path` → `tts_model_dir`/`tts_voice_name`/`tts_speed`), the `SetVoice` IPC payload + `VoiceSettingsSnapshot` (readiness `tts_voice_status`/`espeak_status` → `tts_model_status`/`tts_voices_status`, computed by scanning the model dir for `*.onnx` + `voices-*.bin`), the daemon snapshot/summary, and the **Studio Voice screen** (model-dir/voice/speed inputs, Kokoro readiness rows, kokoro engine option). **Verified:** ipc/config/channel tests + clippy green; `aivyx-web` type-checks + clippy on wasm32; full `channel-voice-full` CLI clippy clean. The committed `dist/` WASM bundle rebuild (`just build-web`) + live browser check are TB.6 (the repo's standard ".5/verify" cadence). |
-| **TB.6** | **Live-verify** | build with `channel-voice-full`, run `aivyx --channel voice`, confirm Kokoro speaks end-to-end; record the run. |
+| **TB.6** ✅ | **Live-verify (build + Studio) — audio speak-test = operator** | Autonomously verified: (1) **Studio bundle rebuilt** (`dx bundle --release`) + re-embedded in the daemon + committed `dist/`; the new wasm contains the Kokoro UI strings ("Kokoro model dir/voices", "kokoro") and **no** Piper strings ("espeak-ng data"/"Piper voice" = 0). (2) **Full voice binary builds + links + runs** — `cargo build -p aivyx-cli --features channel-voice-full` compiles `ort-sys`/`whisper-rs-sys`/`aivyx-voice` into the real `aivyx` binary (ALSA present → cpal links; `ldd` shows `libasound`), and the binary runs; `--channel voice` parses. Also fixed the stale `--channel` usage list to include `voice`. **Remaining (hands-on, needs a mic/speakers + the model files):** run `aivyx --channel voice` and confirm Kokoro speaks — the §7 runbook. |
 
 **Discipline:** TB.4 is the chapter's hard gate — the whole point is *zero GPL*.
 If anything in the Kokoro path drags espeak/GPL back in (a transitive dep, a
@@ -140,6 +141,42 @@ after.
 - **`ort` linking mode.** `ort` can download a prebuilt ONNX Runtime or link a
   system one; pick the mode that keeps the build self-contained and permissive
   (no GPL, no surprise system requirement) in TB.1.
+
+## 7. TB.6 operator runbook — the audio speak-test
+
+The one step that needs a human (a microphone, speakers, and the model files):
+
+1. **Download the Kokoro model + voices** into one directory (see
+   `docs/INSTALL.md` → Voice channel → "Kokoro TTS model + voices"):
+   ```bash
+   mkdir -p ~/models/kokoro && cd ~/models/kokoro
+   wget https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+   wget https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+   ```
+   (Also have a Whisper `.bin` for ASR — e.g. `ggml-base.en.bin`.)
+2. **Point `[voice]` at them** in `aivyx.toml`:
+   ```toml
+   [voice]
+   asr_engine = "whisper-rs"
+   tts_engine = "kokoro"
+   [voice.asr]
+   model_path = "/home/<you>/models/ggml-base.en.bin"
+   [voice.tts]
+   model_dir  = "/home/<you>/models/kokoro"
+   voice_name = "af_heart"
+   ```
+3. **Build with voice + run** (this machine builds it clean — ort fetches its own
+   ONNX Runtime, no espeak/ONNX-headers needed):
+   ```bash
+   cargo run -p aivyx-cli --features channel-voice-full --bin aivyx -- --channel voice
+   ```
+   In a Claude Code session you can run it inline with `! aivyx --channel voice`.
+4. **Confirm:** press Enter to talk, speak, release — the agent replies and you
+   **hear Kokoro speak** (24 kHz, `af_heart`). Then record the run here and flip
+   the banner to fully ✅.
+
+Everything up to the audio device is verified (the binary builds, links ALSA, and
+runs; the Studio shows the Kokoro screen). This step just confirms sound comes out.
 
 ---
 
