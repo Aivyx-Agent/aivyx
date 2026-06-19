@@ -1,6 +1,11 @@
 # The Knowledge-Wiki Layer — synthesized topic pages (Chapter Codex)
 
-> **Status:** 🧭 **design contract — CX.0.** The locked reference for the
+> **Status:** 📖 **CX.1 — page model + storage shipped (inert).** Added the
+> wasm-clean `WikiPage` / `WikiBacklink` / `WikiPageSummary` DTOs (`aivyx-ipc`,
+> with an incremental `source_fingerprint`), a new `KeyDomain::KnowledgeWiki`
+> storage domain (count 21→22), and `PersistentWikiStore` (`aivyx-channel`):
+> canonical-topic-keyed get/put/list/delete + a `needs_regen` fingerprint check.
+> No generation yet (CX.2). The locked reference for the
 > chapter that gives Aivyx a **codex**: a synthesized, browsable, and
 > retrievable layer of per-topic *wiki pages* built from the agent's own
 > memory. Each page is an LLM-consolidated summary of a topic's memory
@@ -114,7 +119,7 @@ math beyond adding the page source.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **CX.0** | **This design contract** | locked reference; banner flips per phase |
-| **CX.1** | **Page model + storage** | `WikiPage` type + `KeyDomain::KnowledgeWiki` (enum/`ALL`/subkey/count-test) + a `PersistentWikiStore` (get/put/list/delete, canonical-topic keyed) + the `source_fingerprint` helper. **Inert** (no generation). Tests. |
+| **CX.1** ✅ | **Page model + storage** | DONE. Wasm-clean `WikiPage` / `WikiBacklink` / `WikiPageSummary` in `aivyx-ipc::wiki` (incremental `WikiPage::fingerprint`, order-independent FNV-1a; `snippet`/`to_summary` helpers) + `KeyDomain::KnowledgeWiki` (enum/`as_bytes`/`table_name`/`ALL`/subkeys 21→22/count-test) + `PersistentWikiStore` in `aivyx-channel` (canonical-topic-keyed get/put/list_summaries/delete/all_pages + `needs_regen`). README domain count 22 (and the stale 85→86 cap-base stat fixed). **Inert** (no generation). 9 tests. |
 | **CX.2** | **Consolidation engine** | `WikiSynthesizer`: topic entries → LLM-consolidated summary (assemble the `chat_stream`) + backlinks via `neighbors_within`; best-effort (no-provider / error / empty → skip); incremental skip on unchanged fingerprint. Tests with a fake `LlmProvider`. |
 | **CX.3** | **Generation trigger** | a stale-sweep (regenerate pages whose topics churned) wired onto the reflection-scheduler cadence + an explicit rebuild entrypoint. Bounded, best-effort. Tests. |
 | **CX.4** | **Read-only IPC** | `ListWikiPages` (topic + snippet + entry_count + updated_at) + `GetWikiPage` (summary + backlinks + source entries); wasm-clean `aivyx-ipc` types + daemon handlers. Tests. |

@@ -22,6 +22,9 @@ pub mod persona;
 /// protocol, the `*Summary` wire structs, and `encode_frame` / `decode_frame`.
 pub mod protocol;
 pub mod team_mission;
+/// Chapter Codex — knowledge-wiki page DTOs (`WikiPage` / `WikiBacklink` /
+/// `WikiPageSummary`) shared by the daemon, IPC, and the Studio Wiki view.
+pub mod wiki;
 
 pub use backlog::{Story, StoryStatus};
 pub use insights::{

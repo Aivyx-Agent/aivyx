@@ -204,6 +204,15 @@ pub enum KeyDomain {
     /// driver. Isolated so a corrupt row degrades only reminders,
     /// never schedules, missions, or any learning ledger.
     Reminders,
+    /// Knowledge-wiki pages (Chapter Codex). One row per canonical
+    /// topic holding a `WikiPage` — the LLM-consolidated summary of
+    /// that topic's memory entries plus its co-occurrence backlinks
+    /// and a `source_fingerprint` for incremental regeneration.
+    /// Derived from [`KeyDomain::Memory`] + the co-occurrence ledger,
+    /// never a second source of truth. Isolated so a corrupt or stale
+    /// page degrades only the codex (the Studio Wiki view + the opt-in
+    /// recall unit), never memory, recall, or any learning ledger.
+    KnowledgeWiki,
 }
 
 impl KeyDomain {
@@ -236,6 +245,7 @@ impl KeyDomain {
             KeyDomain::LoopBacklog => b"loop-backlog",
             KeyDomain::Reminders => b"reminders",
             KeyDomain::TeamMissions => b"team-missions",
+            KeyDomain::KnowledgeWiki => b"knowledge-wiki",
         }
     }
 
@@ -275,12 +285,13 @@ impl KeyDomain {
             KeyDomain::LoopBacklog => "aivyx_loop_backlog_v1",
             KeyDomain::Reminders => "aivyx_reminders_v1",
             KeyDomain::TeamMissions => "aivyx_team_missions_v1",
+            KeyDomain::KnowledgeWiki => "aivyx_knowledge_wiki_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 21] = [
+    pub const ALL: [KeyDomain; 22] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -302,6 +313,7 @@ impl KeyDomain {
         KeyDomain::LoopBacklog,
         KeyDomain::Reminders,
         KeyDomain::TeamMissions,
+        KeyDomain::KnowledgeWiki,
     ];
 }
 
@@ -487,7 +499,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 21],
+    subkeys: [SubKey; 22],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -564,7 +576,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 21], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 22], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -598,6 +610,7 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::LoopBacklog.as_bytes())?,
             master.derive_subkey(KeyDomain::Reminders.as_bytes())?,
             master.derive_subkey(KeyDomain::TeamMissions.as_bytes())?,
+            master.derive_subkey(KeyDomain::KnowledgeWiki.as_bytes())?,
         ])
     }
 
@@ -627,6 +640,7 @@ impl RedbStorage {
             KeyDomain::LoopBacklog => &self.subkeys[18],
             KeyDomain::Reminders => &self.subkeys[19],
             KeyDomain::TeamMissions => &self.subkeys[20],
+            KeyDomain::KnowledgeWiki => &self.subkeys[21],
         }
     }
 }
@@ -1005,7 +1019,7 @@ mod tests {
         // "Encrypted storage domains" row + the `aivyx-storage` line in
         // `README.md`, and the storage-domain figure in
         // `docs/BACKEND_AUDIT_*.md`.**
-        assert_eq!(KeyDomain::ALL.len(), 21, "encrypted storage domain count");
+        assert_eq!(KeyDomain::ALL.len(), 22, "encrypted storage domain count");
     }
 
     #[test]
@@ -1066,7 +1080,8 @@ mod tests {
                 | KeyDomain::CorrectionLedger
                 | KeyDomain::LoopBacklog
                 | KeyDomain::Reminders
-                | KeyDomain::TeamMissions => {}
+                | KeyDomain::TeamMissions
+                | KeyDomain::KnowledgeWiki => {}
             }
         }
     }
