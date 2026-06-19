@@ -4836,23 +4836,27 @@ async fn run_async(
             ),
         )
     });
-    // Chapter Codex (CX.3) — the knowledge-wiki sweep. Built only when
-    // `[wiki].enabled`: synthesizing every topic's page with the LLM has
-    // a cost the operator opts into. Reuses the same LLM provider, memory,
-    // and co-occurrence ledger the rest of the daemon holds.
+    // Chapter Codex — the knowledge-wiki page store. Built unconditionally
+    // (a cheap domain handle) so the read-only IPC (ListWikiPages /
+    // GetWikiPage, CX.4) works even before/without generation; reads just
+    // return an empty codex until a sweep populates it.
+    let wiki_store = Arc::new(
+        aivyx_channel::knowledge_wiki::PersistentWikiStore::new(
+            storage.domain(KeyDomain::KnowledgeWiki),
+        ),
+    );
+    // CX.3 — the sweep. Armed only when `[wiki].enabled`: auto-summarizing
+    // every topic with the LLM has a cost the operator opts into. Reuses
+    // the same store, LLM provider, memory, and co-occurrence ledger the
+    // rest of the daemon holds.
     let wiki_sweep: Option<aivyx_channel::knowledge_wiki::WikiSweepConfig> = config_wiki
         .as_ref()
         .filter(|w| w.enabled)
         .map(|w| {
-            let store = Arc::new(
-                aivyx_channel::knowledge_wiki::PersistentWikiStore::new(
-                    storage.domain(KeyDomain::KnowledgeWiki),
-                ),
-            );
             let mut synth = aivyx_channel::knowledge_wiki::WikiSynthesizer::new(
                 Arc::clone(&memory),
                 Arc::clone(&provider),
-                store,
+                Arc::clone(&wiki_store),
                 model.clone(),
             );
             if let Some(ledger) = &cooccurrence_ledger {
@@ -7138,6 +7142,7 @@ async fn run_async(
             // ledger; folded by the same pass.
             cooccurrence_ledger: cooccurrence_ledger.clone(),
             wiki_sweep,
+            wiki_store: Some(Arc::clone(&wiki_store)),
             // Phase 172 — durable correction ledger; folded by
             // the same recall-feedback pass.
             correction_ledger: correction_ledger.clone(),

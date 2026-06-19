@@ -245,6 +245,11 @@ pub struct DaemonConfig {
     /// spawns a periodic stale-page sweep on its maintenance cadence.
     /// `None` → no synthesis (the byte-identical default).
     pub wiki_sweep: Option<crate::knowledge_wiki::WikiSweepConfig>,
+    /// Chapter Codex (CX.4) — read handle on the knowledge-wiki page
+    /// store, for the `ListWikiPages` / `GetWikiPage` read-only IPC.
+    /// Built whenever storage is available (independent of `[wiki]`
+    /// .enabled — reads return an empty list until a sweep populates it).
+    pub wiki_store: Option<Arc<crate::knowledge_wiki::PersistentWikiStore>>,
     /// Phase 172 — the durable correction ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
@@ -584,6 +589,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         seed_draft_llm,
         document_roots,
         wiki_sweep,
+        wiki_store,
     } = config;
     // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
     // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
@@ -1314,6 +1320,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             recall_log: recall_log.clone(),
             helpfulness_ledger: helpfulness_ledger.clone(),
             cooccurrence_ledger: cooccurrence_ledger.clone(),
+            wiki_store: wiki_store.clone(),
             correction_ledger: correction_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             recall_cluster_stat: recall_cluster_stat.clone(),
@@ -1417,6 +1424,9 @@ struct ConnectionContext {
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    /// Chapter Codex (CX.4) — read handle on the knowledge-wiki page
+    /// store for the `ListWikiPages` / `GetWikiPage` read-only IPC.
+    wiki_store: Option<Arc<crate::knowledge_wiki::PersistentWikiStore>>,
     /// Phase 172 — durable correction ledger for the read-only
     /// `GetLearningInsights` accumulated-corrections view.
     /// `None` = no auto-recall configured.
@@ -1533,6 +1543,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         recall_log,
         helpfulness_ledger,
         cooccurrence_ledger,
+        wiki_store,
         correction_ledger,
         persona_selection_stat,
         recall_cluster_stat,
@@ -2205,6 +2216,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 recall_log.as_ref(),
                                 helpfulness_ledger.as_ref(),
                                 cooccurrence_ledger.as_ref(),
+                                wiki_store.as_ref(),
                                 correction_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 recall_cluster_stat.as_ref(),
@@ -2683,6 +2695,7 @@ async fn run_single_connection_daemon(
         recall_log: None,
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
+        wiki_store: None,
         correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
@@ -2750,6 +2763,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         recall_log: None,
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
+        wiki_store: None,
         correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
@@ -2962,6 +2976,7 @@ async fn handle_query(
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    wiki_store: Option<&Arc<crate::knowledge_wiki::PersistentWikiStore>>,
     correction_ledger: Option<
         &Arc<crate::correction_ledger::PersistentCorrectionLedger>,
     >,
@@ -3744,6 +3759,35 @@ async fn handle_query(
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "memory_list_failed".into(),
                     message: e,
+                },
+            }
+        }
+        QueryPayload::ListWikiPages => {
+            // Chapter Codex — compact page rows, most-recent first. An
+            // absent store (storage not configured) is an empty codex,
+            // not an error.
+            let Some(store) = wiki_store else {
+                return QueryResponsePayload::ListWikiPages { pages: Vec::new() };
+            };
+            match store.list_summaries().await {
+                Ok(pages) => QueryResponsePayload::ListWikiPages { pages },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "wiki_list_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::GetWikiPage { topic } => {
+            // Chapter Codex — one topic's full page (`None` when it has
+            // no page yet, or no store is configured).
+            let Some(store) = wiki_store else {
+                return QueryResponsePayload::GetWikiPage { page: None };
+            };
+            match store.get_page(&topic).await {
+                Ok(page) => QueryResponsePayload::GetWikiPage { page },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "wiki_get_failed".into(),
+                    message: e.to_string(),
                 },
             }
         }

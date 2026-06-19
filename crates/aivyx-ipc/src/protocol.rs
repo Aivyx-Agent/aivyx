@@ -230,6 +230,18 @@ pub enum QueryPayload {
     GetMemoryGraph {
         limit: u32,
     },
+    /// Chapter Codex — list synthesized knowledge-wiki pages (compact
+    /// rows: topic + snippet + entry count + updated-at), most-recent
+    /// first. Read-only. Empty when no pages have been synthesized.
+    /// Responds with [`QueryResponsePayload::ListWikiPages`].
+    ListWikiPages,
+    /// Chapter Codex — fetch one topic's full knowledge-wiki page
+    /// (summary + backlinks + source-entry seqs). Read-only. Responds
+    /// with [`QueryResponsePayload::GetWikiPage`] (`page: None` when the
+    /// topic has no page yet).
+    GetWikiPage {
+        topic: String,
+    },
     /// Phase 78 — read-only learning-observability query.
     /// `window_secs = None` → the handler's default lookback.
     /// `#[serde(default)]` so older clients/frames decode.
@@ -601,6 +613,16 @@ pub enum QueryResponsePayload {
     GetMemoryGraph {
         nodes: Vec<MemoryGraphNode>,
         edges: Vec<crate::PairScore>,
+    },
+    /// Chapter Codex — response to [`QueryPayload::ListWikiPages`]:
+    /// compact page rows, most-recent first.
+    ListWikiPages {
+        pages: Vec<crate::wiki::WikiPageSummary>,
+    },
+    /// Chapter Codex — response to [`QueryPayload::GetWikiPage`]: the
+    /// full page, or `None` when the topic has no page yet.
+    GetWikiPage {
+        page: Option<crate::wiki::WikiPage>,
     },
     /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
     /// Newest-first paginated entries for one topic.
@@ -2954,6 +2976,56 @@ mod tests {
         let frame = encode_frame(&resp).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resp, "nodes + reused PairScore edges survive the frame");
+    }
+
+    #[test]
+    fn wiki_queries_and_responses_round_trip() {
+        // Requests.
+        for req in [
+            QueryPayload::ListWikiPages,
+            QueryPayload::GetWikiPage { topic: "deploy".into() },
+        ] {
+            let msg = FrontendMessage::Query { id: "wk".into(), payload: req.clone() };
+            let frame = encode_frame(&msg).expect("encode");
+            let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, msg);
+        }
+
+        // List response.
+        let list = QueryResponsePayload::ListWikiPages {
+            pages: vec![crate::wiki::WikiPageSummary {
+                topic: "deploy".into(),
+                snippet: "ships via ci…".into(),
+                entry_count: 4,
+                updated_at: 1000,
+            }],
+        };
+        let frame = encode_frame(&list).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, list);
+
+        // Full-page response (Some + None).
+        let page = crate::wiki::WikiPage {
+            topic: "deploy".into(),
+            summary: "Deploy ships via CI; rollback by image tag.".into(),
+            source_seqs: vec![1, 2, 3],
+            entry_count: 3,
+            backlinks: vec![crate::wiki::WikiBacklink {
+                topic: "ci".into(),
+                affinity: 0.8,
+                hops: 1,
+            }],
+            updated_at: 2000,
+            source_fingerprint: crate::wiki::WikiPage::fingerprint(&[1, 2, 3]),
+        };
+        for resp in [
+            QueryResponsePayload::GetWikiPage { page: Some(page) },
+            QueryResponsePayload::GetWikiPage { page: None },
+        ] {
+            let frame = encode_frame(&resp).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, resp);
+        }
     }
 
     #[test]
