@@ -137,7 +137,20 @@ pub struct SemanticMemoryContext {
     /// Chapter Loom (LM.4) — weight of the graph-walk ranker in the
     /// hybrid RRF fusion.
     recall_graph_weight: f32,
+    /// Chapter Codex (CX.6) — the knowledge-wiki page store, so a topic's
+    /// consolidated *page summary* can compete in recall as a single
+    /// high-signal unit. `None` ⇒ no wiki source (the default).
+    wiki_store: Option<Arc<crate::knowledge_wiki::PersistentWikiStore>>,
+    /// Chapter Codex (CX.6) — weight of the wiki-page ranker in the hybrid
+    /// RRF fusion. `0.0` (default) ⇒ off (byte-identical), even with a
+    /// store attached.
+    recall_wiki_weight: f32,
 }
+
+/// Chapter Codex (CX.6) — the sentinel `seq` a wiki page carries when it
+/// enters recall as a synthetic unit. `u64::MAX` so a page never collides
+/// with a real entry's `(topic, seq)` key (entry seqs count up from 0).
+const WIKI_PAGE_SEQ: u64 = u64::MAX;
 
 impl SemanticMemoryContext {
     pub fn new(
@@ -166,7 +179,24 @@ impl SemanticMemoryContext {
             recall_graph_hops: 0,
             recall_graph_decay: 0.5,
             recall_graph_weight: 1.0,
+            wiki_store: None,
+            recall_wiki_weight: 0.0,
         }
+    }
+
+    /// Chapter Codex (CX.6) — attach the knowledge-wiki store + the weight
+    /// of the wiki-page ranker in the hybrid fusion. With `weight = 0.0`
+    /// (the default) the wiki source stays off even when a store is
+    /// attached, so recall is byte-identical. The wiki ranker only fires
+    /// in the `recall_hybrid` path.
+    pub fn with_recall_wiki(
+        mut self,
+        store: Arc<crate::knowledge_wiki::PersistentWikiStore>,
+        weight: f32,
+    ) -> Self {
+        self.wiki_store = Some(store);
+        self.recall_wiki_weight = weight;
+        self
     }
 
     /// Chapter Loom (LM.4) — set the recall-fusion tuning. Builder; the
@@ -523,6 +553,50 @@ impl ContextProvider for SemanticMemoryContext {
                         graph_source_topics =
                             graph_ranks.iter().map(|(t, _)| t.clone()).collect();
                         sources.push((self.recall_graph_weight, graph_ranks));
+                    }
+                }
+            }
+
+            // Chapter Codex (CX.6) — the wiki-page ranker. BM25-rank the
+            // synthesized page *summaries* against the query and fuse the
+            // best ones as single high-signal units (one consolidated
+            // paragraph can out-cover a topic's scattered fragments per
+            // token). Each page enters as a synthetic entry keyed by
+            // `(topic, WIKI_PAGE_SEQ)`. Best-effort: a store/BM25 failure
+            // just omits the source.
+            if let (Some(store), true) =
+                (&self.wiki_store, self.recall_wiki_weight > 0.0)
+            {
+                if let Ok(pages) = store.all_pages().await {
+                    let q = aivyx_memory::bm25::tokenize(&query_text);
+                    if !pages.is_empty() && !q.is_empty() {
+                        let docs: Vec<Vec<String>> = pages
+                            .iter()
+                            .map(|p| aivyx_memory::bm25::tokenize_entry(&p.topic, &p.summary))
+                            .collect();
+                        let ranked = aivyx_memory::bm25::bm25_rank(
+                            &docs,
+                            &q,
+                            aivyx_memory::bm25::BM25_K1,
+                            aivyx_memory::bm25::BM25_B,
+                            self.rag_top_k,
+                        );
+                        let mut wiki_ranks: Vec<(String, u64)> = Vec::new();
+                        for (i, _score) in ranked {
+                            let page = &pages[i];
+                            let key = (page.topic.clone(), WIKI_PAGE_SEQ);
+                            wiki_ranks.push(key.clone());
+                            lookup.entry(key).or_insert_with(|| MemoryEntry {
+                                topic: page.topic.clone(),
+                                body: page.summary.clone(),
+                                seq: WIKI_PAGE_SEQ,
+                                created_at_secs: page.updated_at,
+                                last_read_at_secs: 0,
+                            });
+                        }
+                        if !wiki_ranks.is_empty() {
+                            sources.push((self.recall_wiki_weight, wiki_ranks));
+                        }
                     }
                 }
             }
@@ -1827,6 +1901,81 @@ mod tests {
             }
         }
         hits as f32 / cases.len() as f32
+    }
+
+    /// Chapter Codex (CX.6) — a synthesized wiki page enters recall as a
+    /// single high-signal unit when armed (`recall_wiki_weight > 0`), and
+    /// is absent when off — even though the page's topic has no matching
+    /// memory entry, so only the wiki source can surface it.
+    #[tokio::test]
+    async fn wiki_page_fuses_into_recall_when_armed() {
+        use crate::knowledge_wiki::{PersistentWikiStore, WikiPage};
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-wiki-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let st: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("s.redb")),
+            MasterKey::from_raw([91u8; 32]),
+        )
+        .await
+        .unwrap();
+        let wiki_store =
+            Arc::new(PersistentWikiStore::new(st.domain(KeyDomain::KnowledgeWiki)));
+        // A page whose summary carries the rare query term. Its topic is
+        // NOT in memory, so only the wiki source can recall it.
+        wiki_store
+            .put_page(&WikiPage {
+                topic: "kubernetes".into(),
+                summary: "kubernetes cluster autoscaling and node pool notes".into(),
+                source_seqs: vec![1, 2],
+                entry_count: 2,
+                backlinks: vec![],
+                updated_at: 10,
+                source_fingerprint: WikiPage::fingerprint(&[1, 2]),
+            })
+            .await
+            .unwrap();
+
+        // Some unrelated memory so recall has a base set.
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let s = m.put("notes", "favorite color is purple").await.unwrap();
+        m.put_vector("notes", s, vec![1.0, 1.0]).await.unwrap();
+
+        // Off (weight 0.0) → the page is not recalled.
+        let off = SemanticMemoryContext::new(
+            Arc::clone(&m),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_hybrid(true)
+        .with_recall_wiki(Arc::clone(&wiki_store), 0.0);
+        let block_off = off.recall("kubernetes autoscaling", sid()).await;
+        assert!(
+            block_off.map(|b| !b.contains("autoscaling and node pool")).unwrap_or(true),
+            "wiki off → page summary must not appear",
+        );
+
+        // Armed (weight 2.0) → the page summary is fused in.
+        let on = SemanticMemoryContext::new(
+            Arc::clone(&m),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_hybrid(true)
+        .with_recall_wiki(Arc::clone(&wiki_store), 2.0);
+        let block_on = on
+            .recall("kubernetes autoscaling", sid())
+            .await
+            .expect("a block");
+        assert!(
+            block_on.contains("autoscaling and node pool"),
+            "wiki armed → the consolidated page summary is recalled: {block_on}",
+        );
     }
 
     /// The chapter's headline claim, made measurable: over a fixture set

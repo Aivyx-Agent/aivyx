@@ -4988,6 +4988,13 @@ async fn run_async(
                 cfg.recall_graph_decay,
                 cfg.recall_graph_weight,
             );
+            // Chapter Codex (CX.6) — the knowledge-wiki page ranker.
+            // Default weight 0.0 ⇒ off (byte-identical); shares the same
+            // wiki store the read IPC + sweep use.
+            sc = sc.with_recall_wiki(
+                Arc::clone(&wiki_store),
+                cfg.recall_wiki_weight,
+            );
             Some(Arc::new(sc))
         }
         _ => None,

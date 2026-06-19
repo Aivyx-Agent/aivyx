@@ -1943,6 +1943,13 @@ pub struct EmbeddingConfig {
     /// gentler nudge. Defended to `>= 0`. Ignored when
     /// `recall_graph_hops = 0`.
     pub recall_graph_weight: f32,
+    /// Chapter Codex (CX.6) — weight of the knowledge-wiki **page** ranker
+    /// in the hybrid RRF fusion. `0.0` (default) ⇒ off (byte-identical):
+    /// a topic's consolidated page summary does not compete in recall. Any
+    /// value `> 0` arms it (requires `recall_hybrid` + synthesized pages),
+    /// letting one consolidated paragraph out-cover scattered fragments
+    /// per token. Defended to `>= 0`.
+    pub recall_wiki_weight: f32,
 }
 
 /// Chapter Loom (LM.4) — recall-fusion defaults. All chosen so the
@@ -1952,6 +1959,8 @@ pub const DEFAULT_RECALL_LEXICAL_WEIGHT: f32 = 1.0;
 pub const DEFAULT_RECALL_GRAPH_HOPS: u32 = 0;
 pub const DEFAULT_RECALL_GRAPH_DECAY: f32 = 0.5;
 pub const DEFAULT_RECALL_GRAPH_WEIGHT: f32 = 1.0;
+/// Chapter Codex (CX.6) — wiki-page ranker weight default: off.
+pub const DEFAULT_RECALL_WIKI_WEIGHT: f32 = 0.0;
 
 /// Default embeddings endpoint — the OpenAI public API. An
 /// operator who wants on-device embedding overrides this with
@@ -3990,6 +3999,8 @@ struct RawEmbedding {
     recall_graph_decay: Option<f32>,
     #[serde(default)]
     recall_graph_weight: Option<f32>,
+    #[serde(default)]
+    recall_wiki_weight: Option<f32>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -7248,6 +7259,10 @@ fn build_embedding_config(
         .recall_graph_weight
         .unwrap_or(DEFAULT_RECALL_GRAPH_WEIGHT)
         .max(0.0);
+    let recall_wiki_weight = raw
+        .recall_wiki_weight
+        .unwrap_or(DEFAULT_RECALL_WIKI_WEIGHT)
+        .max(0.0);
 
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
@@ -7278,6 +7293,7 @@ fn build_embedding_config(
         recall_graph_hops,
         recall_graph_decay,
         recall_graph_weight,
+        recall_wiki_weight,
     }))
 }
 
