@@ -172,7 +172,8 @@ use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsDeleteToolConfig,
     FsMetadataToolConfig, FsReadToolConfig, FsWriteToolConfig, LlmPlanner, LlmPlannerConfig,
     ShellExecToolConfig, Tool, ToolRegistry,
-    WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+    WebExtractTool, WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool,
+    WebPostToolConfig,
 };
 use aivyx_crypto::Argon2Params;
 use aivyx_memory::{
@@ -370,6 +371,21 @@ fn build_web_post_for_channel(
     let tool = WebPostToolConfig::new()
         .build()
         .map_err(|e| format!("failed to build web.post tool: {e}"))?;
+    Ok(Arc::new(tool))
+}
+
+/// Build `web.extract` for the given channel kind — Chapter Forge (FG.4).
+///
+/// Like `web.fetch` (and unlike `web.post`), `web.extract` is registered
+/// for **both** `Trusted` and `SemiTrusted` channels: it reuses the
+/// `net.fetch` scope, which lives in `CEILING_SEMITRUSTED`, so a
+/// Telegram-attached researcher that can fetch a URL can also read it.
+fn build_web_extract_for_channel(
+    _channel_kind: ChannelKind,
+) -> Result<Arc<WebExtractTool>, String> {
+    let tool = WebExtractToolConfig::new()
+        .build()
+        .map_err(|e| format!("failed to build web.extract tool: {e}"))?;
     Ok(Arc::new(tool))
 }
 
@@ -5244,6 +5260,12 @@ async fn run_async(
     tool_list.push(Arc::clone(&web_fetch_tool) as Arc<dyn Tool>);
     let web_post_tool: Arc<WebPostTool> = build_web_post_for_channel(channel_kind)?;
     tool_list.push(Arc::clone(&web_post_tool) as Arc<dyn Tool>);
+    // Chapter Forge (FG.4) — `web.extract` registers alongside
+    // `web.fetch` for all channel kinds (it reuses the `net.fetch`
+    // scope, which the SemiTrusted ceiling holds). "Read a page",
+    // not just "fetch a page".
+    let web_extract_tool: Arc<WebExtractTool> = build_web_extract_for_channel(channel_kind)?;
+    tool_list.push(Arc::clone(&web_extract_tool) as Arc<dyn Tool>);
 
     // Phase 109 — `net.dns` registers unconditionally (no
     // config required; uses the existing `net.dns` scope base
@@ -5308,7 +5330,7 @@ async fn run_async(
         let repos: Vec<std::path::PathBuf> =
             gc.repos.into_iter().map(|s| s.value).collect();
         let (git_status, git_diff) =
-            aivyx_core::GitReadToolConfig::new(repos).build().map_err(|e| {
+            aivyx_core::GitReadToolConfig::new(repos.clone()).build().map_err(|e| {
                 format!("failed to build git.read tool pair: {e}")
             })?;
         // The canonical allow-set is the same for both tools;
@@ -5318,6 +5340,21 @@ async fn run_async(
             git_status.repos().to_vec();
         tool_list.push(Arc::new(git_status) as Arc<dyn Tool>);
         tool_list.push(Arc::new(git_diff) as Arc<dyn Tool>);
+
+        // Chapter Forge (FG.4) — `git.commit` registers from the
+        // SAME `[git] repos` allow-set, gated by the `git.write`
+        // scope (Trusted-tier only). Confirm-first wires from
+        // `[access] confirm_destructive`, the same flag `fs.delete`
+        // uses. Like `git.read`, the write scope is role-config-
+        // driven (not auto-granted in the backcompat floor): an
+        // operator who wants the agent to commit declares
+        // `git.write:<repo>` in the role's `capability_scopes`.
+        let git_commit = aivyx_core::GitWriteToolConfig::new(repos)
+            .with_confirm_destructive(confirm_destructive)
+            .build()
+            .map_err(|e| format!("failed to build git.commit tool: {e}"))?;
+        tool_list.push(Arc::new(git_commit) as Arc<dyn Tool>);
+
         // Build a representative scope for the first repo so
         // the Local CLI's operator-held grants include
         // `git.read:<first_repo>/**`. Role-scoped grants in
@@ -8391,6 +8428,19 @@ mod tests {
         let tool = build_web_fetch_for_channel(ChannelKind::Telegram)
             .expect("telegram branch must build web.fetch cleanly");
         assert_eq!(tool.name(), "web.fetch");
+    }
+
+    #[test]
+    fn channels_receive_web_extract() {
+        // Chapter Forge (FG.4) — `web.extract` reuses the `net.fetch`
+        // scope, so it registers for BOTH tiers exactly like
+        // `web.fetch`. If this regresses to Trusted-only, a Telegram
+        // researcher that can fetch a page could no longer read it.
+        for kind in [ChannelKind::Local, ChannelKind::Telegram] {
+            let tool = build_web_extract_for_channel(kind)
+                .expect("web.extract must build for both channel kinds");
+            assert_eq!(tool.name(), "web.extract");
+        }
     }
 
     // -----------------------------------------------------------------

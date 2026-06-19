@@ -51,6 +51,7 @@ computes the capability the call needs, which the daemon enforces **before**
 |---|---|---|---|
 | `web.fetch` | `net.fetch` | SemiTrusted | HTTP GET a URL (read) |
 | `web.post` | `net.post` | Trusted | HTTP POST to a URL |
+| `web.extract` | `net.fetch` | SemiTrusted | GET a URL and return its readable article text (title + clean body), not raw HTML |
 | `net.dns` | `net.dns` | SemiTrusted | resolve a hostname |
 
 ## Shell (substrate)
@@ -66,7 +67,7 @@ computes the capability the call needs, which the daemon enforces **before**
 |---|---|---|---|
 | `git.status` | `git.read` | Trusted | working-tree status of a configured repo |
 | `git.diff` | `git.read` | Trusted | diff of a configured repo |
-| `git.commit` | `git.write` | Trusted | stage + commit in a configured repo; confirm-first when `confirm_destructive` *(tool lands FG.3)* |
+| `git.commit` | `git.write` | Trusted | stage given repo-relative paths + commit with a message in a configured repo; confirm-first when `confirm_destructive` |
 
 *The `git.write` base was added at Chapter Forge FG.2 — the destructive
 sibling A12 anticipated — gating `git.commit`. Trusted-tier only (writing
@@ -213,15 +214,16 @@ user-facing; the scope base groups capabilities):
 
 | Tool name(s) | Capability base | Why |
 |---|---|---|
-| `web.fetch` | `net.fetch` | "web" is the user-facing verb; the capability is generic outbound HTTP |
+| `web.fetch`, `web.extract` | `net.fetch` | "web" is the user-facing verb; both are outbound HTTP GETs (extract adds a readability pass) |
 | `web.post` | `net.post` | same |
 | `gmail.*` | `email.*` | the base is provider-neutral (`email.read/write/send`); Gmail is one implementation |
 | `git.status`, `git.diff` | `git.read` | one read base shared by both read tools (A12) |
+| `git.commit` | `git.write` | the destructive write base (A13, Chapter Forge); separate from `git.read` by invariant |
 | `web.search` | `web.search` | (matches — listed for completeness) |
 
 ---
 
 *This catalog is organized around `KNOWN_BASES`; the drift-guard test asserts every
-one of the 85 bases appears here. Runtime, per-instance tool introspection (live
+one of the 86 bases appears here. Runtime, per-instance tool introspection (live
 names + schemas the agent sees) is provided by the `tools.list` tool — Chapter Atlas
 AT.2.*

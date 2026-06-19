@@ -110,6 +110,11 @@ mod quality_tests {
         let (git_status, git_diff) = GitReadToolConfig::new(Vec::<PathBuf>::new())
             .build()
             .expect("git tools build");
+        // git.commit with an empty allow-set builds without a real repo
+        // on disk (no entries to canonicalize) — enough to sweep metadata.
+        let git_commit = GitWriteToolConfig::new(Vec::<PathBuf>::new())
+            .build()
+            .expect("git.commit builds");
         let mut tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(WebFetchToolConfig::new().build().expect("web.fetch")),
             Arc::new(WebPostToolConfig::new().build().expect("web.post")),
@@ -117,6 +122,7 @@ mod quality_tests {
             Arc::new(NetDnsTool::default()),
             Arc::new(git_status),
             Arc::new(git_diff),
+            Arc::new(git_commit),
             Arc::new(ShellExecToolConfig::new(dir.clone()).build().expect("shell")),
             Arc::new(FsReadToolConfig::new(dir.clone()).build().expect("fs.read")),
             Arc::new(FsWriteToolConfig::new(dir.clone()).build().expect("fs.write")),

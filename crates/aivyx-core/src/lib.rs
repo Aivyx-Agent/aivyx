@@ -51,8 +51,8 @@ pub use tools::{
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitCommitTool, GitDiffTool,
     GitReadToolConfig, GitStatusTool, GitWriteToolConfig, NetDnsTool, ShellExecTool,
     ShellExecToolConfig, SkillReader,
-    SkillsInvokeTool, SkillsListTool, WebFetchTool, WebFetchToolConfig, WebPostTool,
-    WebPostToolConfig,
+    SkillsInvokeTool, SkillsListTool, WebExtractTool, WebExtractToolConfig, WebFetchTool,
+    WebFetchToolConfig, WebPostTool, WebPostToolConfig,
 };
 
 use std::sync::Arc;

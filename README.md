@@ -191,7 +191,7 @@ operator
    ├── turn loop (capability check → audit → execute → audit)
    ├── HMAC-chained audit log (offline-verifiable)
    ├── encrypted redb store (Argon2id → HKDF → ChaCha20-Poly1305)
-   ├── 13 substrate tools + role-gated infrastructure tools
+   ├── 15 substrate tools + role-gated infrastructure tools
    └── tool process bridge (third-party + productivity tools as subprocesses)
 ```
 
@@ -199,7 +199,7 @@ Thirty-two crates in the workspace. The substrate core:
 
 | Crate | What it owns |
 |---|---|
-| `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 13 substrate tools |
+| `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 15 substrate tools (incl. `web.extract`, `git.commit`) |
 | `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, the active scope bases |
 | `aivyx-crypto` | Argon2id, HKDF-SHA256, ChaCha20-Poly1305 |
 | `aivyx-storage` | redb-backed encrypted store, 21 key domains |

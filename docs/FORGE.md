@@ -1,11 +1,11 @@
 # New Tools — `web.extract` + `git.write` (Chapter Forge)
 
-> **Status:** 🔨 **FG.3 — `git.commit` tool shipped** (shell-out in
-> `aivyx-core/tools/git.rs`, repo-allowlist gated, confirm-first, Trusted-only;
-> 8 new tests incl. real-tmpdir happy path / denial / confirm gate). FG.1
-> (`web.extract`) + FG.2 (`git.write` base + A13 amendment) shipped; wiring both
-> tools into the agent `tool_list` + TOOLS.md rows + quality sweep is FG.4.
-> The locked reference for the first
+> **Status:** 🔨 **FG.4 — both tools wired + legible.** `web.extract` registers
+> for all channels (reuses `net.fetch`); `git.commit` registers from the `[git]
+> repos` allow-set with confirm-first from `[access] confirm_destructive`.
+> `docs/TOOLS.md` rows + name→scope map + the `check_tool_quality` sweep +
+> README updated; registration test added. FG.1–FG.3 shipped. Only FG.5
+> (finalize) remains. The locked reference for the first
 > **new-tools breadth** chapter after Atlas. It adds two substrate capabilities —
 > **`web.extract`** (fetch a URL → clean readable text) and **`git.write`**
 > (commit/stage in an allowed repo) — the two the operator picked from the Atlas
