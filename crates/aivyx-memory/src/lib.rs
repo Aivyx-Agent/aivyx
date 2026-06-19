@@ -116,6 +116,10 @@ pub use crate::ann_index::{
     build_ann_index, query_ann, AnnIndex,
 };
 
+// Chapter Loom (LM.2) — pure BM25 lexical scorer backing
+// `Memory::lexical_search_scored`.
+pub mod bm25;
+
 /// A single memory record.
 ///
 /// This is what `Memory::put` stores and what `Memory::get_recent`
@@ -315,6 +319,66 @@ pub trait Memory: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, MemoryError>;
+
+    /// Chapter Loom (LM.2) — **BM25-scored** lexical retrieval over the
+    /// whole corpus. Where [`Self::search`] is an unscored `contains`
+    /// discovery scan (newest-first), this ranks entries by BM25 term
+    /// weighting — rare query terms (acronyms, codenames, identifiers)
+    /// dominate, repeated terms saturate, longer docs are normalized —
+    /// so it surfaces the exact-term matches the semantic ranker tends to
+    /// miss. Returns up to `limit` `(entry, score)` pairs, score
+    /// descending; ties break by topic asc then seq desc to match the
+    /// fusion pipeline's disambiguation.
+    ///
+    /// Default-implemented in terms of [`Self::search`] (the empty query
+    /// returns the full corpus in both substrate impls) + the pure
+    /// [`crate::bm25`] scorer, so `InMemoryMemory` and `RedbMemory` share
+    /// one BM25 implementation with no per-impl code. A v1 full scan; a
+    /// persistent inverted index is a documented deferral if the corpus
+    /// outgrows it. `limit == 0` is an error (matching `search`); an
+    /// empty/all-punctuation query returns no hits.
+    async fn lexical_search_scored(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<(MemoryEntry, f32)>, MemoryError> {
+        if limit == 0 {
+            return Err(MemoryError::ZeroLimit);
+        }
+        let q = crate::bm25::tokenize(query);
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Empty query → the full corpus in both impls (the `search`
+        // contract). We re-rank it with BM25, so `search`'s newest-first
+        // ordering is irrelevant here.
+        let corpus = self.search("", usize::MAX).await?;
+        let docs: Vec<Vec<String>> = corpus
+            .iter()
+            .map(|e| crate::bm25::tokenize_entry(&e.topic, &e.body))
+            .collect();
+        let ranked = crate::bm25::bm25_rank(
+            &docs,
+            &q,
+            crate::bm25::BM25_K1,
+            crate::bm25::BM25_B,
+            limit,
+        );
+        // Stable secondary ordering (topic asc, seq desc) for score ties,
+        // matching `recall_fusion`'s tie-break so the downstream RRF sees
+        // a canonical order regardless of `bm25_rank`'s index tie-break.
+        let mut hits: Vec<(MemoryEntry, f32)> = ranked
+            .into_iter()
+            .map(|(i, score)| (corpus[i].clone(), score))
+            .collect();
+        hits.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.topic.cmp(&b.0.topic))
+                .then_with(|| b.0.seq.cmp(&a.0.seq))
+        });
+        Ok(hits)
+    }
 
     /// Phase 74 — return every distinct topic name in the
     /// substrate, sorted ascending. Drives the Web UI Memory
@@ -1652,5 +1716,67 @@ mod tests {
         let hits = mem.semantic_search(&[1.0, 0.0], 5).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].body, "real");
+    }
+
+    // ---- Chapter Loom (LM.2) — lexical_search_scored ----
+
+    #[tokio::test]
+    async fn lexical_search_scored_ranks_rare_term_first() {
+        // The shared default method, end-to-end over a real substrate:
+        // a query for a rare term surfaces its lone carrier, ranked top,
+        // above entries that share only common words.
+        let mem = InMemoryMemory::new();
+        mem.put("notes", "the cat sat on the mat").await.unwrap();
+        mem.put("notes", "the dog ran in the park").await.unwrap();
+        mem.put("ops", "the kubernetes cluster deploy log").await.unwrap();
+
+        let hits = mem.lexical_search_scored("kubernetes", 10).await.unwrap();
+        assert_eq!(hits.len(), 1, "only the ops entry carries the rare term");
+        assert_eq!(hits[0].0.topic, "ops");
+        assert!(hits[0].1 > 0.0);
+    }
+
+    #[tokio::test]
+    async fn lexical_search_scored_matches_topic_terms() {
+        // A query word that lives in the topic (not the body) still hits,
+        // since entries tokenize topic + body.
+        let mem = InMemoryMemory::new();
+        mem.put("kubernetes", "scaled the fleet").await.unwrap();
+        mem.put("billing", "scaled the fleet").await.unwrap();
+
+        let hits = mem.lexical_search_scored("kubernetes", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0.topic, "kubernetes");
+    }
+
+    #[tokio::test]
+    async fn lexical_search_scored_empty_query_and_zero_limit() {
+        let mem = InMemoryMemory::new();
+        mem.put("t", "something").await.unwrap();
+        // Whitespace/punctuation-only query → no tokens → no hits.
+        assert!(mem.lexical_search_scored("   ,. ", 10).await.unwrap().is_empty());
+        // Zero limit is an error, matching `search`.
+        assert!(matches!(
+            mem.lexical_search_scored("something", 0).await,
+            Err(MemoryError::ZeroLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn lexical_search_scored_respects_limit_and_is_deterministic() {
+        let mem = InMemoryMemory::new();
+        for i in 0..5 {
+            mem.put("t", &format!("rust entry number {i}")).await.unwrap();
+        }
+        let first = mem.lexical_search_scored("rust", 3).await.unwrap();
+        assert_eq!(first.len(), 3);
+        let keys: Vec<(String, u64)> =
+            first.iter().map(|(e, _)| (e.topic.clone(), e.seq)).collect();
+        for _ in 0..3 {
+            let again = mem.lexical_search_scored("rust", 3).await.unwrap();
+            let again_keys: Vec<(String, u64)> =
+                again.iter().map(|(e, _)| (e.topic.clone(), e.seq)).collect();
+            assert_eq!(keys, again_keys, "deterministic ordering");
+        }
     }
 }
