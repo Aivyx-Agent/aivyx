@@ -401,6 +401,9 @@ impl ContextProvider for SemanticMemoryContext {
         let graph_fused = self.recall_hybrid
             && self.recall_graph_hops > 0
             && self.cooccurrence_ledger.is_some();
+        // Chapter Loom (LM.5) — topics the graph-walk source contributed
+        // this turn, for the source-labeled recall breadcrumb below.
+        let mut graph_source_topics: Vec<String> = Vec::new();
 
         let scored = if self.recall_hybrid {
             let semantic = match self
@@ -517,6 +520,8 @@ impl ContextProvider for SemanticMemoryContext {
                         }
                     }
                     if !graph_ranks.is_empty() {
+                        graph_source_topics =
+                            graph_ranks.iter().map(|(t, _)| t.clone()).collect();
                         sources.push((self.recall_graph_weight, graph_ranks));
                     }
                 }
@@ -710,6 +715,22 @@ impl ContextProvider for SemanticMemoryContext {
                 "aivyx recall-cluster: injected {n_sib} affined \
                  sibling(s) (sharing rag_top_k)"
             );
+        }
+        // Chapter Loom (LM.5) — source label for graph-walk hits. How
+        // many of the actually-injected memories were surfaced by the
+        // co-occurrence walk (vs. the semantic / lexical rankers).
+        if !graph_source_topics.is_empty() {
+            let n_graph = final_hits
+                .iter()
+                .filter(|(e, _)| graph_source_topics.contains(&e.topic))
+                .count();
+            if n_graph > 0 {
+                eprintln!(
+                    "aivyx recall-graph: injected {n_graph} via graph-walk \
+                     (≤{}-hop affinity)",
+                    self.recall_graph_hops
+                );
+            }
         }
         // Phase 84 (Q4a) — record this turn for the Phase 78
         // surface (the actually-injected driver→sibling pairs,
@@ -1765,5 +1786,107 @@ mod tests {
             .await
             .expect("a block is produced");
         assert!(!block.contains("deploy runbook"), "graph off → no deploy: {block}");
+    }
+
+    // ---- Chapter Loom (LM.5) — recall@k eval harness -----------
+
+    /// A constant-embedding provider: every input maps to the same
+    /// vector, so a doc's semantic cosine is governed entirely by the
+    /// vector we assign it via `put_vector` — `[1,0]` → cosine 1.0
+    /// (semantically top), `[0,1]` → cosine 0.0 (semantically invisible).
+    /// This makes the eval fully deterministic and lets us engineer docs
+    /// that semantic search alone must miss.
+    struct ConstProvider;
+    #[async_trait]
+    impl EmbeddingProvider for ConstProvider {
+        async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Ok(texts.iter().map(|_| vec![1.0, 0.0]).collect())
+        }
+        fn model(&self) -> &str {
+            "const"
+        }
+        fn dimensions(&self) -> usize {
+            2
+        }
+    }
+
+    /// recall@k over a fixture set: the fraction of `(query, expected)`
+    /// cases whose recalled block contains the expected fragment. `k` is
+    /// the context's `rag_top_k`. This is the harness future recall
+    /// changes are measured against.
+    async fn recall_fraction(
+        ctx: &SemanticMemoryContext,
+        cases: &[(&str, &str)],
+    ) -> f32 {
+        let mut hits = 0usize;
+        for (q, expected) in cases {
+            if let Some(block) = ctx.recall(q, sid()).await {
+                if block.contains(expected) {
+                    hits += 1;
+                }
+            }
+        }
+        hits as f32 / cases.len() as f32
+    }
+
+    /// The chapter's headline claim, made measurable: over a fixture set
+    /// where one target is reachable only lexically (a rare term) and one
+    /// only associatively (a co-occurrence edge), graph-augmented fusion
+    /// recalls **strictly more** than semantic-only — and the lexical /
+    /// graph targets are exactly the ones semantic-only drops.
+    #[tokio::test]
+    async fn eval_fusion_beats_semantic_only_recall_at_k() {
+        let (cooc, _log) = loom_store().await;
+        let now = now_secs();
+        // anchor co-occurs with deploy (the graph-only target).
+        cooc.record_window(&[(("anchor".into(), "deploy".into()), 5.0)], now)
+            .await
+            .unwrap();
+
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        // Distractors first (cosine 1.0) ...
+        for i in 0..2 {
+            let d = m.put("misc", &format!("distractor filler {i}")).await.unwrap();
+            m.put_vector("misc", d, vec![1.0, 0.0]).await.unwrap();
+        }
+        // ... then the anchor LAST so its newer seq wins the cosine tie and
+        // it stays in the semantic top-k (and so seeds the graph walk).
+        let a = m.put("anchor", "anchor note about the project").await.unwrap();
+        m.put_vector("anchor", a, vec![1.0, 0.0]).await.unwrap();
+        // Lexical-only target: rare term, semantically invisible (cosine 0).
+        let b = m.put("atc-417", "atc-417 release notes and checklist").await.unwrap();
+        m.put_vector("atc-417", b, vec![0.0, 1.0]).await.unwrap();
+        // Graph-only target: reached via the anchor→deploy edge, cosine 0.
+        let c = m.put("deploy", "deploy runbook lives in the wiki").await.unwrap();
+        m.put_vector("deploy", c, vec![0.0, 1.0]).await.unwrap();
+
+        let cases: &[(&str, &str)] = &[
+            ("anchor note", "anchor note about"),     // semantic
+            ("atc-417", "atc-417 release notes"),       // lexical-only
+            ("anchor note", "deploy runbook"),          // graph-only (seed=anchor)
+        ];
+
+        // Semantic-only, with a similarity floor that drops the cosine-0
+        // targets. k = rag_top_k = 3.
+        let semantic_only =
+            SemanticMemoryContext::new(Arc::clone(&m), Arc::new(ConstProvider), 3, 0.5);
+
+        // Full graph-augmented fusion (hybrid + 1-hop graph).
+        let cfg = aivyx_config::RecallClusterConfig {
+            enabled: true,
+            max_siblings: 3,
+            min_affinity: 1.0,
+        };
+        let fusion = SemanticMemoryContext::new(Arc::clone(&m), Arc::new(ConstProvider), 3, 0.5)
+            .with_cluster(Arc::clone(&cooc), cfg)
+            .with_recall_hybrid(true)
+            .with_recall_fusion(1.0, 1, 0.5, 1.0);
+
+        let sem = recall_fraction(&semantic_only, cases).await;
+        let fus = recall_fraction(&fusion, cases).await;
+
+        assert!(fus > sem, "fusion recall@3 {fus} must beat semantic-only {sem}");
+        assert!((fus - 1.0).abs() < 1e-6, "fusion recalls all three targets (got {fus})");
+        assert!(sem < 0.5, "semantic-only misses the lexical + graph targets (got {sem})");
     }
 }
