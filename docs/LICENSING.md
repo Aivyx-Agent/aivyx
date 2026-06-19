@@ -124,7 +124,7 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 | **CR.3** ✅ | **Commercial-license path** | DONE. [`COMMERCIAL.md`](../COMMERCIAL.md) at the repo root: the §4 grant restated in plain English (free: individuals, non-commercial, non-profits, education; paid: any for-profit/internal/production/revenue/resale use), a quick-check table, the 4-year→MIT reassurance, the **aivyx@aivyx-studio.com** contact path with what to include, and a per-engagement pricing placeholder. `LICENSE` already points here. |
 | **CR.4** ✅ | **Contributor terms** | DONE. Operator chose the **CLA** (stronger) over a DCO — a plain DCO certifies origin only and does **not** grant commercial-sublicensing rights, which the paid-license model requires. Shipped [`CLA.md`](../CLA.md) (v1.0: a *license grant*, not assignment — contributor keeps copyright, grants the Licensor a perpetual/irrevocable right to relicense **and commercially sublicense** Contributions; Apache-ICLA-shaped + employer/patent/third-party clauses) and [`CONTRIBUTING.md`](../CONTRIBUTING.md) (the contributor entry point). **Acceptance = `git commit -s` sign-off**, which certifies the DCO *and* accepts the CLA per-contribution; maintainers can't merge un-signed-off commits. The gate now **precedes** any external PR (§3). |
 | **CR.5** ✅ | **Positioning & docs refresh** | DONE. Corrected every "open source"/"MIT" claim about *Aivyx's own code* to "source-available under BUSL-1.1": `README.md` (License & trademark section + Contributing note pointing at the CLA), `TRADEMARK.md` (incl. fixing "use it commercially" → needs a commercial license), and `DESIGN.md` "Deliverable 2 — The Open-Core Line" via an inline note + **[Amendment A14](amendments/2026-06-19-busl-relicense.md)** (a LOCKED contract section can't be corrected by prose alone). Added the licensing **FAQ (§8)** cross-linking `COMMERCIAL.md`. Left third-party MIT mentions alone (Ollama/llama.cpp in INSTALL, Hermes in ROADMAP — those *are* MIT). PRODUCT.md carries no licensing clause → untouched. GitHub repo description is currently empty (no "open source" claim to correct); when one is set, phrase it "source-available." |
-| **CR.6** | **First BSL release** | Tag the first version under BSL (**v0.3.0** or **v1.0** — operator's call at the time); cargo-dist release notes lead with the license change; record the green release run. |
+| **CR.6** 🚢 | **First BSL release** | IN FLIGHT. Operator chose **v0.3.0** (incremental; v1.0 held for a real stability milestone). Workspace version bumped 0.2.0 → 0.3.0 (Cargo.toml + Cargo.lock); `CHANGELOG.md` 0.3.0 section **leads with the license change** (then Contacts/Genesis/Harbor/Throttle since the Studio) — cargo-dist sources release notes from it. Tag `v0.3.0` (annotated) triggers `release.yml` → the quality-gate-gated cargo-dist pipeline builds the 4 musl/darwin binaries + shell installer and publishes the GitHub release. **Record the green release run here once it lands.** |
 
 **Discipline:** CR.1 is a hard gate — if a dependency's license is incompatible
 with shipping the combined work under BSL, that's a blocker to resolve (swap the
@@ -211,8 +211,10 @@ change first. Recorded so it isn't rediscovered the hard way.
   trailer certifies the DCO *and* accepts the CLA), keeping friction near-DCO-low.
   *Open follow-up:* have a lawyer review `CLA.md` before the first external PR is
   actually merged — it is a sound Apache-ICLA-derived draft, not legal advice.
-- **First BSL version number** (CR.6) — v0.3.0 (incremental) vs. v1.0 (signals the
-  model is set). Operator's call at release time.
+- **First BSL version number** (CR.6) — ✅ **RESOLVED: v0.3.0.** Incremental from
+  v0.2.0; honest about pre-1.0 maturity (v0.2.0 shipped "early pre-release"). The
+  license change is the release headline regardless of the number; v1.0 is held
+  for a real stability milestone.
 - **crates.io** — not currently a distribution channel (releases are cargo-dist
   binaries + GHCR), so its OSI-license preference doesn't bind us today; revisit
   only if/when publishing crates.

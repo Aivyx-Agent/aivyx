@@ -5,8 +5,50 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## 0.3.0 — source-available (BUSL-1.1) (2026-06-19)
+
+**The headline is the license.** Aivyx moves from **MIT** to the **Business
+Source License 1.1 (BUSL-1.1)**: the whole public workspace is now
+**source-available** — **free for personal, individual, and non-commercial use**,
+with a **paid commercial license for business or production use** — and **every
+released version auto-reverts to MIT four years after it ships.** BUSL-1.1 is
+source-available, *not* OSI "open source," and we no longer call it that.
+**v0.2.0 and every prior release remain MIT in perpetuity** — a license can't be
+revoked; the relicense applies from this tag forward. See [`LICENSE`](LICENSE),
+[`COMMERCIAL.md`](COMMERCIAL.md), and [`docs/LICENSING.md`](docs/LICENSING.md)
+(model + FAQ). This release also lands three breadth chapters since the Studio:
+Contacts, Genesis, and the Docker appliance (Harbor).
+
+### Changed
+
+- **Relicensed MIT → BUSL-1.1 (Chapter Charter).** `LICENSE` is the full
+  canonical BUSL-1.1 (Additional Use Grant = personal/non-commercial; Change
+  Date = 4 years per release; Change License = **MIT**, preserved at
+  [`LICENSES/MIT.txt`](LICENSES/MIT.txt)). A dependency-license audit (`cargo
+  deny check licenses`, all-features) confirmed no copyleft poisons the combined
+  work. Every "open source"/"MIT" claim about Aivyx's own code is now
+  "source-available under BUSL-1.1" (README, TRADEMARK, and DESIGN.md's
+  open-core deliverable via **Amendment A14**).
+- **Contributing now requires a CLA** ([`CONTRIBUTING.md`](CONTRIBUTING.md) +
+  [`CLA.md`](CLA.md)), accepted via a `git commit -s` sign-off — necessary so the
+  free + commercial dual model can lawfully cover contributed code.
+
 ### Added
 
+- **Google Contacts (Chapter Contacts).** A new `aivyx-contacts` tool process
+  (People API) with six tools over `contacts.read`/`contacts.write`
+  (`contacts.search`/`list`/`get`/`create`/`update`/`delete`); connect with
+  `aivyx connect contacts`. The fifth Google integration on the substrate
+  pattern. See [`docs/CONTACTS.md`](docs/CONTACTS.md).
+- **Unified agent creation (Chapter Genesis).** One onboarding flow across CLI
+  and web: the Profile drafter is lifted into the daemon (`DraftProfile` IPC)
+  and a "Create your agent" flow (Profile → Persona → access) lands in the
+  Studio. See [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
+- **Docker server appliance (Chapter Harbor).** A `docker-compose` deployment of
+  the daemon + Studio in a container (distinct from the desktop local-first
+  install), with two opt-in web-exposure knobs (`web_ui_host`,
+  `web_ui_allowed_origins`); CI publishes the image to GHCR. See
+  [`docs/DOCKER.md`](docs/DOCKER.md).
 - **Tool-call rate limits & quotas (Chapter Throttle).** A third dispatch gate —
   after the capability + role gates, before execute — bounds *how often* tools
   run, the sibling of Chapter K's dollar budgets for call counts. Opt-in
