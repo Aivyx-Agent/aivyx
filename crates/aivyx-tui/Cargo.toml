@@ -20,7 +20,6 @@ path = "src/lib.rs"
 # IPC types it renders, and reuses `render_for_cli` text content
 # for the chat-line mapping. No new substrate concern.
 aivyx-channel = { path = "../aivyx-channel" }
-aivyx-core = { path = "../aivyx-core" }
 
 # Phase 185 — the deliberate dependency break, quarantined here.
 # `ratatui` is the terminal-UI library; `crossterm` is its event

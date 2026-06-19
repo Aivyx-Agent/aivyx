@@ -26,7 +26,6 @@ thiserror = { workspace = true }
 # `aivyx_channel::SessionConfig` minus the local-only fields.
 aivyx-llm = { path = "../aivyx-llm" }
 aivyx-storage = { path = "../aivyx-storage" }
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Phase 107 task 2 — twilight-rs is the thin protocol wrapper for
@@ -56,6 +55,5 @@ twilight-model = "0.16"
 # two-partition test exercises the same multi-tenant story the
 # Telegram precedent pins.
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
-aivyx-memory = { path = "../aivyx-memory" }
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-crypto = { path = "../aivyx-crypto" }

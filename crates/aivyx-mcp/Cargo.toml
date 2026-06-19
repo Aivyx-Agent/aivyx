@@ -17,8 +17,6 @@ async-trait = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
-thiserror = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 bytes = { workspace = true }

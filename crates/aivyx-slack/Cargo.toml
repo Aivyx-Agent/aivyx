@@ -25,7 +25,6 @@ thiserror = { workspace = true }
 # DiscordSessionConfig minus the Discord-specific fields.
 aivyx-llm = { path = "../aivyx-llm" }
 aivyx-storage = { path = "../aivyx-storage" }
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Phase 108 task 2 — slack-morphism is the maintained Rust SDK
@@ -45,13 +44,6 @@ serde_json = { workspace = true }
 # without the manifest churning.
 slack-morphism = { version = "2", default-features = false, features = ["hyper", "axum"] }
 
-# slack-morphism's Socket Mode client needs a SlackApiToken handle
-# constructed from the operator's bot + app tokens; the wrapper
-# helpers want rsb_derive's builder pattern. Both transitive via
-# slack-morphism but listed explicitly so the dep is visible in
-# operator-side audits.
-rsb_derive = "0.5"
-
 # Phase 111 — slack-morphism's error_handler callback returns
 # `http::StatusCode`. The `http` crate is transitive via reqwest
 # / hyper already in the workspace; promoting to a direct dep
@@ -60,6 +52,5 @@ http = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
-aivyx-memory = { path = "../aivyx-memory" }
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-crypto = { path = "../aivyx-crypto" }

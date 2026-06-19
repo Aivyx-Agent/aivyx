@@ -23,13 +23,6 @@ serde_json = { workspace = true }
 # async client).
 tokio = { workspace = true, features = ["rt", "io-util", "sync", "time", "fs", "macros"] }
 
-# Base64 for PKCE.
-base64 = { workspace = true }
-
-# Uuid for the OAuth `state` parameter (CSRF binding between
-# consent URL and loopback callback).
-uuid = { workspace = true }
-
 thiserror = { workspace = true }
 
 [dev-dependencies]

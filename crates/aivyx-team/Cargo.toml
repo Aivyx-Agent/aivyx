@@ -34,8 +34,6 @@ tokio = { workspace = true, features = ["sync"] }
 # J.4.2: the TeamRuntime runs a DAG's independent ready steps concurrently
 # via join_all.
 futures-util = { workspace = true }
-toml = "0.8"
-thiserror = { workspace = true }
 
 [dev-dependencies]
 # Turn-running tests need a Tokio runtime for the sub-turn; J.4.2's

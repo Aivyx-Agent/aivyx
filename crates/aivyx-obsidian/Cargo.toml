@@ -34,11 +34,6 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# TOML for the operator-supplied config file at
-# `~/.aivyx/tool-processes/obsidian/config.toml` carrying
-# the vault path.
-toml = "0.8"
-
 thiserror = { workspace = true }
 
 [dev-dependencies]

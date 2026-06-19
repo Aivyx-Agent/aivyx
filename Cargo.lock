@@ -99,7 +99,6 @@ dependencies = [
  "aivyx-google-oauth",
  "aivyx-tool",
  "async-trait",
- "base64 0.22.1",
  "chrono",
  "futures-util",
  "reqwest 0.12.28",
@@ -132,13 +131,11 @@ dependencies = [
  "aivyx-discord",
  "aivyx-ipc",
  "aivyx-llm",
- "aivyx-mcp",
  "aivyx-memory",
  "aivyx-slack",
  "aivyx-storage",
  "aivyx-team",
  "aivyx-telegram",
- "aivyx-tool",
  "aivyx-voice",
  "async-trait",
  "base64 0.22.1",
@@ -161,7 +158,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
- "toml_edit 0.22.27",
  "uuid 1.23.0",
  "zeroize",
 ]
@@ -189,29 +185,18 @@ dependencies = [
  "aivyx-tui",
  "aivyx-voice",
  "async-trait",
- "base64 0.22.1",
- "chrono",
  "cron",
  "futures-util",
- "hmac 0.13.0",
- "http-body-util",
- "hyper",
- "hyper-util",
- "lettre",
  "notify",
  "reqwest 0.12.28",
  "rpassword",
  "secrecy",
  "serde",
- "serde_jcs",
  "serde_json",
- "sha2 0.11.0",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite 0.26.2",
  "toml_edit 0.22.27",
  "uuid 1.23.0",
- "zeroize",
 ]
 
 [[package]]
@@ -222,7 +207,6 @@ dependencies = [
  "aivyx-cost",
  "aivyx-crypto",
  "aivyx-storage",
- "async-trait",
  "globset",
  "secrecy",
  "serde",
@@ -260,7 +244,6 @@ dependencies = [
  "aivyx-storage",
  "async-trait",
  "base64 0.22.1",
- "bytes",
  "futures-util",
  "jsonschema",
  "libc",
@@ -303,10 +286,8 @@ dependencies = [
  "aivyx-core",
  "aivyx-crypto",
  "aivyx-llm",
- "aivyx-memory",
  "aivyx-storage",
  "async-trait",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -347,7 +328,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "reqwest 0.12.28",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -359,13 +339,11 @@ dependencies = [
 name = "aivyx-google-oauth"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "uuid 1.23.0",
 ]
 
 [[package]]
@@ -415,9 +393,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
- "uuid 1.23.0",
 ]
 
 [[package]]
@@ -483,7 +459,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "toml 0.8.23",
 ]
 
 [[package]]
@@ -495,12 +470,9 @@ dependencies = [
  "aivyx-core",
  "aivyx-crypto",
  "aivyx-llm",
- "aivyx-memory",
  "aivyx-storage",
  "async-trait",
  "http",
- "rsb_derive",
- "serde",
  "serde_json",
  "slack-morphism",
  "thiserror 2.0.18",
@@ -531,9 +503,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
- "toml 0.8.23",
 ]
 
 [[package]]
@@ -572,7 +542,6 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "async-trait",
- "bytes",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -603,7 +572,6 @@ name = "aivyx-tui"
 version = "0.3.0"
 dependencies = [
  "aivyx-channel",
- "aivyx-core",
  "crossterm 0.29.0",
  "ratatui",
  "serde_json",
@@ -627,7 +595,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "toml 0.8.23",
  "uuid 1.23.0",
  "voice-g2p",

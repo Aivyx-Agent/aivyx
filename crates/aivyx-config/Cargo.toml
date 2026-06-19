@@ -63,11 +63,6 @@ aivyx-capability = { path = "../aivyx-capability" }
 # is a one-way edge (it does not depend on `aivyx-config`).
 aivyx-cost = { path = "../aivyx-cost" }
 
-# `async_trait` is not strictly required (the one async method lives
-# directly on `AivyxConfig`, not on a trait), but keeping it aligned
-# with the rest of the workspace avoids an odd-crate-out flag later.
-async-trait = { workspace = true }
-
 # Phase 74 — `[[memory.retention]]` topic-glob validation. The
 # globset crate is already in workspace as a transitive of
 # aivyx-capability (Scope::matches uses it for capability-scope

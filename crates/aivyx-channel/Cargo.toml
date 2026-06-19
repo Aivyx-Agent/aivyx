@@ -10,6 +10,12 @@ authors.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+# `aivyx-voice` is an optional dep pulled only by the `channel-voice` feature
+# (`dep:aivyx-voice`); cargo-machete can't see feature-gated optional deps and
+# false-flags it as unused.
+[package.metadata.cargo-machete]
+ignored = ["aivyx-voice"]
+
 [features]
 default = []
 # Phase 134 — embedded Rust-native inference via mistral.rs. Opt-in
@@ -136,13 +142,6 @@ aivyx-discord = { path = "../aivyx-discord" }
 # session-driver layer but the live Socket Mode wiring lands
 # alongside the Discord daemon-frontend.
 aivyx-slack = { path = "../aivyx-slack" }
-aivyx-mcp = { path = "../aivyx-mcp" }
-# Phase 49 — Tool Process IPC Foundation (PRODUCT.md P12). The
-# binary spawns one ToolProcessBridge per `[[tool_process]]` entry
-# at startup, registers their ToolProxy instances into the
-# ToolRegistry, and SIGKILLs them via kill_on_drop on shutdown.
-# Same shape as the MCP wiring above.
-aivyx-tool = { path = "../aivyx-tool" }
 
 # Phase 9 Task 3 — unified config loader. The binary's ten
 # `std::env::var` call sites collapse into a single
@@ -191,11 +190,6 @@ notify = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 serde_jcs = { workspace = true }
-# Phase 58 — `aivyx profile edit` uses `toml_edit` for surgical
-# updates to the `[profile]` section in `aivyx.toml` (preserves
-# comments, whitespace, and unrelated sections). Q2(a) at Phase 58
-# sign-off.
-toml_edit = "0.22"
 # Phase 36 — Ollama model management tools use reqwest directly for
 # Ollama REST API calls (GET /api/tags, POST /api/show, POST /api/pull).
 # Already a workspace dep and transitive via aivyx-core.

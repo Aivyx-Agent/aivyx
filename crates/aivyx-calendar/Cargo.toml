@@ -42,9 +42,6 @@ reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Base64 for OAuth (PKCE).
-base64 = { workspace = true }
-
 # TOML for the operator-supplied OAuth client config file at
 # `~/.aivyx/tool-processes/calendar/config.toml`. Mirrors
 # aivyx-gmail's choice; documented in PHASE_128.md.

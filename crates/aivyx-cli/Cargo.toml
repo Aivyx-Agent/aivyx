@@ -18,6 +18,11 @@ readme.workspace = true
 [package.metadata.dist]
 dist = true
 
+# `cron` IS used (scheduled-task parsing) but cargo-machete's static scan
+# misses it; ignore so the unused-dep check stays clean.
+[package.metadata.cargo-machete]
+ignored = ["cron"]
+
 [[bin]]
 name = "aivyx"
 path = "src/bin/aivyx.rs"
@@ -98,23 +103,12 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 secrecy = { workspace = true }
-base64 = { workspace = true }
 uuid = { workspace = true }
 cron = { workspace = true }
-chrono = { workspace = true }
-hyper = { workspace = true }
-hyper-util = { workspace = true }
-http-body-util = { workspace = true }
 notify = { workspace = true }
-hmac = { workspace = true }
-sha2 = { workspace = true }
-serde_jcs = { workspace = true }
 reqwest = { workspace = true }
-tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
-lettre = { workspace = true }
 thiserror = { workspace = true }
-zeroize = "1.8"
 rpassword = "7"
 toml_edit = "0.22"
 

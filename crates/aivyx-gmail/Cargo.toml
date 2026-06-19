@@ -38,7 +38,6 @@ async-trait = { workspace = true }
 # HTTP + JSON — already workspace-wide via aivyx-llm. rustls-tls
 # avoids OpenSSL; matches the rest of the workspace's TLS posture.
 reqwest = { workspace = true, features = ["json"] }
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Base64 for OAuth (PKCE) + MIME body encoding (Tasks 6/7).
