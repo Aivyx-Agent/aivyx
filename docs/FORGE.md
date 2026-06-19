@@ -1,6 +1,7 @@
 # New Tools — `web.extract` + `git.write` (Chapter Forge)
 
-> **Status:** 🧭 **design contract — FG.0.** The locked reference for the first
+> **Status:** 🔨 **FG.1 — `web.extract` shipped** (tool + readability dep + tests;
+> wiring into the agent's `tool_list` lands in FG.4). The locked reference for the first
 > **new-tools breadth** chapter after Atlas. It adds two substrate capabilities —
 > **`web.extract`** (fetch a URL → clean readable text) and **`git.write`**
 > (commit/stage in an allowed repo) — the two the operator picked from the Atlas

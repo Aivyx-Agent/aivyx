@@ -53,6 +53,7 @@ libc = { workspace = true }
 # backends, no second TLS stack). First net-new workspace
 # dependency since Phase 27's `notify`.
 jsonschema = { workspace = true }
+dom_smoothie = "0.18.0"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }

@@ -77,6 +77,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
+use dom_smoothie::Readability;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
@@ -100,6 +101,19 @@ pub const MAX_TIMEOUT_MS: u64 = 600_000;
 /// clear detail rather than truncating or OOMing.
 pub const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
+/// Build the shared redirect-free, rustls-backed reqwest client used by every
+/// `aivyx-core` web tool (`web.fetch`, `web.extract`). Redirects are off so the
+/// scope gate is re-checked per hop by the caller; a short connect timeout keeps
+/// a dead host from eating the whole per-call budget. `label` names the tool in
+/// the error so a startup misconfig is attributable.
+fn build_redirect_free_client(label: &str) -> Result<reqwest::Client, AivyxError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| AivyxError::Config(format!("{label} reqwest client build failed: {e}")))
+}
+
 /// Construction inputs for [`WebFetchTool`]. Splits the
 /// fallible client build from the infallible tool construction,
 /// matching `shell.exec`'s config→build split.
@@ -116,18 +130,7 @@ impl WebFetchToolConfig {
     /// would be a startup configuration error the operator
     /// needs to see immediately, not at tool-call time.
     pub fn build(self) -> Result<WebFetchTool, AivyxError> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            // Keep connect-time short so a dead host doesn't
-            // eat the whole per-call timeout budget before
-            // any bytes flow.
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| {
-                AivyxError::Config(format!(
-                    "web.fetch reqwest client build failed: {e}"
-                ))
-            })?;
+        let client = build_redirect_free_client("web.fetch")?;
         Ok(WebFetchTool {
             id: ToolId::new(),
             client: Arc::new(client),
@@ -576,6 +579,219 @@ impl Tool for WebFetchTool {
 }
 
 // ---------------------------------------------------------------------------
+// WebExtractTool — Chapter Forge (FG.1)
+//
+// "Read a page", not "fetch a page": GET a URL with the same hardened,
+// redirect-free client as web.fetch, then run a readability pass (dom_smoothie,
+// MIT) to return the article's title + clean text instead of raw HTML. Reuses
+// the `net.fetch` scope — extraction *is* an outbound GET, no new capability.
+// ---------------------------------------------------------------------------
+
+/// Construction inputs for [`WebExtractTool`].
+pub struct WebExtractToolConfig;
+
+impl WebExtractToolConfig {
+    pub fn new() -> Self {
+        WebExtractToolConfig
+    }
+
+    /// Build a ready-to-register [`WebExtractTool`] sharing `web.fetch`'s
+    /// redirect-free rustls client (same SSRF posture).
+    pub fn build(self) -> Result<WebExtractTool, AivyxError> {
+        Ok(WebExtractTool {
+            id: ToolId::new(),
+            client: Arc::new(build_redirect_free_client("web.extract")?),
+            schema: web_extract_input_schema_value(),
+        })
+    }
+}
+
+impl Default for WebExtractToolConfig {
+    fn default() -> Self {
+        WebExtractToolConfig::new()
+    }
+}
+
+fn web_extract_input_schema_value() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Absolute http or https URL of an article/page to read. \
+                                Must be covered by the agent's net.fetch capability. \
+                                Returns the extracted article text, not raw HTML — \
+                                use web.fetch for raw bytes."
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_TIMEOUT_MS as i64,
+                "description": "Wall-clock timeout in milliseconds. Default 30000; \
+                                maximum 600000 (10 minutes)."
+            }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+    })
+}
+
+/// `web.extract` — fetch a URL and return its readable article text.
+pub struct WebExtractTool {
+    id: ToolId,
+    client: Arc<reqwest::Client>,
+    schema: Value,
+}
+
+impl std::fmt::Debug for WebExtractTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebExtractTool").finish()
+    }
+}
+
+impl WebExtractTool {
+    /// Pure readability pass over an HTML string. Split out so it is directly
+    /// unit-testable without the network. Returns `(title, byline, text)`.
+    pub(crate) fn extract_html(
+        html: &str,
+        url: &str,
+    ) -> Result<(String, Option<String>, String), String> {
+        let mut read = Readability::new(html, Some(url), None)
+            .map_err(|e| format!("readability init failed: {e}"))?;
+        let article = read.parse().map_err(|e| format!("extraction failed: {e}"))?;
+        let text = article.text_content.trim().to_string();
+        if text.is_empty() {
+            return Err("no readable content found (not an article?)".to_string());
+        }
+        Ok((article.title, article.byline, text))
+    }
+}
+
+#[async_trait]
+impl Tool for WebExtractTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        "web.extract"
+    }
+
+    fn description(&self) -> &str {
+        "Fetch a web page and return its readable article text (title + clean body), \
+         not raw HTML. Use this to *read* a page; use web.fetch for raw bytes. \
+         Input: { url, timeout_ms? }. Needs the net.fetch capability for the URL."
+    }
+
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    fn required_scope(&self, input: &Value) -> Scope {
+        let Some(url) = input.get("url").and_then(Value::as_str) else {
+            return deny_scope();
+        };
+        if url.is_empty() || !(url.starts_with("http://") || url.starts_with("https://")) {
+            return deny_scope();
+        }
+        Scope::parse(&format!("net.fetch:{url}")).unwrap_or_else(deny_scope)
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        let url = match input.get("url").and_then(Value::as_str) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "input must have a non-empty string `url` field".to_string(),
+                });
+            }
+        };
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("url must start with http:// or https:// (got {url:?})"),
+            });
+        }
+        let timeout_ms = input_timeout_ms(&input);
+
+        let response = match self
+            .client
+            .get(&url)
+            .timeout(Duration::from_millis(timeout_ms))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("GET {url} failed: {e}"),
+                });
+            }
+        };
+
+        let status = response.status().as_u16();
+        if response.status().is_redirection() {
+            return ToolOutcome::Completed {
+                output: json!({
+                    "url": url,
+                    "status": status,
+                    "extractable": false,
+                    "error": "got a redirect; web.extract does not follow redirects — \
+                              re-issue against the redirect target, or use web.fetch",
+                }),
+                verified: Verification::NotApplicable,
+            };
+        }
+
+        let (body, body_encoding) =
+            match collect_body(response, self.id, "web.extract", &url, ctx).await {
+                Ok(pair) => pair,
+                Err(outcome) => return outcome,
+            };
+        if body_encoding != "utf-8" {
+            return ToolOutcome::Completed {
+                output: json!({
+                    "url": url,
+                    "status": status,
+                    "extractable": false,
+                    "error": "response body is not UTF-8 text (binary/non-HTML) — use web.fetch",
+                }),
+                verified: Verification::NotApplicable,
+            };
+        }
+
+        match Self::extract_html(&body, &url) {
+            Ok((title, byline, text)) => {
+                let word_count = text.split_whitespace().count();
+                ToolOutcome::Completed {
+                    output: json!({
+                        "url": url,
+                        "status": status,
+                        "extractable": true,
+                        "title": title,
+                        "byline": byline,
+                        "text": text,
+                        "word_count": word_count,
+                    }),
+                    verified: Verification::NotApplicable,
+                }
+            }
+            Err(e) => ToolOutcome::Completed {
+                output: json!({
+                    "url": url,
+                    "status": status,
+                    "extractable": false,
+                    "error": format!("{e}; the page may not be an article — try web.fetch"),
+                }),
+                verified: Verification::NotApplicable,
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WebPostTool — Phase 37 Task 3
 // ---------------------------------------------------------------------------
 
@@ -931,6 +1147,60 @@ impl Tool for WebPostTool {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod web_extract_tests {
+    use super::*;
+
+    const ARTICLE: &str = r#"<!DOCTYPE html><html><head><title>The Headline</title></head>
+        <body>
+          <nav>Home About Contact</nav>
+          <article>
+            <h1>The Headline</h1>
+            <p>This is the first substantial paragraph of the article body, long
+               enough that the readability scorer treats it as real content and
+               not boilerplate navigation chrome.</p>
+            <p>A second paragraph continues the article with more sentences so the
+               extractor has enough text to confidently select this region.</p>
+          </article>
+          <footer>Copyright 2026</footer>
+        </body></html>"#;
+
+    #[test]
+    fn extract_pulls_title_and_body_drops_chrome() {
+        let (title, _byline, text) =
+            WebExtractTool::extract_html(ARTICLE, "https://example.com/post").expect("extract");
+        assert!(title.contains("Headline"), "title: {title:?}");
+        assert!(text.contains("first substantial paragraph"), "text: {text:?}");
+        assert!(text.contains("second paragraph"), "text: {text:?}");
+        // Navigation/footer chrome should be dropped by the readability pass.
+        assert!(!text.contains("Home About Contact"), "nav leaked: {text:?}");
+    }
+
+    #[test]
+    fn extract_errors_on_empty_or_contentless_html() {
+        assert!(WebExtractTool::extract_html("<html><body></body></html>", "https://x.test").is_err());
+    }
+
+    #[test]
+    fn required_scope_is_net_fetch_for_valid_url() {
+        let tool = WebExtractToolConfig::new().build().expect("build");
+        let scope = tool.required_scope(&json!({"url": "https://example.com/a"}));
+        assert_eq!(scope.base(), "net.fetch");
+    }
+
+    #[test]
+    fn required_scope_denies_non_http_or_missing_url() {
+        // deny_scope() keeps base net.fetch but an unmatchable __deny__ qualifier,
+        // so compare against the sentinel, not the base.
+        let tool = WebExtractToolConfig::new().build().expect("build");
+        let deny = format!("{:?}", deny_scope());
+        assert_eq!(format!("{:?}", tool.required_scope(&json!({"url": "ftp://x"}))), deny);
+        assert_eq!(format!("{:?}", tool.required_scope(&json!({}))), deny);
+        // sanity: a real https URL is NOT the deny sentinel
+        assert_ne!(format!("{:?}", tool.required_scope(&json!({"url": "https://ok.test/a"}))), deny);
+    }
+}
 
 #[cfg(test)]
 mod tests {

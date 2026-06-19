@@ -43,7 +43,10 @@ pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
 pub use skills::{SkillReader, SkillsInvokeTool, SkillsListTool};
-pub use web_fetch::{WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig};
+pub use web_fetch::{
+    WebExtractTool, WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool,
+    WebPostToolConfig,
+};
 
 /// Chapter Atlas (AT.3) — tool-metadata quality invariants.
 ///
@@ -108,6 +111,7 @@ mod quality_tests {
         let mut tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(WebFetchToolConfig::new().build().expect("web.fetch")),
             Arc::new(WebPostToolConfig::new().build().expect("web.post")),
+            Arc::new(WebExtractToolConfig::new().build().expect("web.extract")),
             Arc::new(NetDnsTool::default()),
             Arc::new(git_status),
             Arc::new(git_diff),
