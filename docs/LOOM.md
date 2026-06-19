@@ -1,0 +1,170 @@
+# Graph-Augmented Recall — fusing the graph into RAG (Chapter Loom)
+
+> **Status:** 🧭 **design contract — LM.0.** The locked reference for the
+> chapter that turns Aivyx's co-occurrence graph from a passive *view*
+> into an active *retrieval signal*, and fuses a lexical path into recall
+> alongside the existing semantic one. It **refines** the recall layer
+> already in place (Phase 76 semantic recall, Phase 84 1-hop co-recall,
+> Phase 96/97 ANN-hybrid + token budget) — it adds **no new operator
+> tool, no new capability base, and no substrate-count change.** All work
+> is recall-layer machinery in `aivyx-channel` + a scorer in
+> `aivyx-memory`. The operator picked the **graph-augmented RAG** track
+> over the deferred typed-knowledge-graph and knowledge-wiki tracks.
+
+## 1. Why — what recall does today, and the three gaps
+
+Recall is already good and already *partly* graph-aware. Per turn,
+`SemanticMemoryContext` (Phase 76) embeds the user message, ranks
+memories by cosine (brute-force, or the Phase 96 ANN-narrow→exact
+hybrid), drops everything under `rag_min_similarity`, and injects a
+labeled top-`rag_top_k` block. Phase 84's opt-in `[recall_cluster]`
+then pulls **one hop** of co-occurrence siblings (`siblings_of` over the
+Phase 83 EWMA ledger) and **budget-shares** them in by displacing the
+weakest primary hits. Phase 97 enforces a token budget last.
+
+That is a real foundation — but it leaves three specific gaps:
+
+1. **The graph walk is one hop only.** `siblings_of(topic, …)` returns
+   direct neighbors. A memory two hops away (`deploy → ci → flaky-test`)
+   — exactly the associative recall a human makes — is unreachable.
+
+2. **There is no lexical path in recall.** Recall is pure vector
+   similarity. The substrate's `search` is a naive case-folded
+   `contains` substring scan (no TF-IDF/BM25 scoring) and is **not fused
+   into recall at all**. A query whose exact keyword sits in a memory the
+   embedding model ranks just below the floor is silently missed — the
+   classic semantic-only RAG failure (rare terms, codes, proper nouns).
+
+3. **Expansion is append-by-displacement, not principled fusion.** Phase
+   84 bolts siblings on by knocking out the weakest cosine hits. There is
+   no shared ranking across "sources." The code itself anticipates the
+   fix: a `rag_hybrid_min_rrf` knob is named as a *documented deferral* in
+   `memory_recall.rs`. This chapter ships it.
+
+Closing these three turns recall from "nearest vectors (+ a sibling
+nudge)" into "the genuinely most relevant memories, found by meaning,
+by word, and by association, ranked on one scale."
+
+## 2. Architecture & decisions (locked)
+
+### One fusion, three candidate sources
+The recall set becomes the **rank-fusion** of up to three ranked lists:
+
+- **Semantic** — the existing cosine ranking (brute-force or ANN-hybrid).
+  Unchanged.
+- **Lexical** — a new **BM25** scorer over memory entries (LM.2).
+- **Graph-walk** — multi-hop co-occurrence neighbors of the *seed*
+  topics, weight-decayed per hop (LM.3), each contributing its most
+  relevant entry.
+
+They merge through **Reciprocal Rank Fusion (RRF)** (LM.1): `score(d) =
+Σ_sources 1/(k + rank_source(d))`. RRF is the right primitive here
+because it fuses rankings whose **scores are not comparable** (cosine
+similarity vs. BM25 magnitude vs. decayed edge weight) using only each
+item's *rank* within its source — exactly the incomparability Phase 84's
+displacement hack worked around. It is **~30 lines, deterministic, and
+needs no new dependency** — matching the IVF/canonicalizer zero-dep,
+zero-RNG precedent.
+
+### Reuse the Phase 83 ledger as the graph — no new storage, no typed edges
+The "graph" is the existing `PersistentCooccurrenceLedger` (undirected,
+EWMA-weighted topic pairs). LM.3 adds a `neighbors_within(seed, hops,
+per_hop_decay, min_affinity, cap)` walk **over that ledger**, reusing its
+HKDF-isolated storage and read-time decay. **Typed/directed
+entity–relation edges and entity extraction stay out** — that is the
+separately-tracked "real DAG" chapter. Loom makes the graph we already
+have *earn its keep in retrieval*; it does not change the graph's model.
+
+### BM25 over the existing entries — a scorer, not a new index
+LM.2's lexical retriever scores the **entries already in the substrate**
+(tokenize body+topic, IDF over the corpus, BM25 term weighting). It is a
+pure function exposed as a `Memory` method (e.g. `lexical_search_scored`)
+or a recall-side scorer over a candidate scan — decided in-phase, leaning
+toward the substrate so `RedbMemory` and `InMemoryMemory` share it. No
+persistent inverted index in v1 (the corpus is ≤ ~100K entries, the same
+scale IVF targets); a persistent index is a documented deferral if
+profiling demands it.
+
+### Opt-in, back-compatible, and recall **never errors a turn**
+Every addition is config-gated and defaults to **today's behavior
+byte-identical**. The fusion path activates only when the operator
+enables it; with it off, the Phase 76/84/96 path runs unchanged. The
+best-effort invariant is absolute: any failure in the lexical scorer, the
+graph walk, or the fusion (empty corpus, ledger miss, embed failure)
+**falls back to the current recall, never errors the turn** — the same
+contract Phase 76/84 already hold.
+
+### Determinism + observability
+RRF, BM25, and the decayed walk are all deterministic (no RNG, stable
+tie-breaks on `seq`). The per-turn recall breadcrumb + the Phase 78
+cluster stat extend to label each injected hit by its winning source
+(semantic / lexical / graph-hop-N) so the operator can *see* why a memory
+was recalled — and so the LM.5 eval harness has ground truth to score.
+
+### No tool / capability / amendment surface
+This is recall-layer infrastructure (the agent's own machinery to *be*
+itself, P10's "infrastructure" tier), not an operator-facing substrate
+tool. **No new `KNOWN_BASES` base, no P10 substrate-count amendment, no
+DESIGN Deliverable 4 change.** Lighter governance than Chapter Forge by
+design — the contract here is config + recall behavior, verified by tests
+and the eval harness, not a charter change.
+
+## 3. Scope
+
+**In:** the RRF fusion core, the BM25 lexical scorer, the multi-hop
+weight-decayed graph walk, their composition in `SemanticMemoryContext`,
+the `[recall]` config knobs (all opt-in), the source-labeled breadcrumb,
+and a retrieval-quality eval harness (recall@k over fixtures).
+
+**Out:** typed/directed entity–relation edges + entity extraction (the
+"real DAG" chapter); the synthesized knowledge-wiki / per-topic summary
+layer (its own chapter); the HNSW ANN upgrade (a separate RAG-quality
+item, recorded since Phase 96); any new operator tool or capability base;
+any change to the at-rest memory encoding or the ledger's data model.
+
+## 4. Phase plan (docs-first, small phases per convention)
+
+| Phase | Deliverable | Notes |
+|---|---|---|
+| **LM.0** | **This design contract** | locked reference; banner flips per phase |
+| **LM.1** | **RRF fusion core** | pure, dep-free `reciprocal_rank_fusion(sources, k) -> ranked` helper (likely `aivyx-channel` recall module or a small shared util). Lands the deferred `rag_hybrid_min_rrf` / `rrf_k` knob named in `memory_recall.rs`. Unit tests pin determinism + the incomparable-score property. **No behavior change yet** — wired in LM.4. |
+| **LM.2** | **BM25 lexical scorer** | scored lexical retrieval over memory entries (tokenize + IDF + BM25), as a `Memory` method shared by both impls, replacing the naive `contains` for recall purposes (the substring `search` tool stays for discovery). Pure, deterministic, fixture-tested (rare-term beats semantic). |
+| **LM.3** | **Multi-hop graph walk** | `neighbors_within(seed, hops, per_hop_decay, min_affinity, cap)` over the Phase 83 ledger — generalizes Phase 84's 1-hop `siblings_of` (which becomes the `hops=1` case). Edge weight decays per hop; dedup; deterministic ordering. Ledger-level tests (2-hop reach, decay, cap, cycle-safety). |
+| **LM.4** | **Fuse + config + wiring** | compose semantic ∪ lexical ∪ graph-walk through RRF in `SemanticMemoryContext`; add `[recall]` knobs (`rrf_k`, `lexical_weight`, `graph_hops`, `graph_decay`) — all default-off / back-compat; preserve recall-never-errors + the token budget; extend the breadcrumb/stat with the winning source. Config + recall integration tests. |
+| **LM.5** | **Eval harness + finalize** | a small **recall@k** eval harness over seeded fixtures (queries → expected memories), proving fusion ≥ semantic-only on the fixtures and that default-off is byte-identical. Full suite + clippy + `cargo deny` green; status flip; record. |
+
+**Discipline:** LM.1–LM.3 each ship **inert** (pure helpers + tests, no
+recall behavior change); LM.4 is the single seam that activates fusion,
+behind config, with the never-errors fallback. So at every commit before
+LM.4 the live recall path is byte-identical, and LM.4's diff is small and
+reviewable. The eval harness (LM.5) is what makes the whole chapter
+*measurable* rather than vibes — the recurring lesson that retrieval
+changes need a yardstick.
+
+## 5. Open questions (resolve in-phase)
+
+- **RRF `k` default** — the canonical RRF constant is 60; validate against
+  the fixture set in LM.5 and expose `rrf_k` for operators who tune
+  (LM.1/LM.4).
+- **Lexical scorer home** — `Memory` trait method (shared by both impls,
+  cleanest) vs. a recall-side scorer over a candidate scan (keeps the
+  substrate minimal). Lean trait-method unless the corpus-IDF pass proves
+  too heavy for `InMemoryMemory`'s test-speed contract (LM.2).
+- **Graph seed set** — walk from the semantic top-K topics only, or also
+  from lexical-hit topics? Default to the union of both source's top
+  topics; cap total walk cost (LM.3/LM.4).
+- **Per-source weighting** — pure RRF weights all sources equally; expose
+  a `lexical_weight` (and implicit graph weight via `graph_decay`) so an
+  operator can bias toward exact-term recall without recompiling (LM.4).
+- **Eval fixtures** — hand-seeded query→expected pairs vs. a generated
+  set; start hand-seeded (small, legible, deterministic) and grow (LM.5).
+
+---
+
+*Chapter Loom weaves the three threads recall already has — meaning
+(vectors), words (lexical), and association (the co-occurrence graph) —
+onto a single loom (rank fusion), so a memory is recalled when **any** of
+the three says it matters, ranked on one honest scale. It is a refinement
+chapter: no new tool, no new base, no charter change — just the recall the
+agent already does, made deeper, fairer, and for the first time
+measurable.*
