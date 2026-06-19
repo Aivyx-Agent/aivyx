@@ -17,6 +17,9 @@ use thiserror::Error;
 #[cfg(feature = "tts-piper")]
 pub mod piper;
 
+#[cfg(feature = "tts-kokoro")]
+pub mod kokoro;
+
 /// Errors a TTS backend can surface to the channel
 /// loop.
 #[derive(Debug, Error)]

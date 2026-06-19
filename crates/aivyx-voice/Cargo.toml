@@ -40,16 +40,26 @@ asr-whisper-rs = ["dep:whisper-rs"]
 # (rwhisper, whisper-stream-rs, etc.).
 asr-whisper-cpp-plus = []
 
-# TTS backends — only Piper for Phase 135. Higher-quality
-# alternatives (Kokoro, F5-TTS) lack mature Rust bindings and
-# are Phase 136+ candidates. piper1-rs's build script
-# requires ONNX runtime headers; see INSTALL.md.
+# TTS backends.
+#
+# `tts-piper` (GPL-3.0 via piper1-rs-sys → espeak-ng) is being
+# retired in Chapter Timbre (docs/TIMBRE.md) for the permissive
+# Kokoro stack below. It stays wired through TB.2 so engine
+# selection has both during the swap; TB.3 deletes it + the
+# piper1-rs dep entirely. piper1-rs's build needs ONNX headers.
 tts-piper = ["dep:piper1-rs"]
 
-# Convenience meta-feature: the recommended voice loop
-# (whisper-rs STT + Piper TTS). `cargo install` users pull
-# this through `aivyx-channel/channel-voice-full` rather than
-# enabling it directly.
+# Chapter Timbre (TB.1) — the permissive replacement: Kokoro-82M
+# (Apache-2.0 weights) via `ort` (ONNX Runtime, Apache/MIT) with
+# `voice-g2p` (MIT, dictionary-based, **espeak-free**) G2P. No GPL
+# anywhere in this path; `ort`'s default `download-binaries`
+# fetches a prebuilt ONNX Runtime at build time, so — unlike Piper
+# — there are no system ONNX headers or espeak-ng prereqs. `zip`
+# parses the Kokoro `voices-*.bin` (an npz archive).
+tts-kokoro = ["dep:ort", "dep:ndarray", "dep:zip", "dep:voice-g2p"]
+
+# Convenience meta-feature: the recommended voice loop. Still
+# whisper-rs STT + Piper TTS until TB.3 flips TTS to `tts-kokoro`.
 recommended-voice = ["asr-whisper-rs", "tts-piper"]
 
 [dependencies]
@@ -115,7 +125,22 @@ whisper-rs = { version = "0.16", optional = true }
 # Optional TTS backend. piper1-rs requires ONNX runtime
 # headers at build time (`ONNX_RUNTIME_DIR`,
 # `ONNX_INCLUDE_PATH`); see INSTALL.md for per-OS setup.
+# (GPL-3.0 — removed in Chapter Timbre TB.3.)
 piper1-rs = { version = "0.1", optional = true }
+
+# Chapter Timbre (TB.1) — permissive Kokoro TTS stack. All MIT /
+# Apache-2.0; no espeak-ng, no GPL. Pinned to the rc the engine
+# was written against (the ort 2.0 pre-release API still moves
+# between rc's). `ort` default features include `download-binaries`
+# (prebuilt ONNX Runtime, MIT) so no system lib is required.
+ort = { version = "2.0.0-rc.10", optional = true }
+ndarray = { version = "0.17", optional = true }
+# Kokoro `voices-*.bin` is an npz (zip of .npy); deflate only.
+zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+# MIT, pure-Rust, dictionary-based English G2P (no espeak-ng linked
+# — espeak is only an optional runtime exec fallback, never a build
+# dep, so nothing GPL enters the link graph). Outputs Kokoro IPA.
+voice-g2p = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

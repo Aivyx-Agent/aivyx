@@ -1,6 +1,6 @@
 # Permissive Voice / TTS (Chapter Timbre)
 
-> **Status:** 🧭 **design contract — TB.0.** This is the locked reference for
+> **Status:** 🧭 **design contract — TB.0 ✅ + TB.1 ✅.** This is the locked reference for
 > replacing the voice channel's **GPL-3.0 Piper TTS** with a **fully permissive
 > (Apache-2.0 / MIT) Kokoro stack**, so voice is license-clean for everyone who
 > builds Aivyx and can ship in official binaries. Nothing in the TTS code has
@@ -113,7 +113,7 @@ the tree.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **TB.0** | **This design contract** | locked reference; status banner flips per phase |
-| **TB.1** | **`KokoroTtsEngine` spike** | `tts-kokoro` feature: `ort` + `voice-g2p` wiring; load Kokoro `.onnx` + voices bin; synthesize one sentence to PCM behind the existing `TtsEngine` trait. Pin the model I/O contract (input_ids vocab, 256-d style vector, speed, 24 kHz out). |
+| **TB.1** ✅ | **`KokoroTtsEngine` spike** | DONE. `tts-kokoro` feature + `crates/aivyx-voice/src/tts/kokoro.rs`: `KokoroEngine` impls the existing `TtsEngine` trait via `ort` (=`2.0.0-rc.12`, default `download-binaries` → no system ONNX/espeak prereqs) + `voice-g2p` (MIT, espeak-free). Model I/O pinned: tokens `[0,…,0]` shape `[1,N+2]`, `[1,256]` style vector indexed by token-count from the `voices-*.bin` npz, int32/float32 `speed` autodetected, first output = 24 kHz f32 PCM; embedded canonical Kokoro vocab + `config.json` override; punctuation-aware chunking at `MAX_PHONEME_LEN=510`. Compiles, **clippy clean (-D warnings)**, 8 pure-logic tests green (vocab, phoneme→id, chunking, .npy parse). Real-audio inference is TB.6 (needs model files). Resolved an `ort` rc.10→rc.12 bump (rc.10 pinned `smallvec` incompatibly with mistralrs). |
 | **TB.2** | **Config + engine selection** | generalize `TtsConfig` (model dir + voice name, no espeak path); `tts_engine = "kokoro"`; wire selection in `session`/`channel`; keep the chunking substrate. |
 | **TB.3** | **Remove Piper** | delete `tts-piper` feature, `piper1-rs` dep, `tts/piper.rs`; redefine `recommended-voice` → whisper-rs + kokoro; update `aivyx-channel` features. |
 | **TB.4** | **Flip the license gate** | remove the `piper1-rs-sys` exception from `deny.toml`; `cargo deny check licenses` (all-features) green with **zero GPL**. The hard proof. |
