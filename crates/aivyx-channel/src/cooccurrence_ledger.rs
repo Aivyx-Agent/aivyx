@@ -32,6 +32,42 @@ use aivyx_storage::DomainHandle;
 // persistent ledger + IPC are unchanged.
 pub use aivyx_ipc::ledgers::{CooccurrencePatterns, PairScore};
 
+/// Chapter Loom (LM.3) — one topic reached by a multi-hop walk over the
+/// co-occurrence graph (see [`PersistentCooccurrenceLedger::neighbors_within`]).
+/// `affinity` is the decayed bottleneck-path score to the seed; `hops`
+/// is the path length (1 = a direct sibling). Recall-internal (not an IPC
+/// type); LM.4 uses `hops` to label an injected hit's source as
+/// `graph-hop-N` in the recall breadcrumb.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNeighbor {
+    pub topic: String,
+    pub affinity: f32,
+    pub hops: u32,
+}
+
+/// Relax a topic's best path in the BFS: record `(affinity, hops)` if it
+/// beats the current best (higher affinity, or equal affinity at fewer
+/// hops), and queue it for the next level when it does.
+fn relax<'a>(
+    best: &mut std::collections::HashMap<&'a str, (f32, u32)>,
+    frontier: &mut Vec<(&'a str, f32)>,
+    topic: &'a str,
+    affinity: f32,
+    bottleneck: f32,
+    hops: u32,
+) {
+    let improved = match best.get(topic) {
+        Some((cur_aff, cur_hops)) => {
+            affinity > *cur_aff || (affinity == *cur_aff && hops < *cur_hops)
+        }
+        None => true,
+    };
+    if improved {
+        best.insert(topic, (affinity, hops));
+        frontier.push((topic, bottleneck));
+    }
+}
+
 /// EWMA half-life for a pair's joint-helpfulness (~60 days),
 /// matching the Phase 82 per-topic ledger so the two durable
 /// signals age on the same clock.
@@ -332,6 +368,126 @@ impl PersistentCooccurrenceLedger {
             })
             .take(top_n)
             .collect();
+        Ok(out)
+    }
+
+    /// Chapter Loom (LM.3) — **multi-hop** weighted graph walk over the
+    /// co-occurrence ledger, generalizing [`Self::siblings_of`] (which is
+    /// the `hops == 1` case). From `seed`, walk up to `hops` edges through
+    /// the undirected affinity graph and return every reachable topic with
+    /// its decayed **path affinity** and hop distance.
+    ///
+    /// ## The path-affinity model
+    ///
+    /// An edge's weight is its decayed `ewma_score`. A path's affinity is
+    /// its **bottleneck** (weakest edge along it) scaled by
+    /// `per_hop_decay^(hops-1)`, so:
+    /// - a direct sibling (hop 1) scores exactly its edge weight — the
+    ///   same number [`Self::siblings_of`] returns;
+    /// - a 2-hop topic scores `min(edge1, edge2) · per_hop_decay`, always
+    ///   strictly weaker than a direct sibling on the same edges.
+    ///
+    /// Affinity is monotonically non-increasing along a path (the
+    /// bottleneck only shrinks, the decay only grows), so a branch that
+    /// drops below `min_affinity` is pruned — the walk stays bounded even
+    /// before `hops` runs out. A topic reachable by several paths keeps
+    /// its **best** (highest-affinity, then fewest-hop) arrival. Only
+    /// positive-weight edges are walked (a non-positive co-occurrence is
+    /// not a real association). The seed itself is never returned.
+    ///
+    /// Bounded BFS: this is a recall-time heuristic, not an exact
+    /// longest-bottleneck-path search — for the small `hops` recall uses
+    /// (1–3) over a self-pruning ledger it is both fast and good enough.
+    /// Results are sorted by affinity descending then topic ascending,
+    /// capped at `cap`. `hops == 0` / `cap == 0` → empty. `per_hop_decay`
+    /// is defended to `[0, 1]` (non-finite → `1.0`).
+    pub async fn neighbors_within(
+        &self,
+        seed: &str,
+        now_secs: u64,
+        hops: u32,
+        per_hop_decay: f32,
+        min_affinity: f32,
+        cap: usize,
+    ) -> Result<Vec<GraphNeighbor>, CooccurrenceLedgerError> {
+        if hops == 0 || cap == 0 {
+            return Ok(Vec::new());
+        }
+        let decay = if per_hop_decay.is_finite() {
+            per_hop_decay.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        // Build the undirected positive-weight adjacency from one decayed
+        // scan. `ranked` is score-descending, so each adjacency list is
+        // too — making the BFS order deterministic.
+        let ranked = self.ranked(now_secs).await?;
+        let mut adj: std::collections::HashMap<&str, Vec<(&str, f32)>> =
+            std::collections::HashMap::new();
+        for (lo, hi, e) in &ranked {
+            if e.ewma_score <= 0.0 {
+                continue;
+            }
+            adj.entry(lo).or_default().push((hi, e.ewma_score));
+            adj.entry(hi).or_default().push((lo, e.ewma_score));
+        }
+
+        // best[topic] = (affinity, hops) for the strongest path found.
+        let mut best: std::collections::HashMap<&str, (f32, u32)> =
+            std::collections::HashMap::new();
+        // Current BFS frontier: (topic, bottleneck-so-far).
+        let mut frontier: Vec<(&str, f32)> = Vec::new();
+
+        // Hop 1 — direct siblings; affinity == edge weight (decay^0).
+        if let Some(neigh) = adj.get(seed) {
+            for (v, w) in neigh {
+                if *v == seed || *w < min_affinity {
+                    continue;
+                }
+                relax(&mut best, &mut frontier, v, *w, *w, 1);
+            }
+        }
+
+        // Hops 2..=hops — extend the frontier, decaying per hop.
+        for hop in 2..=hops {
+            if frontier.is_empty() {
+                break;
+            }
+            let factor = decay.powi((hop - 1) as i32);
+            let mut next: Vec<(&str, f32)> = Vec::new();
+            for (u, bottleneck_u) in &frontier {
+                let Some(neigh) = adj.get(*u) else { continue };
+                for (v, w) in neigh {
+                    if *v == seed {
+                        continue;
+                    }
+                    let bottleneck = bottleneck_u.min(*w);
+                    let affinity = bottleneck * factor;
+                    if affinity < min_affinity {
+                        continue;
+                    }
+                    relax(&mut best, &mut next, v, affinity, bottleneck, hop);
+                }
+            }
+            frontier = next;
+        }
+
+        let mut out: Vec<GraphNeighbor> = best
+            .into_iter()
+            .map(|(topic, (affinity, hops))| GraphNeighbor {
+                topic: topic.to_string(),
+                affinity,
+                hops,
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.affinity
+                .partial_cmp(&a.affinity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.topic.cmp(&b.topic))
+        });
+        out.truncate(cap);
         Ok(out)
     }
 
@@ -640,5 +796,147 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    // ---- Chapter Loom (LM.3) — neighbors_within (multi-hop) ----
+
+    /// `hops == 1` reproduces `siblings_of`: same neighbor set, each at
+    /// hop 1 with affinity == the direct edge weight.
+    #[tokio::test]
+    async fn neighbors_within_hop1_matches_siblings_of() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        l.record_window(
+            &[
+                (("deploy".into(), "rollback".into()), 9.0),
+                (("deploy".into(), "ci".into()), 8.0),
+                (("deploy".into(), "weak".into()), 0.5),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+
+        let n = l
+            .neighbors_within("deploy", 10, 1, 0.5, 1.0, 10)
+            .await
+            .unwrap();
+        let names: Vec<&str> = n.iter().map(|g| g.topic.as_str()).collect();
+        assert_eq!(names, vec!["rollback", "ci"]); // "weak" < min_affinity
+        assert!(n.iter().all(|g| g.hops == 1));
+        assert!((n[0].affinity - 9.0).abs() < 1e-4);
+        assert!((n[1].affinity - 8.0).abs() < 1e-4);
+    }
+
+    /// A 2-hop topic is reached only when `hops >= 2`, with a decayed
+    /// bottleneck affinity strictly weaker than its hop-1 parent.
+    #[tokio::test]
+    async fn neighbors_within_reaches_two_hops_with_decay() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        // deploy — ci (8) — flaky (6)
+        l.record_window(
+            &[
+                (("deploy".into(), "ci".into()), 8.0),
+                (("ci".into(), "flaky".into()), 6.0),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+
+        // hops=1 cannot see "flaky".
+        let one = l.neighbors_within("deploy", 10, 1, 0.5, 0.1, 10).await.unwrap();
+        assert!(!one.iter().any(|g| g.topic == "flaky"));
+
+        // hops=2 reaches it: affinity = min(8,6) * 0.5 = 3.0, hop 2.
+        let two = l.neighbors_within("deploy", 10, 2, 0.5, 0.1, 10).await.unwrap();
+        let flaky = two.iter().find(|g| g.topic == "flaky").expect("flaky reached");
+        assert_eq!(flaky.hops, 2);
+        assert!((flaky.affinity - 3.0).abs() < 1e-4, "aff {}", flaky.affinity);
+        // ...and it ranks below its hop-1 parent "ci" (affinity 8).
+        let ci = two.iter().find(|g| g.topic == "ci").unwrap();
+        assert!(ci.affinity > flaky.affinity);
+    }
+
+    /// Bottleneck semantics: a weak first edge caps a strong second one.
+    #[tokio::test]
+    async fn neighbors_within_path_affinity_is_the_bottleneck() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        // deploy — mid (2) — far (9). The far edge is strong but the
+        // path is bottlenecked at 2.
+        l.record_window(
+            &[
+                (("deploy".into(), "mid".into()), 2.0),
+                (("mid".into(), "far".into()), 9.0),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+        let n = l.neighbors_within("deploy", 10, 2, 0.5, 0.1, 10).await.unwrap();
+        let far = n.iter().find(|g| g.topic == "far").expect("far reached");
+        // min(2, 9) * 0.5 = 1.0, NOT 9 * 0.5.
+        assert!((far.affinity - 1.0).abs() < 1e-4, "aff {}", far.affinity);
+    }
+
+    /// A higher `min_affinity` prunes deep branches whose decayed score
+    /// falls below the floor.
+    #[tokio::test]
+    async fn neighbors_within_min_affinity_prunes_deep() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        l.record_window(
+            &[
+                (("deploy".into(), "ci".into()), 8.0),
+                (("ci".into(), "flaky".into()), 6.0),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+        // 2-hop affinity is 3.0; a floor of 4.0 drops "flaky" but keeps "ci".
+        let n = l.neighbors_within("deploy", 10, 2, 0.5, 4.0, 10).await.unwrap();
+        assert!(n.iter().any(|g| g.topic == "ci"));
+        assert!(!n.iter().any(|g| g.topic == "flaky"));
+    }
+
+    /// A direct edge beats a longer path to the same topic (best-path).
+    #[tokio::test]
+    async fn neighbors_within_direct_path_wins() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        // deploy — target (7) direct, and deploy — a (5) — target (5).
+        l.record_window(
+            &[
+                (("deploy".into(), "target".into()), 7.0),
+                (("deploy".into(), "a".into()), 5.0),
+                (("a".into(), "target".into()), 5.0),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+        let n = l.neighbors_within("deploy", 10, 2, 0.5, 0.1, 10).await.unwrap();
+        let target = n.iter().find(|g| g.topic == "target").unwrap();
+        assert_eq!(target.hops, 1, "direct hop-1 path wins");
+        assert!((target.affinity - 7.0).abs() < 1e-4);
+    }
+
+    /// Degenerate inputs: seed never returned, unknown seed empty,
+    /// hops==0 / cap==0 empty.
+    #[tokio::test]
+    async fn neighbors_within_degenerate_inputs() {
+        let s = Scratch::new();
+        let l = open_ledger(&s, 6).await;
+        l.record_window(&[(("deploy".into(), "ci".into()), 8.0)], 10)
+            .await
+            .unwrap();
+        let n = l.neighbors_within("deploy", 10, 2, 0.5, 0.1, 10).await.unwrap();
+        assert!(!n.iter().any(|g| g.topic == "deploy"), "seed excluded");
+        assert!(l.neighbors_within("nope", 10, 2, 0.5, 0.1, 10).await.unwrap().is_empty());
+        assert!(l.neighbors_within("deploy", 10, 0, 0.5, 0.1, 10).await.unwrap().is_empty());
+        assert!(l.neighbors_within("deploy", 10, 2, 0.5, 0.1, 0).await.unwrap().is_empty());
     }
 }

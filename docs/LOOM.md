@@ -1,12 +1,12 @@
 # Graph-Augmented Recall — fusing the graph into RAG (Chapter Loom)
 
-> **Status:** 🧵 **LM.2 — BM25 lexical scorer shipped (inert).** Added
-> `aivyx-memory/src/bm25.rs` (pure, dep-free BM25+ scorer) + a shared default
-> trait method `Memory::lexical_search_scored` that BM25-ranks the live corpus —
-> both substrate impls share it, neither was touched. LM.1 added per-source
-> **weighted RRF** (`reciprocal_rank_fusion_weighted`); the Phase 98 unweighted
-> core is live in `recall_hybrid`. Both LM.1 + LM.2 ship **inert** (the BM25
-> ranker becomes the third fusion source in LM.4). The locked reference for the
+> **Status:** 🧵 **LM.3 — multi-hop graph walk shipped (inert).** Added
+> `PersistentCooccurrenceLedger::neighbors_within` (BFS over the Phase 83 ledger:
+> decayed bottleneck-path affinity, `hops=1` == `siblings_of`, branch-pruned by
+> `min_affinity`) + the `GraphNeighbor` type. With LM.1 (**weighted RRF**) and
+> LM.2 (**BM25** lexical scorer), all three of Loom's candidate sources now
+> exist as pure, tested, **inert** building blocks. LM.4 is the single seam that
+> fuses them into live recall. The locked reference for the
 > chapter that turns Aivyx's co-occurrence graph from a passive *view*
 > into an active *retrieval signal*, and fuses a lexical path into recall
 > alongside the existing semantic one. It **refines** the recall layer
@@ -137,7 +137,7 @@ any change to the at-rest memory encoding or the ledger's data model.
 | **LM.0** ✅ | **This design contract** | locked reference; banner flips per phase. DONE. |
 | **LM.1** ✅ | **Weighted RRF** | DONE. The unweighted RRF core already existed (Phase 98, `recall_fusion.rs`, live in `recall_hybrid`). LM.1 added `reciprocal_rank_fusion_weighted` (per-source weight multiplier; NaN/∞→1.0, negative→0.0/silenced) for the 3-source `lexical_weight` biasing LM.4 needs; the unweighted fn now delegates (proven behavior unchanged). Pure, dep-free, **inert** (not wired). 6 new tests (weight scaling, biasing, zero-drop, defended weights, all-ones≡unweighted). |
 | **LM.2** ✅ | **BM25 lexical scorer** | DONE. Pure `aivyx-memory/src/bm25.rs` (tokenize + non-negative BM25+ IDF + k1/b saturation, zero-dep, deterministic) + `Memory::lexical_search_scored` **default** trait method that pulls the corpus via `search("", MAX)` and BM25-ranks it — shared by `InMemoryMemory` + `RedbMemory` with no per-impl code; `search` stays the unscored discovery scan. 11 tests (7 scorer: rare-term-dominates, tf-saturation, more-terms-win, determinism; 4 integration: rare-term-first, topic-term match, empty/zero-limit, deterministic limit). **Inert** — becomes the 3rd fusion source in LM.4. |
-| **LM.3** | **Multi-hop graph walk** | `neighbors_within(seed, hops, per_hop_decay, min_affinity, cap)` over the Phase 83 ledger — generalizes Phase 84's 1-hop `siblings_of` (which becomes the `hops=1` case). Edge weight decays per hop; dedup; deterministic ordering. Ledger-level tests (2-hop reach, decay, cap, cycle-safety). |
+| **LM.3** ✅ | **Multi-hop graph walk** | DONE. `PersistentCooccurrenceLedger::neighbors_within(seed, now, hops, per_hop_decay, min_affinity, cap)` — bounded BFS over the Phase 83 ledger returning `GraphNeighbor { topic, affinity, hops }`. Path affinity = decayed **bottleneck** (`min` edge · `decay^(hops-1)`), so `hops=1` reproduces `siblings_of` exactly and 2-hop is strictly weaker; best-path-wins on multi-path arrival; monotonic decrease lets `min_affinity` prune branches early; positive edges only; seed excluded. 6 tests (hop1≡siblings, 2-hop decay, bottleneck, min-affinity prune, direct-wins, degenerate). **Inert** — wired as the 3rd RRF source in LM.4 (`hops` labels `graph-hop-N`). |
 | **LM.4** | **Fuse + config + wiring** | compose semantic ∪ lexical ∪ graph-walk through RRF in `SemanticMemoryContext`; add `[recall]` knobs (`rrf_k`, `lexical_weight`, `graph_hops`, `graph_decay`) — all default-off / back-compat; preserve recall-never-errors + the token budget; extend the breadcrumb/stat with the winning source. Config + recall integration tests. |
 | **LM.5** | **Eval harness + finalize** | a small **recall@k** eval harness over seeded fixtures (queries → expected memories), proving fusion ≥ semantic-only on the fixtures and that default-off is byte-identical. Full suite + clippy + `cargo deny` green; status flip; record. |
 
