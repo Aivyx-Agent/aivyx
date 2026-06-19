@@ -93,6 +93,7 @@ computes the capability the call needs, which the daemon enforces **before**
 | `notify.send` | `notify.send` | Trusted | push a message to the operator (Trusted-only — cross-boundary leak guard) |
 | `turn.history` | `audit.read` | Trusted | read recent turn outcomes from the audit chain |
 | `daemon.state` | `audit.read` | Trusted | read daemon/agent status |
+| `tools.list` | `audit.read` | Trusted | **enumerate the agent's own tools** (name + description; `detail=true` for input schemas; optional `filter`). Live, ground-truth introspection — Chapter Atlas AT.2 |
 
 ## Config
 

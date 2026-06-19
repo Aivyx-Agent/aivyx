@@ -109,6 +109,7 @@ pub mod reflection_tool;
 pub mod role_overrides;
 pub mod role_update_tool;
 pub mod turn_history_tool;
+pub mod tools_list_tool;
 pub mod ollama_tools;
 /// Phase 62 — Agent-Initiated Outbound Notifications. The
 /// dispatcher and `NotifyBackend` trait live here; per-kind

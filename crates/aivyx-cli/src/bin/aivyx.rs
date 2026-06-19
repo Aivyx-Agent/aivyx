@@ -5892,6 +5892,19 @@ async fn run_async(
         .map_err(|_| "notify.send dispatcher was set twice (programming error)")?;
     tool_list.push(Arc::clone(&notify_send_tool) as Arc<dyn Tool>);
 
+    // Chapter Atlas (AT.2) — runtime tool introspection. Snapshot the now-complete
+    // tool list's metadata (name/description/schema) + a self-entry, and register
+    // `tools.list` so the agent can enumerate its own tools with ground truth
+    // instead of guessing (local models hallucinate tool names). The snapshot
+    // avoids a reference cycle: the tool can't hold the registry that contains it.
+    {
+        use aivyx_channel::tools_list_tool::{ToolInfo, ToolsListTool};
+        let mut infos: Vec<ToolInfo> =
+            tool_list.iter().map(|t| ToolInfo::from_tool(t.as_ref())).collect();
+        infos.push(ToolsListTool::self_info());
+        tool_list.push(Arc::new(ToolsListTool::new(infos)) as Arc<dyn Tool>);
+    }
+
     // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider,
     // the persistent HMAC audit hook, AND the daemon's full `tool_list` — so
     // assemble the team and run the lead in-process with specialists that get
