@@ -7697,7 +7697,7 @@ async fn run_async(
             #[cfg(feature = "channel-voice-full")]
             {
                 use aivyx_voice::asr::whisper_rs::WhisperRsEngine;
-                use aivyx_voice::tts::piper::{config_from_generic, PiperEngine};
+                use aivyx_voice::tts::{kokoro, piper};
                 use aivyx_voice::{
                     run_push_to_talk_loop_streaming, VoiceChannel, VoiceChannelConfig,
                 };
@@ -7801,21 +7801,46 @@ async fn run_async(
                 let asr_engine = WhisperRsEngine::new(asr_cfg).map_err(|e| {
                     format!("voice: build WhisperRsEngine: {e}")
                 })?;
+                // Engine-neutral TTS config; each backend reads the
+                // fields it needs (Piper: voice_path + espeak; Kokoro:
+                // model_dir + voice_name + speed).
                 let tts_cfg = aivyx_voice::tts::TtsConfig {
                     voice_path: v.tts_voice_path.clone(),
                     speaker_id: None,
+                    model_dir: v.tts_model_dir.clone(),
+                    voice_name: v.tts_voice_name.clone(),
+                    speed: v.tts_speed,
                 };
-                let espeak_path = v.tts_espeak_data_path.clone().ok_or_else(|| {
-                    "voice: [voice] tts_espeak_data_path is required for Piper TTS. \
-                     Linux: `/usr/share/espeak-ng-data` (apt install espeak-ng-data). \
-                     macOS: `/opt/homebrew/share/espeak-ng-data` (brew install espeak-ng)."
-                        .to_string()
-                })?;
-                let piper_cfg = config_from_generic(&tts_cfg, espeak_path)
-                    .map_err(|e| format!("voice: build PiperEngine config: {e}"))?;
-                let tts_engine = PiperEngine::new(piper_cfg).map_err(|e| {
-                    format!("voice: build PiperEngine: {e}")
-                })?;
+
+                // Chapter Timbre — select the TTS engine from
+                // `[voice] tts_engine`. "kokoro" → the permissive
+                // Kokoro stack; anything else (incl. unset) → the
+                // legacy Piper engine, retired in TB.3.
+                let tts_dyn: Arc<dyn aivyx_voice::tts::TtsEngine> =
+                    match v.tts_engine.as_deref() {
+                        Some("kokoro") => {
+                            let kcfg = kokoro::config_from_generic(&tts_cfg)
+                                .map_err(|e| format!("voice: build Kokoro config: {e}"))?;
+                            let eng = kokoro::KokoroEngine::new(kcfg)
+                                .map_err(|e| format!("voice: build KokoroEngine: {e}"))?;
+                            Arc::new(eng)
+                        }
+                        _ => {
+                            let espeak_path =
+                                v.tts_espeak_data_path.clone().ok_or_else(|| {
+                                    "voice: [voice] tts_espeak_data_path is required for Piper TTS. \
+                                     Linux: `/usr/share/espeak-ng-data` (apt install espeak-ng-data). \
+                                     macOS: `/opt/homebrew/share/espeak-ng-data` (brew install espeak-ng)."
+                                        .to_string()
+                                })?;
+                            let piper_cfg = piper::config_from_generic(&tts_cfg, espeak_path)
+                                .map_err(|e| format!("voice: build PiperEngine config: {e}"))?;
+                            let eng = piper::PiperEngine::new(piper_cfg)
+                                .map_err(|e| format!("voice: build PiperEngine: {e}"))?;
+                            Arc::new(eng)
+                        }
+                    };
+
                 let channel_cfg = VoiceChannelConfig {
                     asr_engine: v.asr_engine.clone(),
                     tts_engine: v.tts_engine.clone(),
@@ -7824,10 +7849,7 @@ async fn run_async(
                         language: v.asr_language.clone(),
                         beam_size: v.asr_beam_size,
                     },
-                    tts: aivyx_voice::tts::TtsConfig {
-                        voice_path: v.tts_voice_path.clone(),
-                        speaker_id: None,
-                    },
+                    tts: tts_cfg.clone(),
                     input_device: v.input_device.clone(),
                     output_device: v.output_device.clone(),
                     capture_debug_path: None,
@@ -7835,7 +7857,6 @@ async fn run_async(
                 let channel = Arc::new(VoiceChannel::new(channel_cfg));
 
                 let asr_dyn: Arc<dyn aivyx_voice::asr::AsrEngine> = Arc::new(asr_engine);
-                let tts_dyn: Arc<dyn aivyx_voice::tts::TtsEngine> = Arc::new(tts_engine);
 
                 run_push_to_talk_loop_streaming(agent, channel, asr_dyn, tts_dyn)
                     .await

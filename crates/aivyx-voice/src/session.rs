@@ -3591,6 +3591,7 @@ url_retry_jitter_ms = 250
             tts: TtsConfig {
                 voice_path: Some("/m/piper.onnx".into()),
                 speaker_id: Some(0),
+                ..Default::default()
             },
             input_device: None,
             output_device: None,

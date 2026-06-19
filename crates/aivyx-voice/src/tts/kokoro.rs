@@ -49,7 +49,7 @@ use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 
-use crate::tts::{TtsAudio, TtsEngine, TtsError};
+use crate::tts::{TtsAudio, TtsConfig, TtsEngine, TtsError};
 
 /// Kokoro style-vector dimension.
 pub const STYLE_DIM: usize = 256;
@@ -92,6 +92,27 @@ impl KokoroTtsConfig {
         self.speed = speed;
         self
     }
+}
+
+/// Build a [`KokoroTtsConfig`] from the engine-neutral
+/// [`TtsConfig`]. `model_dir` is required; `voice_name` and
+/// `speed` fall back to the engine defaults (`af_heart`, `1.0`).
+pub fn config_from_generic(generic: &TtsConfig) -> Result<KokoroTtsConfig, TtsError> {
+    let model_dir = generic.model_dir.clone().ok_or_else(|| {
+        TtsError::ModelLoad(
+            "[voice.tts] model_dir missing — set the absolute path to the Kokoro model \
+             directory (the folder holding the .onnx model + voices-*.bin)"
+                .to_string(),
+        )
+    })?;
+    let mut cfg = KokoroTtsConfig::new(model_dir);
+    if let Some(voice) = &generic.voice_name {
+        cfg = cfg.with_voice(voice.clone());
+    }
+    if let Some(speed) = generic.speed {
+        cfg = cfg.with_speed(speed);
+    }
+    Ok(cfg)
 }
 
 /// `TtsEngine` backed by Kokoro-82M over ONNX Runtime.
@@ -580,5 +601,33 @@ mod tests {
     #[test]
     fn parse_npy_rejects_bad_magic() {
         assert!(parse_npy(b"not a numpy file at all").is_err());
+    }
+
+    #[test]
+    fn config_from_generic_requires_model_dir() {
+        let empty = TtsConfig::default();
+        assert!(config_from_generic(&empty).is_err());
+    }
+
+    #[test]
+    fn config_from_generic_maps_fields_with_defaults() {
+        let generic = TtsConfig {
+            model_dir: Some("/models/kokoro".into()),
+            ..Default::default()
+        };
+        let cfg = config_from_generic(&generic).expect("ok");
+        assert_eq!(cfg.model_dir, std::path::PathBuf::from("/models/kokoro"));
+        assert_eq!(cfg.voice_name, "af_heart"); // default
+        assert_eq!(cfg.speed, 1.0); // default
+
+        let generic = TtsConfig {
+            model_dir: Some("/m".into()),
+            voice_name: Some("bf_emma".to_string()),
+            speed: Some(1.25),
+            ..Default::default()
+        };
+        let cfg = config_from_generic(&generic).expect("ok");
+        assert_eq!(cfg.voice_name, "bf_emma");
+        assert_eq!(cfg.speed, 1.25);
     }
 }

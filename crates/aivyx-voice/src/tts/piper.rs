@@ -248,6 +248,7 @@ mod tests {
         let generic = TtsConfig {
             voice_path: None,
             speaker_id: None,
+            ..Default::default()
         };
         let result = config_from_generic(&generic, "/usr/share/espeak-ng-data".into());
         match result {
@@ -264,6 +265,7 @@ mod tests {
         let generic = TtsConfig {
             voice_path: Some("/models/voice.onnx".into()),
             speaker_id: Some(0),
+            ..Default::default()
         };
         let cfg = config_from_generic(&generic, "/usr/share/espeak-ng-data".into())
             .expect("ok");

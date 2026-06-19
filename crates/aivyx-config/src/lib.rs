@@ -4362,15 +4362,30 @@ pub struct VoiceOptions {
     #[serde(default)]
     pub asr_beam_size: Option<usize>,
     /// Absolute path to the Piper `.onnx` voice
-    /// model. Required when `--channel voice`.
+    /// model. Required when `tts_engine = "piper"`.
+    /// (Piper is removed in Chapter Timbre TB.3.)
     #[serde(default)]
     pub tts_voice_path: Option<PathBuf>,
     /// Absolute path to espeak-ng's data directory
     /// (Piper's phonemizer). Linux default is
     /// `/usr/share/espeak-ng-data`; macOS via Homebrew
     /// is `/opt/homebrew/share/espeak-ng-data`.
+    /// (Piper-only; removed in Chapter Timbre TB.3.)
     #[serde(default)]
     pub tts_espeak_data_path: Option<PathBuf>,
+    /// Chapter Timbre — Kokoro model directory (holds the
+    /// `.onnx` model + `voices-*.bin` + optional
+    /// `config.json`). Required when `tts_engine = "kokoro"`.
+    #[serde(default)]
+    pub tts_model_dir: Option<PathBuf>,
+    /// Chapter Timbre — Kokoro voice name (e.g. `af_heart`).
+    /// Optional; defaults to the engine's default voice.
+    #[serde(default)]
+    pub tts_voice_name: Option<String>,
+    /// Chapter Timbre — Kokoro speaking-rate multiplier
+    /// (1.0 = normal). Optional; defaults to 1.0.
+    #[serde(default)]
+    pub tts_speed: Option<f32>,
     /// Optional cpal input device name override.
     #[serde(default)]
     pub input_device: Option<String>,

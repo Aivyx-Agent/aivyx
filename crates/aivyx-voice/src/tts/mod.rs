@@ -91,18 +91,35 @@ pub trait TtsEngine: Send + Sync {
     fn native_sample_rate(&self) -> u32;
 }
 
-/// Operator-supplied TTS configuration.
+/// Operator-supplied TTS configuration — the engine-neutral
+/// superset; each backend's `config_from_generic` reads the
+/// fields it needs.
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct TtsConfig {
     /// Absolute path to the voice model `.onnx` file.
-    /// Required when the operator enables Piper.
+    /// Piper-only (removed with Piper in Chapter Timbre TB.3).
     #[serde(default)]
     pub voice_path: Option<std::path::PathBuf>,
 
-    /// Optional speaker id for multi-speaker voice
-    /// models. Defaults to 0 when omitted.
+    /// Optional speaker id for multi-speaker voice models.
+    /// Piper-only (removed with Piper in TB.3).
     #[serde(default)]
     pub speaker_id: Option<u32>,
+
+    /// Chapter Timbre — Kokoro model directory (holds the
+    /// `.onnx`, `voices-*.bin`, and optional `config.json`).
+    #[serde(default)]
+    pub model_dir: Option<std::path::PathBuf>,
+
+    /// Chapter Timbre — Kokoro voice name (e.g. `af_heart`).
+    /// Defaults to the engine's default voice when omitted.
+    #[serde(default)]
+    pub voice_name: Option<String>,
+
+    /// Chapter Timbre — Kokoro speaking-rate multiplier
+    /// (1.0 = normal). Defaults to 1.0 when omitted.
+    #[serde(default)]
+    pub speed: Option<f32>,
 }
 
 // ---------------------------------------------------------------------------
