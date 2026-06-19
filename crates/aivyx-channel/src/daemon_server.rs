@@ -240,6 +240,11 @@ pub struct DaemonConfig {
             crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
         >,
     >,
+    /// Chapter Codex (CX.3) — knowledge-wiki sweep. `Some` when
+    /// `[wiki].enabled` + an LLM provider are configured: the daemon
+    /// spawns a periodic stale-page sweep on its maintenance cadence.
+    /// `None` → no synthesis (the byte-identical default).
+    pub wiki_sweep: Option<crate::knowledge_wiki::WikiSweepConfig>,
     /// Phase 172 — the durable correction ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
@@ -578,7 +583,20 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         config_toml_path,
         seed_draft_llm,
         document_roots,
+        wiki_sweep,
     } = config;
+    // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
+    // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
+    // aware; absent ⇒ no synthesis (byte-identical default).
+    let _wiki_sweep_handle = wiki_sweep.map(|w| {
+        let sweep_shutdown = shutdown.clone();
+        tokio::spawn(crate::knowledge_wiki::run_wiki_sweep_loop(
+            w.synthesizer,
+            w.interval_secs,
+            w.max_pages,
+            sweep_shutdown,
+        ))
+    });
     // Phase 102 — shared once into every per-connection
     // `ConnectionContext` so `GetToolStats` can list the tool set.
     let tool_descriptors: Arc<[ToolDescriptor]> = tool_descriptors.into();
@@ -2768,6 +2786,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         config_toml_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
+        wiki_sweep: None,
     }).await
 }
 

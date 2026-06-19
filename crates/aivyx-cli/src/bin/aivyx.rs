@@ -4128,6 +4128,9 @@ async fn run_async(
         // Phase 84 — `[recall_cluster]` config. Wired into the
         // recall provider's cluster-aware expansion below.
         recall_cluster: config_recall_cluster,
+        // Chapter Codex — `[wiki]` config. Drives the daemon's
+        // knowledge-wiki sweep (built + passed via DaemonConfig below).
+        wiki: config_wiki,
         // Phase 87 — `[persona_consolidation]` config. Wired
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
@@ -4833,6 +4836,34 @@ async fn run_async(
             ),
         )
     });
+    // Chapter Codex (CX.3) — the knowledge-wiki sweep. Built only when
+    // `[wiki].enabled`: synthesizing every topic's page with the LLM has
+    // a cost the operator opts into. Reuses the same LLM provider, memory,
+    // and co-occurrence ledger the rest of the daemon holds.
+    let wiki_sweep: Option<aivyx_channel::knowledge_wiki::WikiSweepConfig> = config_wiki
+        .as_ref()
+        .filter(|w| w.enabled)
+        .map(|w| {
+            let store = Arc::new(
+                aivyx_channel::knowledge_wiki::PersistentWikiStore::new(
+                    storage.domain(KeyDomain::KnowledgeWiki),
+                ),
+            );
+            let mut synth = aivyx_channel::knowledge_wiki::WikiSynthesizer::new(
+                Arc::clone(&memory),
+                Arc::clone(&provider),
+                store,
+                model.clone(),
+            );
+            if let Some(ledger) = &cooccurrence_ledger {
+                synth = synth.with_ledger(Arc::clone(ledger));
+            }
+            aivyx_channel::knowledge_wiki::WikiSweepConfig {
+                synthesizer: Arc::new(synth),
+                interval_secs: w.interval_secs,
+                max_pages: w.max_pages_per_sweep,
+            }
+        });
     // Phase 172 — the durable correction ledger. Zero-config,
     // same condition + rationale as the helpfulness ledger (the
     // correction signal only exists when auto-recall is on).
@@ -7106,6 +7137,7 @@ async fn run_async(
             // Phase 83 — durable cross-session co-occurrence
             // ledger; folded by the same pass.
             cooccurrence_ledger: cooccurrence_ledger.clone(),
+            wiki_sweep,
             // Phase 172 — durable correction ledger; folded by
             // the same recall-feedback pass.
             correction_ledger: correction_ledger.clone(),

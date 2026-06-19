@@ -789,6 +789,10 @@ pub struct AivyxConfig {
     /// only arms cluster expansion; it still no-ops unless
     /// `enabled = true`.
     pub recall_cluster: Option<RecallClusterConfig>,
+    /// Chapter Codex — `[wiki]` section. `None` when absent: no
+    /// knowledge-wiki synthesis. `Some` only arms it; it still no-ops
+    /// unless `enabled = true`.
+    pub wiki: Option<WikiConfig>,
     /// Phase 87 — `[persona_consolidation]` section. `None`
     /// when absent: the Persona proposal pipeline is unchanged
     /// (pre-Phase-87 behaviour — no pattern-driven proposals).
@@ -2224,6 +2228,26 @@ pub const DEFAULT_RC_MAX_SIBLINGS: u32 = 3;
 /// decay) before it steers recall.
 pub const DEFAULT_RC_MIN_AFFINITY: f32 = 1.0;
 
+/// Chapter Codex — `[wiki]` knowledge-wiki config. Off by default:
+/// auto-summarizing memory topics with the LLM has a cost the operator
+/// opts into. When `enabled`, the daemon sweeps stale topic pages onto
+/// the maintenance cadence (see `aivyx-channel::knowledge_wiki`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WikiConfig {
+    /// Master switch. Default `false` — no synthesis, no sweep.
+    pub enabled: bool,
+    /// Max pages (re)generated per sweep, bounding LLM calls per pass.
+    pub max_pages_per_sweep: usize,
+    /// Seconds between sweeps.
+    pub interval_secs: u64,
+}
+
+/// Default per-sweep page cap — modest so a first sweep over a large
+/// memory doesn't fire a flood of LLM calls in one pass.
+pub const DEFAULT_WIKI_MAX_PAGES_PER_SWEEP: usize = 20;
+/// Default sweep interval — hourly, matching the memory-maintenance cadence.
+pub const DEFAULT_WIKI_INTERVAL_SECS: u64 = 3600;
+
 /// Phase 87 — `[persona_consolidation]` runtime config.
 ///
 /// The actuator surface for pattern-driven Persona proposals:
@@ -3180,6 +3204,9 @@ struct RawToml {
     /// co-recall.
     #[serde(default)]
     recall_cluster: RawRecallCluster,
+    /// `[wiki]` section. Chapter Codex — knowledge-wiki synthesis.
+    #[serde(default)]
+    wiki: RawWiki,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -4102,6 +4129,18 @@ struct RawRecallCluster {
     max_siblings: Option<u32>,
     #[serde(default)]
     min_affinity: Option<f32>,
+}
+
+/// Chapter Codex — `[wiki]` deserialize target. Absent section →
+/// all-`None` via `Default` → `wiki: None` (no synthesis).
+#[derive(Debug, Default, Deserialize)]
+struct RawWiki {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_pages_per_sweep: Option<usize>,
+    #[serde(default)]
+    interval_secs: Option<u64>,
 }
 
 /// Phase 87 — `[persona_consolidation]` deserialize target.
@@ -5105,6 +5144,7 @@ impl AivyxConfig {
         let recall_cluster = build_recall_cluster_config(
             &toml.recall_cluster,
         )?;
+        let wiki = build_wiki_config(&toml.wiki)?;
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -6190,6 +6230,7 @@ impl AivyxConfig {
             persona_lifecycle,
             persona_seed,
             recall_cluster,
+            wiki,
             persona_consolidation,
             correction_consolidation,
             loop_config,
@@ -7493,6 +7534,42 @@ fn build_recall_cluster_config(
         enabled,
         max_siblings,
         min_affinity,
+    }))
+}
+
+/// Chapter Codex — build the `[wiki]` config. Absent section (every field
+/// `None`) → `Ok(None)` (no synthesis). Validation applies only when
+/// `enabled`, matching the `[recall_cluster]` staged-config pattern.
+fn build_wiki_config(raw: &RawWiki) -> Result<Option<WikiConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.max_pages_per_sweep.is_some()
+        || raw.interval_secs.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+    let enabled = raw.enabled.unwrap_or(false);
+    let max_pages_per_sweep = raw
+        .max_pages_per_sweep
+        .unwrap_or(DEFAULT_WIKI_MAX_PAGES_PER_SWEEP);
+    let interval_secs = raw.interval_secs.unwrap_or(DEFAULT_WIKI_INTERVAL_SECS);
+    if enabled {
+        if max_pages_per_sweep == 0 {
+            return Err(ConfigError::Invalid {
+                field: "wiki.max_pages_per_sweep",
+                reason: "`max_pages_per_sweep` must be >= 1 when wiki is enabled".into(),
+            });
+        }
+        if interval_secs == 0 {
+            return Err(ConfigError::Invalid {
+                field: "wiki.interval_secs",
+                reason: "`interval_secs` must be >= 1 when wiki is enabled".into(),
+            });
+        }
+    }
+    Ok(Some(WikiConfig {
+        enabled,
+        max_pages_per_sweep,
+        interval_secs,
     }))
 }
 

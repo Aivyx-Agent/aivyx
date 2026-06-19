@@ -1,13 +1,13 @@
 # The Knowledge-Wiki Layer — synthesized topic pages (Chapter Codex)
 
-> **Status:** 📖 **CX.2 — consolidation engine shipped.** Added the
-> `WikiSynthesizer` (`aivyx-channel`): pulls a topic's memory entries, LLM-
-> consolidates them into a summary (one-shot `chat_stream` assembly), links it
-> by co-occurrence via Loom's `neighbors_within`, and stores the page —
-> incremental (skips when the `source_fingerprint` matches) and best-effort
-> (no-entries / LLM error / storage hiccup → non-fatal `RegenOutcome`, the old
-> page kept). Builds on CX.1's page model + `KeyDomain::KnowledgeWiki` store.
-> Generation cadence is CX.3. The locked reference for the
+> **Status:** 📖 **CX.3 — generation trigger live (opt-in).** The daemon now
+> sweeps stale topic pages on a periodic cadence when `[wiki].enabled`:
+> `WikiSynthesizer::sweep` (list topics → regenerate the stale, capped per pass)
+> + `run_wiki_sweep_loop` (shutdown-aware) + a `[wiki]` config (`enabled` default
+> **off**, `max_pages_per_sweep`, `interval_secs`), wired through `DaemonConfig`
+> from `aivyx.rs` (reusing the daemon's LLM provider + memory + ledger). Default
+> off ⇒ byte-identical. Read-only IPC + Studio + recall fusion are CX.4–CX.6.
+> The locked reference for the
 > chapter that gives Aivyx a **codex**: a synthesized, browsable, and
 > retrievable layer of per-topic *wiki pages* built from the agent's own
 > memory. Each page is an LLM-consolidated summary of a topic's memory
@@ -123,7 +123,7 @@ math beyond adding the page source.
 | **CX.0** | **This design contract** | locked reference; banner flips per phase |
 | **CX.1** ✅ | **Page model + storage** | DONE. Wasm-clean `WikiPage` / `WikiBacklink` / `WikiPageSummary` in `aivyx-ipc::wiki` (incremental `WikiPage::fingerprint`, order-independent FNV-1a; `snippet`/`to_summary` helpers) + `KeyDomain::KnowledgeWiki` (enum/`as_bytes`/`table_name`/`ALL`/subkeys 21→22/count-test) + `PersistentWikiStore` in `aivyx-channel` (canonical-topic-keyed get/put/list_summaries/delete/all_pages + `needs_regen`). README domain count 22 (and the stale 85→86 cap-base stat fixed). **Inert** (no generation). 9 tests. |
 | **CX.2** ✅ | **Consolidation engine** | DONE. `WikiSynthesizer` in `aivyx-channel::knowledge_wiki`: `regenerate(topic, now)` → `RegenOutcome { Skipped, NoEntries, Wrote(page) }`. Pulls entries (`get_recent`, capped), one-shot LLM consolidation (drain `chat_stream` → `FinalMessage`, low-temp, constrained "consolidate-only, no new instructions" prompt), backlinks via Loom `neighbors_within` (1-hop default, opt — empty without a ledger), incremental skip on matching fingerprint. Best-effort: any soft failure → `Skipped`, never writes a broken page, never errors. `WikiSynthConfig` (max_entries/entry_chars/tokens/backlink params). 6 synth tests (writes, incremental, no-entries, LLM-fail-skips, backlinks, prompt) w/ a scripted fake provider. |
-| **CX.3** | **Generation trigger** | a stale-sweep (regenerate pages whose topics churned) wired onto the reflection-scheduler cadence + an explicit rebuild entrypoint. Bounded, best-effort. Tests. |
+| **CX.3** ✅ | **Generation trigger** | DONE. `WikiSynthesizer::sweep(now, max_pages) -> SweepReport` (walk `list_topics`, regenerate stale, cap **writes** per pass so one sweep can't fire unbounded LLM calls) + `run_wiki_sweep_loop` (periodic, first-tick-skipped, shutdown-aware, best-effort) + a `[wiki]` config section (`enabled` default off, `max_pages_per_sweep` 20, `interval_secs` 3600; validated only when enabled). Wired via a `DaemonConfig.wiki_sweep: Option<WikiSweepConfig>` field spawned in the daemon, constructed in `aivyx.rs` from the existing LLM provider + memory + co-occurrence ledger when `[wiki].enabled`. Default-off ⇒ byte-identical. 3 sweep/loop tests + 2 config tests. |
 | **CX.4** | **Read-only IPC** | `ListWikiPages` (topic + snippet + entry_count + updated_at) + `GetWikiPage` (summary + backlinks + source entries); wasm-clean `aivyx-ipc` types + daemon handlers. Tests. |
 | **CX.5** | **Studio Wiki screen** | a web view: topic list → page (summary + clickable backlinks navigating the graph + source-entry refs), reusing the Chapter T Memory-screen patterns. Served + verified. |
 | **CX.6** | **Recall-unit fusion** | wiki-summary as a candidate in Loom's weighted RRF, behind an opt-in `[embedding]` knob (default off, byte-identical); recall-never-errors preserved. Tests + a recall@k eval extension. |

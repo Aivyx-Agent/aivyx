@@ -357,6 +357,90 @@ impl WikiSynthesizer {
             Err(_) => RegenOutcome::Skipped,
         }
     }
+
+    /// Refresh every topic's page that has gone stale, newest churn
+    /// first, capped at `max_pages` (re)generations per sweep so one
+    /// pass can't fire an unbounded number of LLM calls. The cap counts
+    /// **writes** (the costly path), not scans — already-current topics
+    /// are cheap fingerprint checks. Best-effort: a `list_topics` failure
+    /// returns an empty report; per-topic failures are folded into
+    /// `skipped`. Returns a [`SweepReport`] for the breadcrumb / tests.
+    pub async fn sweep(&self, now_secs: u64, max_pages: usize) -> SweepReport {
+        let mut report = SweepReport::default();
+        let topics = match self.memory.list_topics().await {
+            Ok(t) => t,
+            Err(_) => return report,
+        };
+        for topic in topics {
+            if report.wrote >= max_pages {
+                break;
+            }
+            report.scanned += 1;
+            match self.regenerate(&topic, now_secs).await {
+                RegenOutcome::Wrote(_) => report.wrote += 1,
+                RegenOutcome::Skipped => report.skipped += 1,
+                RegenOutcome::NoEntries => report.no_entries += 1,
+            }
+        }
+        report
+    }
+}
+
+/// Tally of one [`WikiSynthesizer::sweep`] pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SweepReport {
+    /// Topics examined this pass.
+    pub scanned: usize,
+    /// Pages (re)synthesized + stored.
+    pub wrote: usize,
+    /// Topics already up to date (fingerprint matched) or soft-failed.
+    pub skipped: usize,
+    /// Topics that turned out to have no entries.
+    pub no_entries: usize,
+}
+
+/// What the daemon needs to run the wiki sweep loop: a ready
+/// synthesizer plus the cadence knobs from `[wiki]`. Built by the binary
+/// (it owns the storage + provider) and passed into `DaemonConfig`;
+/// `None` there ⇒ no sweep (the byte-identical default).
+pub struct WikiSweepConfig {
+    pub synthesizer: Arc<WikiSynthesizer>,
+    pub interval_secs: u64,
+    pub max_pages: usize,
+}
+
+/// Background generation trigger (CX.3) — periodically sweep stale pages
+/// onto the daemon's maintenance cadence. Best-effort and shutdown-aware:
+/// the first immediate tick is skipped (the first sweep runs one interval
+/// after startup), and the loop exits cleanly on `shutdown`. Modeled on
+/// the daemon's hourly memory-GC / embedding-backfill timer.
+pub async fn run_wiki_sweep_loop(
+    synthesizer: Arc<WikiSynthesizer>,
+    interval_secs: u64,
+    max_pages: usize,
+    shutdown: CancellationToken,
+) {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
+    interval.tick().await; // skip the immediate first tick
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let r = synthesizer.sweep(now, max_pages).await;
+                if r.wrote > 0 {
+                    eprintln!(
+                        "aivyx wiki-sweep: wrote {} page(s) ({} scanned, {} skipped)",
+                        r.wrote, r.scanned, r.skipped
+                    );
+                }
+            }
+            _ = shutdown.cancelled() => break,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -596,6 +680,68 @@ mod tests {
             }
             other => panic!("expected Wrote, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn sweep_writes_all_stale_then_skips_on_second_pass() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "ships via ci").await.unwrap();
+        mem.put("billing", "stripe webhooks").await.unwrap();
+        let store = Arc::new(store().await);
+        let s = synth(Arc::clone(&mem), Arc::clone(&store), "summary", false);
+
+        let first = s.sweep(100, 50).await;
+        assert_eq!(first.scanned, 2);
+        assert_eq!(first.wrote, 2);
+        assert_eq!(first.skipped, 0);
+
+        // Nothing changed → all skipped.
+        let second = s.sweep(200, 50).await;
+        assert_eq!(second.scanned, 2);
+        assert_eq!(second.wrote, 0);
+        assert_eq!(second.skipped, 2);
+
+        // Both pages exist.
+        assert_eq!(store.list_summaries().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn sweep_caps_writes_per_pass() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        for t in ["a", "b", "c"] {
+            mem.put(t, "note").await.unwrap();
+        }
+        let store = Arc::new(store().await);
+        let s = synth(Arc::clone(&mem), Arc::clone(&store), "summary", false);
+
+        // Cap at 2 writes → only 2 pages this pass.
+        let r = s.sweep(1, 2).await;
+        assert_eq!(r.wrote, 2);
+        // A second pass writes the remaining one (the first two now skip).
+        let r2 = s.sweep(2, 2).await;
+        assert_eq!(r2.wrote, 1);
+        assert_eq!(store.list_summaries().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn sweep_loop_first_tick_skipped_and_cancels() {
+        // The loop skips the immediate tick, so a sweep doesn't run
+        // before the first interval; cancelling returns promptly.
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "note").await.unwrap();
+        let store = Arc::new(store().await);
+        let s = Arc::new(synth(Arc::clone(&mem), Arc::clone(&store), "summary", false));
+        let shutdown = CancellationToken::new();
+        let handle = tokio::spawn(run_wiki_sweep_loop(
+            Arc::clone(&s),
+            3600,
+            10,
+            shutdown.clone(),
+        ));
+        // No page yet (first tick skipped, interval is an hour).
+        assert!(store.get_page("deploy").await.unwrap().is_none());
+        shutdown.cancel();
+        handle.await.unwrap();
     }
 
     #[tokio::test]

@@ -7138,6 +7138,50 @@ fn persona_lifecycle_present_disabled_is_allowed_partial() {
 /// Phase 85 — explicit helpfulness-decay knobs win; the two
 /// validation cases fire only when decay is armed.
 #[test]
+fn wiki_section_parses_defaults_and_overrides() {
+    let _env = EnvScope::new();
+    // Absent section → None (no synthesis).
+    let cfg = load_with_toml("\n", "wiki-absent");
+    assert!(cfg.wiki.is_none());
+
+    // Present + enabled with defaults filled in.
+    let cfg = load_with_toml("\n[wiki]\nenabled = true\n", "wiki-default");
+    let w = cfg.wiki.expect("section present");
+    assert!(w.enabled);
+    assert_eq!(w.max_pages_per_sweep, crate::DEFAULT_WIKI_MAX_PAGES_PER_SWEEP);
+    assert_eq!(w.interval_secs, crate::DEFAULT_WIKI_INTERVAL_SECS);
+
+    // Overrides honored.
+    let cfg = load_with_toml(
+        "\n[wiki]\nenabled = true\nmax_pages_per_sweep = 5\ninterval_secs = 900\n",
+        "wiki-override",
+    );
+    let w = cfg.wiki.unwrap();
+    assert_eq!(w.max_pages_per_sweep, 5);
+    assert_eq!(w.interval_secs, 900);
+
+    // Present but disabled (staged) → Some, no validation of zero knobs.
+    let cfg = load_with_toml(
+        "\n[wiki]\nenabled = false\nmax_pages_per_sweep = 0\n",
+        "wiki-staged",
+    );
+    assert!(!cfg.wiki.unwrap().enabled);
+}
+
+#[test]
+fn wiki_enabled_rejects_zero_knobs() {
+    let _env = EnvScope::new();
+    let tmp = TempDir::new("wiki-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[wiki]\nenabled = true\nmax_pages_per_sweep = 0\n").unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        ..LoadOptions::test_env_only()
+    };
+    assert!(AivyxConfig::load_from_env_and_toml(&opts).is_err());
+}
+
+#[test]
 fn persona_lifecycle_helpfulness_decay_knobs() {
     let env = EnvScope::new();
 
