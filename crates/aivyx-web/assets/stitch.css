@@ -428,6 +428,9 @@ a { color: var(--color-primary); text-decoration: none; }
 .mem-entry-head .when { margin-left: auto; }
 .mem-entry-head .seq { color: var(--color-text-disabled); }
 .mem-body { margin: 0; color: var(--color-text-primary); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+/* Chapter Codex — knowledge-wiki backlink chips. */
+.wiki-backlinks { display: flex; flex-wrap: wrap; gap: 6px; }
+.wiki-backlinks .chip { cursor: pointer; border: none; }
 
 /* ── Chat / Terminal view ──────────────────────────────────────────────────── */
 .chat { display: flex; flex-direction: column; min-height: 0; height: 100%; }

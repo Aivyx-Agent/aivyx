@@ -26,6 +26,7 @@ use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
     TrustTier,
 };
+use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
@@ -68,6 +69,8 @@ enum View {
     Missions,
     Chat,
     Memory,
+    /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
+    Wiki,
     Settings,
     Agents,
     Teams,
@@ -89,6 +92,15 @@ struct MemoryState {
     graph_nodes: Vec<MemoryGraphNode>,
     /// MG — the weighted co-occurrence edges (empty ⇒ a topic cloud).
     graph_edges: Vec<PairScore>,
+}
+
+/// Chapter Codex — knowledge-wiki browser state. `pages` is the index
+/// (compact rows); `selected` is the open page (full summary + backlinks
+/// + source seqs). Read-only snapshots fanned in by `ws_task`.
+#[derive(Clone, Default, PartialEq)]
+struct WikiState {
+    pages: Vec<WikiPageSummary>,
+    selected: Option<WikiPage>,
 }
 
 /// Settings screen state — the on-disk config snapshot + the last write outcome.
@@ -256,6 +268,7 @@ fn App() -> Element {
     let missions = use_signal(Vec::<TeamMissionView>::new);
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
+    let wiki = use_signal(WikiState::default);
     let settings = use_signal(SettingsState::default);
     let agents = use_signal(AgentsState::default);
     let roster = use_signal(|| None::<TeamConfig>);
@@ -269,12 +282,13 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, settings, agents, roster, documents, voice,
+            rx, missions, dashboard, memory, wiki, settings, agents, roster, documents, voice,
             connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
     use_context_provider(|| memory);
+    use_context_provider(|| wiki);
     use_context_provider(|| settings);
     use_context_provider(|| agents);
     use_context_provider(|| roster);
@@ -324,6 +338,7 @@ fn App() -> Element {
         View::Missions => "Mission Orchestration",
         View::Chat => "Terminal",
         View::Memory => "Memory",
+        View::Wiki => "Knowledge Wiki",
         View::Settings => "Settings",
         View::Agents => "Agents",
         View::Teams => "Teams",
@@ -349,6 +364,7 @@ fn App() -> Element {
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
                         View::Chat => rsx! { ChatPanel {} },
                         View::Memory => rsx! { MemoryPanel {} },
+                        View::Wiki => rsx! { WikiPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
@@ -385,6 +401,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Chat) }
             NavItem { icon: ICON_MEMORY, label: "Memory", active: view() == View::Memory,
                 onclick: move |_| view.set(View::Memory) }
+            NavItem { icon: ICON_MEMORY, label: "Wiki", active: view() == View::Wiki,
+                onclick: move |_| view.set(View::Wiki) }
             NavItem { icon: ICON_SETTINGS, label: "Settings", active: view() == View::Settings,
                 onclick: move |_| view.set(View::Settings) }
             NavItem { icon: ICON_AGENTS, label: "Agents", active: view() == View::Agents,
@@ -1004,6 +1022,115 @@ fn mem_graph_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-mem-graph".to_string(),
         payload: QueryPayload::GetMemoryGraph { limit: 60 },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wiki view — Chapter Codex (CX.5). The synthesized per-topic knowledge
+// pages: an index rail → a page (summary + co-occurrence backlinks +
+// source-entry refs). Read-only; pages are derived from memory.
+// ---------------------------------------------------------------------------
+
+#[component]
+fn WikiPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let wiki = use_context::<Signal<WikiState>>();
+
+    // Load the page index each time the view opens.
+    use_future(move || async move {
+        ws.send(wiki_list_query());
+    });
+
+    let w = wiki();
+    let selected_topic = w.selected.as_ref().map(|p| p.topic.clone());
+    rsx! {
+        div { class: "mem",
+            aside { class: "mem-rail",
+                div { class: "panel-head", h3 { "Pages" } span { class: "label-tech", "{w.pages.len()}" } }
+                if w.pages.is_empty() {
+                    p { class: "label-tech", style: "padding:8px",
+                        "No pages yet. Enable [wiki] and the agent consolidates each memory topic into a page."
+                    }
+                }
+                for p in w.pages.iter() {
+                    {
+                        let topic = p.topic.clone();
+                        let sel = selected_topic.as_deref() == Some(p.topic.as_str());
+                        rsx! {
+                            button {
+                                class: if sel { "mem-topic active" } else { "mem-topic" },
+                                onclick: move |_| ws.send(wiki_page_query(topic.clone())),
+                                "{p.topic}"
+                                span { class: "label-tech", style: "float:right", "{p.entry_count}" }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "mem-main",
+                match w.selected.clone() {
+                    Some(page) => rsx! { WikiPageView { page } },
+                    None => rsx! {
+                        div { class: "glass-card empty",
+                            p { class: "label-tech",
+                                "Select a page. Each is the agent's consolidated summary of one memory topic — what it knows, not just what it logged."
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn WikiPageView(page: WikiPage) -> Element {
+    let ws = use_context::<Sender>();
+    rsx! {
+        div { class: "glass-card",
+            div { class: "mem-entry-head",
+                h3 { "{page.topic}" }
+                span { class: "chip", "{page.entry_count} entries" }
+                span { class: "when label-tech", "updated {rel_time_secs(page.updated_at)}" }
+            }
+            p { class: "mem-body", style: "white-space:pre-wrap", "{page.summary}" }
+            if !page.backlinks.is_empty() {
+                div { class: "panel-head", h3 { class: "label-tech", "Related" } }
+                div { class: "wiki-backlinks",
+                    for b in page.backlinks.iter() {
+                        {
+                            let topic = b.topic.clone();
+                            rsx! {
+                                button {
+                                    class: "chip",
+                                    title: "affinity {b.affinity:.2} · {b.hops} hop(s)",
+                                    onclick: move |_| ws.send(wiki_page_query(topic.clone())),
+                                    "{b.topic}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "when label-tech", style: "margin-top:8px",
+                "consolidated from {page.source_seqs.len()} memory entr",
+                if page.source_seqs.len() == 1 { "y" } else { "ies" }
+            }
+        }
+    }
+}
+
+fn wiki_list_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-wiki-list".to_string(),
+        payload: QueryPayload::ListWikiPages,
+    }
+}
+
+fn wiki_page_query(topic: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-wiki-page".to_string(),
+        payload: QueryPayload::GetWikiPage { topic },
     }
 }
 
@@ -3352,6 +3479,7 @@ async fn ws_task(
     mut missions: Signal<Vec<TeamMissionView>>,
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
+    mut wiki: Signal<WikiState>,
     mut settings: Signal<SettingsState>,
     mut agents: Signal<AgentsState>,
     mut roster: Signal<Option<TeamConfig>>,
@@ -3504,6 +3632,18 @@ async fn ws_task(
                     let mut m = memory.write();
                     m.entries = matches;
                     m.fell_back = fell_back_to_keyword;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListWikiPages { pages },
+                    ..
+                } => {
+                    wiki.write().pages = pages;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetWikiPage { page },
+                    ..
+                } => {
+                    wiki.write().selected = page;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetSettings { settings: snap },
