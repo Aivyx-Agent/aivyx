@@ -83,7 +83,7 @@ pub mod reminder_driver;
 /// Phase 173 — the autonomous-loop backlog agent tools
 /// (`loop.next` / `loop.complete`), channel-tier like
 /// `mission.*`. The only new agent-facing surface the loop
-/// needs; the thirteen-tool substrate core is untouched.
+/// needs; the fifteen-tool substrate core is untouched.
 pub mod loop_tool;
 /// Phase 173 — the autonomous-loop driver. A background task
 /// (sibling of `reflection_scheduler`) that fires a fresh-context

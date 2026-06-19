@@ -619,6 +619,34 @@ tool-process bases). The `known_bases_count_matches_phase_143_a3_addendum`
 test pins the new total at **85**, so this addendum and the runtime
 stay in sync.
 
+## Chapter Forge addendum — `git.write` (FG.2) (2026-06-19)
+
+> *Added at Chapter Forge FG.2, the first new-tools breadth
+> chapter after Atlas. `git.write` is the destructive git base
+> A12 explicitly anticipated ("a future destructive git tool
+> would warrant a separate `git.write` scope"). It gates the
+> `git.commit` tool (stage + commit), shipping at FG.3; the base
+> + count contract lands at FG.2, ahead of the tool. Qualified by
+> canonical repo path, checked against the same operator
+> `[git] repos` allow-set as `git.read`. `CEILING_TRUSTED` only —
+> writing history is as sensitive as `shell.exec` / `fs.delete`,
+> so a remote SemiTrusted adapter cannot hold it by default;
+> confirm-first at the tool level when `confirm_destructive` is
+> on. The companion `web.extract` substrate tool (FG.1) needs no
+> new base — it reuses the existing `net.fetch` base — so it does
+> not move this count.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Forge | `git.write` | FG.2 — gates `git.commit` (FG.3), the destructive sibling to `git.status` / `git.diff`; Trusted-tier-only, confirm-first, reuses the `git.read` repo allow-set |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **85 → 86** (the one new `git.write`
+substrate base). The `known_bases_count_matches_phase_143_a3_addendum`
+test pins the new total at **86**, so this addendum and the runtime
+stay in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

@@ -60,14 +60,18 @@ computes the capability the call needs, which the daemon enforces **before**
 | `shell.exec` | `shell.exec` | Trusted | run a command; Local-channel gated + sandboxable |
 | *(spawn)* | `shell.spawn` | Trusted | long-running spawn capability |
 
-## Git (substrate, read-only)
+## Git (substrate)
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
 | `git.status` | `git.read` | Trusted | working-tree status of a configured repo |
 | `git.diff` | `git.read` | Trusted | diff of a configured repo |
+| `git.commit` | `git.write` | Trusted | stage + commit in a configured repo; confirm-first when `confirm_destructive` *(tool lands FG.3)* |
 
-*(A destructive `git.write` is a recorded future item — see `ATLAS.md` §6.)*
+*The `git.write` base was added at Chapter Forge FG.2 — the destructive
+sibling A12 anticipated — gating `git.commit`. Trusted-tier only (writing
+history is as sensitive as `shell.exec` / `fs.delete`); reuses `git.read`'s
+`[git] repos` allow-set. See `docs/amendments/2026-06-19-substrate-tool-count-fifteen.md`.*
 
 ## LLM (substrate)
 

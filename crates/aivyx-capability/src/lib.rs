@@ -58,9 +58,19 @@ const KNOWN_BASES: &[&str] = &[
     // the operator's configured `[git] repos` list. One base
     // shared by both read tools by design (read-invariant
     // grouping; see A12 amendment doc for the rationale).
-    // A future destructive git tool would warrant a separate
-    // `git.write` base.
     "git.read",
+    // git write — Chapter Forge (FG.2). The destructive sibling
+    // A12 anticipated ("a future destructive git tool would
+    // warrant a separate `git.write` base"). Gates the
+    // `git.commit` tool (stage + commit inside an allowed repo).
+    // Qualifier is the canonical repo path, checked against the
+    // same operator `[git] repos` allow-set as `git.read`.
+    // Trusted-tier only — present in `CEILING_TRUSTED` but not
+    // `CEILING_SEMITRUSTED`: writing history is at least as
+    // sensitive as `shell.exec` / `fs.delete`, so a remote
+    // adapter must not hold it by default. Confirm-first at the
+    // tool level when `[access] confirm_destructive` is on.
+    "git.write",
     // llm
     "llm.call",
     "llm.embed",
@@ -874,6 +884,14 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "net.dns",
         "shell.exec",
         "shell.spawn",
+        // Chapter Forge (FG.2) — `git.write` gates the destructive
+        // `git.commit` tool. Trusted-tier only (like shell.exec /
+        // fs.delete): writing repo history is sensitive, so a remote
+        // SemiTrusted adapter must not hold it by default. The read
+        // sibling `git.read` is reachable at the operator/Kernel tier
+        // the Local CLI runs under; the write base is pinned here so a
+        // future role grant can never lift it past Trusted.
+        "git.write",
         "llm.call",
         "llm.embed",
         "memory.read",
@@ -1878,11 +1896,13 @@ mod tests {
         // Chapter Contacts adds contacts.read + contacts.write for the
         // aivyx-contacts third-party tool process (Google People API;
         // first Broaden-track everyday-PA domain, audit F4).
+        // Chapter Forge (FG.2) adds git.write — the destructive git
+        // sibling A12 anticipated — gating the git.commit tool.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            85,
+            86,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
@@ -1896,6 +1916,28 @@ mod tests {
         assert_eq!(r.base(), "budget.read");
         let w = Scope::parse("budget.write").expect("budget.write");
         assert_eq!(w.base(), "budget.write");
+    }
+
+    #[test]
+    fn git_write_base_parses_and_is_trusted_only() {
+        // Chapter Forge (FG.2) — the new destructive git base parses
+        // (qualified by repo path, like git.read) and sits at Trusted+
+        // only: held at the Trusted ceiling, denied at SemiTrusted.
+        let w = Scope::parse("git.write").expect("git.write");
+        assert_eq!(w.base(), "git.write");
+        let repo = Scope::parse("git.write:/home/me/projects/aivyx")
+            .expect("git.write with repo-path qualifier");
+        assert_eq!(repo.base(), "git.write");
+
+        let needed = Scope::parse("git.write:/home/me/projects/aivyx").unwrap();
+        assert!(
+            CEILING_TRUSTED.grants(&needed),
+            "Trusted ceiling must grant git.write"
+        );
+        assert!(
+            !CEILING_SEMITRUSTED.grants(&needed),
+            "SemiTrusted ceiling must deny git.write (writing history is Trusted-only)"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Gmail third-party tool process for Aivyx. Chapter F #1 — Phase
 //! 123. Ships as a separate binary the operator installs and wires
 //! into `aivyx.toml` via `[[tool_process]]`. Per PRODUCT.md P10
-//! (substrate is closed at thirteen tools forever; email is third-
+//! (substrate is closed at fifteen tools forever; email is third-
 //! party territory).
 //!
 //! ## Layout (Phase 123 Task 2 — this commit)

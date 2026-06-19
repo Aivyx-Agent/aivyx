@@ -561,11 +561,12 @@ Rule 4 is intentional: tools must be specific. Unrestricted requests are visible
 | `shell.exec` | command allowlist | Run a command, capture output |
 | `shell.spawn` | command allowlist | Spawn long-lived subprocess |
 
-**`git` — version control read** *(added in Amendment A12, Phase 109)*
+**`git` — version control** *(read added in Amendment A12, Phase 109; write added in Amendment A13, Chapter Forge)*
 
 | Scope | Qualifier | Description |
 |---|---|---|
 | `git.read` | repo path glob | Read repo state — `git.status` and `git.diff` share this base |
+| `git.write` | repo path glob | Write repo history — `git.commit` (stage + commit); Trusted-tier only, confirm-first |
 
 > **Amendment (2026-05-28):** `git.read` joins the substrate
 > base table as the qualifier-by-repo-path gate for the
@@ -576,6 +577,17 @@ Rule 4 is intentional: tools must be specific. Unrestricted requests are visible
 > shared-scope-base rationale (one `git.read` rather than
 > separate `git.status` / `git.diff` bases, mirroring the
 > read-invariant grouping).
+>
+> **Amendment (2026-06-19):** `git.write` joins the table as the
+> destructive sibling A12 anticipated — the qualifier-by-repo-
+> path gate for the `git.commit` tool (Chapter Forge). It reuses
+> `git.read`'s `[git] repos` allow-set, sits at `CEILING_TRUSTED`
+> only (writing history is as sensitive as `shell.exec` /
+> `fs.delete`), and is confirm-first when `confirm_destructive`
+> is on. See amendment
+> [`docs/amendments/2026-06-19-substrate-tool-count-fifteen.md`](docs/amendments/2026-06-19-substrate-tool-count-fifteen.md)
+> for the P10 count update from thirteen to fifteen (also adding
+> `web.extract` over the existing `net.fetch` base).
 
 **`skills` — learned procedural pattern surface** *(added in Phase 110)*
 
