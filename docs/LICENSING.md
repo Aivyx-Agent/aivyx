@@ -1,17 +1,18 @@
 # Licensing & Commercial Model (Chapter Charter)
 
 > **Status:** 🧭 **design contract — CR.0 ✅ + CR.1 ✅ + CR.2 ✅ + CR.3 ✅ + CR.4
-> ✅.** This document is the locked reference for moving Aivyx from **MIT** to the
-> **Business Source License 1.1 (BUSL-1.1)** going forward: **free for personal /
-> individual / non-commercial use, a paid commercial license for any business or
-> production use,** auto-converting back to MIT after a fixed term. As of CR.2 the
-> **tree carries the BUSL-1.1 `LICENSE`** (MIT preserved as the Change License at
-> `LICENSES/MIT.txt`); as of CR.3 the **commercial path is documented in
-> [`COMMERCIAL.md`](../COMMERCIAL.md)**; as of CR.4 the **contributor gate is in
-> place** ([`CONTRIBUTING.md`](../CONTRIBUTING.md) + a **CLA**,
-> [`CLA.md`](../CLA.md)) so external PRs can be accepted without breaking the
-> relicense. The positioning/docs refresh and the first BSL release are the
-> remaining phases below (CR.5–CR.6). Decisions locked by the
+> ✅ + CR.5 ✅.** This document is the locked reference for moving Aivyx from
+> **MIT** to the **Business Source License 1.1 (BUSL-1.1)** going forward: **free
+> for personal / individual / non-commercial use, a paid commercial license for
+> any business or production use,** auto-converting back to MIT after a fixed
+> term. As of CR.2 the **tree carries the BUSL-1.1 `LICENSE`** (MIT preserved as
+> the Change License at `LICENSES/MIT.txt`); CR.3 documented the **commercial
+> path** ([`COMMERCIAL.md`](../COMMERCIAL.md)); CR.4 added the **contributor gate**
+> ([`CONTRIBUTING.md`](../CONTRIBUTING.md) + the **CLA**, [`CLA.md`](../CLA.md));
+> CR.5 **refreshed positioning** — every "open source"/"MIT" claim for Aivyx's own
+> code is now "source-available under BUSL-1.1" (README, DESIGN via Amendment A14,
+> TRADEMARK), and a licensing FAQ is in §8. The **first BSL release (CR.6)** is
+> the only phase remaining. Decisions locked by the
 > operator: (1) **BSL**, not FSL/AGPL — the gate is *commercial vs. personal*,
 > not *competing vs. not* and not *SaaS vs. internal*; (2) the **whole public
 > repo** moves (engine + public tool crates), with verticals staying private as
@@ -122,7 +123,7 @@ the expression non-standard, fall back to `license-file` pointing at `LICENSE`.
 | **CR.2** ✅ | **The LICENSE swap** | DONE. `LICENSE` is now the filled canonical BUSL-1.1 (full Terms + Covenants + Notice; Parameters per §4 — Change License = MIT, per-release 4-year Change Date, personal/non-commercial Additional Use Grant). MIT preserved verbatim as `LICENSES/MIT.txt` (the Change License + historical form). Workspace `Cargo.toml` `license = "BUSL-1.1"` (SPDX-parseable; the non-standard grant lives in `LICENSE`). All 33 crates inherit it via `license.workspace`. Set `publish = false` workspace-wide (no crates.io distribution) so `cargo deny`'s `private.ignore` skips our own first-party BUSL crates — **`cargo deny check licenses` stays green** (a third-party copyleft/BUSL dep still fails loudly). Findings in §6.2. |
 | **CR.3** ✅ | **Commercial-license path** | DONE. [`COMMERCIAL.md`](../COMMERCIAL.md) at the repo root: the §4 grant restated in plain English (free: individuals, non-commercial, non-profits, education; paid: any for-profit/internal/production/revenue/resale use), a quick-check table, the 4-year→MIT reassurance, the **aivyx@aivyx-studio.com** contact path with what to include, and a per-engagement pricing placeholder. `LICENSE` already points here. |
 | **CR.4** ✅ | **Contributor terms** | DONE. Operator chose the **CLA** (stronger) over a DCO — a plain DCO certifies origin only and does **not** grant commercial-sublicensing rights, which the paid-license model requires. Shipped [`CLA.md`](../CLA.md) (v1.0: a *license grant*, not assignment — contributor keeps copyright, grants the Licensor a perpetual/irrevocable right to relicense **and commercially sublicense** Contributions; Apache-ICLA-shaped + employer/patent/third-party clauses) and [`CONTRIBUTING.md`](../CONTRIBUTING.md) (the contributor entry point). **Acceptance = `git commit -s` sign-off**, which certifies the DCO *and* accepts the CLA per-contribution; maintainers can't merge un-signed-off commits. The gate now **precedes** any external PR (§3). |
-| **CR.5** | **Positioning & docs refresh** | Correct every "open source" → "source-available" (README, INSTALL, DESIGN, ROADMAP, this repo's description); add a licensing FAQ ("can I use it at work?", "what counts as commercial?", "when does it become MIT?"); cross-link COMMERCIAL.md. |
+| **CR.5** ✅ | **Positioning & docs refresh** | DONE. Corrected every "open source"/"MIT" claim about *Aivyx's own code* to "source-available under BUSL-1.1": `README.md` (License & trademark section + Contributing note pointing at the CLA), `TRADEMARK.md` (incl. fixing "use it commercially" → needs a commercial license), and `DESIGN.md` "Deliverable 2 — The Open-Core Line" via an inline note + **[Amendment A14](amendments/2026-06-19-busl-relicense.md)** (a LOCKED contract section can't be corrected by prose alone). Added the licensing **FAQ (§8)** cross-linking `COMMERCIAL.md`. Left third-party MIT mentions alone (Ollama/llama.cpp in INSTALL, Hermes in ROADMAP — those *are* MIT). PRODUCT.md carries no licensing clause → untouched. GitHub repo description is currently empty (no "open source" claim to correct); when one is set, phrase it "source-available." |
 | **CR.6** | **First BSL release** | Tag the first version under BSL (**v0.3.0** or **v1.0** — operator's call at the time); cargo-dist release notes lead with the license change; record the green release run. |
 
 **Discipline:** CR.1 is a hard gate — if a dependency's license is incompatible
@@ -215,6 +216,52 @@ change first. Recorded so it isn't rediscovered the hard way.
 - **crates.io** — not currently a distribution channel (releases are cargo-dist
   binaries + GHCR), so its OSI-license preference doesn't bind us today; revisit
   only if/when publishing crates.
+
+## 8. Licensing FAQ
+
+Plain-English answers to the common questions. The buyer-facing version lives in
+[`COMMERCIAL.md`](../COMMERCIAL.md); the authoritative terms are in
+[`LICENSE`](../LICENSE).
+
+**Is Aivyx open source?**
+No — it is **source-available** under BUSL-1.1. The full source is public,
+readable, and forkable for non-commercial use, and every version converts to MIT
+(true open source) four years after it ships. But while under BUSL it is *not*
+OSI-approved "open source," and we don't call it that.
+
+**Can I use Aivyx for free?**
+Yes, for **personal, individual, non-commercial, educational, and research** use
+— including a non-profit or an accredited school. No payment, no sign-up.
+
+**Can I use it at work / in my company?**
+Not for free. **Any use by or on behalf of a for-profit entity needs a
+[commercial license](../COMMERCIAL.md)** — there is no "internal use is free"
+carve-out. If a business depends on it, the business licenses it.
+
+**What counts as "commercial"?**
+Use primarily intended for or directed toward commercial advantage or monetary
+compensation: for-profit internal use, production use behind a paid product or
+service, anything that generates revenue, and offering Aivyx to third parties
+(hosted, embedded, or resold). See [`COMMERCIAL.md`](../COMMERCIAL.md) for the
+quick-check table.
+
+**When does it become MIT?**
+Each released version auto-converts to the [MIT License](../LICENSES/MIT.txt)
+**four years after that version is published** — its own clock. After that, that
+version has no restrictions at all.
+
+**What about the versions already released under MIT?**
+v0.2.0 and every prior commit are **MIT in perpetuity** — a license can't be
+revoked. The relicense applies only from the first BSL-tagged release forward.
+
+**Can I fork it?**
+Yes. The BUSL grant lets you fork, modify, and redistribute for non-commercial
+use; commercial use of your fork still needs a commercial license. Either way,
+**rename it** — "Aivyx" is a [trademark](../TRADEMARK.md), separate from the code
+license.
+
+**How do I get a commercial license?**
+Email **aivyx@aivyx-studio.com** — details in [`COMMERCIAL.md`](../COMMERCIAL.md).
 
 ---
 

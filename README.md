@@ -275,10 +275,13 @@ zero warnings since the Phase 9 hook was wired.
 ## Contributing
 
 This is a single-operator personal-agent platform by design
-(PRODUCT.md P1 + P6). Contributions are welcome via the same
-channels any open-source Rust project uses: file an issue,
-discuss the shape, send a PR. New channels, new tools, new
-provider adapters fit cleanly into the existing SDK surfaces.
+(PRODUCT.md P1 + P6). Contributions are welcome via the usual
+channels: file an issue, discuss the shape, send a PR. New
+channels, new tools, new provider adapters fit cleanly into the
+existing SDK surfaces. Before your first PR, read
+[CONTRIBUTING.md](CONTRIBUTING.md) — Aivyx is source-available
+under BUSL-1.1, so a short [CLA](CLA.md) (accepted via a
+`git commit -s` sign-off) is required.
 
 Architectural changes that touch DESIGN.md or PRODUCT.md require
 a formal amendment under `docs/amendments/` — thirteen have been
@@ -288,7 +291,16 @@ tracked stability discipline.)
 
 ## License & trademark
 
-Code is [MIT-licensed](LICENSE). The "Aivyx" name and associated
-branding are trademarked — see [TRADEMARK.md](TRADEMARK.md) for
-the brand usage rule (MIT + branded: fork the code freely; don't
-call the fork "Aivyx").
+The code is **source-available under [BUSL-1.1](LICENSE)** — free
+for personal and non-commercial use, with a paid
+[commercial license](COMMERCIAL.md) for any business or
+production use, **auto-reverting to [MIT](LICENSES/MIT.txt) four
+years after each release.** BUSL-1.1 is source-available, *not*
+OSI "open source." See [docs/LICENSING.md](docs/LICENSING.md) for
+the model and the licensing FAQ. (v0.2.0 and prior remain MIT in
+perpetuity.)
+
+The "Aivyx" name and associated branding are trademarked — see
+[TRADEMARK.md](TRADEMARK.md) for the brand usage rule (BUSL +
+branded: fork the code for non-commercial use; don't call the
+fork "Aivyx").

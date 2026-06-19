@@ -1,15 +1,18 @@
 # Trademark Notice
 
-The code in this repository is MIT-licensed. The "Aivyx" name, logo, and
-associated branding are **not** covered by that license — they are
-trademarks.
+The code in this repository is **source-available under BUSL-1.1** (free for
+personal/non-commercial use; a [commercial license](COMMERCIAL.md) for business
+or production use — see [`LICENSE`](LICENSE)). The "Aivyx" name, logo, and
+associated branding are **not** covered by that license — they are trademarks,
+and a code license (free or commercial) grants no rights to them.
 
 ## What you can do
 
 - Fork the code
-- Modify it, rebuild it, redistribute it
-- Use it commercially, including in closed-source products
-- Contribute upstream
+- Modify it, rebuild it, redistribute it (for personal/non-commercial use under
+  the BUSL grant, or under a commercial license for commercial use)
+- Use it commercially **with a [commercial license](COMMERCIAL.md)**
+- Contribute upstream (see [`CONTRIBUTING.md`](CONTRIBUTING.md))
 
 ## What you cannot do
 

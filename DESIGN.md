@@ -134,6 +134,19 @@ Four scenarios the paragraph should make easy to reason about:
 
 ## Deliverable 2 — The Open-Core Line (LOCKED 2026-04-13)
 
+> **Amendment A14 (2026-06-19) — relicense MIT → BUSL-1.1.** Chapter Charter
+> ([`docs/LICENSING.md`](docs/LICENSING.md),
+> [Amendment A14](docs/amendments/2026-06-19-busl-relicense.md)) supersedes the
+> *mechanism* of this Deliverable. Every "MIT" entry in the rule and tables below
+> now reads **"BUSL-1.1 (→ MIT after 4 years)"**: the whole public workspace is
+> **source-available under BUSL-1.1** — free for personal/non-commercial use,
+> paid for commercial use, auto-reverting to MIT four years after each release.
+> The *spirit* (auditable free core + sustainable commercial side) is preserved
+> and strengthened — the core now carries its own monetization hook, not just the
+> separate products below. v0.2.0 and prior remain MIT in perpetuity. The
+> branding exception is unchanged in substance (`aivyx-pa` is now "BUSL-1.1 +
+> branded"). Read the original text below as historical-but-superseded.
+
 ### The Rule
 
 > **Protocol and security surface are MIT. Products are commercial.
