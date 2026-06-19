@@ -1,6 +1,13 @@
 # Graph-Augmented Recall — fusing the graph into RAG (Chapter Loom)
 
-> **Status:** 🧭 **design contract — LM.0.** The locked reference for the
+> **Status:** 🧵 **LM.1 — weighted RRF shipped (inert).** Correction to LM.0:
+> the RRF **core already exists** (Phase 98, `recall_fusion.rs`) and is **live**
+> fusing two equal-weight rankers (semantic + substring) in the `recall_hybrid`
+> path — it was never a deferral. LM.1 therefore added the genuinely-missing
+> piece for 3-source fusion: a **per-source-weighted** RRF variant
+> (`reciprocal_rank_fusion_weighted`), with the original unweighted fn now
+> delegating to it (proven behavior unchanged). 6 new tests; not yet wired
+> (LM.4). The locked reference for the
 > chapter that turns Aivyx's co-occurrence graph from a passive *view*
 > into an active *retrieval signal*, and fuses a lexical path into recall
 > alongside the existing semantic one. It **refines** the recall layer
@@ -28,18 +35,19 @@ That is a real foundation — but it leaves three specific gaps:
    direct neighbors. A memory two hops away (`deploy → ci → flaky-test`)
    — exactly the associative recall a human makes — is unreachable.
 
-2. **There is no lexical path in recall.** Recall is pure vector
-   similarity. The substrate's `search` is a naive case-folded
-   `contains` substring scan (no TF-IDF/BM25 scoring) and is **not fused
-   into recall at all**. A query whose exact keyword sits in a memory the
-   embedding model ranks just below the floor is silently missed — the
-   classic semantic-only RAG failure (rare terms, codes, proper nouns).
+2. **The lexical path is unscored substring matching.** Phase 98's
+   `recall_hybrid` *does* already fuse a keyword ranker with the semantic
+   one via RRF — but the keyword ranker is `Memory::search`, a naive
+   case-folded `contains` scan (no TF-IDF/BM25 term weighting). A two-word
+   query ranks a memory that merely *contains* one common word the same as
+   one that contains the rare discriminating term. Real BM25 scoring is
+   the missing quality (rare terms, codes, proper nouns).
 
-3. **Expansion is append-by-displacement, not principled fusion.** Phase
-   84 bolts siblings on by knocking out the weakest cosine hits. There is
-   no shared ranking across "sources." The code itself anticipates the
-   fix: a `rag_hybrid_min_rrf` knob is named as a *documented deferral* in
-   `memory_recall.rs`. This chapter ships it.
+3. **The graph is not a fusion input.** Phase 84 bolts co-occurrence
+   siblings on by *displacement* — knocking out the weakest cosine hits —
+   instead of feeding the graph in as a third **ranker** the shared RRF
+   fuses fairly against the others. (And it walks only one hop, per gap 1.)
+   So the three signals never compete on one honest scale.
 
 Closing these three turns recall from "nearest vectors (+ a sibling
 nudge)" into "the genuinely most relevant memories, found by meaning,
@@ -57,14 +65,15 @@ The recall set becomes the **rank-fusion** of up to three ranked lists:
   topics, weight-decayed per hop (LM.3), each contributing its most
   relevant entry.
 
-They merge through **Reciprocal Rank Fusion (RRF)** (LM.1): `score(d) =
-Σ_sources 1/(k + rank_source(d))`. RRF is the right primitive here
+They merge through **Reciprocal Rank Fusion (RRF)**: `score(d) =
+Σ_sources weight·1/(k + rank_source(d))`. RRF is the right primitive
 because it fuses rankings whose **scores are not comparable** (cosine
 similarity vs. BM25 magnitude vs. decayed edge weight) using only each
-item's *rank* within its source — exactly the incomparability Phase 84's
-displacement hack worked around. It is **~30 lines, deterministic, and
-needs no new dependency** — matching the IVF/canonicalizer zero-dep,
-zero-RNG precedent.
+item's *rank* within its source. The unweighted core already exists and
+is live (Phase 98, `recall_fusion.rs`, fusing two rankers); LM.1 added the
+per-source `weight` so an operator can bias toward exact-term recall. It
+is **deterministic and needs no new dependency** — matching the
+IVF/canonicalizer zero-dep, zero-RNG precedent.
 
 ### Reuse the Phase 83 ledger as the graph — no new storage, no typed edges
 The "graph" is the existing `PersistentCooccurrenceLedger` (undirected,
@@ -126,8 +135,8 @@ any change to the at-rest memory encoding or the ledger's data model.
 
 | Phase | Deliverable | Notes |
 |---|---|---|
-| **LM.0** | **This design contract** | locked reference; banner flips per phase |
-| **LM.1** | **RRF fusion core** | pure, dep-free `reciprocal_rank_fusion(sources, k) -> ranked` helper (likely `aivyx-channel` recall module or a small shared util). Lands the deferred `rag_hybrid_min_rrf` / `rrf_k` knob named in `memory_recall.rs`. Unit tests pin determinism + the incomparable-score property. **No behavior change yet** — wired in LM.4. |
+| **LM.0** ✅ | **This design contract** | locked reference; banner flips per phase. DONE. |
+| **LM.1** ✅ | **Weighted RRF** | DONE. The unweighted RRF core already existed (Phase 98, `recall_fusion.rs`, live in `recall_hybrid`). LM.1 added `reciprocal_rank_fusion_weighted` (per-source weight multiplier; NaN/∞→1.0, negative→0.0/silenced) for the 3-source `lexical_weight` biasing LM.4 needs; the unweighted fn now delegates (proven behavior unchanged). Pure, dep-free, **inert** (not wired). 6 new tests (weight scaling, biasing, zero-drop, defended weights, all-ones≡unweighted). |
 | **LM.2** | **BM25 lexical scorer** | scored lexical retrieval over memory entries (tokenize + IDF + BM25), as a `Memory` method shared by both impls, replacing the naive `contains` for recall purposes (the substring `search` tool stays for discovery). Pure, deterministic, fixture-tested (rare-term beats semantic). |
 | **LM.3** | **Multi-hop graph walk** | `neighbors_within(seed, hops, per_hop_decay, min_affinity, cap)` over the Phase 83 ledger — generalizes Phase 84's 1-hop `siblings_of` (which becomes the `hops=1` case). Edge weight decays per hop; dedup; deterministic ordering. Ledger-level tests (2-hop reach, decay, cap, cycle-safety). |
 | **LM.4** | **Fuse + config + wiring** | compose semantic ∪ lexical ∪ graph-walk through RRF in `SemanticMemoryContext`; add `[recall]` knobs (`rrf_k`, `lexical_weight`, `graph_hops`, `graph_decay`) — all default-off / back-compat; preserve recall-never-errors + the token budget; extend the breadcrumb/stat with the winning source. Config + recall integration tests. |

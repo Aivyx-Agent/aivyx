@@ -35,6 +35,21 @@
 //! That's why ~30 lines of pure arithmetic give a
 //! production-quality fusion without normalization or
 //! tuning knobs.
+//!
+//! ## Chapter Loom (LM.1) — per-source weighting
+//!
+//! Phase 98 fuses exactly two equal-weight rankers
+//! (semantic + substring). Chapter Loom fuses **three**
+//! sources — semantic, BM25 lexical (LM.2), and a multi-hop
+//! co-occurrence walk (LM.3) — and wants the operator to be
+//! able to bias toward exact-term recall (`lexical_weight`)
+//! without recompiling. [`reciprocal_rank_fusion_weighted`]
+//! adds a per-source weight multiplier to each ranker's RRF
+//! contribution; the original [`reciprocal_rank_fusion`] is
+//! now the all-weights-`1.0` case (it delegates, so its
+//! proven behavior is unchanged). Both stay **pure** — LM.1
+//! ships them inert; LM.4 is the seam that wires the third
+//! source + the weights into live recall.
 
 use std::collections::HashMap;
 
@@ -74,17 +89,68 @@ pub fn reciprocal_rank_fusion(
     k: usize,
     limit: usize,
 ) -> Vec<(String, u64, f32)> {
-    if rankings.is_empty() || limit == 0 {
+    // The original Phase 98 surface is the all-weights-1.0
+    // case of the weighted helper. Delegate (no clone — pass
+    // each ranker as a weight-1.0 slice) so both share one
+    // accumulation + sort path and the proven behavior here
+    // can never drift from the weighted version.
+    fuse_inner(rankings.iter().map(|r| (1.0_f32, r.as_slice())), k, limit)
+}
+
+/// Chapter Loom (LM.1) — Reciprocal Rank Fusion with a
+/// per-source **weight** multiplier. Each input is
+/// `(weight, ranker)`; the ranker's RRF contribution at each
+/// position is scaled by `weight`, so a source with weight
+/// `2.0` counts like two identical equal-weight sources and a
+/// source with weight `0.0` drops out entirely. With every
+/// weight `1.0` this is byte-identical to
+/// [`reciprocal_rank_fusion`].
+///
+/// Weights are defended like `k`: a non-finite weight (NaN /
+/// ∞) falls back to `1.0`, and a negative weight clamps to
+/// `0.0` (a ranker can be silenced but never subtract). Same
+/// `(topic, seq)` identity, tie-break, and edge cases as the
+/// unweighted form.
+pub fn reciprocal_rank_fusion_weighted(
+    rankings: &[(f32, Vec<(String, u64)>)],
+    k: usize,
+    limit: usize,
+) -> Vec<(String, u64, f32)> {
+    fuse_inner(
+        rankings.iter().map(|(w, r)| (*w, r.as_slice())),
+        k,
+        limit,
+    )
+}
+
+/// Shared accumulation + sort core for both public fusers.
+/// Takes an iterator of `(weight, ranker_slice)` so neither
+/// public form needs to clone its input.
+fn fuse_inner<'a>(
+    rankings: impl Iterator<Item = (f32, &'a [(String, u64)])>,
+    k: usize,
+    limit: usize,
+) -> Vec<(String, u64, f32)> {
+    if limit == 0 {
         return Vec::new();
     }
     let k = k.max(1);
 
-    // Accumulate fused scores per (topic, seq).
+    // Accumulate weighted fused scores per (topic, seq).
     let mut fused: HashMap<(String, u64), f32> = HashMap::new();
-    for ranker in rankings {
+    for (weight, ranker) in rankings {
+        // Defend operator-supplied weights: NaN/∞ → 1.0,
+        // negative → 0.0 (silence, never subtract).
+        let weight = if weight.is_finite() { weight.max(0.0) } else { 1.0 };
+        // A zero-weight source is silenced entirely — skip it so
+        // its unique items don't enter the fused set with score
+        // 0.0 (they'd otherwise rank last but still appear).
+        if weight == 0.0 {
+            continue;
+        }
         for (rank, (topic, seq)) in ranker.iter().enumerate() {
             let contribution =
-                1.0_f32 / (k as f32 + rank as f32 + 1.0);
+                weight * (1.0_f32 / (k as f32 + rank as f32 + 1.0));
             *fused
                 .entry((topic.clone(), *seq))
                 .or_insert(0.0) += contribution;
@@ -310,5 +376,111 @@ mod tests {
             );
             assert_eq!(first, again);
         }
+    }
+
+    // ---- Chapter Loom (LM.1) — weighted RRF ----
+
+    /// All-weights-`1.0` weighted fusion is byte-identical to
+    /// the unweighted form — the invariant that lets the
+    /// unweighted public fn delegate safely.
+    #[test]
+    fn weighted_all_ones_equals_unweighted() {
+        let a = r(&[("a", 1), ("b", 2), ("c", 3)]);
+        let b = r(&[("c", 3), ("d", 4), ("e", 5)]);
+        let plain = reciprocal_rank_fusion(&[a.clone(), b.clone()], RRF_K, 10);
+        let weighted = reciprocal_rank_fusion_weighted(
+            &[(1.0, a), (1.0, b)],
+            RRF_K,
+            10,
+        );
+        assert_eq!(plain, weighted);
+    }
+
+    /// A weight of `2.0` scales a source's contribution like
+    /// two copies of it: one source at weight 2.0 matches the
+    /// same ranker listed twice at weight 1.0.
+    #[test]
+    fn weight_two_matches_duplicated_source() {
+        let a = r(&[("a", 1), ("b", 2)]);
+        let doubled = reciprocal_rank_fusion(
+            &[a.clone(), a.clone()],
+            RRF_K,
+            10,
+        );
+        let weighted = reciprocal_rank_fusion_weighted(
+            &[(2.0, a)],
+            RRF_K,
+            10,
+        );
+        assert_eq!(doubled.len(), weighted.len());
+        for (d, w) in doubled.iter().zip(weighted.iter()) {
+            assert_eq!(d.0, w.0);
+            assert_eq!(d.1, w.1);
+            assert!((d.2 - w.2).abs() < 1e-6, "score {d:?} vs {w:?}");
+        }
+    }
+
+    /// `lexical_weight`-style biasing: raising a source's
+    /// weight lifts an item it ranks #1 above an item the
+    /// other source ranks #1. Tunable exact-term preference.
+    #[test]
+    fn higher_weight_biases_toward_that_source() {
+        let semantic = r(&[("sem_top", 1)]);
+        let lexical = r(&[("lex_top", 2)]);
+        // Equal weight → tie broken by topic asc ("lex_top" < "sem_top").
+        let even = reciprocal_rank_fusion_weighted(
+            &[(1.0, semantic.clone()), (1.0, lexical.clone())],
+            RRF_K,
+            10,
+        );
+        assert_eq!(even[0].0, "lex_top");
+        // Bias semantic heavily → its top wins outright.
+        let biased = reciprocal_rank_fusion_weighted(
+            &[(5.0, semantic), (1.0, lexical)],
+            RRF_K,
+            10,
+        );
+        assert_eq!(biased[0].0, "sem_top");
+    }
+
+    /// Weight `0.0` silences a source entirely — items unique
+    /// to it never appear in the fused output.
+    #[test]
+    fn zero_weight_drops_a_source() {
+        let keep = r(&[("keep", 1)]);
+        let drop = r(&[("dropped", 2)]);
+        let out = reciprocal_rank_fusion_weighted(
+            &[(1.0, keep), (0.0, drop)],
+            RRF_K,
+            10,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "keep");
+    }
+
+    /// Defended weights: a negative weight clamps to 0.0
+    /// (silence, never subtract) and a non-finite weight
+    /// (NaN) falls back to 1.0.
+    #[test]
+    fn defended_weights_negative_and_nan() {
+        let a = r(&[("a", 1)]);
+        let b = r(&[("b", 2)]);
+        // Negative weight on b → b silenced.
+        let neg = reciprocal_rank_fusion_weighted(
+            &[(1.0, a.clone()), (-3.0, b.clone())],
+            RRF_K,
+            10,
+        );
+        assert_eq!(neg.len(), 1);
+        assert_eq!(neg[0].0, "a");
+        // NaN weight → treated as 1.0, so both survive and
+        // the result matches plain equal-weight fusion.
+        let nan = reciprocal_rank_fusion_weighted(
+            &[(f32::NAN, a.clone()), (1.0, b.clone())],
+            RRF_K,
+            10,
+        );
+        let plain = reciprocal_rank_fusion(&[a, b], RRF_K, 10);
+        assert_eq!(nan, plain);
     }
 }
