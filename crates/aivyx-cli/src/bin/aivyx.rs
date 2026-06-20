@@ -7195,6 +7195,7 @@ async fn run_async(
             wiki_sweep,
             wiki_store: Some(Arc::clone(&wiki_store)),
             graph_sweep,
+            graph_store: Some(Arc::clone(&graph_store)),
             // Phase 172 — durable correction ledger; folded by
             // the same recall-feedback pass.
             correction_ledger: correction_ledger.clone(),

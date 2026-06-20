@@ -27,6 +27,7 @@ use aivyx_ipc::{
     TrustTier,
 };
 use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
+use aivyx_ipc::graph::{GraphEntity, GraphTriple};
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
@@ -71,6 +72,9 @@ enum View {
     Memory,
     /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
     Wiki,
+    /// Chapter Lattice — the typed knowledge graph: entities + directed
+    /// typed relations.
+    Lattice,
     Settings,
     Agents,
     Teams,
@@ -101,6 +105,14 @@ struct MemoryState {
 struct WikiState {
     pages: Vec<WikiPageSummary>,
     selected: Option<WikiPage>,
+}
+
+/// Chapter Lattice — typed knowledge-graph state: entity nodes + the
+/// directed typed edges, fanned in by `ws_task`.
+#[derive(Clone, Default, PartialEq)]
+struct GraphKnowledgeState {
+    entities: Vec<GraphEntity>,
+    edges: Vec<GraphTriple>,
 }
 
 /// Settings screen state — the on-disk config snapshot + the last write outcome.
@@ -269,6 +281,7 @@ fn App() -> Element {
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
     let wiki = use_signal(WikiState::default);
+    let lattice = use_signal(GraphKnowledgeState::default);
     let settings = use_signal(SettingsState::default);
     let agents = use_signal(AgentsState::default);
     let roster = use_signal(|| None::<TeamConfig>);
@@ -282,13 +295,14 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, wiki, settings, agents, roster, documents, voice,
-            connected, session, transcript, streaming, gate,
+            rx, missions, dashboard, memory, wiki, lattice, settings, agents, roster, documents,
+            voice, connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
     use_context_provider(|| memory);
     use_context_provider(|| wiki);
+    use_context_provider(|| lattice);
     use_context_provider(|| settings);
     use_context_provider(|| agents);
     use_context_provider(|| roster);
@@ -339,6 +353,7 @@ fn App() -> Element {
         View::Chat => "Terminal",
         View::Memory => "Memory",
         View::Wiki => "Knowledge Wiki",
+        View::Lattice => "Knowledge Graph",
         View::Settings => "Settings",
         View::Agents => "Agents",
         View::Teams => "Teams",
@@ -365,6 +380,7 @@ fn App() -> Element {
                         View::Chat => rsx! { ChatPanel {} },
                         View::Memory => rsx! { MemoryPanel {} },
                         View::Wiki => rsx! { WikiPanel {} },
+                        View::Lattice => rsx! { LatticePanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
@@ -403,6 +419,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Memory) }
             NavItem { icon: ICON_MEMORY, label: "Wiki", active: view() == View::Wiki,
                 onclick: move |_| view.set(View::Wiki) }
+            NavItem { icon: ICON_MEMORY, label: "Graph", active: view() == View::Lattice,
+                onclick: move |_| view.set(View::Lattice) }
             NavItem { icon: ICON_SETTINGS, label: "Settings", active: view() == View::Settings,
                 onclick: move |_| view.set(View::Settings) }
             NavItem { icon: ICON_AGENTS, label: "Agents", active: view() == View::Agents,
@@ -1131,6 +1149,128 @@ fn wiki_page_query(topic: String) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-wiki-page".to_string(),
         payload: QueryPayload::GetWikiPage { topic },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lattice view — Chapter Lattice (LT.5). The typed knowledge graph:
+// entity nodes (sized by degree) + DIRECTED, labeled relation edges,
+// force-laid-out in-WASM. Read-only; distinct from the MG co-occurrence
+// view (undirected, topics).
+// ---------------------------------------------------------------------------
+
+#[component]
+fn LatticePanel() -> Element {
+    let ws = use_context::<Sender>();
+    let lattice = use_context::<Signal<GraphKnowledgeState>>();
+
+    use_future(move || async move {
+        ws.send(knowledge_graph_query());
+    });
+
+    let g = lattice();
+    rsx! {
+        div { class: "lattice",
+            div { class: "panel-head",
+                h3 { "Knowledge Graph" }
+                span { class: "label-tech", "{g.entities.len()} entities · {g.edges.len()} relations" }
+            }
+            if g.entities.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech",
+                        "No graph yet. Enable [graph] and the agent extracts typed relations — (subject)-[predicate]->(object) — from its memory."
+                    }
+                }
+            } else {
+                LatticeGraph { entities: g.entities.clone(), edges: g.edges.clone() }
+            }
+        }
+    }
+}
+
+/// The typed knowledge graph as a directed, labeled SVG. Reuses the
+/// force-directed `compute_layout` (entities → nodes, triples → edges by
+/// connectivity), then draws each edge as an arrowed line with its
+/// predicate label at the midpoint.
+#[component]
+fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element {
+    // Map to the layout types (the FR layout cares only about
+    // connectivity, not direction).
+    let nodes: Vec<MemoryGraphNode> = entities
+        .iter()
+        .map(|e| MemoryGraphNode { topic: e.name.clone(), entry_count: e.degree })
+        .collect();
+    let layout_edges: Vec<PairScore> = edges
+        .iter()
+        .map(|t| PairScore {
+            a: t.subject.clone(),
+            b: t.object.clone(),
+            score: t.mentions.max(1) as f32,
+            samples: t.mentions,
+        })
+        .collect();
+    let pos = compute_layout(&nodes, &layout_edges);
+    let idx: std::collections::HashMap<&str, usize> =
+        nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
+
+    rsx! {
+        div { class: "glass-card mem-graph-card",
+            svg {
+                class: "mem-graph",
+                view_box: "0 0 {GRAPH_W} {GRAPH_H}",
+                defs {
+                    marker {
+                        id: "lattice-arrow", view_box: "0 0 10 10",
+                        ref_x: "9", ref_y: "5", marker_width: "7", marker_height: "7",
+                        orient: "auto-start-reverse",
+                        path { d: "M 0 0 L 10 5 L 0 10 z", class: "lattice-arrowhead" }
+                    }
+                }
+                // Directed edges (under the nodes), shortened to the target
+                // node's rim so the arrowhead is visible.
+                for t in edges.iter() {
+                    if let (Some(&i), Some(&j)) = (idx.get(t.subject.as_str()), idx.get(t.object.as_str())) {
+                        {
+                            let (x1, y1) = pos[i];
+                            let (x2c, y2c) = pos[j];
+                            let r = node_radius(entities[j].degree) + 4.0;
+                            let dx = x2c - x1; let dy = y2c - y1;
+                            let d = (dx * dx + dy * dy).sqrt().max(0.01);
+                            let (x2, y2) = (x2c - dx / d * r, y2c - dy / d * r);
+                            let (mx, my) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
+                            let label = t.predicate.clone();
+                            rsx! {
+                                line {
+                                    x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
+                                    class: "lattice-edge", marker_end: "url(#lattice-arrow)",
+                                }
+                                text { x: "{mx}", y: "{my}", class: "lattice-edge-label", text_anchor: "middle", "{label}" }
+                            }
+                        }
+                    }
+                }
+                // Entity nodes.
+                for (i, ent) in entities.iter().enumerate() {
+                    {
+                        let (cx, cy) = pos[i];
+                        let r = node_radius(ent.degree);
+                        rsx! {
+                            g { class: "mem-node",
+                                circle { cx: "{cx}", cy: "{cy}", r: "{r}" }
+                                text { x: "{cx}", y: "{cy + r + 11.0}", text_anchor: "middle", "{ent.name}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn knowledge_graph_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-knowledge-graph".to_string(),
+        payload: QueryPayload::GetKnowledgeGraph { limit: 80 },
     }
 }
 
@@ -3480,6 +3620,7 @@ async fn ws_task(
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
     mut wiki: Signal<WikiState>,
+    mut lattice: Signal<GraphKnowledgeState>,
     mut settings: Signal<SettingsState>,
     mut agents: Signal<AgentsState>,
     mut roster: Signal<Option<TeamConfig>>,
@@ -3644,6 +3785,14 @@ async fn ws_task(
                     ..
                 } => {
                     wiki.write().selected = page;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetKnowledgeGraph { entities, edges },
+                    ..
+                } => {
+                    let mut l = lattice.write();
+                    l.entities = entities;
+                    l.edges = edges;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetSettings { settings: snap },

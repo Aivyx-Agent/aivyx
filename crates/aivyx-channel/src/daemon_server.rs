@@ -255,6 +255,11 @@ pub struct DaemonConfig {
     /// spawns a periodic triple-extraction sweep on its maintenance
     /// cadence. `None` → no extraction (the byte-identical default).
     pub graph_sweep: Option<crate::knowledge_graph::GraphSweepConfig>,
+    /// Chapter Lattice (LT.5) — read handle on the typed-graph store, for
+    /// the `GetKnowledgeGraph` read-only IPC (the Studio graph view).
+    /// Built whenever storage is available (independent of `[graph]`
+    /// .enabled — reads return an empty graph until a sweep populates it).
+    pub graph_store: Option<Arc<crate::knowledge_graph::PersistentGraphStore>>,
     /// Phase 172 — the durable correction ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
@@ -596,6 +601,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         wiki_sweep,
         wiki_store,
         graph_sweep,
+        graph_store,
     } = config;
     // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
     // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
@@ -1339,6 +1345,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             helpfulness_ledger: helpfulness_ledger.clone(),
             cooccurrence_ledger: cooccurrence_ledger.clone(),
             wiki_store: wiki_store.clone(),
+            graph_store: graph_store.clone(),
             correction_ledger: correction_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             recall_cluster_stat: recall_cluster_stat.clone(),
@@ -1445,6 +1452,9 @@ struct ConnectionContext {
     /// Chapter Codex (CX.4) — read handle on the knowledge-wiki page
     /// store for the `ListWikiPages` / `GetWikiPage` read-only IPC.
     wiki_store: Option<Arc<crate::knowledge_wiki::PersistentWikiStore>>,
+    /// Chapter Lattice (LT.5) — read handle on the typed-graph store for
+    /// the `GetKnowledgeGraph` read-only IPC.
+    graph_store: Option<Arc<crate::knowledge_graph::PersistentGraphStore>>,
     /// Phase 172 — durable correction ledger for the read-only
     /// `GetLearningInsights` accumulated-corrections view.
     /// `None` = no auto-recall configured.
@@ -1562,6 +1572,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         helpfulness_ledger,
         cooccurrence_ledger,
         wiki_store,
+        graph_store,
         correction_ledger,
         persona_selection_stat,
         recall_cluster_stat,
@@ -2235,6 +2246,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 helpfulness_ledger.as_ref(),
                                 cooccurrence_ledger.as_ref(),
                                 wiki_store.as_ref(),
+                                graph_store.as_ref(),
                                 correction_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 recall_cluster_stat.as_ref(),
@@ -2714,6 +2726,7 @@ async fn run_single_connection_daemon(
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
         wiki_store: None,
+        graph_store: None,
         correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
@@ -2782,6 +2795,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         helpfulness_ledger: None,
         cooccurrence_ledger: None,
         wiki_store: None,
+        graph_store: None,
         correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
@@ -2996,6 +3010,7 @@ async fn handle_query(
         >,
     >,
     wiki_store: Option<&Arc<crate::knowledge_wiki::PersistentWikiStore>>,
+    graph_store: Option<&Arc<crate::knowledge_graph::PersistentGraphStore>>,
     correction_ledger: Option<
         &Arc<crate::correction_ledger::PersistentCorrectionLedger>,
     >,
@@ -3806,6 +3821,37 @@ async fn handle_query(
                 Ok(page) => QueryResponsePayload::GetWikiPage { page },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "wiki_get_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::GetKnowledgeGraph { limit } => {
+            // Chapter Lattice — entity nodes + the top-`limit` directed
+            // typed edges (by mentions). An absent store is an empty graph,
+            // not an error.
+            let Some(store) = graph_store else {
+                return QueryResponsePayload::GetKnowledgeGraph {
+                    entities: Vec::new(),
+                    edges: Vec::new(),
+                };
+            };
+            const GRAPH_QUERY_MAX_LIMIT: u32 = 500;
+            let cap = limit.clamp(1, GRAPH_QUERY_MAX_LIMIT) as usize;
+            match (store.entities().await, store.all_triples().await) {
+                (Ok(entities), Ok(mut edges)) => {
+                    // Strongest relations first; cap the edge set.
+                    edges.sort_by(|a, b| {
+                        b.mentions
+                            .cmp(&a.mentions)
+                            .then_with(|| a.subject.cmp(&b.subject))
+                            .then_with(|| a.predicate.cmp(&b.predicate))
+                            .then_with(|| a.object.cmp(&b.object))
+                    });
+                    edges.truncate(cap);
+                    QueryResponsePayload::GetKnowledgeGraph { entities, edges }
+                }
+                (Err(e), _) | (_, Err(e)) => QueryResponsePayload::QueryError {
+                    code: "graph_read_failed".into(),
                     message: e.to_string(),
                 },
             }

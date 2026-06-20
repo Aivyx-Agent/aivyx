@@ -242,6 +242,14 @@ pub enum QueryPayload {
     GetWikiPage {
         topic: String,
     },
+    /// Chapter Lattice — fetch the **typed knowledge graph**: entity nodes
+    /// (with degree) + the top-`limit` directed `(subject)-[predicate]->
+    /// (object)` relations (by `mentions`). Read-only. Empty until the
+    /// extraction sweep has run. Responds with
+    /// [`QueryResponsePayload::GetKnowledgeGraph`].
+    GetKnowledgeGraph {
+        limit: u32,
+    },
     /// Phase 78 — read-only learning-observability query.
     /// `window_secs = None` → the handler's default lookback.
     /// `#[serde(default)]` so older clients/frames decode.
@@ -623,6 +631,13 @@ pub enum QueryResponsePayload {
     /// full page, or `None` when the topic has no page yet.
     GetWikiPage {
         page: Option<crate::wiki::WikiPage>,
+    },
+    /// Chapter Lattice — response to [`QueryPayload::GetKnowledgeGraph`]:
+    /// `entities` are the nodes (with degree); `edges` are the directed
+    /// typed relations. Both empty until the extraction sweep has run.
+    GetKnowledgeGraph {
+        entities: Vec<crate::graph::GraphEntity>,
+        edges: Vec<crate::graph::GraphTriple>,
     },
     /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
     /// Newest-first paginated entries for one topic.
@@ -3026,6 +3041,35 @@ mod tests {
             let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
             assert_eq!(back, resp);
         }
+    }
+
+    #[test]
+    fn knowledge_graph_query_and_response_round_trip() {
+        let req = FrontendMessage::Query {
+            id: "kg".into(),
+            payload: QueryPayload::GetKnowledgeGraph { limit: 80 },
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        let resp = QueryResponsePayload::GetKnowledgeGraph {
+            entities: vec![
+                crate::graph::GraphEntity { name: "deploy".into(), degree: 2, kind: String::new() },
+                crate::graph::GraphEntity { name: "ci".into(), degree: 1, kind: "system".into() },
+            ],
+            edges: vec![crate::graph::GraphTriple {
+                subject: "deploy".into(),
+                predicate: "depends-on".into(),
+                object: "ci".into(),
+                source_seqs: vec![1, 2],
+                mentions: 3,
+                updated_at: 100,
+            }],
+        };
+        let frame = encode_frame(&resp).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resp, "entities + directed typed edges survive the frame");
     }
 
     #[test]
