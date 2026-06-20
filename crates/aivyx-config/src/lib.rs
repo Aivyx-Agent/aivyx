@@ -2338,6 +2338,43 @@ impl Default for SkillRefinementConfig {
     }
 }
 
+/// Chapter Praxis — default wiki-summary length floor for a topic to be
+/// "skill-worthy" (a real paragraph, not a stub).
+pub const DEFAULT_AUTHOR_MIN_SUMMARY_CHARS: usize = 200;
+/// Chapter Praxis — default minimum typed-graph edges around a topic
+/// (evidence it's a connected, procedural subject).
+pub const DEFAULT_AUTHOR_MIN_EDGES: usize = 2;
+/// Chapter Praxis — default cap on specialized skills authored per cycle
+/// (conservative: a new skill is a bigger ask than a refinement).
+pub const DEFAULT_AUTHOR_MAX_PER_CYCLE: usize = 1;
+
+/// Chapter Praxis — `[skill_authoring]` config. The reflection-cadence
+/// pass that authors a specialized skill from a knowledge-rich, skill-less
+/// topic's wiki page + graph neighbourhood. Off by default; even `Some`,
+/// the pass no-ops unless `enabled`.
+#[derive(Debug, Clone)]
+pub struct SkillAuthoringConfig {
+    /// Master switch. Default `false`.
+    pub enabled: bool,
+    /// Wiki-summary length floor (chars) for a topic to be a candidate.
+    pub min_summary_chars: usize,
+    /// Minimum typed-graph edges around the topic.
+    pub min_edges: usize,
+    /// Hard cap on authored skills per reflection cycle.
+    pub max_per_cycle: usize,
+}
+
+impl Default for SkillAuthoringConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_summary_chars: DEFAULT_AUTHOR_MIN_SUMMARY_CHARS,
+            min_edges: DEFAULT_AUTHOR_MIN_EDGES,
+            max_per_cycle: DEFAULT_AUTHOR_MAX_PER_CYCLE,
+        }
+    }
+}
+
 /// Chapter Synapse — the `[memory] profile` activation switch. One knob
 /// that expands into the coherent bundle of memory settings, so an
 /// operator opts into the full self-organizing memory stack
