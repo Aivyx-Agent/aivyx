@@ -1316,6 +1316,7 @@ fn SkillCard(view: SkillView) -> Element {
                 span { class: "label-tech",
                     if view.samples == 0 { "no data" } else { "score {view.ewma_score:.1} · {view.samples} sample(s)" }
                 }
+                span { class: "label-tech", "· invoked {view.invocations}×" }
             }
             details { class: "skill-proc",
                 summary { class: "label-tech", "procedure" }

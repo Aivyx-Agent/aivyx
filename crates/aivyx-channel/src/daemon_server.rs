@@ -4052,6 +4052,21 @@ async fn handle_query(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
+            // Chapter Repertoire — all-time per-skill invocation counts from
+            // the audit chain's SkillInvocation entries.
+            let mut invoke_counts: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+            if let Some(audit) = audit_log {
+                if let Ok(entries) = audit.entries() {
+                    for e in &entries {
+                        if let aivyx_audit::AuditEvent::SkillInvocation { skill_name, .. } =
+                            &e.event
+                        {
+                            *invoke_counts.entry(skill_name.clone()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
             let mut skills = Vec::new();
             for raw in &raws {
                 let Some(skill) = crate::persona::LearnedSkill::from_json_value(raw)
@@ -4065,7 +4080,13 @@ async fn handle_query(
                     },
                     None => (0.0, 0),
                 };
-                skills.push(aivyx_ipc::protocol::SkillView { skill, ewma_score, samples });
+                let invocations = invoke_counts.get(&skill.name).copied().unwrap_or(0);
+                skills.push(aivyx_ipc::protocol::SkillView {
+                    skill,
+                    ewma_score,
+                    samples,
+                    invocations,
+                });
             }
             // Pending LearnedSkill-category proposals (Whetstone refinements
             // + Praxis authored skills) → the "review in Agents" pointer.

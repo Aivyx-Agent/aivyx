@@ -528,6 +528,10 @@ pub struct SkillView {
     /// Folded windows behind `ewma_score` — a confidence proxy. `0` when
     /// unmeasured.
     pub samples: u32,
+    /// Chapter Repertoire — how many times this skill has been invoked
+    /// (`SkillInvocation` audit entries), all-time. `0` if never used.
+    #[serde(default)]
+    pub invocations: u32,
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -3152,6 +3156,7 @@ mod tests {
                 },
                 ewma_score: 1.5,
                 samples: 4,
+                invocations: 7,
             }],
             pending_proposals: 2,
         };
