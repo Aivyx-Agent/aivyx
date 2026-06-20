@@ -44,6 +44,7 @@ use mistralrs::{GgufModelBuilder, Model};
 use tokio_util::sync::CancellationToken;
 
 use crate::mistral_rs::convert::{append_message_to_builder, apply_tools};
+use crate::tool_grammar::{tool_call_grammar, RESPOND_SENTINEL};
 use crate::{
     LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
     NameResolution, ToolCallEnd,
@@ -62,6 +63,11 @@ pub struct MistralRsConfig {
     pub model_file: Option<String>,
     pub chat_template_path: Option<PathBuf>,
     pub max_seq_len: Option<usize>,
+    /// Chapter Stencil (ST.3) — when `true`, tool-carrying turns
+    /// constrain decoding to the [`tool_call_grammar`] JSON Schema
+    /// so a small model emits a valid, real-named call (or the
+    /// `respond` text escape) by construction. Default `false`.
+    pub constrain_tool_calls: bool,
 }
 
 impl MistralRsConfig {
@@ -71,6 +77,7 @@ impl MistralRsConfig {
             model_file: None,
             chat_template_path: None,
             max_seq_len: None,
+            constrain_tool_calls: false,
         }
     }
 
@@ -88,6 +95,11 @@ impl MistralRsConfig {
         self.max_seq_len = Some(len);
         self
     }
+
+    pub fn with_constrain_tool_calls(mut self, on: bool) -> Self {
+        self.constrain_tool_calls = on;
+        self
+    }
 }
 
 /// In-process LLM provider backed by mistralrs.
@@ -96,6 +108,10 @@ impl MistralRsConfig {
 /// reused across every `chat_stream` call.
 pub struct MistralRsProvider {
     model: Arc<Model>,
+    /// Chapter Stencil (ST.3) — grammar-constrain tool-carrying
+    /// turns. Copied from [`MistralRsConfig::constrain_tool_calls`]
+    /// at construction.
+    constrain_tool_calls: bool,
 }
 
 impl MistralRsProvider {
@@ -105,6 +121,7 @@ impl MistralRsProvider {
     /// template parse) on a worker; this is the only
     /// `chat_stream`-blocking work.
     pub async fn new(config: MistralRsConfig) -> Result<Self, LlmError> {
+        let constrain_tool_calls = config.constrain_tool_calls;
         let (dir, files) = match &config.model_file {
             Some(f) => (
                 config.model_path.to_string_lossy().to_string(),
@@ -142,6 +159,7 @@ impl MistralRsProvider {
             .map_err(|e| LlmError::Config(format!("mistralrs: model load failed: {e}")))?;
         Ok(MistralRsProvider {
             model: Arc::new(model),
+            constrain_tool_calls,
         })
     }
 }
@@ -166,6 +184,21 @@ impl LlmProvider for MistralRsProvider {
         }
         builder = apply_tools(builder, request.tools)
             .map_err(|e| LlmError::Config(format!("mistralrs tool conversion: {e}")))?;
+
+        // Chapter Stencil (ST.3) — grammar-constrained tool-calling.
+        // On tool-carrying turns, constrain decoding to a JSON-Schema
+        // grammar so the model can only emit a valid, real-named call
+        // (or the `respond` text escape). `JsonSchema` constrains the
+        // raw output *tokens*, not mistralrs's native tool-call
+        // channel — so the constrained JSON arrives as message
+        // `content`, which we parse below. Off (the default) or on a
+        // tool-less turn: the unchanged, unconstrained path.
+        let constrain = self.constrain_tool_calls && !request.tools.is_empty();
+        if constrain {
+            let grammar = tool_call_grammar(request.tools);
+            builder = builder.set_constraint(mistralrs::Constraint::JsonSchema(grammar));
+        }
+
         builder = builder.set_sampler_max_len(request.max_tokens as usize);
         if let Some(temp) = request.temperature {
             builder = builder.set_sampler_temperature(temp.into());
@@ -184,8 +217,8 @@ impl LlmProvider for MistralRsProvider {
         let choice = response.choices.into_iter().next().ok_or_else(|| {
             LlmError::Parse("mistralrs: response has no choices".to_string())
         })?;
-        let text = choice.message.content.unwrap_or_default();
-        let tool_calls: Vec<ToolCallEnd> = choice
+        let native_text = choice.message.content.unwrap_or_default();
+        let native_tool_calls: Vec<ToolCallEnd> = choice
             .message
             .tool_calls
             .unwrap_or_default()
@@ -201,6 +234,26 @@ impl LlmProvider for MistralRsProvider {
                 }
             })
             .collect();
+
+        // When constrained, the grammar-shaped JSON is in `content`,
+        // not the native tool-call channel. Parse it: a `respond`
+        // sentinel unwraps to plain text; any other name is a real
+        // tool call. If parsing somehow fails (the grammar makes it
+        // well-formed, so this is defensive), fall through to the
+        // native extraction.
+        let (text, tool_calls) = match (constrain, parse_constrained_output(&native_text)) {
+            (true, Some(ConstrainedOutput::Text(t))) => (t, Vec::new()),
+            (true, Some(ConstrainedOutput::ToolCall { tool_name, input })) => (
+                String::new(),
+                vec![ToolCallEnd {
+                    call_id: "mistralrs-constrained-call".to_string(),
+                    tool_name,
+                    input,
+                    name_resolution: NameResolution::Known,
+                }],
+            ),
+            _ => (native_text, native_tool_calls),
+        };
 
         let usage = LlmUsage {
             input_tokens: response.usage.prompt_tokens as u32,
@@ -225,6 +278,45 @@ impl LlmProvider for MistralRsProvider {
         // for operators who want to bias the textual
         // extractor.
         None
+    }
+}
+
+/// Outcome of parsing a grammar-constrained turn's output
+/// (Chapter Stencil ST.3). `tool_call_grammar` admits a single
+/// `{"name", "arguments"}` object; the `respond` sentinel maps to
+/// plain text, any other name to a real tool call.
+#[derive(Debug, PartialEq)]
+enum ConstrainedOutput {
+    ToolCall {
+        tool_name: String,
+        input: serde_json::Value,
+    },
+    Text(String),
+}
+
+/// Parse the JSON a grammar-constrained turn produced. Returns
+/// `None` when `content` isn't the expected shape — the grammar
+/// guarantees it is, so `None` is purely defensive (caller falls
+/// back to the native extraction).
+fn parse_constrained_output(content: &str) -> Option<ConstrainedOutput> {
+    let value: serde_json::Value = serde_json::from_str(content.trim()).ok()?;
+    let name = value.get("name")?.as_str()?;
+    let arguments = value
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if name == RESPOND_SENTINEL {
+        let text = arguments
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string();
+        Some(ConstrainedOutput::Text(text))
+    } else {
+        Some(ConstrainedOutput::ToolCall {
+            tool_name: name.to_string(),
+            input: arguments,
+        })
     }
 }
 
@@ -289,6 +381,55 @@ mod tests {
         assert!(cfg.model_file.is_none());
         assert!(cfg.chat_template_path.is_none());
         assert!(cfg.max_seq_len.is_none());
+        // Chapter Stencil (ST.3) — constraint defaults off.
+        assert!(!cfg.constrain_tool_calls);
+    }
+
+    #[test]
+    fn mistralrs_config_constrain_tool_calls_builder() {
+        let cfg = MistralRsConfig::new("/models/x.gguf").with_constrain_tool_calls(true);
+        assert!(cfg.constrain_tool_calls);
+    }
+
+    #[test]
+    fn parse_constrained_real_tool_call() {
+        let out = parse_constrained_output(
+            r#"{"name": "fs.read", "arguments": {"path": "/etc/hosts"}}"#,
+        )
+        .expect("well-formed constrained call parses");
+        assert_eq!(
+            out,
+            ConstrainedOutput::ToolCall {
+                tool_name: "fs.read".to_string(),
+                input: serde_json::json!({"path": "/etc/hosts"}),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_constrained_respond_sentinel_unwraps_to_text() {
+        let out = parse_constrained_output(
+            r#"{"name": "respond", "arguments": {"text": "All done."}}"#,
+        )
+        .expect("sentinel parses");
+        assert_eq!(out, ConstrainedOutput::Text("All done.".to_string()));
+    }
+
+    #[test]
+    fn parse_constrained_tolerates_surrounding_whitespace() {
+        let out = parse_constrained_output(
+            "\n  {\"name\": \"respond\", \"arguments\": {\"text\": \"hi\"}}\n",
+        )
+        .expect("trimmed JSON parses");
+        assert_eq!(out, ConstrainedOutput::Text("hi".to_string()));
+    }
+
+    #[test]
+    fn parse_constrained_rejects_non_json() {
+        // Defensive: non-JSON / non-object content yields None so the
+        // caller falls back to the native extraction.
+        assert!(parse_constrained_output("not json at all").is_none());
+        assert!(parse_constrained_output(r#"{"missing": "name"}"#).is_none());
     }
 
     #[tokio::test]

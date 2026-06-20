@@ -71,6 +71,13 @@ pub mod ollama;
 #[cfg(feature = "provider-mistral-rs")]
 pub mod mistral_rs;
 
+/// Chapter Stencil (ST.1) — tool-call grammar generation for
+/// grammar-constrained decoding. Pure and provider-agnostic (no
+/// engine), so it is ungated: the MistralRs provider consumes it
+/// today and a future `llama-server` `/completion` GBNF path can
+/// reuse it unchanged.
+pub mod tool_grammar;
+
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible
 /// `/v1/embeddings` client whose `base_url` can point at the

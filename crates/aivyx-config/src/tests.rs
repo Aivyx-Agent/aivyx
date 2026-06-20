@@ -3072,6 +3072,7 @@ model_path = "/models/qwen3-dir"
 model_file = "qwen3-4b-q4_k_m.gguf"
 chat_template_path = "/templates/qwen3.json"
 max_seq_len = 32768
+constrain_tool_calls = true
 "#,
     )
     .unwrap();
@@ -3095,6 +3096,45 @@ max_seq_len = 32768
         Some(std::path::Path::new("/templates/qwen3.json"))
     );
     assert_eq!(mr.max_seq_len, Some(32768));
+    // Chapter Stencil (ST.2) — grammar-constrained tool-calling opt-in.
+    assert!(mr.constrain_tool_calls);
+    drop(env);
+}
+
+#[test]
+fn mistralrs_constrain_tool_calls_defaults_off() {
+    // Chapter Stencil (ST.2) — the opt-in must default to `false`
+    // so the unconstrained code path stays byte-identical when an
+    // operator doesn't set it. Omitting the key (and the whole
+    // section) both leave it off.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mistralrs-constrain-default");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "mistralrs"
+model = "qwen3"
+
+[mistralrs]
+model_path = "/models/qwen3-4b-q4_k_m.gguf"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(
+        !cfg.mistralrs_options.constrain_tool_calls,
+        "constrain_tool_calls must default to false"
+    );
     drop(env);
 }
 

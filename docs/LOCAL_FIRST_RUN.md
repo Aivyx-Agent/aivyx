@@ -101,3 +101,14 @@ and `v0.1.0` (pre-release) is ready to tag. It deliberately landed *on top of* a
 local on-ramp that already works; shipping a binary whose free path produces
 empty replies would have defeated the point. See
 [`docs/INSTALL.md`](INSTALL.md#shell-installer-recommended).
+
+## 5. Hardening tool-calling itself (Chapter Stencil)
+
+The mechanisms above make a local model *reply*; making a **small** local model
+reliably *call a tool* is the harder, later problem — four prompt-substrate phases
+proved it can't be fixed from the prompt. **Chapter Stencil** ([`docs/STENCIL.md`](STENCIL.md))
+adds the lever the prompt can't reach: **grammar-constrained decoding** on the
+in-process mistral.rs engine (`[mistralrs] constrain_tool_calls = true`, default
+off). The decoder is constrained to a JSON-Schema grammar built from the registered
+tools, so a small GGUF emits a valid, real-named tool call (or a `respond` text
+escape) *by construction*, not by hoping. Live-proven on Qwen3-4B.

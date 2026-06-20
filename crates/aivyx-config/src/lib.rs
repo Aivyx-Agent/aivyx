@@ -4788,6 +4788,17 @@ pub struct MistralRsOptions {
     /// the model's declared `max_seq_len`.
     #[serde(default)]
     pub max_seq_len: Option<usize>,
+    /// Chapter Stencil (ST.2) — grammar-constrained tool-calling.
+    /// When `true`, the in-process engine constrains decoding to a
+    /// JSON-Schema grammar (`aivyx_llm::tool_grammar`) so a small
+    /// GGUF model emits a valid, real-named tool call (or the
+    /// `respond` text escape) *by construction* instead of
+    /// hallucinating tool names or malformed arguments. Default
+    /// `false` → the unchanged, unconstrained code path
+    /// (byte-identical behavior). Only takes effect on turns that
+    /// carry tools.
+    #[serde(default)]
+    pub constrain_tool_calls: bool,
 }
 
 /// `OllamaOptions`.

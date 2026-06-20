@@ -4609,6 +4609,9 @@ async fn run_async(
                 if let Some(n) = opts.max_seq_len {
                     mr_cfg = mr_cfg.with_max_seq_len(n);
                 }
+                // Chapter Stencil (ST.3) — grammar-constrained
+                // tool-calling opt-in (default off).
+                mr_cfg = mr_cfg.with_constrain_tool_calls(opts.constrain_tool_calls);
                 let p = MistralRsProvider::new(mr_cfg).await.map_err(|e| {
                     format!("failed to build mistralrs provider: {e}")
                 })?;

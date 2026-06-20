@@ -372,6 +372,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "jsonschema",
  "mistralrs",
  "reqwest 0.12.28",
  "secrecy",
