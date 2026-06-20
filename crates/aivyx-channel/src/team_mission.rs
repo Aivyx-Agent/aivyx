@@ -84,15 +84,12 @@ mod tests {
     use aivyx_storage::{RedbStorage, Storage, StorageConfig};
     use aivyx_team::{MissionPlan, Step};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     async fn team_domain() -> DomainHandle {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+        // A UUID, not pid+nanos: avoids a same-nanosecond collision between
+        // parallel tests (the transient-flake class).
         let dir = std::env::temp_dir()
-            .join(format!("aivyx-team-mission-{}-{nanos}", std::process::id()));
+            .join(format!("aivyx-team-mission-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let storage: Arc<dyn Storage> = RedbStorage::open(
             StorageConfig::new(dir.join("store.redb")),

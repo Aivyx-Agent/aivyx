@@ -1528,14 +1528,10 @@ mod tests {
     impl TempDir {
         fn new() -> Self {
             let mut path = std::env::temp_dir();
-            let suffix = format!(
-                "aivyx-persona-test-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0),
-            );
+            // A UUID, not just pid+nanos: two parallel tests in the same
+            // process can hit the same nanosecond (coarse clock resolution)
+            // and collide on the same redb path → a transient flake.
+            let suffix = format!("aivyx-persona-test-{}", uuid::Uuid::new_v4());
             path.push(suffix);
             std::fs::create_dir_all(&path).expect("tempdir create");
             TempDir { path }

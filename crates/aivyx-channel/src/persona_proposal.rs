@@ -926,14 +926,10 @@ mod tests {
     impl TempDir {
         fn new() -> Self {
             let mut path = std::env::temp_dir();
-            let suffix = format!(
-                "aivyx-persona-proposal-test-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0),
-            );
+            // A UUID, not pid+nanos: avoids a same-nanosecond collision
+            // between parallel tests (the transient-flake class).
+            let suffix =
+                format!("aivyx-persona-proposal-test-{}", uuid::Uuid::new_v4());
             path.push(suffix);
             std::fs::create_dir_all(&path).expect("tempdir create");
             TempDir { path }

@@ -205,12 +205,11 @@ mod tests {
     async fn chain_with_costs(
         costs: &[(&str, TokenUsage)],
     ) -> Arc<PersistentAuditLog> {
-        let nanos = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+        // A UUID, not pid+nanos: parallel tests in the same process can
+        // collide on the same nanosecond (coarse clock) → same redb path →
+        // a transient flake.
         let dir = std::env::temp_dir()
-            .join(format!("aivyx-budget-gate-{}-{nanos}", std::process::id()));
+            .join(format!("aivyx-budget-gate-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let storage = RedbStorage::open(
             StorageConfig::new(dir.join("store.redb")),
