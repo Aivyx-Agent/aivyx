@@ -7241,6 +7241,26 @@ fn memory_profile_off_is_byte_identical() {
 }
 
 #[test]
+fn memory_profile_lite_arms_cheap_fusion_only() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\nprofile = \"lite\"\n[embedding]\nmodel = \"m\"\n",
+        "mp-lite",
+    );
+    assert_eq!(cfg.memory_profile, crate::MemoryProfile::Lite);
+    let e = cfg.embedding.expect("embedding present");
+    // Cheap recall fusion over existing data: armed.
+    assert!(e.recall_hybrid, "lite arms hybrid");
+    assert_eq!(e.recall_graph_hops, 1, "lite arms the co-occurrence walk");
+    assert!(cfg.recall_cluster.unwrap().enabled, "lite arms co-occurrence siblings");
+    // Paid generation: NOT armed — no sweeps, no wiki/typed-graph weights.
+    assert_eq!(e.recall_wiki_weight, 0.0, "lite leaves the wiki source silent");
+    assert_eq!(e.recall_graph_typed_weight, 0.0, "lite leaves the typed-graph source silent");
+    assert!(cfg.wiki.is_none(), "lite does not arm the wiki sweep");
+    assert!(cfg.graph.is_none(), "lite does not arm the graph sweep");
+}
+
+#[test]
 fn memory_profile_smart_arms_the_bundle() {
     let _env = EnvScope::new();
     let cfg = load_with_toml(

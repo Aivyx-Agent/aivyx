@@ -2393,11 +2393,17 @@ pub enum MemoryProfile {
     /// The default — today's behavior, byte-identical. Nothing expanded.
     #[default]
     Off,
-    /// The full coherent stack: hybrid recall + the lexical /
-    /// co-occurrence / wiki / typed-graph fusion sources at sensible
-    /// weights, plus the `[wiki]` + `[graph]` extraction sweeps (capped).
-    /// Any explicitly-set `[embedding]` / `[recall_cluster]` / `[wiki]` /
-    /// `[graph]` value still overrides this — the profile is a floor.
+    /// **Recall fusion over EXISTING data, no paid generation.** Arms
+    /// hybrid recall + the lexical + co-occurrence sources (which work over
+    /// memory the agent already has — no LLM calls), but NOT the `[wiki]` /
+    /// `[graph]` extraction sweeps or their recall weights. The "make
+    /// recall smarter for free" tier.
+    Lite,
+    /// The full coherent stack: `Lite` **plus** the wiki / typed-graph
+    /// fusion sources and the `[wiki]` + `[graph]` extraction sweeps
+    /// (capped). Any explicitly-set `[embedding]` / `[recall_cluster]` /
+    /// `[wiki]` / `[graph]` value still overrides this — the profile is a
+    /// floor.
     Smart,
 }
 
@@ -2406,12 +2412,25 @@ impl MemoryProfile {
     pub fn from_arg(s: Option<&str>) -> Self {
         match s.map(|x| x.trim().to_lowercase()).as_deref() {
             Some("smart") => MemoryProfile::Smart,
+            Some("lite") => MemoryProfile::Lite,
             _ => MemoryProfile::Off,
         }
     }
 
     /// Whether the smart bundle should be expanded.
     pub fn is_smart(self) -> bool {
+        matches!(self, MemoryProfile::Smart)
+    }
+
+    /// Arms the **cheap** recall-fusion knobs (hybrid + lexical +
+    /// co-occurrence over existing data). True for `Lite` and `Smart`.
+    pub fn arms_recall_fusion(self) -> bool {
+        matches!(self, MemoryProfile::Lite | MemoryProfile::Smart)
+    }
+
+    /// Arms the **paid** generation layers (the `[wiki]` / `[graph]`
+    /// sweeps + their recall weights). True for `Smart` only.
+    pub fn arms_generation(self) -> bool {
         matches!(self, MemoryProfile::Smart)
     }
 }
@@ -5421,34 +5440,35 @@ impl AivyxConfig {
         // below. Explicit `[embedding]`/`[recall_cluster]`/`[wiki]`/`[graph]`
         // values always win — the profile only fills what's unset/absent.
         let memory_profile = MemoryProfile::from_arg(toml.memory.profile.as_deref());
-        let smart = memory_profile.is_smart();
 
-        let embedding = build_embedding_config(&toml.embedding, smart)?;
+        let embedding = build_embedding_config(&toml.embedding, memory_profile)?;
         let proactive = build_proactive_config(&toml.proactive)?;
         let persona_lifecycle = build_persona_lifecycle_config(
             &toml.persona_lifecycle,
         )?;
         let persona_seed = build_persona_seed(&toml.persona_seed);
         // For the section-level layers, an explicitly-present section
-        // (`Some`) is the operator's choice and wins; only when absent
-        // does `smart` synthesize an `enabled` config with default caps.
+        // (`Some`) is the operator's choice and wins; only when absent does
+        // the profile synthesize an `enabled` config. `[recall_cluster]` is
+        // the cheap co-occurrence expansion (Lite+); `[wiki]`/`[graph]` are
+        // the paid generation sweeps (Smart only).
         let recall_cluster = build_recall_cluster_config(&toml.recall_cluster)?
             .or_else(|| {
-                smart.then_some(RecallClusterConfig {
+                memory_profile.arms_recall_fusion().then_some(RecallClusterConfig {
                     enabled: true,
                     max_siblings: DEFAULT_RC_MAX_SIBLINGS,
                     min_affinity: DEFAULT_RC_MIN_AFFINITY,
                 })
             });
         let wiki = build_wiki_config(&toml.wiki)?.or_else(|| {
-            smart.then_some(WikiConfig {
+            memory_profile.arms_generation().then_some(WikiConfig {
                 enabled: true,
                 max_pages_per_sweep: DEFAULT_WIKI_MAX_PAGES_PER_SWEEP,
                 interval_secs: DEFAULT_WIKI_INTERVAL_SECS,
             })
         });
         let graph = build_graph_config(&toml.graph)?.or_else(|| {
-            smart.then_some(GraphConfig {
+            memory_profile.arms_generation().then_some(GraphConfig {
                 enabled: true,
                 max_topics_per_sweep: DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP,
                 interval_secs: DEFAULT_GRAPH_INTERVAL_SECS,
@@ -7432,7 +7452,7 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
 /// encrypted store in phase 2 ([`AivyxConfig::hydrate_secrets_from_store`]).
 fn build_embedding_config(
     raw: &RawEmbedding,
-    smart: bool,
+    profile: MemoryProfile,
 ) -> Result<Option<EmbeddingConfig>, ConfigError> {
     let any_set = raw.base_url.is_some()
         || raw.model.is_some()
@@ -7545,9 +7565,10 @@ fn build_embedding_config(
     let recall_token_budget =
         raw.recall_token_budget.unwrap_or(0);
 
-    // Phase 98 — hybrid recall fusion opt-in. Boolean;
-    // no bounds; default false. Chapter Synapse — `smart` arms it.
-    let recall_hybrid = raw.recall_hybrid.unwrap_or(smart);
+    // Phase 98 — hybrid recall fusion opt-in. Boolean; no bounds; default
+    // false. Chapter Synapse — `lite`/`smart` arm it (cheap, over existing
+    // data).
+    let recall_hybrid = raw.recall_hybrid.unwrap_or(profile.arms_recall_fusion());
 
     // Chapter Loom (LM.4) — recall-fusion tuning. Defaults preserve the
     // pre-Loom hybrid (graph off; lexical weight 1.0). Weights clamp at
@@ -7557,7 +7578,9 @@ fn build_embedding_config(
         .recall_lexical_weight
         .unwrap_or(DEFAULT_RECALL_LEXICAL_WEIGHT)
         .max(0.0);
-    let recall_graph_hops = raw.recall_graph_hops.unwrap_or(if smart {
+    // The co-occurrence walk is cheap (it reads the ledger that auto-builds
+    // from recall) → armed at `lite`+.
+    let recall_graph_hops = raw.recall_graph_hops.unwrap_or(if profile.arms_recall_fusion() {
         SMART_RECALL_GRAPH_HOPS
     } else {
         DEFAULT_RECALL_GRAPH_HOPS
@@ -7570,15 +7593,16 @@ fn build_embedding_config(
         .recall_graph_weight
         .unwrap_or(DEFAULT_RECALL_GRAPH_WEIGHT)
         .max(0.0);
-    // Chapter Synapse — `smart` arms the wiki + typed-graph recall sources
-    // (weight 1.0). Off they default to 0.0 (the source is silent).
+    // Chapter Synapse — only `smart` arms the wiki + typed-graph recall
+    // sources (weight 1.0); they need the paid generation sweeps to have
+    // any data, so `lite` leaves them silent (0.0).
     let recall_wiki_weight = raw
         .recall_wiki_weight
-        .unwrap_or(if smart { 1.0 } else { DEFAULT_RECALL_WIKI_WEIGHT })
+        .unwrap_or(if profile.arms_generation() { 1.0 } else { DEFAULT_RECALL_WIKI_WEIGHT })
         .max(0.0);
     let recall_graph_typed_weight = raw
         .recall_graph_typed_weight
-        .unwrap_or(if smart { 1.0 } else { DEFAULT_RECALL_GRAPH_TYPED_WEIGHT })
+        .unwrap_or(if profile.arms_generation() { 1.0 } else { DEFAULT_RECALL_GRAPH_TYPED_WEIGHT })
         .max(0.0);
 
     // env > TOML; encrypted-store fall-through happens in phase 2.

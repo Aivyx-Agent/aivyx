@@ -834,14 +834,20 @@ parent_role = "researcher"
 # whole coherent stack with ONE line:
 #
 #   [memory]
-#   profile = "smart"      # default "off" (byte-identical)
+#   profile = "smart"      # off (default) | lite | smart
 #
-# `smart` arms hybrid recall + the lexical / co-occurrence / wiki /
-# typed-graph fusion sources, AND the [wiki] + [graph] extraction sweeps
-# (with conservative caps). It needs an `[embedding]` section for the
-# semantic-recall parts (the sweeps + graph.query work without it). Any
-# knob you set explicitly below still wins — `profile` is a floor, not a
-# cage. Leave it `off` (or unset) for exactly today's behavior.
+# Three tiers:
+#   off    today's behavior, byte-identical.
+#   lite   recall fusion over data you ALREADY have — hybrid (BM25) +
+#          co-occurrence siblings/walk. No LLM generation, no extra cost.
+#          "Make recall smarter for free."
+#   smart  lite PLUS the wiki + typed-graph layers and their [wiki]/[graph]
+#          extraction sweeps (those cost LLM calls) and their recall
+#          weights — the full self-organizing stack.
+#
+# All tiers need an `[embedding]` section for the semantic-recall parts.
+# Any knob you set explicitly below still wins — `profile` is a floor, not
+# a cage. Leave it `off` (or unset) for exactly today's behavior.
 #
 # ----------------------------------------------------------------
 # Semantic memory search (Phase 75) — optional `[embedding]`

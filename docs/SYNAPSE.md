@@ -61,9 +61,16 @@ opts in *once* instead of tuning ten flags. Two levels in v1:
 
 **Explicit knobs always win** — `profile = "smart"` sets the bundle as
 *defaults*, and any individually-set `[embedding]` / `[wiki]` / `[graph]`
-value overrides it. So the switch is a floor, never a cage. (A middle
-`lite` tier — recall fusion over *existing* data only, no paid LLM sweeps
-— is a documented deferral; `off` / `smart` is the clean v1.)
+value overrides it. So the switch is a floor, never a cage.
+
+**`lite` tier (pre-v0.4.0 addendum).** A middle tier between `off` and
+`smart`: it arms only the **cheap** recall fusion — hybrid (BM25) + the
+co-occurrence sources, which read data the agent *already* has (no LLM
+calls) — and leaves the paid `[wiki]` / `[graph]` extraction sweeps (and
+their recall weights) off. "Make recall smarter for free." Modeled as
+`MemoryProfile::{arms_recall_fusion (Lite+), arms_generation (Smart only)}`;
+`off` / `lite` / `smart`. *Originally a documented deferral; completed in
+the pre-v0.4.0 cleanup.*
 
 The default stays `off`: the switch removes the *friction* of activation
 without changing what an un-opted-in operator gets — the byte-identical
