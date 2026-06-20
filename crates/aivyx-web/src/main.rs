@@ -20,7 +20,8 @@ use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
     MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary, PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, SeedSkillWire, SettingsSnapshot, StreamEventPayload, VoiceSettingsSnapshot,
+    QueryResponsePayload, SeedSkillWire, SettingsSnapshot, SkillView, StreamEventPayload,
+    VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
@@ -75,6 +76,9 @@ enum View {
     /// Chapter Lattice — the typed knowledge graph: entities + directed
     /// typed relations.
     Lattice,
+    /// Chapter Repertoire — the Skills library: every skill + its
+    /// effectiveness + provenance/lineage.
+    Skills,
     Settings,
     Agents,
     Teams,
@@ -105,6 +109,17 @@ struct MemoryState {
 struct WikiState {
     pages: Vec<WikiPageSummary>,
     selected: Option<WikiPage>,
+}
+
+/// Chapter Repertoire — Skills library state: the skill inventory (each
+/// `SkillView` = a `LearnedSkill` + its WH.2 effectiveness) + the count of
+/// pending skill proposals (governed in Agents). Read-only snapshot fanned
+/// in by `ws_task`.
+#[derive(Clone, Default, PartialEq)]
+struct SkillsState {
+    skills: Vec<SkillView>,
+    pending_proposals: usize,
+    loaded: bool,
 }
 
 /// Chapter Lattice — typed knowledge-graph state: entity nodes + the
@@ -287,6 +302,7 @@ fn App() -> Element {
     let roster = use_signal(|| None::<TeamConfig>);
     let documents = use_signal(DocumentsState::default);
     let voice = use_signal(VoiceState::default);
+    let skills = use_signal(SkillsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -296,7 +312,7 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, dashboard, memory, wiki, lattice, settings, agents, roster, documents,
-            voice, connected, session, transcript, streaming, gate,
+            voice, skills, connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -308,6 +324,10 @@ fn App() -> Element {
     use_context_provider(|| roster);
     use_context_provider(|| documents);
     use_context_provider(|| voice);
+    use_context_provider(|| skills);
+    // Chapter Repertoire — the Skills screen's "review in Agents" pointer
+    // switches the active view.
+    use_context_provider(|| view);
     use_context_provider(|| missions);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
@@ -354,6 +374,7 @@ fn App() -> Element {
         View::Memory => "Memory",
         View::Wiki => "Knowledge Wiki",
         View::Lattice => "Knowledge Graph",
+        View::Skills => "Skills",
         View::Settings => "Settings",
         View::Agents => "Agents",
         View::Teams => "Teams",
@@ -381,6 +402,7 @@ fn App() -> Element {
                         View::Memory => rsx! { MemoryPanel {} },
                         View::Wiki => rsx! { WikiPanel {} },
                         View::Lattice => rsx! { LatticePanel {} },
+                        View::Skills => rsx! { SkillsPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
@@ -425,6 +447,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Settings) }
             NavItem { icon: ICON_AGENTS, label: "Agents", active: view() == View::Agents,
                 onclick: move |_| view.set(View::Agents) }
+            NavItem { icon: ICON_AGENTS, label: "Skills", active: view() == View::Skills,
+                onclick: move |_| view.set(View::Skills) }
             NavItem { icon: ICON_TEAMS, label: "Teams", active: view() == View::Teams,
                 onclick: move |_| view.set(View::Teams) }
             NavItem { icon: ICON_DOCUMENTS, label: "Documents", active: view() == View::Documents,
@@ -1149,6 +1173,130 @@ fn wiki_page_query(topic: String) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-wiki-page".to_string(),
         payload: QueryPayload::GetWikiPage { topic },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skills view — Chapter Repertoire (RP.2). The agent's whole repertoire of
+// skills (operator-taught, agent-authored, agent-refined) with their WH.2
+// effectiveness + provenance/lineage. Read-only; governance (approve/edit/
+// reject of skill proposals) stays in the Agents screen — this points there.
+// ---------------------------------------------------------------------------
+
+fn skills_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-skills".to_string(),
+        payload: QueryPayload::GetSkills,
+    }
+}
+
+/// Effectiveness bucket label + bar fraction from the WH.2 EWMA + samples.
+/// `samples == 0` ⇒ unmeasured.
+fn skill_effectiveness(view: &SkillView) -> (&'static str, &'static str, f32) {
+    if view.samples == 0 {
+        return ("unmeasured", "skill-eff-unmeasured", 0.0);
+    }
+    // Normalize the (unbounded) EWMA into a 0..1 bar via a soft squash.
+    let frac = (view.ewma_score / (view.ewma_score.abs() + 2.0) + 1.0) / 2.0;
+    if view.ewma_score < 0.0 {
+        ("underperforming", "skill-eff-bad", frac.clamp(0.0, 1.0))
+    } else if view.ewma_score > 0.0 {
+        ("helping", "skill-eff-good", frac.clamp(0.0, 1.0))
+    } else {
+        ("neutral", "skill-eff-neutral", 0.5)
+    }
+}
+
+#[component]
+fn SkillsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let mut view = use_context::<Signal<View>>();
+    let skills = use_context::<Signal<SkillsState>>();
+
+    // Load the inventory each time the view opens.
+    use_future(move || async move {
+        ws.send(skills_query());
+    });
+
+    let s = skills();
+    // Effectiveness-descending, with unmeasured (samples 0) grouped last.
+    let mut rows = s.skills.clone();
+    rows.sort_by(|a, b| {
+        let am = a.samples == 0;
+        let bm = b.samples == 0;
+        am.cmp(&bm).then_with(|| {
+            b.ewma_score
+                .partial_cmp(&a.ewma_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+
+    rsx! {
+        div { class: "skills",
+            div { class: "panel-head",
+                h3 { "Skills" }
+                span { class: "label-tech", "{s.skills.len()}" }
+            }
+            if s.pending_proposals > 0 {
+                button { class: "skills-pending",
+                    onclick: move |_| view.set(View::Agents),
+                    "{s.pending_proposals} pending skill proposal(s) — review in Agents →"
+                }
+            }
+            if s.loaded && s.skills.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech",
+                        "No skills yet. Teach one in chat (\"learn this skill…\"), or enable [skill_authoring] so the agent writes specialized skills from what it knows."
+                    }
+                }
+            }
+            div { class: "skills-grid",
+                for sv in rows.iter() {
+                    { rsx! { SkillCard { view: sv.clone() } } }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SkillCard(view: SkillView) -> Element {
+    let sk = &view.skill;
+    let (eff_label, eff_class, eff_frac) = skill_effectiveness(&view);
+    let agent = sk.provenance.author == aivyx_ipc::persona::SkillAuthor::Agent;
+    rsx! {
+        div { class: "glass-card skill-card",
+            div { class: "skill-card-head",
+                h3 { "{sk.name}" }
+                div { class: "skill-badges",
+                    span {
+                        class: if agent { "chip skill-prov-agent" } else { "chip skill-prov-op" },
+                        if agent { "agent" } else { "operator" }
+                    }
+                    if let Some(d) = sk.domain.as_ref() {
+                        span { class: "chip", "{d}" }
+                    }
+                    span { class: "label-tech", "v{sk.version}" }
+                }
+            }
+            p { class: "skill-trigger", "{sk.trigger}" }
+            if let Some(from) = sk.refined_from.as_ref() {
+                p { class: "label-tech", "refined from {from}" }
+            }
+            div { class: "skill-eff",
+                span { class: "chip {eff_class}", "{eff_label}" }
+                div { class: "skill-eff-bar",
+                    div { class: "skill-eff-fill {eff_class}", style: "width:{(eff_frac*100.0) as u32}%" }
+                }
+                span { class: "label-tech",
+                    if view.samples == 0 { "no data" } else { "score {view.ewma_score:.1} · {view.samples} sample(s)" }
+                }
+            }
+            details { class: "skill-proc",
+                summary { class: "label-tech", "procedure" }
+                p { class: "mem-body", style: "white-space:pre-wrap", "{sk.procedure}" }
+            }
+        }
     }
 }
 
@@ -3626,6 +3774,7 @@ async fn ws_task(
     mut roster: Signal<Option<TeamConfig>>,
     mut documents: Signal<DocumentsState>,
     mut voice: Signal<VoiceState>,
+    mut skills: Signal<SkillsState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -3779,6 +3928,15 @@ async fn ws_task(
                     ..
                 } => {
                     wiki.write().pages = pages;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetSkills { skills: sk, pending_proposals },
+                    ..
+                } => {
+                    let mut s = skills.write();
+                    s.skills = sk;
+                    s.pending_proposals = pending_proposals;
+                    s.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetWikiPage { page },

@@ -436,6 +436,30 @@ a { color: var(--color-primary); text-decoration: none; }
 .lattice-arrowhead { fill: var(--color-accent, #6cf); opacity: 0.7; }
 .lattice-edge-label { fill: var(--color-text-disabled, #88a); font-size: 8px; pointer-events: none; }
 
+/* Chapter Repertoire — the Skills library. */
+.skills { display: flex; flex-direction: column; gap: 12px; }
+.skills-pending { align-self: flex-start; cursor: pointer; border: 1px solid var(--color-accent, #6cf);
+  background: rgba(108, 207, 255, 0.08); color: var(--color-accent, #6cf); border-radius: 8px;
+  padding: 6px 12px; font-size: 12.5px; }
+.skills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.skill-card { display: flex; flex-direction: column; gap: 8px; }
+.skill-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.skill-card-head h3 { margin: 0; }
+.skill-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.skill-prov-agent { background: rgba(108, 207, 255, 0.16); color: var(--color-accent, #6cf); }
+.skill-prov-op { background: rgba(160, 160, 180, 0.16); }
+.skill-trigger { margin: 0; color: var(--color-text-primary); font-size: 13px; line-height: 1.5; }
+.skill-eff { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.skill-eff-bar { flex: 1; min-width: 80px; height: 6px; border-radius: 3px;
+  background: rgba(160, 160, 180, 0.18); overflow: hidden; }
+.skill-eff-fill { height: 100%; border-radius: 3px; }
+.skill-eff-good, .skill-eff-fill.skill-eff-good { background: #4caf7d; color: #0b1a12; }
+.skill-eff-bad, .skill-eff-fill.skill-eff-bad { background: #d9714e; color: #1a0b06; }
+.skill-eff-neutral, .skill-eff-fill.skill-eff-neutral { background: #c9b85a; color: #1a160b; }
+.skill-eff-unmeasured { background: rgba(160, 160, 180, 0.16); }
+.skill-proc summary { cursor: pointer; }
+.skill-proc .mem-body { margin-top: 6px; }
+
 /* ── Chat / Terminal view ──────────────────────────────────────────────────── */
 .chat { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .transcript {
