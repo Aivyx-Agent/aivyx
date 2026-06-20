@@ -1401,6 +1401,7 @@ fn build_proposed_op(
                 name: name.clone(),
                 trigger: trigger.clone(),
                 procedure: procedure.clone(),
+                ..Default::default()
             };
             crate::persona::PersonaDeltaOp::AppendList {
                 value: learned.to_json_value(),

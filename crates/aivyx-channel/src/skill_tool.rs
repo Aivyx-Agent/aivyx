@@ -251,6 +251,7 @@ impl Tool for SkillTeachTool {
             name: name.to_string(),
             trigger: trigger.to_string(),
             procedure: procedure.to_string(),
+            ..Default::default()
         };
         match commit_ops(log, eff, &[teach_op(&skill)]).await {
             Ok(()) => ToolOutcome::Completed {

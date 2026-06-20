@@ -99,6 +99,9 @@ pub fn merged_skill(
         procedure: new_procedure
             .map(|p| p.trim().to_string())
             .unwrap_or_else(|| existing.procedure.clone()),
+        // Chapter Whetstone — an operator update preserves the skill's
+        // version/provenance/lineage; only trigger/procedure change here.
+        ..existing.clone()
     }
 }
 
@@ -111,6 +114,7 @@ mod tests {
             name: name.into(),
             trigger: trig.into(),
             procedure: proc.into(),
+            ..Default::default()
         }
     }
 

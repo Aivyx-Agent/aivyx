@@ -311,6 +311,69 @@ pub struct LearnedSkill {
     /// `skills.invoke` to avoid bloating every turn's prompt
     /// with every skill's full body.
     pub procedure: String,
+    /// Chapter Whetstone — version in this skill's refinement
+    /// lineage. Pre-Whetstone entries (no field) decode as `1`.
+    #[serde(default = "default_skill_version")]
+    pub version: u32,
+    /// Chapter Whetstone — who authored this version (and, for an
+    /// agent refinement, why). Pre-Whetstone entries decode as
+    /// `operator`, no reason.
+    #[serde(default)]
+    pub provenance: SkillProvenance,
+    /// Chapter Whetstone — the skill name this version was refined
+    /// from (lineage). `None` for a hand-authored original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refined_from: Option<String>,
+    /// Chapter Whetstone — optional specialization tag (groundwork
+    /// for the deferred knowledge-derived specialization chapter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+/// Chapter Whetstone — default version for a pre-Whetstone skill
+/// entry that has no `version` field on the chain.
+fn default_skill_version() -> u32 {
+    1
+}
+
+/// Chapter Whetstone — who authored a [`LearnedSkill`] version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillAuthor {
+    /// Hand-authored by the operator (`skills.teach`, seed, the
+    /// Studio). The default for any entry without provenance.
+    #[default]
+    Operator,
+    /// Authored or refined by the agent (the auto-proposer / the
+    /// Whetstone refinement loop), pending or past operator approval.
+    Agent,
+}
+
+/// Chapter Whetstone — provenance of a [`LearnedSkill`] version:
+/// who wrote it and, for an agent refinement, a one-line reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SkillProvenance {
+    /// Who authored this version. Defaults to `operator`.
+    #[serde(default)]
+    pub author: SkillAuthor,
+    /// For an agent refinement: a one-line reason ("turns using it
+    /// were reworked"). `None` for a hand-authored skill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Default for LearnedSkill {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            trigger: String::new(),
+            procedure: String::new(),
+            version: 1,
+            provenance: SkillProvenance::default(),
+            refined_from: None,
+            domain: None,
+        }
+    }
 }
 
 impl LearnedSkill {
@@ -417,9 +480,40 @@ mod tests {
             name: "code.review".into(),
             trigger: "before merging".into(),
             procedure: "run the checklist".into(),
+            ..Default::default()
         };
         let back = LearnedSkill::from_json_value(&s.to_json_value()).unwrap();
         assert_eq!(back, s);
+        // A fresh skill defaults to v1, operator-authored, no lineage.
+        assert_eq!(s.version, 1);
+        assert_eq!(s.provenance.author, SkillAuthor::Operator);
+        assert!(s.refined_from.is_none() && s.domain.is_none());
+
+        // Chapter Whetstone — a PRE-Whetstone chain entry (no version /
+        // provenance / refined_from / domain) decodes with the defaults,
+        // so the format extension is backward-compatible.
+        let legacy = r#"{"name":"deploy","trigger":"on ship","procedure":"push"}"#;
+        let decoded = LearnedSkill::from_json_value(legacy).unwrap();
+        assert_eq!(decoded.name, "deploy");
+        assert_eq!(decoded.version, 1, "missing version defaults to 1");
+        assert_eq!(decoded.provenance.author, SkillAuthor::Operator);
+        assert!(decoded.refined_from.is_none() && decoded.domain.is_none());
+
+        // A refined version round-trips its lineage + provenance.
+        let refined = LearnedSkill {
+            name: "deploy".into(),
+            trigger: "on ship".into(),
+            procedure: "push then verify".into(),
+            version: 2,
+            provenance: SkillProvenance {
+                author: SkillAuthor::Agent,
+                reason: Some("turns using it were reworked".into()),
+            },
+            refined_from: Some("deploy".into()),
+            domain: Some("ops".into()),
+        };
+        let rt = LearnedSkill::from_json_value(&refined.to_json_value()).unwrap();
+        assert_eq!(rt, refined);
 
         let mut p = EffectivePersona::default();
         assert!(!p.is_non_empty());

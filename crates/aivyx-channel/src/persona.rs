@@ -678,6 +678,7 @@ pub async fn seed_persona_chain_if_empty(
             name: sk.name.clone(),
             trigger: sk.trigger.clone(),
             procedure: sk.procedure.clone(),
+            ..Default::default()
         };
         ops.push((
             PersonaDeltaCategory::LearnedSkill,

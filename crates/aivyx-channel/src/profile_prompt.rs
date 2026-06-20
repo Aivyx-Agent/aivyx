@@ -845,6 +845,7 @@ mod tests {
                 name: "greet".into(),
                 trigger: "on hello".into(),
                 procedure: "say hi".into(),
+                ..Default::default()
             }
             .to_json_value(),
         );

@@ -1,6 +1,12 @@
 # Skills That Sharpen — the refinement loop (Chapter Whetstone)
 
-> **Status:** 🧭 **design contract — WH.0.** The locked reference for the
+> **Status:** 🪨 **WH.1 — richer skill model shipped (inert).** `LearnedSkill`
+> now carries `version` (default 1), `provenance` (`operator`/`agent` + an
+> optional reason), `refined_from`, and an optional `domain` — all
+> `#[serde(default)]`, so pre-Whetstone chain entries decode unchanged (v1,
+> operator). An operator `skills.update` preserves the lineage; nothing reads
+> the new fields yet. The effectiveness ledger is WH.2. The locked reference for
+> the
 > chapter that turns Aivyx's skills from a *static list* into something
 > that **gets better through use**. Skills already exist as first-class,
 > governed parts of the agent's identity — authored by the operator
@@ -129,7 +135,7 @@ proposals).
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **WH.0** | **This design contract** | locked reference; banner flips per phase |
-| **WH.1** | **Richer skill model** | extend `LearnedSkill` (`provenance`, `refined_from`, `version`, optional `domain`) in `aivyx-ipc::persona`, all `#[serde(default)]` so existing chain entries decode unchanged (today's skills = v1, operator-authored); the prompt render + `skills.invoke` ignore the new fields for now. **Inert**. Tests (round-trip + default decode of a pre-Whetstone entry). |
+| **WH.1** ✅ | **Richer skill model** | DONE. `LearnedSkill` gains `version: u32` (`#[serde(default = "1")]`), `provenance: SkillProvenance { author: SkillAuthor (Operator/Agent), reason: Option<String> }`, `refined_from: Option<String>`, `domain: Option<String>` in `aivyx-ipc::persona`, all `#[serde(default)]` + a manual `Default` (so a `..Default::default()` spread = v1/operator). Pre-Whetstone entries decode unchanged; the `skills.update` builder preserves lineage via `..existing.clone()`; the seven construction sites updated; the prompt render + `skills.invoke` ignore the new fields. **Inert**. Tests (fresh-skill defaults; a pre-Whetstone JSON decodes v1/operator; a refined v2 round-trips its lineage + provenance). |
 | **WH.2** | **Skill-effectiveness ledger** | `PersistentSkillHelpfulnessLedger` (EWMA, the Phase 82 pattern) + `KeyDomain::SkillHelpfulnessLedger`; folded on the reflection cadence from the skill-invocation + turn-outcome signal (cross-referenced with the correction ledger). Tests (fold, decay, ranked/underperformer query). |
 | **WH.3** | **The refinement loop** | the reflection-cadence pass: pick an underperforming, well-sampled skill → LLM-draft a sharper procedure → file a governed supersession **persona proposal** (`provenance: agent`, `refined_from`/`version`, a reason) that the existing Agents UI approves/edits/rejects. Opt-in config; best-effort. Tests with a scripted LLM (underperformer → proposal; healthy skill → none; explicit off → none). |
 | **WH.4** | **Finalize** | full suite + clippy + `cargo deny` green; affordance/docs (the refinement loop in the example config + a note in the Agents proposal docs); status flip; record. |
