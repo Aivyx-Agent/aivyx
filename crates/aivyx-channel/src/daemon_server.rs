@@ -2378,6 +2378,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 cooccurrence_ledger.as_ref(),
                                 wiki_store.as_ref(),
                                 graph_store.as_ref(),
+                                skill_effectiveness_ledger.as_ref(),
                                 correction_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
                                 recall_cluster_stat.as_ref(),
@@ -3148,6 +3149,9 @@ async fn handle_query(
     >,
     wiki_store: Option<&Arc<crate::knowledge_wiki::PersistentWikiStore>>,
     graph_store: Option<&Arc<crate::knowledge_graph::PersistentGraphStore>>,
+    skill_effectiveness_ledger: Option<
+        &Arc<crate::skill_effectiveness::SkillEffectivenessLedger>,
+    >,
     correction_ledger: Option<
         &Arc<crate::correction_ledger::PersistentCorrectionLedger>,
     >,
@@ -3992,6 +3996,48 @@ async fn handle_query(
                     message: e.to_string(),
                 },
             }
+        }
+        QueryPayload::GetSkills => {
+            // Chapter Repertoire — the effective persona's learned skills
+            // joined with their WH.2 effectiveness, plus the count of
+            // pending skill proposals (governed in the Agents screen).
+            let raws: Vec<String> = match shared_persona.read() {
+                Ok(p) => p.learned_skills.clone(),
+                Err(_) => Vec::new(),
+            };
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut skills = Vec::new();
+            for raw in &raws {
+                let Some(skill) = crate::persona::LearnedSkill::from_json_value(raw)
+                else {
+                    continue;
+                };
+                let (ewma_score, samples) = match skill_effectiveness_ledger {
+                    Some(ledger) => match ledger.skill_score(&skill.name, now_secs).await {
+                        Ok(Some(e)) => (e.ewma_score, e.samples),
+                        _ => (0.0, 0),
+                    },
+                    None => (0.0, 0),
+                };
+                skills.push(aivyx_ipc::protocol::SkillView { skill, ewma_score, samples });
+            }
+            // Pending LearnedSkill-category proposals (Whetstone refinements
+            // + Praxis authored skills) → the "review in Agents" pointer.
+            let pending_proposals = persona_proposal_log
+                .map(|log| {
+                    log.list(crate::persona_proposal::ProposalStatusFilter::Pending)
+                        .into_iter()
+                        .filter(|p| {
+                            p.proposed_op.category
+                                == crate::persona::PersonaDeltaCategory::LearnedSkill
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            QueryResponsePayload::GetSkills { skills, pending_proposals }
         }
         QueryPayload::GetMemoryTopicEntries { topic, limit } => {
             let Some(mem) = memory else {

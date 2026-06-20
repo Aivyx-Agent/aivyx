@@ -250,6 +250,11 @@ pub enum QueryPayload {
     GetKnowledgeGraph {
         limit: u32,
     },
+    /// Chapter Repertoire — the Studio Skills library: every `LearnedSkill`
+    /// in the effective persona, joined with its WH.2 effectiveness
+    /// (decayed EWMA + samples), plus the count of pending skill proposals.
+    /// Read-only. Responds with [`QueryResponsePayload::GetSkills`].
+    GetSkills,
     /// Phase 78 — read-only learning-observability query.
     /// `window_secs = None` → the handler's default lookback.
     /// `#[serde(default)]` so older clients/frames decode.
@@ -508,6 +513,23 @@ pub enum QueryPayload {
     },
 }
 
+/// Chapter Repertoire — one row in the Studio Skills library: a
+/// `LearnedSkill` joined with its WH.2 effectiveness. `ewma_score`/
+/// `samples` are `0` for a skill the effectiveness ledger hasn't seen yet
+/// ("not yet measured"). Wasm-clean (the Studio renders it directly).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkillView {
+    /// The skill itself (name, trigger, procedure, version, provenance,
+    /// refined_from, domain).
+    pub skill: crate::persona::LearnedSkill,
+    /// Decayed effectiveness EWMA (WH.2 ledger), decayed to "now". `0.0`
+    /// when unmeasured.
+    pub ewma_score: f32,
+    /// Folded windows behind `ewma_score` — a confidence proxy. `0` when
+    /// unmeasured.
+    pub samples: u32,
+}
+
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
 /// [`DaemonMessage::QueryResponse`] with the same correlation `id`
 /// the query was sent with.
@@ -638,6 +660,13 @@ pub enum QueryResponsePayload {
     GetKnowledgeGraph {
         entities: Vec<crate::graph::GraphEntity>,
         edges: Vec<crate::graph::GraphTriple>,
+    },
+    /// Chapter Repertoire — response to [`QueryPayload::GetSkills`]: the
+    /// skill inventory (each `LearnedSkill` + its effectiveness) and the
+    /// count of pending skill proposals (governed in the Agents screen).
+    GetSkills {
+        skills: Vec<SkillView>,
+        pending_proposals: usize,
     },
     /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
     /// Newest-first paginated entries for one topic.
@@ -3070,6 +3099,40 @@ mod tests {
         let frame = encode_frame(&resp).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resp, "entities + directed typed edges survive the frame");
+    }
+
+    #[test]
+    fn get_skills_query_and_response_round_trip() {
+        let req = FrontendMessage::Query {
+            id: "sk".into(),
+            payload: QueryPayload::GetSkills,
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        let resp = QueryResponsePayload::GetSkills {
+            skills: vec![SkillView {
+                skill: crate::persona::LearnedSkill {
+                    name: "deploy".into(),
+                    trigger: "when shipping".into(),
+                    procedure: "run ci then ship".into(),
+                    version: 2,
+                    provenance: crate::persona::SkillProvenance {
+                        author: crate::persona::SkillAuthor::Agent,
+                        reason: Some("authored from knowledge".into()),
+                    },
+                    refined_from: Some("deploy".into()),
+                    domain: Some("deploy".into()),
+                },
+                ewma_score: 1.5,
+                samples: 4,
+            }],
+            pending_proposals: 2,
+        };
+        let frame = encode_frame(&resp).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resp, "skill view + effectiveness survive the frame");
     }
 
     #[test]

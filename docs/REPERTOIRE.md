@@ -1,6 +1,13 @@
 # The Skills Library — a Studio screen (Chapter Repertoire)
 
-> **Status:** 🧭 **design contract — RP.0.** The locked reference for the
+> **Status:** 📚 **RP.1 — the `GetSkills` IPC + daemon arm shipped.** A wasm-
+> clean `SkillView { skill, ewma_score, samples }` + `QueryPayload::GetSkills` →
+> `QueryResponsePayload::GetSkills { skills, pending_proposals }` in `aivyx-ipc`
+> (roundtrip-tested), and the `handle_query` arm that joins the effective
+> persona's `learned_skills` with the WH.2 effectiveness ledger (`skill_score`
+> per name; absent → unmeasured) and counts Pending `LearnedSkill` proposals.
+> `handle_query` gained the effectiveness-ledger handle. The Studio screen is
+> RP.2. The locked reference for the
 > Studio's **Skills library**: the screen where the operator sees the
 > agent's whole **repertoire** of skills — operator-taught, agent-authored
 > ([[PRAXIS]]), and agent-refined ([[WHETSTONE]]) — each with its
@@ -109,7 +116,7 @@ base; surfacing skill *invocation history* (a possible later enrichment).
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **RP.0** | **This design contract** | locked reference; banner flips per phase |
-| **RP.1** | **`GetSkills` IPC + daemon arm** | `SkillView` in `aivyx-ipc` + `QueryPayload::GetSkills` / `QueryResponsePayload::GetSkills { skills, pending_proposals }` (+ roundtrip test); thread the `SkillEffectivenessLedger` handle into `handle_query` + the arm (effective persona `learned_skills` decoded ⋈ `skill_score`; count Pending LearnedSkill proposals). Daemon/IPC tests. |
+| **RP.1** ✅ | **`GetSkills` IPC + daemon arm** | DONE. `SkillView { skill: LearnedSkill, ewma_score, samples }` in `aivyx-ipc::protocol` + `QueryPayload::GetSkills` / `QueryResponsePayload::GetSkills { skills, pending_proposals }` (roundtrip test). `handle_query` gained a `skill_effectiveness_ledger` param (threaded at the call site like wiki/graph); the `GetSkills` arm reads `shared_persona.read().learned_skills` (decoded), joins each with `ledger.skill_score(name, now)` (absent → `0/0`), and counts Pending `LearnedSkill`-category proposals via `proposal_log.list(Pending)`. ipc 61 / channel 1008 + clippy green. |
 | **RP.2** | **The Studio Skills screen** | `View::Skills` + nav entry + `SkillsPanel` (cards: name, provenance/domain/version/lineage badges, trigger, effectiveness bar + samples, collapsible procedure, the "N pending — review in Agents" pointer) + the `get_skills()` ws call; Stitch CSS; rebuild the WASM bundle + commit `dist/`. |
 | **RP.3** | **Finalize** | full suite + clippy + `cargo deny` green; README (Studio screen count Twelve→Thirteen) + CHANGELOG + FRONTEND screen row; status flip; record. |
 
