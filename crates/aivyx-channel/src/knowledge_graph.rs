@@ -25,7 +25,9 @@
 
 use aivyx_storage::DomainHandle;
 
-pub use aivyx_ipc::graph::{canonical_label, GraphEntity, GraphPath, GraphTriple};
+pub use aivyx_ipc::graph::{
+    canonical_label, canonical_predicate, GraphEntity, GraphPath, GraphTriple,
+};
 
 /// Prefix byte that marks a non-triple (metadata) row. A canonical triple
 /// key starts with the subject's first byte, which is never `\x00`.
@@ -268,7 +270,9 @@ pub fn traverse(
         return Vec::new();
     }
     let start = canonical_label(start);
-    let pred = predicate.map(canonical_label).filter(|p| !p.is_empty());
+    // Chapter Lexicon — fold the filter predicate into the controlled
+    // vocabulary too, so filtering by "requires" matches "depends-on" edges.
+    let pred = predicate.map(canonical_predicate).filter(|p| !p.is_empty());
 
     // Adjacency: entity → Vec<(predicate, neighbor)>, honoring direction +
     // the optional predicate filter.
@@ -412,9 +416,12 @@ impl GraphExtractor {
         "You extract a knowledge graph from an AI assistant's memory notes \
          about one topic. Output ONLY a JSON array of directed relation \
          triples, each `{\"subject\":\"...\",\"predicate\":\"...\",\"object\":\"...\"}`. \
-         The predicate is a short directed relation label (e.g. \
-         \"depends-on\", \"caused\", \"owns\", \"part-of\"); direction \
-         matters (subject → object). Extract ONLY relations the notes \
+         The predicate is a short directed relation label; direction \
+         matters (subject → object). PREFER these canonical relation \
+         types when one fits: depends-on, uses, causes, part-of, contains, \
+         related-to, located-in, created-by, produces, instance-of, \
+         replaces, owns, precedes, follows. If none fits, use a short \
+         relation label of your own. Extract ONLY relations the notes \
          actually state — do not invent, infer beyond the text, or add \
          commentary. Use concise noun-phrase entities. If the notes state \
          no clear relations, output `[]`. No prose, no markdown fences."
@@ -481,7 +488,10 @@ impl GraphExtractor {
         let mut counts: HashMap<(String, String, String), u32> = HashMap::new();
         for rt in Self::parse_triples(&text) {
             let s = canonical_label(&rt.subject);
-            let p = canonical_label(&rt.predicate);
+            // Chapter Lexicon — fold the predicate into the controlled
+            // vocabulary so synonyms (depends on / requires / needs) store
+            // as one canonical relation type; unknowns keep their label.
+            let p = canonical_predicate(&rt.predicate);
             let o = canonical_label(&rt.object);
             // Reject empties and self-loops (an entity related to itself
             // by the same name is noise).
@@ -979,6 +989,39 @@ mod tests {
         assert!(g.all_triples().await.unwrap().is_empty(), "first tick skipped");
         shutdown.cancel();
         handle.await.unwrap();
+    }
+
+    // ---- LX.1 — lexicon folding at extraction + query ----------------
+
+    #[tokio::test]
+    async fn extraction_folds_predicate_synonyms_to_canonical() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "the deploy requires ci").await.unwrap();
+        let g = Arc::new(store().await);
+        // The LLM emits a synonym ("requires"); it must store as "depends-on".
+        let x = extractor(
+            Arc::clone(&mem),
+            Arc::clone(&g),
+            r#"[{"subject":"deploy","predicate":"requires","object":"ci"}]"#,
+            false,
+        );
+        assert!(matches!(x.regenerate("deploy", 1).await, GraphRegenOutcome::Wrote(1)));
+        assert!(g.get_triple("deploy", "depends-on", "ci").await.unwrap().is_some());
+        // The raw synonym is NOT stored as its own edge.
+        assert!(g.get_triple("deploy", "requires", "ci").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn query_predicate_filter_matches_via_lexicon() {
+        let g = store().await;
+        g.put_triple(&triple("deploy", "depends-on", "ci")).await.unwrap();
+        // Filtering by a synonym of the stored canonical type still matches.
+        let r = g
+            .query("deploy", GraphDirection::Out, Some("needs"), 2, 50)
+            .await
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].entity, "ci");
     }
 
     #[tokio::test]

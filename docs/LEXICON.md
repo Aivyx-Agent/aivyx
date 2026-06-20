@@ -1,6 +1,12 @@
 # Constrained Relation Vocabulary — a controlled lexicon (Chapter Lexicon)
 
-> **Status:** 🧭 **design contract — LX.0.** The locked reference for the
+> **Status:** 📕 **LX.1 — lexicon core + apply shipped.** Added
+> `RELATION_LEXICON` (14 curated canonical relation types + synonym table) +
+> the pure `canonical_predicate` (clean → map → open-world fallback) in
+> `aivyx-ipc::graph`. Applied at extraction (the `GraphExtractor` folds parsed
+> predicates; the prompt lists the vocabulary) and at `graph.query` (the
+> predicate filter is canonicalized, so `requires` matches `depends-on` edges).
+> Re-normalizing existing triples is LX.2. The locked reference for the
 > chapter that gives [[LATTICE]]'s typed knowledge graph a **controlled
 > relation vocabulary**: a curated set of canonical relation types
 > (`depends-on`, `causes`, `part-of`, …) that synonymous free-text
@@ -125,7 +131,7 @@ labels — a deferred polish; any change to entities (this chapter is about
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **LX.0** | **This design contract** | locked reference; banner flips per phase |
-| **LX.1** | **Lexicon core + apply** | the curated `RELATION_LEXICON` const table + `canonical_predicate(s)` in `aivyx-ipc::graph` (pure, fallback-preserving) + a reverse-lookup; apply it in `GraphExtractor` (map parsed predicates before store) + list the vocabulary in the extraction prompt; canonicalize `graph.query`'s predicate filter. Tests (synonym folding, fallback, determinism; extractor maps; query filter matches a synonym). |
+| **LX.1** ✅ | **Lexicon core + apply** | DONE. `RELATION_LEXICON` const (14 canonical types — depends-on, uses, causes, part-of, contains, related-to, located-in, created-by, produces, instance-of, replaces, owns, precedes, follows — each with same-direction synonyms) + pure `canonical_predicate` (clean via `canonical_label` → synonym lookup → open-world fallback) in `aivyx-ipc::graph`. `GraphExtractor` folds parsed predicates through it before store + the system prompt lists the canonical vocabulary as a preference; `graph.query`'s `traverse` canonicalizes its predicate filter (so `needs` matches `depends-on`). 6 tests (synonym fold + fallback + key-idempotence; extraction stores canonical not the synonym; query filter matches via lexicon). |
 | **LX.2** | **Re-normalize existing (merge)** | a `normalize_predicates()` pass on `PersistentGraphStore` that re-maps stored predicates and **merges** synonym collisions (sum `mentions`, union `source_seqs`, delete the old key); idempotent; run best-effort on the graph sweep cadence. Tests (two synonym edges merge into one; canonical triple is a no-op). |
 | **LX.3** | **Finalize** | full suite + clippy + `cargo deny` green; docs (README/CHANGELOG/example note the lexicon); status flip; record. |
 

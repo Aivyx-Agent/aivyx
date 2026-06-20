@@ -27,6 +27,51 @@ pub fn canonical_label(s: &str) -> String {
     lowered.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Chapter Lexicon — the curated controlled vocabulary of relation types.
+/// Each entry is `(canonical_key, &[synonym_phrases])`; the synonyms are
+/// already in [`canonical_label`] form (lowercase, single-spaced) so they
+/// compare directly against a cleaned predicate. Same-direction phrasings
+/// only — inverse phrasings (`owned by`, `caused by`) are deliberately
+/// absent (folding them would flip subject↔object); they fall through to
+/// the open-world fallback. Kept deliberately small: a big lexicon is just
+/// open-world with extra steps.
+pub const RELATION_LEXICON: &[(&str, &[&str])] = &[
+    ("depends-on", &["depends on", "depend on", "requires", "require", "needs", "need", "relies on", "rely on", "dependent on"]),
+    ("uses", &["use", "utilizes", "utilize", "leverages", "leverage"]),
+    ("causes", &["cause", "caused", "leads to", "lead to", "led to", "results in", "result in", "resulted in", "triggers", "trigger", "triggered"]),
+    ("part-of", &["part of", "belongs to", "belong to", "contained in", "component of", "member of", "subset of"]),
+    ("contains", &["contain", "includes", "include", "comprises", "comprise", "has part"]),
+    ("related-to", &["related to", "relates to", "relate to", "associated with", "associates with", "linked to", "links to", "connected to", "connects to"]),
+    ("located-in", &["located in", "resides in", "reside in", "hosted in", "runs in", "run in", "lives in", "live in"]),
+    ("created-by", &["created by", "authored by", "made by", "built by", "written by", "developed by"]),
+    ("produces", &["produce", "produced", "generates", "generate", "outputs", "output", "emits", "emit"]),
+    ("instance-of", &["instance of", "is a", "is an", "type of", "a type of", "kind of", "a kind of", "an example of", "example of"]),
+    ("replaces", &["replace", "replaced", "supersedes", "supersede", "deprecates", "deprecate", "succeeds", "succeed"]),
+    ("owns", &["own", "owner of", "maintains", "maintain", "responsible for", "manages", "manage"]),
+    ("precedes", &["precede", "comes before", "before", "preceded"]),
+    ("follows", &["follow", "comes after", "after", "followed"]),
+];
+
+/// Chapter Lexicon — fold a free-text predicate into the controlled
+/// vocabulary: clean it ([`canonical_label`]), map it through
+/// [`RELATION_LEXICON`] to its canonical relation type, and — when no
+/// synonym matches — keep the cleaned label (open-world fallback, so a
+/// genuinely-new relation is never discarded). The single source of truth
+/// the extractor, `graph.query`'s filter, and the re-normalization sweep
+/// all call. Pure + deterministic.
+pub fn canonical_predicate(s: &str) -> String {
+    let cleaned = canonical_label(s);
+    if cleaned.is_empty() {
+        return cleaned;
+    }
+    for (canonical, synonyms) in RELATION_LEXICON {
+        if cleaned == *canonical || synonyms.contains(&cleaned.as_str()) {
+            return (*canonical).to_string();
+        }
+    }
+    cleaned
+}
+
 /// One directed, typed relation: `subject —[predicate]→ object`.
 ///
 /// `subject` / `object` are canonical entity strings; `predicate` is a
@@ -129,6 +174,31 @@ mod tests {
         let back: GraphTriple = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(t, back);
         assert_eq!(back.storage_key(), GraphTriple::key("deploy", "depends-on", "ci"));
+    }
+
+    #[test]
+    fn canonical_predicate_folds_synonyms_and_keeps_unknowns() {
+        // Synonyms fold to the canonical type, regardless of casing/spacing.
+        assert_eq!(canonical_predicate("depends on"), "depends-on");
+        assert_eq!(canonical_predicate("Requires"), "depends-on");
+        assert_eq!(canonical_predicate("  NEEDS "), "depends-on");
+        assert_eq!(canonical_predicate("led to"), "causes");
+        assert_eq!(canonical_predicate("part of"), "part-of");
+        // The canonical key maps to itself.
+        assert_eq!(canonical_predicate("depends-on"), "depends-on");
+        // Unknown relation → open-world fallback (cleaned, not dropped).
+        assert_eq!(canonical_predicate("Rivals"), "rivals");
+        assert_eq!(canonical_predicate("  smells  like "), "smells like");
+        assert_eq!(canonical_predicate("   "), "");
+    }
+
+    #[test]
+    fn lexicon_canonical_keys_are_stable_under_their_own_mapping() {
+        // Every canonical key is idempotent (maps to itself) — a guard that
+        // no key is itself a synonym of another type.
+        for (canonical, _) in RELATION_LEXICON {
+            assert_eq!(canonical_predicate(canonical), *canonical, "key {canonical}");
+        }
     }
 
     #[test]
