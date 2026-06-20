@@ -1177,6 +1177,35 @@ parent_role = "researcher"
 #   recall_wiki_weight = 1.0    # 0 = off (default)
 #
 # ----------------------------------------------------------------
+# Typed knowledge graph (Chapter Lattice) — [graph] + recall_graph_typed_weight
+# ----------------------------------------------------------------
+#
+# The agent can extract a real DIRECTED, TYPED graph from its
+# memory: nodes are entities, edges are directed
+# (subject)-[predicate]->(object) relations ("deploy depends-on
+# ci"). It answers relational questions a topic graph can't —
+# "what depends on X?", "what did Y cause?" — via the graph.query
+# tool, is browsable in the Studio "Graph" screen, and can steer
+# recall along meaningful relations. OFF by default (LLM
+# extraction has a cost you opt into).
+#
+# Arm extraction with a [graph] section:
+#
+#   [graph]
+#   enabled = true                # default false (no extraction)
+#   max_topics_per_sweep = 20     # cap LLM calls per sweep
+#   interval_secs = 3600          # how often to re-extract stale topics
+#
+# Like [wiki], extraction is incremental (only changed topics are
+# re-extracted) and the graph.query tool / Studio view work
+# regardless (empty until a sweep runs). Optionally let typed
+# relations steer recall:
+#
+#   [embedding]
+#   recall_hybrid           = true
+#   recall_graph_typed_weight = 1.0   # 0 = off (default)
+#
+# ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own
 # ----------------------------------------------------------------
 #

@@ -11,6 +11,17 @@ enable it.
 
 ### Added
 
+- **Typed knowledge graph (Chapter Lattice).** A real, **directed, typed**
+  graph the agent extracts from memory: nodes are entities, edges are directed
+  `(subject)-[predicate]->(object)` relations (`deploy` —*depends-on*→ `ci`),
+  stored in a new encrypted `KnowledgeGraph` domain. The agent can **query** it
+  with a new **`graph.query`** tool (a multi-hop typed traversal — "what depends
+  on X?", "what did Y cause?"; gated by a new `graph.read` *infrastructure*
+  capability base, no P10 amendment); a new **Studio "Graph" screen** browses
+  the directed graph; and `recall_graph_typed_weight > 0` lets the typed
+  relations steer recall along *meaningful* edges (vs. mere co-occurrence).
+  Opt-in via `[graph].enabled` (a periodic extraction sweep); always derived
+  from memory; zero new dependencies.
 - **Knowledge-wiki layer (Chapter Codex).** A derived, browsable layer over
   memory: the agent consolidates each topic's entries into a **`WikiPage`** —
   an LLM-written summary plus co-occurrence **backlinks** — persisted in a new
