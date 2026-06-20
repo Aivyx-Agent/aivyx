@@ -105,10 +105,14 @@ the `View::Skills` Studio screen (nav + panel + cards + badges +
 effectiveness + expandable body + the Agents pointer); the bundle rebuild
 + `dist/` commit.
 
-**Out:** approve / edit / reject **in** the Skills screen (it points to
-Agents — that governance already exists); editing or deleting a skill from
-the screen (a future write-screen step); any new agent tool / capability
-base; surfacing skill *invocation history* (a possible later enrichment).
+**Out:** ~~approve / edit / reject **in** the Skills screen~~ *(done —
+pre-v0.4.0: the pending skill proposals render inline via the existing
+`ProposalCard`)*; ~~deleting a skill from the screen~~ *(done — pre-v0.4.0:
+a two-step **Forget** button → `ForgetSkill` IPC →
+`operator_forget_skill`)*; ~~surfacing skill *invocation history*~~ *(done —
+pre-v0.4.0: a per-skill all-time invocation count from the audit chain)*;
+in-place **editing** of a skill body (stays in chat via `skills.update`);
+any new agent tool / capability base.
 
 ## 4. Phase plan (docs-first, small phases per convention)
 
