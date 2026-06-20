@@ -1,13 +1,14 @@
 # Skills That Sharpen — the refinement loop (Chapter Whetstone)
 
-> **Status:** 🪨 **WH.2 — skill-effectiveness ledger shipped.** A durable,
-> time-decayed per-skill EWMA (`SkillEffectivenessLedger`, a skill-named wrapper
-> over the proven Phase 82 helpfulness mechanics) in a new
-> `KeyDomain::SkillHelpfulnessLedger`, with a confidence-gated `underperformers`
-> query and a `record_turn_skills` turn-boundary fold (distinct invoked skills ×
-> the turn outcome). The *measurement* WH.3's refinement loop reads. WH.1's
-> richer `LearnedSkill` (provenance/lineage) shipped. The locked reference for
-> the
+> **Status:** 🪨 **WH.3 — the refinement engine shipped.** `skill_refinement::
+> propose_skill_refinements` reads the WH.2 ledger's confidence-gated
+> `underperformers`, has a `RefinementDrafter` (production `LlmRefinementDrafter`)
+> draft a sharper procedure, and files a **governed supersession pair** —
+> `AppendList(v2, provenance: agent, refined_from, version+1)` + `RemoveList`(the
+> exact stored v1 JSON), cross-linked — into the existing persona-proposal log
+> (the Agents approve/edit/reject UI). Deterministic ids dedup re-runs; only ever
+> *proposes*. The daemon write-side fold + reflection-cadence scheduling + the
+> `[skill_refinement]` config land in **WH.3b**. The locked reference for the
 > chapter that turns Aivyx's skills from a *static list* into something
 > that **gets better through use**. Skills already exist as first-class,
 > governed parts of the agent's identity — authored by the operator
@@ -138,8 +139,9 @@ proposals).
 | **WH.0** | **This design contract** | locked reference; banner flips per phase |
 | **WH.1** ✅ | **Richer skill model** | DONE. `LearnedSkill` gains `version: u32` (`#[serde(default = "1")]`), `provenance: SkillProvenance { author: SkillAuthor (Operator/Agent), reason: Option<String> }`, `refined_from: Option<String>`, `domain: Option<String>` in `aivyx-ipc::persona`, all `#[serde(default)]` + a manual `Default` (so a `..Default::default()` spread = v1/operator). Pre-Whetstone entries decode unchanged; the `skills.update` builder preserves lineage via `..existing.clone()`; the seven construction sites updated; the prompt render + `skills.invoke` ignore the new fields. **Inert**. Tests (fresh-skill defaults; a pre-Whetstone JSON decodes v1/operator; a refined v2 round-trips its lineage + provenance). |
 | **WH.2** ✅ | **Skill-effectiveness ledger** | DONE. `KeyDomain::SkillHelpfulnessLedger` (domains 23→24) + `skill_effectiveness::SkillEffectivenessLedger` — a thin skill-named wrapper over the Phase 82 `PersistentHelpfulnessLedger` (same EWMA decay / half-life / prune), with `record_window`, `skill_score`, `ranked`, and the confidence-gated `underperformers(floor, min_samples, now)` (worst-first, `samples ≥ min`). `record_turn_skills(ledger, audit_entries, helpful, now)` folds the **distinct** `SkillInvocation` skills of a finished turn by its outcome (`±1`), failure-isolated. 3 tests (fold + decay; underperformers confidence-gate; turn-fold dedups by outcome). Storage 36 / channel 1001 + clippy green. The daemon **write-side wiring** (call it at the turn-finalize spawn) lands with WH.3, where the ledger is also read. |
-| **WH.3** | **The refinement loop** | the reflection-cadence pass: pick an underperforming, well-sampled skill → LLM-draft a sharper procedure → file a governed supersession **persona proposal** (`provenance: agent`, `refined_from`/`version`, a reason) that the existing Agents UI approves/edits/rejects. Opt-in config; best-effort. Tests with a scripted LLM (underperformer → proposal; healthy skill → none; explicit off → none). |
-| **WH.4** | **Finalize** | full suite + clippy + `cargo deny` green; affordance/docs (the refinement loop in the example config + a note in the Agents proposal docs); status flip; record. |
+| **WH.3** ✅ | **The refinement engine** | DONE. `skill_refinement.rs`: `propose_skill_refinements(ledger, learned_skills_raw, drafter, proposal_log, config, …)` reads `underperformers`, drafts a sharper procedure (`RefinementDrafter` trait + production `LlmRefinementDrafter`), and files the **linked supersession pair** — `AppendList(v2)` (`provenance: agent` + reason, `refined_from`, `version+1`) + `RemoveList(raw v1 JSON)`, cross-linked via `supersedes_proposal_id` — through `append_pending`. Takes the **raw** stored JSON so the retire matches even a pre-Whetstone entry; deterministic ids dedup re-runs; `enabled=false` default. 3 tests (underperformer → cross-linked pair w/ agent provenance + lineage + exact-v1 retire; healthy/disabled/missing → nothing; re-run dedups). Channel 1004 + clippy green. |
+| **WH.3b** | **Wire it live** | plumb `Option<Arc<SkillEffectivenessLedger>>` through `DaemonConfig`/`ConnectionContext` + construct in `aivyx.rs`; call `record_turn_skills` at the turn-finalize spawn (helpful = `TurnOutcome::Completed`); schedule `propose_skill_refinements` on the reflection cadence (alongside the consolidation passes) reading the effective persona's `learned_skills`; the `[skill_refinement]` config section. |
+| **WH.4** | **Finalize** | full suite + clippy + `cargo deny` green; affordance/docs (the refinement loop in the example config + a note in the Agents proposal docs); README domain count 23→24; status flip; record. |
 
 **Discipline:** WH.1 ships the model substrate **inert** (a backward-
 compatible format extension, no behavior). WH.2 adds the *signal*

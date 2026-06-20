@@ -46,7 +46,7 @@ use aivyx_storage::DomainHandle;
 // module's HMAC chain / store / fold code and the IPC surface are unchanged.
 pub use aivyx_ipc::persona::{
     EffectivePersona, LearnedSkill, PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
-    ProposedPersonaDelta,
+    ProposedPersonaDelta, SkillAuthor, SkillProvenance,
 };
 
 // ---------------------------------------------------------------------------
