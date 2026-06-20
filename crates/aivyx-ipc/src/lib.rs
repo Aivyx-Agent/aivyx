@@ -25,6 +25,10 @@ pub mod team_mission;
 /// Chapter Codex — knowledge-wiki page DTOs (`WikiPage` / `WikiBacklink` /
 /// `WikiPageSummary`) shared by the daemon, IPC, and the Studio Wiki view.
 pub mod wiki;
+/// Chapter Lattice — typed knowledge-graph DTOs (`GraphTriple` /
+/// `GraphEntity` / `GraphPath`) shared by the daemon, IPC, the
+/// `graph.query` tool, and the Studio graph view.
+pub mod graph;
 
 pub use backlog::{Story, StoryStatus};
 pub use insights::{

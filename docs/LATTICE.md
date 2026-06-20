@@ -1,6 +1,12 @@
 # The Typed Knowledge Graph — entities + directed relations (Chapter Lattice)
 
-> **Status:** 🧭 **design contract — LT.0.** The locked reference for the
+> **Status:** 🕸️ **LT.1 — model + storage shipped (inert).** Added the
+> wasm-clean `GraphTriple` / `GraphEntity` / `GraphPath` DTOs + a non-stemming
+> `canonical_label` (`aivyx-ipc::graph`), a new `KeyDomain::KnowledgeGraph`
+> domain (count 22→23), and `PersistentGraphStore` (`aivyx-channel`): canonical
+> directed-triple upsert/get/delete + `out_edges`/`in_edges`/`entities` adjacency
+> + a NUL-prefixed per-topic incremental fingerprint (kept out of the triple
+> scan). No extraction yet (LT.2). The locked reference for the
 > chapter that gives Aivyx a **real, directed, typed knowledge graph**:
 > nodes are **entities** (people, systems, concepts) and edges are
 > **typed, directed relations** (`deploy` —*depends-on*→ `ci`), extracted
@@ -128,7 +134,7 @@ extraction beyond memory entries; any P10 substrate-count amendment.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **LT.0** | **This design contract** | locked reference; banner flips per phase |
-| **LT.1** | **Model + storage** | wasm-clean `Entity` / `GraphTriple` DTOs (`aivyx-ipc`) + `KeyDomain::KnowledgeGraph` + a `PersistentGraphStore` (upsert/get/delete + adjacency primitives: `out_edges` / `in_edges` of an entity, predicate filter) + the `source_fingerprint`. **Inert**. Tests. |
+| **LT.1** ✅ | **Model + storage** | DONE. `aivyx-ipc::graph` — `GraphTriple` (directed, NUL-joined `key`, provenance + `mentions` weight), `GraphEntity` (name + degree + optional kind), `GraphPath`, and `canonical_label` (lowercase/trim/collapse, **no stemming** — `settings` ≠ `setting`). `KeyDomain::KnowledgeGraph` (ALL/subkeys 22→23, 2 count tests; README 23). `PersistentGraphStore` (`aivyx-channel`) — canonical triple upsert/get/delete (empty part rejected), `all_triples` (skips meta rows), `out_edges`/`in_edges` (direction-aware), `entities` (degree-ranked), + per-topic incremental fingerprint markers keyed `\x00fp\x00<topic>` (invisible to the triple scan). **Inert**. 12 tests. |
 | **LT.2** | **Extraction engine** | `GraphExtractor`: topic entries → directed `(subject, predicate, object)` triples (LLM, constrained "only what's stated", entity-kind + provenance) → store; incremental + best-effort, with a scripted-fake-LLM test. |
 | **LT.3** | **Generation trigger** | a stale-sweep on the maintenance cadence + a `[graph]` config (`enabled` default off, per-sweep cap, interval), wired via `DaemonConfig` from `aivyx.rs`. Default off ⇒ byte-identical. |
 | **LT.4** | **`graph.read` base + `graph.query` tool** | add `graph.read` to `KNOWN_BASES` + `CEILING_TRUSTED` + the taxonomy addendum + count-test + DESIGN D4 (the base lands with/before the tool); the agent-facing `graph.query` (multi-hop directed/typed traversal, predicate + direction + hop-cap, Trusted-tier). Tests (denial, traversal, cycle-safety). |
