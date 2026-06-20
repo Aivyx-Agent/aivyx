@@ -2640,6 +2640,46 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::ForgetSkill { id, name } => {
+                            // Chapter Repertoire — operator forgets a learned
+                            // skill from the Skills screen (appends a
+                            // RemoveList persona delta, operator-authoritative).
+                            let resp = match persona_log.as_deref() {
+                                None => DaemonMessage::SkillForgotten {
+                                    id,
+                                    ok: false,
+                                    removed: false,
+                                        name: name.clone(),
+                                    error: Some(
+                                        "daemon has no persona log configured".into(),
+                                    ),
+                                },
+                                Some(log) => match crate::skill_edit::operator_forget_skill(
+                                    log,
+                                    &shared_persona,
+                                    &name,
+                                )
+                                .await
+                                {
+                                    Ok(removed) => DaemonMessage::SkillForgotten {
+                                        id,
+                                        ok: true,
+                                        removed,
+                                        name: name.clone(),
+                                        error: None,
+                                    },
+                                    Err(e) => DaemonMessage::SkillForgotten {
+                                        id,
+                                        ok: false,
+                                        removed: false,
+                                        name: name.clone(),
+                                        error: Some(e),
+                                    },
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ApplyProfileHint {
                             id,
                             proposal_id,

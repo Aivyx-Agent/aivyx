@@ -16,6 +16,54 @@
 
 use crate::persona::{LearnedSkill, PersonaDeltaOp};
 
+/// Chapter Repertoire — operator-initiated skill **forget** from the Studio
+/// Skills screen. Finds the skill by name in the effective persona's
+/// `learned_skills` (removing the **exact** stored JSON so a pre-Whetstone
+/// entry is matched), appends a `RemoveList` delta to the persona chain
+/// (operator-authoritative, like the agent's `skills.forget`), and
+/// recomputes the shared snapshot. `Ok(true)` if removed, `Ok(false)` if no
+/// skill by that name exists.
+pub async fn operator_forget_skill(
+    persona_log: &crate::persona::PersistentPersonaLog,
+    shared: &crate::persona::SharedEffectivePersona,
+    name: &str,
+) -> Result<bool, String> {
+    let raws: Vec<String> = {
+        let snap = shared
+            .read()
+            .map_err(|_| "persona snapshot lock poisoned".to_string())?;
+        snap.learned_skills.clone()
+    };
+    let Some(raw) = raws.into_iter().find(|r| {
+        LearnedSkill::from_json_value(r).map(|s| s.name == name).unwrap_or(false)
+    }) else {
+        return Ok(false);
+    };
+    let op = PersonaDeltaOp::RemoveList { value: raw };
+    let proposal_id = format!("skill-forget:{}", uuid::Uuid::new_v4());
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let delta = crate::persona::PersonaDelta {
+        delta_id: crate::persona::synthesize_delta_id(
+            &proposal_id,
+            crate::persona::PersonaDeltaCategory::LearnedSkill,
+            &op,
+            0,
+        ),
+        proposed_at_unix_ms: now_ms,
+        approved_at_unix_ms: now_ms,
+        proposal_id,
+        category: crate::persona::PersonaDeltaCategory::LearnedSkill,
+        op,
+    };
+    persona_log.append(delta).await.map_err(|e| e.to_string())?;
+    let entries = persona_log.entries();
+    crate::persona::recompute_shared_from_entries(shared, &entries);
+    Ok(true)
+}
+
 /// Max characters for a skill name — long enough for a
 /// dot-namespaced kebab slug, short enough to stay an identifier.
 pub const SKILL_NAME_MAX: usize = 64;

@@ -1583,6 +1583,13 @@ pub enum FrontendMessage {
         id: String,
         topic: String,
     },
+    /// Chapter Repertoire — operator forgets a learned skill by name from
+    /// the Studio Skills screen. Appends a `RemoveList` persona delta
+    /// (operator-authoritative); responds with [`DaemonMessage::SkillForgotten`].
+    ForgetSkill {
+        id: String,
+        name: String,
+    },
     /// Phase 119 — operator's act-on-approval gesture for a
     /// Phase 118 `ProfileHint` proposal. Carries the values
     /// the CLI already wrote to `aivyx.toml` via the Task 3
@@ -1781,6 +1788,16 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         deleted: Option<u64>,
+        error: Option<String>,
+    },
+    /// Chapter Repertoire — ack for [`FrontendMessage::ForgetSkill`].
+    /// `ok = true` + `removed` whether a skill by that name existed; `name`
+    /// echoes the request so the UI can drop the row locally.
+    SkillForgotten {
+        id: String,
+        ok: bool,
+        removed: bool,
+        name: String,
         error: Option<String>,
     },
     /// Phase 119 — ack for [`FrontendMessage::ApplyProfileHint`].
@@ -2110,6 +2127,14 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         deleted: Option<u64>,
+        error: Option<String>,
+    },
+    /// Chapter Repertoire — ack for `ForgetSkill`.
+    SkillForgotten {
+        id: String,
+        ok: bool,
+        removed: bool,
+        name: String,
         error: Option<String>,
     },
     // Phase 119 — ProfileHint apply ack.

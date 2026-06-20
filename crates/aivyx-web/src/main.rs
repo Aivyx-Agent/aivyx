@@ -1190,6 +1190,13 @@ fn skills_query() -> FrontendMessage {
     }
 }
 
+fn forget_skill_query(name: &str) -> FrontendMessage {
+    FrontendMessage::ForgetSkill {
+        id: format!("mc-skill-forget-{name}"),
+        name: name.to_string(),
+    }
+}
+
 /// Effectiveness bucket label + bar fraction from the WH.2 EWMA + samples.
 /// `samples == 0` ⇒ unmeasured.
 fn skill_effectiveness(view: &SkillView) -> (&'static str, &'static str, f32) {
@@ -1276,9 +1283,12 @@ fn SkillsPanel() -> Element {
 
 #[component]
 fn SkillCard(view: SkillView) -> Element {
+    let ws = use_context::<Sender>();
+    let mut confirming = use_signal(|| false);
     let sk = &view.skill;
     let (eff_label, eff_class, eff_frac) = skill_effectiveness(&view);
     let agent = sk.provenance.author == aivyx_ipc::persona::SkillAuthor::Agent;
+    let forget_name = sk.name.clone();
     rsx! {
         div { class: "glass-card skill-card",
             div { class: "skill-card-head",
@@ -1310,6 +1320,18 @@ fn SkillCard(view: SkillView) -> Element {
             details { class: "skill-proc",
                 summary { class: "label-tech", "procedure" }
                 p { class: "mem-body", style: "white-space:pre-wrap", "{sk.procedure}" }
+            }
+            div { class: "skill-actions",
+                if confirming() {
+                    span { class: "label-tech", "Forget this skill?" }
+                    button { class: "btn-danger",
+                        onclick: move |_| { ws.send(forget_skill_query(&forget_name)); confirming.set(false); },
+                        "Confirm"
+                    }
+                    button { class: "btn-ghost", onclick: move |_| confirming.set(false), "Cancel" }
+                } else {
+                    button { class: "btn-ghost", onclick: move |_| confirming.set(true), "Forget" }
+                }
             }
         }
     }
@@ -3952,6 +3974,10 @@ async fn ws_task(
                     s.skills = sk;
                     s.pending_proposals = pending_proposals;
                     s.loaded = true;
+                }
+                DaemonEnvelope::SkillForgotten { ok, removed, name, .. } if ok && removed => {
+                    // Chapter Repertoire — drop the forgotten skill locally.
+                    skills.write().skills.retain(|s| s.skill.name != name);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetWikiPage { page },
