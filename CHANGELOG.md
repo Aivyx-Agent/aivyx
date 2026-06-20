@@ -5,9 +5,16 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
-Post-0.3.0 chapters. The recall + memory work (Loom, Codex) is **opt-in and
-byte-identical by default** — nothing changes for an existing config until you
-enable it.
+## [0.4.0] — 2026-06-20
+
+The memory + skills release. Everything below is **opt-in and byte-identical by
+default** — nothing changes for an existing config until you enable it. The
+agent's memory now compounds (graph-augmented recall + a knowledge-wiki + a
+typed knowledge graph, all behind one `[memory] profile` switch), and its
+skills now learn (they sharpen when they underperform, the agent authors new
+specialized ones from its own knowledge, and a Studio Skills screen makes the
+whole repertoire legible). Plus a pre-release cleanup sweep that cleared the
+chapter deferrals and stabilized the test suite.
 
 ### Added
 
