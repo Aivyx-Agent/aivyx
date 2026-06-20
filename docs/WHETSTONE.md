@@ -10,13 +10,14 @@
 > *proposes*. The daemon write-side fold + reflection-cadence scheduling + the
 > `[skill_refinement]` config land in **WH.3b/WH.3c**.
 >
-> **WH.3b** — the measurement is now **live**: the `[skill_refinement]` config
-> section (`aivyx-config`), and the turn loop folds each turn's
-> `SkillInvocation` outcomes into the effectiveness ledger
-> (`record_turn_skills` at the finalize spawn, `helpful = Completed`). The
-> ledger is built only when `[skill_refinement]` is present (default
-> byte-identical). The refinement **pass** scheduling is WH.3c. The locked
-> reference for the
+> **WH.3c** — the loop is now **live end-to-end**: the refinement pass runs on
+> the reflection cadence (`run_skill_refinement_pass` reads the effective
+> persona's `learned_skills` + the WH.3b ledger and files refinement proposals
+> for underperformers, via a `SkillRefinementDeps` bundle threaded through
+> `run_reflection_scheduler`, gated by `[skill_refinement].enabled`). Together
+> with WH.3 (the engine) and WH.3b (the live measurement), the full
+> measure → draft → propose loop is wired. Only finalize (WH.4) remains. The
+> locked reference for the
 > chapter that turns Aivyx's skills from a *static list* into something
 > that **gets better through use**. Skills already exist as first-class,
 > governed parts of the agent's identity — authored by the operator
@@ -149,7 +150,7 @@ proposals).
 | **WH.2** ✅ | **Skill-effectiveness ledger** | DONE. `KeyDomain::SkillHelpfulnessLedger` (domains 23→24) + `skill_effectiveness::SkillEffectivenessLedger` — a thin skill-named wrapper over the Phase 82 `PersistentHelpfulnessLedger` (same EWMA decay / half-life / prune), with `record_window`, `skill_score`, `ranked`, and the confidence-gated `underperformers(floor, min_samples, now)` (worst-first, `samples ≥ min`). `record_turn_skills(ledger, audit_entries, helpful, now)` folds the **distinct** `SkillInvocation` skills of a finished turn by its outcome (`±1`), failure-isolated. 3 tests (fold + decay; underperformers confidence-gate; turn-fold dedups by outcome). Storage 36 / channel 1001 + clippy green. The daemon **write-side wiring** (call it at the turn-finalize spawn) lands with WH.3, where the ledger is also read. |
 | **WH.3** ✅ | **The refinement engine** | DONE. `skill_refinement.rs`: `propose_skill_refinements(ledger, learned_skills_raw, drafter, proposal_log, config, …)` reads `underperformers`, drafts a sharper procedure (`RefinementDrafter` trait + production `LlmRefinementDrafter`), and files the **linked supersession pair** — `AppendList(v2)` (`provenance: agent` + reason, `refined_from`, `version+1`) + `RemoveList(raw v1 JSON)`, cross-linked via `supersedes_proposal_id` — through `append_pending`. Takes the **raw** stored JSON so the retire matches even a pre-Whetstone entry; deterministic ids dedup re-runs; `enabled=false` default. 3 tests (underperformer → cross-linked pair w/ agent provenance + lineage + exact-v1 retire; healthy/disabled/missing → nothing; re-run dedups). Channel 1004 + clippy green. |
 | **WH.3b** ✅ | **Wire the measurement live** | DONE. The `[skill_refinement]` config (`aivyx-config`: `SkillRefinementConfig` + `RawSkillRefinement` + `build_skill_refinement_config`, default `None`/byte-identical). `Option<Arc<SkillEffectivenessLedger>>` plumbed through `DaemonConfig` → `ConnectionContext`, built in `aivyx.rs` only when `[skill_refinement]` is present. `record_turn_skills` folded at the turn-finalize spawn (`helpful = TurnOutcome::Completed`), detached + failure-isolated, mirroring the tool-relevance hook. Channel 1004 / e2e 30 / cli 470 / config 350 + clippy green. |
-| **WH.3c** | **Schedule the pass** | wire `propose_skill_refinements` onto the reflection cadence (a `SkillRefinementDeps` bundle + `run_skill_refinement_pass` in `reflection_scheduler`, alongside the consolidation passes) reading the effective persona's `learned_skills` + a production `LlmRefinementDrafter`; gated by `[skill_refinement].enabled`. |
+| **WH.3c** ✅ | **Schedule the pass** | DONE. `SkillRefinementDeps` bundle + `run_skill_refinement_pass` in `reflection_scheduler` (reads the effective persona's `learned_skills` via `compute_effective_persona` + the ledger → `propose_skill_refinements`), threaded as a new `Option<SkillRefinementDeps>` through `run_reflection_scheduler`/`fire_reflection` alongside the consolidation passes. Deps assembled in `daemon_server` from `DaemonConfig` (config + ledger + proposal/persona logs + a production `LlmRefinementDrafter` built in `aivyx.rs`), armed only when `[skill_refinement].enabled`. Channel 1004 / e2e 30 / cli 470 + clippy green. |
 | **WH.4** | **Finalize** | full suite + clippy + `cargo deny` green; affordance/docs (the refinement loop in the example config + a note in the Agents proposal docs); README domain count 23→24; status flip; record. |
 
 **Discipline:** WH.1 ships the model substrate **inert** (a backward-

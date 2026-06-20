@@ -387,6 +387,26 @@ pub struct CorrectionConsolidationDeps {
     >,
 }
 
+/// Chapter Whetstone (WH.3c) — handles the skill-refinement pass needs.
+/// `None` (no `[skill_refinement]` / no effectiveness ledger) → the pass
+/// is skipped entirely (the ledger still accumulates passively; no
+/// refinements are proposed). Even `Some`, no-ops unless `config.enabled`.
+pub struct SkillRefinementDeps {
+    pub config: aivyx_config::SkillRefinementConfig,
+    pub ledger: std::sync::Arc<
+        crate::skill_effectiveness::SkillEffectivenessLedger,
+    >,
+    pub proposal_log: std::sync::Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    /// Read-only Persona chain handle — the pass walks the effective
+    /// persona's `learned_skills` (their raw JSON) to refine.
+    pub persona_log:
+        std::sync::Arc<crate::persona::PersistentPersonaLog>,
+    pub drafter:
+        std::sync::Arc<dyn crate::skill_refinement::RefinementDrafter>,
+}
+
 /// Phase 91 — handles the LLM-judged recall pass needs.
 /// Bundled like [`PersonaConsolidationDeps`]. `None` (no
 /// `[recall_judgment]` / no recall-log + judge substrate) →
@@ -734,6 +754,7 @@ pub async fn run_reflection_scheduler(
     persona_consolidation: Option<PersonaConsolidationDeps>,
     correction_consolidation: Option<CorrectionConsolidationDeps>,
     recall_judgment: Option<RecallJudgmentDeps>,
+    skill_refinement: Option<SkillRefinementDeps>,
     cadence_stats: SharedRecentReflectionStats,
     shutdown: CancellationToken,
 ) {
@@ -832,6 +853,7 @@ pub async fn run_reflection_scheduler(
                     persona_consolidation.as_ref(),
                     correction_consolidation.as_ref(),
                     recall_judgment.as_ref(),
+                    skill_refinement.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -876,6 +898,7 @@ async fn fire_reflection(
     persona_consolidation: Option<&PersonaConsolidationDeps>,
     correction_consolidation: Option<&CorrectionConsolidationDeps>,
     recall_judgment: Option<&RecallJudgmentDeps>,
+    skill_refinement: Option<&SkillRefinementDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -940,6 +963,14 @@ async fn fire_reflection(
     // getting reworked on and asks the operator about it).
     if let Some(deps) = correction_consolidation {
         run_correction_consolidation_pass(deps, sched, now_ms).await;
+    }
+
+    // Chapter Whetstone (WH.3c) — skill refinement on the same cadence.
+    // Independent; no-op when absent or disabled. Files Pending
+    // supersession proposals only — the operator approves them in the
+    // existing Agents UI.
+    if let Some(deps) = skill_refinement {
+        run_skill_refinement_pass(deps, sched, now_ms).await;
     }
 
     // Phase 91 — LLM-judged per-recall classification on the
@@ -1724,6 +1755,42 @@ async fn run_persona_lifecycle_pass(
 /// phrasing returns `None`) is recorded on the Phase 78 stat
 /// so a quiet "0 filed" cycle stays distinguishable from "LLM
 /// unavailable."
+/// Chapter Whetstone (WH.3c) — drive the skill-refinement pass: read the
+/// effective persona's `learned_skills` + the effectiveness ledger and
+/// file refinement proposals for underperformers. Propose-only.
+async fn run_skill_refinement_pass(
+    deps: &SkillRefinementDeps,
+    sched: &ReflectionScheduleConfig,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let source_label = format!("skill-refinement:{}", sched.name);
+    let entries = deps.persona_log.entries();
+    let persona = crate::persona::compute_effective_persona(&entries);
+    if persona.learned_skills.is_empty() {
+        return;
+    }
+    let stat = crate::skill_refinement::propose_skill_refinements(
+        deps.ledger.as_ref(),
+        &persona.learned_skills,
+        deps.drafter.as_ref(),
+        deps.proposal_log.as_ref(),
+        &deps.config,
+        &source_label,
+        now_ms,
+    )
+    .await;
+    if stat.filed > 0 {
+        eprintln!(
+            "aivyx skill-refinement: filed {} refinement proposal(s) \
+             ({} considered) for schedule {:?}",
+            stat.filed, stat.considered, sched.name,
+        );
+    }
+}
+
 async fn run_persona_consolidation_pass(
     deps: &PersonaConsolidationDeps,
     sched: &ReflectionScheduleConfig,

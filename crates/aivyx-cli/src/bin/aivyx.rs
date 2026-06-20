@@ -5121,6 +5121,20 @@ async fn run_async(
         )),
         _ => None,
     };
+    // Chapter Whetstone (WH.3c) — production refinement drafter, built
+    // iff `[skill_refinement]` is enabled (the daemon arms the pass only
+    // when every piece — config + ledger + drafter — is present).
+    let skill_refinement_drafter: Option<
+        Arc<dyn aivyx_channel::skill_refinement::RefinementDrafter>,
+    > = match &config_skill_refinement {
+        Some(c) if c.enabled => Some(Arc::new(
+            aivyx_channel::skill_refinement::LlmRefinementDrafter::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        )),
+        _ => None,
+    };
     // Phase 91 — `[recall_judgment]` config + stat + LLM
     // judge. Built when the section is enabled; the daemon
     // arms the pass only when every piece is present.
@@ -7093,6 +7107,10 @@ async fn run_async(
                         ),
                     )
                 }),
+            // Chapter Whetstone (WH.3c) — config + drafter for the
+            // reflection-cadence refinement pass.
+            skill_refinement_config: config_skill_refinement.clone(),
+            skill_refinement_drafter: skill_refinement_drafter.clone(),
             // Phase 173 — autonomous loop: the always-built
             // backlog, the shared run state (Some iff armed), and
             // the [loop] config.

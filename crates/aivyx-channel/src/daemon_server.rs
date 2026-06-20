@@ -435,6 +435,12 @@ pub struct DaemonConfig {
     /// refinement pass to read.
     pub skill_effectiveness_ledger:
         Option<Arc<crate::skill_effectiveness::SkillEffectivenessLedger>>,
+    /// Chapter Whetstone (WH.3c) — `[skill_refinement]` config + the
+    /// production refinement drafter. Both `Some` (with the ledger +
+    /// persona/proposal logs) arm the reflection-cadence refinement pass.
+    pub skill_refinement_config: Option<aivyx_config::SkillRefinementConfig>,
+    pub skill_refinement_drafter:
+        Option<Arc<dyn crate::skill_refinement::RefinementDrafter>>,
     /// Phase 173 — the autonomous-loop backlog (zero-config,
     /// always built when storage is configured) for the loop
     /// IPC handlers + the driver.
@@ -579,6 +585,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         conversation_windows,
         persona_consolidation_config,
         persona_consolidation_stat,
+        skill_refinement_config,
+        skill_refinement_drafter,
         persona_consolidation_phraser,
         correction_consolidation_config,
         correction_consolidation_stat,
@@ -1108,6 +1116,31 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // Chapter Whetstone (WH.3c) — skill-refinement deps: armed
+            // only when [skill_refinement] is enabled AND every piece is
+            // present (the effectiveness ledger + the proposal/persona
+            // chains + an LlmRefinementDrafter). Any missing piece → None →
+            // the pass is skipped (the ledger still accumulates passively).
+            let rs_skill_refinement = match (
+                skill_refinement_config.clone(),
+                skill_effectiveness_ledger.clone(),
+                persona_proposal_log.clone(),
+                persona_log.clone(),
+                skill_refinement_drafter.clone(),
+            ) {
+                (Some(cfg), Some(ledger), Some(plog), Some(persona), Some(drafter))
+                    if cfg.enabled =>
+                {
+                    Some(crate::reflection_scheduler::SkillRefinementDeps {
+                        config: cfg,
+                        ledger,
+                        proposal_log: plog,
+                        persona_log: persona,
+                        drafter,
+                    })
+                }
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -1126,6 +1159,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_persona_consolidation,
                     rs_correction_consolidation,
                     rs_recall_judgment,
+                    rs_skill_refinement,
                     rs_cadence_stats,
                     rs_shutdown,
                 )
@@ -2882,6 +2916,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         skill_auto_proposer: None,
         tool_relevance_ledger: None,
         skill_effectiveness_ledger: None,
+        skill_refinement_config: None,
+        skill_refinement_drafter: None,
         loop_backlog: None,
         loop_state: None,
         loop_config: None,
