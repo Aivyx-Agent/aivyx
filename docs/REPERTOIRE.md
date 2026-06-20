@@ -1,13 +1,12 @@
 # The Skills Library — a Studio screen (Chapter Repertoire)
 
-> **Status:** 📚 **RP.2 — the Studio Skills screen shipped.** A `View::Skills`
-> + nav entry + `SkillsPanel`: one card per skill (name, provenance badge
-> operator/agent, `domain` chip, version, "refined from …" lineage, trigger, an
-> effectiveness bar + bucket label off the WH.2 EWMA, and the procedure body in
-> a collapsible `<details>`), effectiveness-descending with unmeasured last, plus
-> a "N pending — review in Agents" banner that switches view. Bundle rebuilt +
-> `dist/` committed. With RP.1's data path the skills library is live. Only
-> finalize (RP.3) remains. The locked reference for the
+> **Status:** ✅ **COMPLETE (RP.0–RP.3).** The agent's skills have a home: a
+> read-only Studio **Skills** screen listing every skill (operator-taught,
+> agent-authored, agent-refined) with its WH.2 effectiveness, provenance, and
+> lineage, over a new `GetSkills` IPC — governance stays in Agents (the screen
+> points). The established read-only-screen recipe: **no new capability base,
+> tool, P10 amendment, or storage domain**; full suite + clippy + `cargo deny`
+> green. The locked reference for the
 > Studio's **Skills library**: the screen where the operator sees the
 > agent's whole **repertoire** of skills — operator-taught, agent-authored
 > ([[PRAXIS]]), and agent-refined ([[WHETSTONE]]) — each with its
@@ -118,7 +117,7 @@ base; surfacing skill *invocation history* (a possible later enrichment).
 | **RP.0** | **This design contract** | locked reference; banner flips per phase |
 | **RP.1** ✅ | **`GetSkills` IPC + daemon arm** | DONE. `SkillView { skill: LearnedSkill, ewma_score, samples }` in `aivyx-ipc::protocol` + `QueryPayload::GetSkills` / `QueryResponsePayload::GetSkills { skills, pending_proposals }` (roundtrip test). `handle_query` gained a `skill_effectiveness_ledger` param (threaded at the call site like wiki/graph); the `GetSkills` arm reads `shared_persona.read().learned_skills` (decoded), joins each with `ledger.skill_score(name, now)` (absent → `0/0`), and counts Pending `LearnedSkill`-category proposals via `proposal_log.list(Pending)`. ipc 61 / channel 1008 + clippy green. |
 | **RP.2** ✅ | **The Studio Skills screen** | DONE. `View::Skills` + nav entry + `SkillsPanel`/`SkillCard` (name, provenance badge, `domain` chip, `v{n}`, "refined from …", trigger, a `skill_effectiveness` bucket label + bar off the WH.2 EWMA, `<details>` procedure), sorted effectiveness-desc (unmeasured last), + a `skills-pending` banner that `view.set(View::Agents)` (so `view` is now a context provider) + the `get_skills()` ws call + the `GetSkills` fan-in arm + `SkillsState`. Stitch CSS for the cards. WASM bundle rebuilt (`dx bundle --release`) + `dist/` committed (the new strings are in the wasm; existing screens intact). web clippy 0. |
-| **RP.3** | **Finalize** | full suite + clippy + `cargo deny` green; README (Studio screen count Twelve→Thirteen) + CHANGELOG + FRONTEND screen row; status flip; record. |
+| **RP.3** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps. README (Repertoire in phases; Studio screen count Twelve→Thirteen + Skills in the screen lists; Rust tests), CHANGELOG entry, and a Skills row in `docs/FRONTEND.md`. Status flipped to COMPLETE; recorded. |
 
 **Discipline:** RP.1 is read-only IPC + a read arm (no behaviour change —
 the data already exists). RP.2 is the WASM screen (the only bundle

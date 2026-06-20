@@ -11,6 +11,14 @@ enable it.
 
 ### Added
 
+- **The Skills library (Chapter Repertoire).** A new Studio **Skills** screen
+  (the thirteenth) gives the agent's skills a home: every skill — operator-
+  taught, agent-authored (Praxis), agent-refined (Whetstone) — with its
+  effectiveness (the WH.2 decayed EWMA as a bar + bucket label), provenance
+  badge, `domain`, version, and lineage, and the full procedure on demand. A
+  banner links pending skill proposals to the Agents screen (where their
+  approval already lives). Read-only over a new `GetSkills` IPC; no new
+  capability base, tool, or storage domain.
 - **Skills authored from knowledge (Chapter Praxis).** The agent now writes its
   own **specialized skills** from what it has learned: on the reflection cadence
   it finds a topic with rich, connected knowledge (a substantial wiki page + a
