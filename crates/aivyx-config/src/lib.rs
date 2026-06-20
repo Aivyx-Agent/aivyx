@@ -797,6 +797,13 @@ pub struct AivyxConfig {
     /// typed-knowledge-graph extraction. `Some` only arms it; it still
     /// no-ops unless `enabled = true`.
     pub graph: Option<GraphConfig>,
+    /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
+    /// behavior; `Smart` expands the coherent memory bundle into the
+    /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
+    /// above (at load time, explicit values winning). The expansion has
+    /// already been applied by the time this `Config` is built — this
+    /// field records *which* profile was requested, for introspection.
+    pub memory_profile: MemoryProfile,
     /// Phase 87 — `[persona_consolidation]` section. `None`
     /// when absent: the Persona proposal pipeline is unchanged
     /// (pre-Phase-87 behaviour — no pattern-driven proposals).
@@ -2291,6 +2298,46 @@ pub struct GraphConfig {
 pub const DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP: usize = 20;
 /// Default graph sweep interval — hourly.
 pub const DEFAULT_GRAPH_INTERVAL_SECS: u64 = 3600;
+
+/// Chapter Synapse — the `[memory] profile` activation switch. One knob
+/// that expands into the coherent bundle of memory settings, so an
+/// operator opts into the full self-organizing memory stack
+/// (graph-augmented recall + the wiki / typed-graph layers + their
+/// extraction sweeps) **once** instead of tuning ~14 flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryProfile {
+    /// The default — today's behavior, byte-identical. Nothing expanded.
+    #[default]
+    Off,
+    /// The full coherent stack: hybrid recall + the lexical /
+    /// co-occurrence / wiki / typed-graph fusion sources at sensible
+    /// weights, plus the `[wiki]` + `[graph]` extraction sweeps (capped).
+    /// Any explicitly-set `[embedding]` / `[recall_cluster]` / `[wiki]` /
+    /// `[graph]` value still overrides this — the profile is a floor.
+    Smart,
+}
+
+impl MemoryProfile {
+    /// Parse the `[memory] profile` string. Unknown / absent → `Off`.
+    pub fn from_arg(s: Option<&str>) -> Self {
+        match s.map(|x| x.trim().to_lowercase()).as_deref() {
+            Some("smart") => MemoryProfile::Smart,
+            _ => MemoryProfile::Off,
+        }
+    }
+
+    /// Whether the smart bundle should be expanded.
+    pub fn is_smart(self) -> bool {
+        matches!(self, MemoryProfile::Smart)
+    }
+}
+
+// Chapter Synapse — the values the `smart` profile sets for the recall
+// fusion knobs (when the operator hasn't set them explicitly). Chosen
+// coherent: hybrid on, all fusion sources armed at weight 1.0, a single
+// graph hop. The extraction sweeps ([wiki]/[graph]/[recall_cluster]) are
+// synthesized as `enabled` with their own existing default caps.
+const SMART_RECALL_GRAPH_HOPS: u32 = 1;
 
 /// Phase 87 — `[persona_consolidation]` runtime config.
 ///
@@ -3916,6 +3963,10 @@ struct RawMemory {
     /// identical to pre-Phase-89.
     #[serde(default)]
     canonicalize_topics: Option<bool>,
+    /// Chapter Synapse — `[memory] profile` activation switch
+    /// (`off` default / `smart`). Absent → `Off`.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -5198,17 +5249,45 @@ impl AivyxConfig {
         // (semantic search disabled). When present, the env
         // var beats the TOML key; a still-`None` key is filled
         // from the encrypted store in phase 2 of the load.
-        let embedding = build_embedding_config(&toml.embedding)?;
+        // Chapter Synapse — the `[memory] profile` activation switch.
+        // Expand `smart` into the memory bundle: armed recall-fusion knobs
+        // (in `build_embedding_config`) + synthesized `enabled` sweeps
+        // below. Explicit `[embedding]`/`[recall_cluster]`/`[wiki]`/`[graph]`
+        // values always win — the profile only fills what's unset/absent.
+        let memory_profile = MemoryProfile::from_arg(toml.memory.profile.as_deref());
+        let smart = memory_profile.is_smart();
+
+        let embedding = build_embedding_config(&toml.embedding, smart)?;
         let proactive = build_proactive_config(&toml.proactive)?;
         let persona_lifecycle = build_persona_lifecycle_config(
             &toml.persona_lifecycle,
         )?;
         let persona_seed = build_persona_seed(&toml.persona_seed);
-        let recall_cluster = build_recall_cluster_config(
-            &toml.recall_cluster,
-        )?;
-        let wiki = build_wiki_config(&toml.wiki)?;
-        let graph = build_graph_config(&toml.graph)?;
+        // For the section-level layers, an explicitly-present section
+        // (`Some`) is the operator's choice and wins; only when absent
+        // does `smart` synthesize an `enabled` config with default caps.
+        let recall_cluster = build_recall_cluster_config(&toml.recall_cluster)?
+            .or_else(|| {
+                smart.then_some(RecallClusterConfig {
+                    enabled: true,
+                    max_siblings: DEFAULT_RC_MAX_SIBLINGS,
+                    min_affinity: DEFAULT_RC_MIN_AFFINITY,
+                })
+            });
+        let wiki = build_wiki_config(&toml.wiki)?.or_else(|| {
+            smart.then_some(WikiConfig {
+                enabled: true,
+                max_pages_per_sweep: DEFAULT_WIKI_MAX_PAGES_PER_SWEEP,
+                interval_secs: DEFAULT_WIKI_INTERVAL_SECS,
+            })
+        });
+        let graph = build_graph_config(&toml.graph)?.or_else(|| {
+            smart.then_some(GraphConfig {
+                enabled: true,
+                max_topics_per_sweep: DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP,
+                interval_secs: DEFAULT_GRAPH_INTERVAL_SECS,
+            })
+        });
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -6296,6 +6375,7 @@ impl AivyxConfig {
             recall_cluster,
             wiki,
             graph,
+            memory_profile,
             persona_consolidation,
             correction_consolidation,
             loop_config,
@@ -7179,6 +7259,7 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
 /// encrypted store in phase 2 ([`AivyxConfig::hydrate_secrets_from_store`]).
 fn build_embedding_config(
     raw: &RawEmbedding,
+    smart: bool,
 ) -> Result<Option<EmbeddingConfig>, ConfigError> {
     let any_set = raw.base_url.is_some()
         || raw.model.is_some()
@@ -7292,8 +7373,8 @@ fn build_embedding_config(
         raw.recall_token_budget.unwrap_or(0);
 
     // Phase 98 — hybrid recall fusion opt-in. Boolean;
-    // no bounds; default false.
-    let recall_hybrid = raw.recall_hybrid.unwrap_or(false);
+    // no bounds; default false. Chapter Synapse — `smart` arms it.
+    let recall_hybrid = raw.recall_hybrid.unwrap_or(smart);
 
     // Chapter Loom (LM.4) — recall-fusion tuning. Defaults preserve the
     // pre-Loom hybrid (graph off; lexical weight 1.0). Weights clamp at
@@ -7303,8 +7384,11 @@ fn build_embedding_config(
         .recall_lexical_weight
         .unwrap_or(DEFAULT_RECALL_LEXICAL_WEIGHT)
         .max(0.0);
-    let recall_graph_hops =
-        raw.recall_graph_hops.unwrap_or(DEFAULT_RECALL_GRAPH_HOPS);
+    let recall_graph_hops = raw.recall_graph_hops.unwrap_or(if smart {
+        SMART_RECALL_GRAPH_HOPS
+    } else {
+        DEFAULT_RECALL_GRAPH_HOPS
+    });
     let recall_graph_decay = raw
         .recall_graph_decay
         .unwrap_or(DEFAULT_RECALL_GRAPH_DECAY)
@@ -7313,13 +7397,15 @@ fn build_embedding_config(
         .recall_graph_weight
         .unwrap_or(DEFAULT_RECALL_GRAPH_WEIGHT)
         .max(0.0);
+    // Chapter Synapse — `smart` arms the wiki + typed-graph recall sources
+    // (weight 1.0). Off they default to 0.0 (the source is silent).
     let recall_wiki_weight = raw
         .recall_wiki_weight
-        .unwrap_or(DEFAULT_RECALL_WIKI_WEIGHT)
+        .unwrap_or(if smart { 1.0 } else { DEFAULT_RECALL_WIKI_WEIGHT })
         .max(0.0);
     let recall_graph_typed_weight = raw
         .recall_graph_typed_weight
-        .unwrap_or(DEFAULT_RECALL_GRAPH_TYPED_WEIGHT)
+        .unwrap_or(if smart { 1.0 } else { DEFAULT_RECALL_GRAPH_TYPED_WEIGHT })
         .max(0.0);
 
     // env > TOML; encrypted-store fall-through happens in phase 2.

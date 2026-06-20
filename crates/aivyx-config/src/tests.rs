@@ -7169,6 +7169,61 @@ fn wiki_section_parses_defaults_and_overrides() {
 }
 
 #[test]
+fn memory_profile_off_is_byte_identical() {
+    let _env = EnvScope::new();
+    // No [memory] + a present [embedding] → profile Off, nothing armed.
+    let cfg = load_with_toml("\n[embedding]\nmodel = \"m\"\n", "mp-off");
+    assert_eq!(cfg.memory_profile, crate::MemoryProfile::Off);
+    let e = cfg.embedding.expect("embedding present");
+    assert!(!e.recall_hybrid);
+    assert_eq!(e.recall_graph_hops, 0);
+    assert_eq!(e.recall_wiki_weight, 0.0);
+    assert_eq!(e.recall_graph_typed_weight, 0.0);
+    assert!(cfg.wiki.is_none());
+    assert!(cfg.graph.is_none());
+    assert!(cfg.recall_cluster.is_none());
+}
+
+#[test]
+fn memory_profile_smart_arms_the_bundle() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\nprofile = \"smart\"\n[embedding]\nmodel = \"m\"\n",
+        "mp-smart",
+    );
+    assert_eq!(cfg.memory_profile, crate::MemoryProfile::Smart);
+    let e = cfg.embedding.expect("embedding present");
+    assert!(e.recall_hybrid, "smart arms hybrid");
+    assert_eq!(e.recall_graph_hops, 1, "smart arms the co-occurrence walk");
+    assert_eq!(e.recall_wiki_weight, 1.0, "smart arms the wiki source");
+    assert_eq!(e.recall_graph_typed_weight, 1.0, "smart arms the typed-graph source");
+    // The extraction sweeps + cluster expansion are synthesized enabled.
+    assert!(cfg.wiki.unwrap().enabled);
+    assert!(cfg.graph.unwrap().enabled);
+    assert!(cfg.recall_cluster.unwrap().enabled);
+}
+
+#[test]
+fn memory_profile_smart_explicit_knobs_win() {
+    let _env = EnvScope::new();
+    // smart, but the operator explicitly disables hybrid + the wiki sweep.
+    let cfg = load_with_toml(
+        "\n[memory]\nprofile = \"smart\"\n\
+         [embedding]\nmodel = \"m\"\nrecall_hybrid = false\n\
+         [wiki]\nenabled = false\n",
+        "mp-override",
+    );
+    let e = cfg.embedding.unwrap();
+    assert!(!e.recall_hybrid, "explicit recall_hybrid=false beats smart");
+    // ...but the unset weights still get the smart defaults.
+    assert_eq!(e.recall_wiki_weight, 1.0);
+    // The explicitly-present [wiki] section wins (stays disabled).
+    assert!(!cfg.wiki.unwrap().enabled, "explicit [wiki] enabled=false beats smart");
+    // The unset [graph] section is still synthesized enabled.
+    assert!(cfg.graph.unwrap().enabled);
+}
+
+#[test]
 fn graph_section_parses_and_validates() {
     let _env = EnvScope::new();
     assert!(load_with_toml("\n", "graph-absent").graph.is_none());

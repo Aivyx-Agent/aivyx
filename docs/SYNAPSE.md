@@ -1,6 +1,12 @@
 # Activating the Memory Stack — one switch, proven live (Chapter Synapse)
 
-> **Status:** 🧭 **design contract — SY.0.** The locked reference for the
+> **Status:** ⚡ **SY.1 — the `[memory] profile` switch shipped.** One config
+> knob: `off` (default, byte-identical) / `smart`. `smart` expands at config-
+> load into the coherent bundle — `recall_hybrid` on, the wiki + typed-graph +
+> co-occurrence recall sources armed (weight 1.0 / 1 hop), and `[recall_cluster]`
+> / `[wiki]` / `[graph]` synthesized `enabled` — while any explicitly-set value
+> still wins. No daemon wiring needed (the expansion fills the fields the daemon
+> already reads). The end-to-end proof is SY.2. The locked reference for the
 > chapter that turns the **built-but-dormant** memory stack ([[LOOM]] →
 > [[CODEX]] → [[LATTICE]] → [[LEXICON]]) into **realized, verified value**.
 > Those five chapters shipped a sophisticated, deeply-tested memory
@@ -118,7 +124,7 @@ two flaky tests surfaced during the arc (`budget_gate`, persona-log) is a
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **SY.0** | **This design contract** | locked reference; banner flips per phase |
-| **SY.1** | **`[memory] profile` switch** | a `[memory]` config section with `profile` ∈ {`off` (default), `smart`}; the load-time expansion that fills the `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` bundle from `smart` while letting any explicitly-set value win; default `off` ⇒ byte-identical. Tests (off = unchanged; smart sets the bundle; an explicit knob overrides smart). |
+| **SY.1** ✅ | **`[memory] profile` switch** | DONE. `MemoryProfile` {`Off` (default), `Smart`} + `[memory] profile` on the existing `[memory]` section; the load-time expansion: `build_embedding_config(raw, smart)` arms `recall_hybrid` / `recall_graph_hops=1` / `recall_wiki_weight=1.0` / `recall_graph_typed_weight=1.0` when unset, and `[recall_cluster]` / `[wiki]` / `[graph]` are synthesized `enabled` (default caps) when *absent* (an explicitly-present section wins). Default `off` ⇒ byte-identical; expansion fills the fields the daemon already reads (zero daemon wiring; `Config.memory_profile` is introspection-only). 3 tests (off unchanged; smart arms the bundle; explicit `recall_hybrid=false` + `[wiki] enabled=false` beat smart). |
 | **SY.2** | **End-to-end integration proof** | one integration test wiring the real memory + wiki synthesizer + graph extractor + recall fusion with a multi-response scripted provider: memories → sweep → wiki page + typed triples → `graph.query` → recall fuses both. The composition proof the arc lacked. |
 | **SY.3** | **Affordance + activation docs** | verify/tighten `graph.query`'s when-to-use description; repoint the Studio Wiki/Graph empty states at `[memory] profile`; add a "smart memory" section to the example config + README; the operator live-verify runbook (`docs/SYNAPSE.md` §runbook). Studio bundle rebuilt if the empty-state strings change. |
 | **SY.4** | **Finalize** | full suite + clippy + `cargo deny` green; status flip; record. |

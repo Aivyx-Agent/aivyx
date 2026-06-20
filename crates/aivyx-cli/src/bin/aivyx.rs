@@ -4134,6 +4134,11 @@ async fn run_async(
         // Chapter Lattice — `[graph]` config. Drives the daemon's
         // typed-knowledge-graph extraction sweep (via DaemonConfig below).
         graph: config_graph,
+        // Chapter Synapse — `[memory] profile` has already expanded into
+        // the embedding/recall_cluster/wiki/graph fields at config-load,
+        // so the daemon reads those as usual; the profile itself is
+        // introspection-only here.
+        memory_profile: _,
         // Phase 87 — `[persona_consolidation]` config. Wired
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
