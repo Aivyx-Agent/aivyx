@@ -99,6 +99,7 @@ pub mod loop_driver;
 /// stops a run the moment the tree goes red.
 pub mod loop_gate;
 pub mod helpfulness_ledger;
+pub mod skill_effectiveness;
 pub mod memory_embedding;
 pub mod memory_gc_tool;
 pub mod memory_recall;

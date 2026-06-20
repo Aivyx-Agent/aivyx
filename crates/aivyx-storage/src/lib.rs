@@ -221,6 +221,14 @@ pub enum KeyDomain {
     /// graph view + the `graph.query` tool + the opt-in recall source),
     /// never memory, recall, the wiki, or any learning ledger.
     KnowledgeGraph,
+    /// Chapter Whetstone — the per-skill effectiveness ledger: a
+    /// time-decayed EWMA, keyed by `LearnedSkill` name, of "did invoking
+    /// this skill lead to a turn that went well." Folded on the turn
+    /// boundary from the `SkillInvocation` audit signal + the turn
+    /// outcome. Isolated so a corrupt row degrades only the skill-
+    /// refinement signal — never skills, the persona, recall, or any
+    /// other ledger.
+    SkillHelpfulnessLedger,
 }
 
 impl KeyDomain {
@@ -255,6 +263,7 @@ impl KeyDomain {
             KeyDomain::TeamMissions => b"team-missions",
             KeyDomain::KnowledgeWiki => b"knowledge-wiki",
             KeyDomain::KnowledgeGraph => b"knowledge-graph",
+            KeyDomain::SkillHelpfulnessLedger => b"skill-helpfulness-ledger",
         }
     }
 
@@ -296,12 +305,15 @@ impl KeyDomain {
             KeyDomain::TeamMissions => "aivyx_team_missions_v1",
             KeyDomain::KnowledgeWiki => "aivyx_knowledge_wiki_v1",
             KeyDomain::KnowledgeGraph => "aivyx_knowledge_graph_v1",
+            KeyDomain::SkillHelpfulnessLedger => {
+                "aivyx_skill_helpfulness_ledger_v1"
+            }
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 23] = [
+    pub const ALL: [KeyDomain; 24] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -325,6 +337,7 @@ impl KeyDomain {
         KeyDomain::TeamMissions,
         KeyDomain::KnowledgeWiki,
         KeyDomain::KnowledgeGraph,
+        KeyDomain::SkillHelpfulnessLedger,
     ];
 }
 
@@ -510,7 +523,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 23],
+    subkeys: [SubKey; 24],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -587,7 +600,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 23], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 24], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -623,6 +636,9 @@ impl RedbStorage {
             master.derive_subkey(KeyDomain::TeamMissions.as_bytes())?,
             master.derive_subkey(KeyDomain::KnowledgeWiki.as_bytes())?,
             master.derive_subkey(KeyDomain::KnowledgeGraph.as_bytes())?,
+            master.derive_subkey(
+                KeyDomain::SkillHelpfulnessLedger.as_bytes(),
+            )?,
         ])
     }
 
@@ -654,6 +670,7 @@ impl RedbStorage {
             KeyDomain::TeamMissions => &self.subkeys[20],
             KeyDomain::KnowledgeWiki => &self.subkeys[21],
             KeyDomain::KnowledgeGraph => &self.subkeys[22],
+            KeyDomain::SkillHelpfulnessLedger => &self.subkeys[23],
         }
     }
 }
@@ -1032,7 +1049,7 @@ mod tests {
         // "Encrypted storage domains" row + the `aivyx-storage` line in
         // `README.md`, and the storage-domain figure in
         // `docs/BACKEND_AUDIT_*.md`.**
-        assert_eq!(KeyDomain::ALL.len(), 23, "encrypted storage domain count");
+        assert_eq!(KeyDomain::ALL.len(), 24, "encrypted storage domain count");
     }
 
     #[test]
@@ -1095,7 +1112,8 @@ mod tests {
                 | KeyDomain::Reminders
                 | KeyDomain::TeamMissions
                 | KeyDomain::KnowledgeWiki
-                | KeyDomain::KnowledgeGraph => {}
+                | KeyDomain::KnowledgeGraph
+                | KeyDomain::SkillHelpfulnessLedger => {}
             }
         }
     }
