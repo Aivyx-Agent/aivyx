@@ -5,6 +5,43 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+Post-0.3.0 chapters. The recall + memory work (Loom, Codex) is **opt-in and
+byte-identical by default** — nothing changes for an existing config until you
+enable it.
+
+### Added
+
+- **Knowledge-wiki layer (Chapter Codex).** A derived, browsable layer over
+  memory: the agent consolidates each topic's entries into a **`WikiPage`** —
+  an LLM-written summary plus co-occurrence **backlinks** — persisted in a new
+  encrypted `KnowledgeWiki` storage domain. A new **Studio "Wiki" screen**
+  browses the pages (index → summary + clickable backlinks + source-entry
+  count) over read-only IPC. Opt-in: `[wiki].enabled` arms a periodic
+  stale-page sweep on the maintenance cadence, and `recall_wiki_weight > 0`
+  lets a page summary compete in recall as a single high-signal unit. Pages are
+  always *derived* — memory stays the source of truth. Zero new dependencies.
+- **`web.extract` + `git.commit` (Chapter Forge).** Two new substrate tools:
+  `web.extract` returns a page's readable article text (readability over the
+  existing `net.fetch` capability), and `git.commit` stages + commits in an
+  operator-allowed repo (a new `git.write` capability base, Trusted-tier only,
+  confirm-first). The substrate count moves 13 → 15 (**Amendment A13**).
+- **`tools.list` runtime tool introspection (Chapter Atlas).** A refinement
+  pass over the ~92-tool surface: a runtime `tools.list` tool, a drift-guarded
+  [`docs/TOOLS.md`](docs/TOOLS.md) catalog, and a tool-metadata quality guard.
+- **Permissive voice (Chapter Timbre).** Swapped the GPL Piper TTS for
+  **Kokoro-82M (Apache-2.0)** + an espeak-free MIT G2P, closing the last GPL
+  door (`cargo deny check licenses` clean with no copyleft exception).
+
+### Changed
+
+- **Graph-augmented recall (Chapter Loom).** Auto-recall now fuses three signals
+  on one ranking via weighted Reciprocal Rank Fusion: **semantic** (vectors),
+  **lexical** (a real BM25 scorer, replacing the old substring match), and a
+  **multi-hop co-occurrence graph-walk** (the agent's topic-affinity graph,
+  promoted from a passive view to an active retrieval signal). Tunable per
+  source under `[embedding]` and proven by a `recall@k` eval harness; default
+  off ⇒ identical to prior recall.
+
 ## 0.3.0 — source-available (BUSL-1.1) (2026-06-19)
 
 **The headline is the license.** Aivyx moves from **MIT** to the **Business

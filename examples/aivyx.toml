@@ -900,6 +900,16 @@ parent_role = "researcher"
 #   ann_rebuild_threshold = 100   # ANN stale-rebuild threshold (Phase 96)
 #   recall_token_budget = 0   # token-budget context sizing (Phase 97)
 #   recall_hybrid = false     # hybrid keyword+semantic fusion (Phase 98)
+#   # Chapter Loom — graph-augmented recall (only when recall_hybrid = true).
+#   # Recall fuses three signals on one ranking via weighted RRF:
+#   recall_lexical_weight = 1.0   # weight of the BM25 lexical ranker
+#   recall_graph_hops    = 0      # 0 = graph source off; >=1 = walk the
+#                                 #   co-occurrence graph N hops as a 3rd ranker
+#   recall_graph_decay   = 0.5    # per-hop affinity decay for the walk
+#   recall_graph_weight  = 1.0    # weight of the graph ranker
+#   # Chapter Codex — fuse a topic's consolidated wiki-page summary as a
+#   # single high-signal recall unit (needs [wiki] pages synthesized):
+#   recall_wiki_weight   = 0.0    # 0 = off; >0 arms the wiki ranker
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related
@@ -1104,6 +1114,67 @@ parent_role = "researcher"
 # refactor" now reliably surface memories about those
 # rare terms, even when the semantic side doesn't
 # strongly link them to a learnable concept.
+#
+# ----------------------------------------------------------------
+# Graph-augmented recall (Chapter Loom) — only with recall_hybrid
+# ----------------------------------------------------------------
+#
+# Chapter Loom deepens the hybrid path into a THREE-source
+# fusion, all on one RRF ranking. It is byte-identical to the
+# Phase 98 hybrid above until you turn the new pieces on.
+#
+#   1. The keyword ranker is now a real BM25 scorer (rare query
+#      terms dominate, not just substring presence) — automatic.
+#   2. `recall_lexical_weight` (default 1.0) biases that lexical
+#      ranker up or down relative to the semantic one.
+#   3. `recall_graph_hops` (default 0 = OFF) adds a THIRD ranker:
+#      a multi-hop walk over the agent's co-occurrence graph
+#      (the "these topics get recalled together helpfully"
+#      signal). Set 1–2 to pull in associatively-related topics
+#      the literal query missed; `recall_graph_decay` (0.5)
+#      weakens each hop and `recall_graph_weight` (1.0) sets the
+#      ranker's pull.
+#
+#   [embedding]
+#   recall_hybrid        = true   # required for the below
+#   recall_lexical_weight = 1.0
+#   recall_graph_hops    = 1      # 0 = off (default)
+#   recall_graph_decay   = 0.5
+#   recall_graph_weight  = 1.0
+#
+# The daemon prints `aivyx recall-graph: injected N via
+# graph-walk` when the graph source actually steered a turn.
+#
+# ----------------------------------------------------------------
+# Knowledge-wiki layer (Chapter Codex) — [wiki] + recall_wiki_weight
+# ----------------------------------------------------------------
+#
+# The agent can consolidate each memory TOPIC into a derived
+# "wiki page": an LLM-written summary of that topic's entries
+# plus co-occurrence backlinks, browsable in the Studio "Wiki"
+# screen. Pages are always derived — memory stays the source of
+# truth — and the whole layer is OFF by default (auto-
+# summarizing memory with the LLM has a cost you opt into).
+#
+# Arm generation with a [wiki] section:
+#
+#   [wiki]
+#   enabled = true              # default false (no synthesis)
+#   max_pages_per_sweep = 20    # cap LLM calls per sweep
+#   interval_secs = 3600        # how often to refresh stale pages
+#
+# A page only regenerates when its topic's entries changed
+# (incremental), so steady-state sweeps are cheap. Reads (the
+# Studio Wiki screen) work regardless — they just show an empty
+# codex until pages exist.
+#
+# Optionally let a page summary compete in RECALL as a single
+# high-signal unit (one consolidated paragraph can out-cover a
+# topic's scattered fragments per token):
+#
+#   [embedding]
+#   recall_hybrid     = true
+#   recall_wiki_weight = 1.0    # 0 = off (default)
 #
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own

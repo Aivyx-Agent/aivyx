@@ -92,6 +92,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
 | **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T + MG) |
+| **Wiki** | knowledge-wiki browser: synthesized per-topic pages (LLM summary + co-occurrence backlinks + source-entry count) over read-only IPC | ✅ Live (Ch. Codex) |
 | **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z + DW) |
 | **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
 | **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
