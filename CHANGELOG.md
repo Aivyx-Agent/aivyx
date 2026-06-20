@@ -11,6 +11,13 @@ enable it.
 
 ### Added
 
+- **Skills that sharpen (Chapter Whetstone).** Skills are no longer a static
+  list. Each turn folds its skill outcomes into a decayed per-skill
+  effectiveness ledger, and on the reflection cadence the agent **proposes a
+  refined version** of an underperforming skill — the operator's *or* its own —
+  as a governed supersession pair (provenance + lineage) that surfaces in the
+  existing Agents approve / edit / reject UI. Opt-in via `[skill_refinement]`,
+  off by default, propose-only; no new agent tool or capability base.
 - **One-switch smart memory (Chapter Synapse).** The whole memory stack above
   (graph-augmented recall + the knowledge-wiki and typed-graph layers + their
   extraction sweeps) was opt-in and spread across ~14 knobs. **`[memory] profile

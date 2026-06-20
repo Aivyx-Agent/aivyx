@@ -1444,6 +1444,37 @@ parent_role = "researcher"
 # signal_decay = true
 
 # ----------------------------------------------------------------
+# Skills that sharpen (Chapter Whetstone) — [skill_refinement]
+# ----------------------------------------------------------------
+#
+# Skills (the named procedures the agent follows — taught via
+# `skills.teach`, seeded at onboarding, or proposed by the agent)
+# are normally a static list. With this section the agent measures
+# how each skill ACTUALLY performs: every turn folds its skill
+# outcomes into a decayed per-skill effectiveness ledger, and on
+# the reflection cadence the agent proposes a SHARPER version of an
+# underperforming skill — the operator's OR its own.
+#
+# A refinement is a governed persona proposal (a v1→v2 supersession
+# pair with provenance + lineage). It is PROPOSE-ONLY: you approve /
+# edit / reject it in the Studio Agents screen (or `aivyx persona`),
+# and `aivyx persona revert` undoes any approved one — exactly like
+# every other change to the agent's identity.
+#
+# Off unless this block is present AND `enabled = true`. It also
+# needs a [[reflection_schedule]] (it piggybacks that cron). With
+# the block absent the per-skill ledger isn't even written —
+# byte-identical to before.
+#
+# [skill_refinement]
+# enabled = true
+# floor = 0.0          # optional — refine when decayed effectiveness
+#                      #   drops below this (0.0 = net-negative)
+# min_samples = 4      # optional — confidence gate: this many folded
+#                      #   windows before a skill can be refined
+# max_per_cycle = 2    # optional — cap refinement proposals per cycle
+
+# ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic
 # ----------------------------------------------------------------
 #
