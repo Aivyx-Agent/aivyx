@@ -16,12 +16,12 @@ verifiable offline.
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), and Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill) — and 15 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), and Praxis (the agent authors new specialized skills from its own consolidated knowledge) — and 15 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.3.0`** (the first BUSL-1.1 release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Wiki (knowledge pages) · Graph (typed knowledge graph) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 33 |
-| Rust tests | 4,914 passing |
+| Rust tests | 4,920 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 87 |
@@ -132,9 +132,10 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 - **A self-learning identity.** A user-defined **Profile** plus a
   reflection-written **Persona/Soul**, seedable at first launch (by hand or
   *"describe it and the model drafts it"*) and governed through approve / edit
-  / reject proposals. **Skills sharpen through use** — the agent measures how
-  each saved skill actually performs and proposes a refined version of an
-  underperforming one (yours or its own), governed the same way.
+  / reject proposals. **Skills sharpen — and grow — through use**: the agent
+  measures how each saved skill performs and proposes a refined version of an
+  underperforming one, *and* authors brand-new specialized skills from its own
+  consolidated knowledge (the wiki + graph) — all governed the same way.
 - **Memory that compounds.** Encrypted, topic-keyed memory with
   **graph-augmented recall** — meaning (vectors), words (BM25), and association
   (a multi-hop co-occurrence walk) fused on one ranking — an opt-in

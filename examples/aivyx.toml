@@ -1475,6 +1475,33 @@ parent_role = "researcher"
 # max_per_cycle = 2    # optional — cap refinement proposals per cycle
 
 # ----------------------------------------------------------------
+# Skills authored from knowledge (Chapter Praxis) — [skill_authoring]
+# ----------------------------------------------------------------
+#
+# Whetstone (above) SHARPENS skills that underperform; Praxis CREATES
+# new ones. When a topic has rich, connected knowledge — a substantial
+# wiki page (Chapter Codex) AND a typed-graph neighbourhood (Chapter
+# Lattice) — but no skill yet, the agent synthesizes a SPECIALIZED
+# skill from that page + those relations and proposes it (tagged with
+# the topic as its `domain`). "The wiki is what the agent knows; the
+# skill is how it acts."
+#
+# Like every other identity change it is PROPOSE-ONLY: you approve /
+# edit / reject it in the Studio Agents screen, reversible via
+# `aivyx persona revert`. It needs a [[reflection_schedule]] (it
+# piggybacks that cron) AND the wiki + graph layers populated (the
+# simplest way: `[memory] profile = "smart"`). Off unless this block
+# is present AND `enabled = true`.
+#
+# [skill_authoring]
+# enabled = true
+# min_summary_chars = 200  # optional — wiki-summary length floor for a
+#                          #   topic to be "skill-worthy"
+# min_edges = 2            # optional — minimum typed-graph relations
+#                          #   around the topic
+# max_per_cycle = 1        # optional — cap authored skills per cycle
+
+# ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic
 # ----------------------------------------------------------------
 #

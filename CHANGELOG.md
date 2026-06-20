@@ -11,6 +11,15 @@ enable it.
 
 ### Added
 
+- **Skills authored from knowledge (Chapter Praxis).** The agent now writes its
+  own **specialized skills** from what it has learned: on the reflection cadence
+  it finds a topic with rich, connected knowledge (a substantial wiki page + a
+  typed-graph neighbourhood) but no skill, and proposes a grounded specialized
+  skill synthesized from that page + those relations (tagged with the topic's
+  `domain`, agent provenance). Like Whetstone's refinements, it's a governed,
+  propose-only persona proposal in the existing Agents UI. Opt-in via
+  `[skill_authoring]`, off by default; reuses the wiki/graph stores — no new
+  agent tool, capability base, or storage domain.
 - **Skills that sharpen (Chapter Whetstone).** Skills are no longer a static
   list. Each turn folds its skill outcomes into a decayed per-skill
   effectiveness ledger, and on the reflection cadence the agent **proposes a
