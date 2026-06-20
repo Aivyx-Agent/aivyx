@@ -1,13 +1,12 @@
 # The Typed Knowledge Graph — entities + directed relations (Chapter Lattice)
 
-> **Status:** 🕸️ **LT.2 — extraction engine shipped.** Added the
-> `GraphExtractor` (`aivyx-channel`): pulls a topic's memory entries, LLM-
-> extracts directed `(subject, predicate, object)` triples (constrained
-> "only what's stated", JSON output parsed tolerantly through prose/fences,
-> self-loops + empties dropped, repeats counted as `mentions`), and upserts them
-> with batch provenance — incremental (per-topic fingerprint) and best-effort
-> (no-provider / LLM error / unparseable → non-fatal, graph untouched). Builds
-> on LT.1's store. Generation cadence is LT.3. The locked reference for the
+> **Status:** 🕸️ **LT.3 — generation trigger live (opt-in).** The daemon now
+> extracts triples from changed topics on a periodic cadence when
+> `[graph].enabled`: `GraphExtractor::sweep` (list topics → re-extract the stale,
+> capped per pass) + `run_graph_sweep_loop` (shutdown-aware) + a `[graph]` config
+> (`enabled` default **off**, `max_topics_per_sweep`, `interval_secs`), wired
+> through `DaemonConfig` from `aivyx.rs`. Default off ⇒ byte-identical. The
+> `graph.read` base + `graph.query` tool are LT.4. The locked reference for the
 > chapter that gives Aivyx a **real, directed, typed knowledge graph**:
 > nodes are **entities** (people, systems, concepts) and edges are
 > **typed, directed relations** (`deploy` —*depends-on*→ `ci`), extracted
@@ -137,7 +136,7 @@ extraction beyond memory entries; any P10 substrate-count amendment.
 | **LT.0** | **This design contract** | locked reference; banner flips per phase |
 | **LT.1** ✅ | **Model + storage** | DONE. `aivyx-ipc::graph` — `GraphTriple` (directed, NUL-joined `key`, provenance + `mentions` weight), `GraphEntity` (name + degree + optional kind), `GraphPath`, and `canonical_label` (lowercase/trim/collapse, **no stemming** — `settings` ≠ `setting`). `KeyDomain::KnowledgeGraph` (ALL/subkeys 22→23, 2 count tests; README 23). `PersistentGraphStore` (`aivyx-channel`) — canonical triple upsert/get/delete (empty part rejected), `all_triples` (skips meta rows), `out_edges`/`in_edges` (direction-aware), `entities` (degree-ranked), + per-topic incremental fingerprint markers keyed `\x00fp\x00<topic>` (invisible to the triple scan). **Inert**. 12 tests. |
 | **LT.2** ✅ | **Extraction engine** | DONE. `GraphExtractor::regenerate(topic, now) -> GraphRegenOutcome { Skipped, NoEntries, Wrote(n) }` in `aivyx-channel::knowledge_graph`. Pulls entries (capped), one-shot LLM extraction (constrained system prompt, low temp, **JSON triple array** parsed tolerantly — finds the outermost `[ … ]` through prose/fences), canonicalizes + drops empties/self-loops + dedups (repeats → `mentions`), upserts with the topic's seqs as batch provenance. Incremental (records the fingerprint even on zero triples so a relation-less topic isn't re-extracted); best-effort (any soft failure → no triples, never errors). 5 tests w/ a scripted fake `LlmProvider` (parse tolerance, directed store, incremental, failure/no-entries, mentions). |
-| **LT.3** | **Generation trigger** | a stale-sweep on the maintenance cadence + a `[graph]` config (`enabled` default off, per-sweep cap, interval), wired via `DaemonConfig` from `aivyx.rs`. Default off ⇒ byte-identical. |
+| **LT.3** ✅ | **Generation trigger** | DONE. `GraphExtractor::sweep(now, max_topics) -> GraphSweepReport` (walk `list_topics`, re-extract stale, cap **extractions**/LLM-calls per pass) + `run_graph_sweep_loop` (periodic, first-tick-skipped, shutdown-aware) + a `[graph]` config (`enabled` default off, `max_topics_per_sweep` 20, `interval_secs` 3600; validated only when enabled). Wired via `DaemonConfig.graph_sweep: Option<GraphSweepConfig>` spawned in the daemon, constructed in `aivyx.rs` from the LLM provider + memory + `KnowledgeGraph` domain when enabled. Default-off ⇒ byte-identical. 3 sweep/loop tests + 1 config test (7 e2e `DaemonConfig` literals updated). |
 | **LT.4** | **`graph.read` base + `graph.query` tool** | add `graph.read` to `KNOWN_BASES` + `CEILING_TRUSTED` + the taxonomy addendum + count-test + DESIGN D4 (the base lands with/before the tool); the agent-facing `graph.query` (multi-hop directed/typed traversal, predicate + direction + hop-cap, Trusted-tier). Tests (denial, traversal, cycle-safety). |
 | **LT.5** | **Read-only IPC + Studio graph view** | `GetKnowledgeGraph` (typed nodes + directed labeled edges) wasm-clean types + handler reading the store; a Studio view rendering the directed/typed graph (distinct from the MG co-occurrence view). Bundle rebuilt. |
 | **LT.6** | **Recall fusion source** | typed-graph neighbors of the query's entities as an opt-in Loom RRF source (`recall_graph_typed_weight`, default 0.0), byte-identical default; recall-never-errors preserved. Tests + eval extension. |

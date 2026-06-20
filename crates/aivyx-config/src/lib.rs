@@ -793,6 +793,10 @@ pub struct AivyxConfig {
     /// knowledge-wiki synthesis. `Some` only arms it; it still no-ops
     /// unless `enabled = true`.
     pub wiki: Option<WikiConfig>,
+    /// Chapter Lattice — `[graph]` section. `None` when absent: no
+    /// typed-knowledge-graph extraction. `Some` only arms it; it still
+    /// no-ops unless `enabled = true`.
+    pub graph: Option<GraphConfig>,
     /// Phase 87 — `[persona_consolidation]` section. `None`
     /// when absent: the Persona proposal pipeline is unchanged
     /// (pre-Phase-87 behaviour — no pattern-driven proposals).
@@ -2257,6 +2261,26 @@ pub const DEFAULT_WIKI_MAX_PAGES_PER_SWEEP: usize = 20;
 /// Default sweep interval — hourly, matching the memory-maintenance cadence.
 pub const DEFAULT_WIKI_INTERVAL_SECS: u64 = 3600;
 
+/// Chapter Lattice — `[graph]` typed-knowledge-graph config. Off by
+/// default: extracting a relation graph from memory with the LLM has a
+/// cost the operator opts into. When `enabled`, the daemon sweeps
+/// changed topics for `(subject, predicate, object)` triples on the
+/// maintenance cadence (see `aivyx-channel::knowledge_graph`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphConfig {
+    /// Master switch. Default `false` — no extraction, no sweep.
+    pub enabled: bool,
+    /// Max topics (re)extracted per sweep, bounding LLM calls per pass.
+    pub max_topics_per_sweep: usize,
+    /// Seconds between sweeps.
+    pub interval_secs: u64,
+}
+
+/// Default per-sweep topic cap (LLM calls per pass).
+pub const DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP: usize = 20;
+/// Default graph sweep interval — hourly.
+pub const DEFAULT_GRAPH_INTERVAL_SECS: u64 = 3600;
+
 /// Phase 87 — `[persona_consolidation]` runtime config.
 ///
 /// The actuator surface for pattern-driven Persona proposals:
@@ -3216,6 +3240,9 @@ struct RawToml {
     /// `[wiki]` section. Chapter Codex — knowledge-wiki synthesis.
     #[serde(default)]
     wiki: RawWiki,
+    /// `[graph]` section. Chapter Lattice — typed-graph extraction.
+    #[serde(default)]
+    graph: RawGraph,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -4150,6 +4177,18 @@ struct RawWiki {
     enabled: Option<bool>,
     #[serde(default)]
     max_pages_per_sweep: Option<usize>,
+    #[serde(default)]
+    interval_secs: Option<u64>,
+}
+
+/// Chapter Lattice — `[graph]` deserialize target. Absent section →
+/// `graph: None` (no extraction).
+#[derive(Debug, Default, Deserialize)]
+struct RawGraph {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    max_topics_per_sweep: Option<usize>,
     #[serde(default)]
     interval_secs: Option<u64>,
 }
@@ -5156,6 +5195,7 @@ impl AivyxConfig {
             &toml.recall_cluster,
         )?;
         let wiki = build_wiki_config(&toml.wiki)?;
+        let graph = build_graph_config(&toml.graph)?;
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -6242,6 +6282,7 @@ impl AivyxConfig {
             persona_seed,
             recall_cluster,
             wiki,
+            graph,
             persona_consolidation,
             correction_consolidation,
             loop_config,
@@ -7585,6 +7626,42 @@ fn build_wiki_config(raw: &RawWiki) -> Result<Option<WikiConfig>, ConfigError> {
     Ok(Some(WikiConfig {
         enabled,
         max_pages_per_sweep,
+        interval_secs,
+    }))
+}
+
+/// Chapter Lattice — build the `[graph]` config. Absent section → `None`
+/// (no extraction). Validation applies only when `enabled`, matching the
+/// `[wiki]` / `[recall_cluster]` staged-config pattern.
+fn build_graph_config(raw: &RawGraph) -> Result<Option<GraphConfig>, ConfigError> {
+    let any_set = raw.enabled.is_some()
+        || raw.max_topics_per_sweep.is_some()
+        || raw.interval_secs.is_some();
+    if !any_set {
+        return Ok(None);
+    }
+    let enabled = raw.enabled.unwrap_or(false);
+    let max_topics_per_sweep = raw
+        .max_topics_per_sweep
+        .unwrap_or(DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP);
+    let interval_secs = raw.interval_secs.unwrap_or(DEFAULT_GRAPH_INTERVAL_SECS);
+    if enabled {
+        if max_topics_per_sweep == 0 {
+            return Err(ConfigError::Invalid {
+                field: "graph.max_topics_per_sweep",
+                reason: "`max_topics_per_sweep` must be >= 1 when graph is enabled".into(),
+            });
+        }
+        if interval_secs == 0 {
+            return Err(ConfigError::Invalid {
+                field: "graph.interval_secs",
+                reason: "`interval_secs` must be >= 1 when graph is enabled".into(),
+            });
+        }
+    }
+    Ok(Some(GraphConfig {
+        enabled,
+        max_topics_per_sweep,
         interval_secs,
     }))
 }

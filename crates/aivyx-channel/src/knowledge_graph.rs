@@ -417,6 +417,91 @@ impl GraphExtractor {
         let _ = self.store.set_topic_fingerprint(topic, fingerprint).await;
         GraphRegenOutcome::Wrote(wrote)
     }
+
+    /// Re-extract every topic whose entries have changed, capped at
+    /// `max_topics` **extractions** (LLM calls) per sweep so one pass
+    /// can't fire an unbounded number of calls. Already-current topics
+    /// are cheap fingerprint checks and don't count against the cap.
+    /// Best-effort: a `list_topics` failure returns an empty report.
+    pub async fn sweep(&self, now_secs: u64, max_topics: usize) -> GraphSweepReport {
+        let mut report = GraphSweepReport::default();
+        let topics = match self.memory.list_topics().await {
+            Ok(t) => t,
+            Err(_) => return report,
+        };
+        for topic in topics {
+            if report.extracted >= max_topics {
+                break;
+            }
+            report.scanned += 1;
+            match self.regenerate(&topic, now_secs).await {
+                GraphRegenOutcome::Wrote(n) => {
+                    report.extracted += 1;
+                    report.triples += n;
+                }
+                GraphRegenOutcome::Skipped => report.skipped += 1,
+                GraphRegenOutcome::NoEntries => report.no_entries += 1,
+            }
+        }
+        report
+    }
+}
+
+/// Tally of one [`GraphExtractor::sweep`] pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GraphSweepReport {
+    /// Topics examined this pass.
+    pub scanned: usize,
+    /// Topics (re)extracted (one LLM call each).
+    pub extracted: usize,
+    /// Topics already up to date (fingerprint matched) or soft-failed.
+    pub skipped: usize,
+    /// Topics with no entries.
+    pub no_entries: usize,
+    /// Total triples written this pass.
+    pub triples: usize,
+}
+
+/// What the daemon needs to run the graph sweep loop: a ready extractor
+/// plus the cadence knobs from `[graph]`. Built by the binary (it owns
+/// the storage + provider) and passed into `DaemonConfig`; `None` there ⇒
+/// no extraction (the byte-identical default).
+pub struct GraphSweepConfig {
+    pub extractor: Arc<GraphExtractor>,
+    pub interval_secs: u64,
+    pub max_topics: usize,
+}
+
+/// Background generation trigger (LT.3) — periodically extract the graph
+/// from churned topics on the daemon's maintenance cadence. Best-effort,
+/// first-tick-skipped, shutdown-aware (the same shape as the wiki sweep).
+pub async fn run_graph_sweep_loop(
+    extractor: Arc<GraphExtractor>,
+    interval_secs: u64,
+    max_topics: usize,
+    shutdown: CancellationToken,
+) {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
+    interval.tick().await; // skip the immediate first tick
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let r = extractor.sweep(now, max_topics).await;
+                if r.triples > 0 {
+                    eprintln!(
+                        "aivyx graph-sweep: {} triple(s) from {} topic(s) ({} scanned)",
+                        r.triples, r.extracted, r.scanned
+                    );
+                }
+            }
+            _ = shutdown.cancelled() => break,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -642,6 +727,68 @@ mod tests {
         let xf = extractor(Arc::clone(&mem), Arc::clone(&g), "", true);
         assert_eq!(xf.regenerate("deploy", 1).await, GraphRegenOutcome::Wrote(0));
         assert!(g.all_triples().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sweep_extracts_stale_then_skips_and_caps() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "ship via ci").await.unwrap();
+        mem.put("billing", "stripe charges the card").await.unwrap();
+        let g = Arc::new(store().await);
+        let x = extractor(
+            Arc::clone(&mem),
+            Arc::clone(&g),
+            r#"[{"subject":"a","predicate":"r","object":"b"}]"#,
+            false,
+        );
+
+        let first = x.sweep(1, 50).await;
+        assert_eq!(first.scanned, 2);
+        assert_eq!(first.extracted, 2);
+        assert_eq!(first.triples, 2);
+
+        // Unchanged → all skipped.
+        let second = x.sweep(2, 50).await;
+        assert_eq!(second.extracted, 0);
+        assert_eq!(second.skipped, 2);
+    }
+
+    #[tokio::test]
+    async fn sweep_caps_extractions_per_pass() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        for t in ["a", "b", "c"] {
+            mem.put(t, "x relates to y").await.unwrap();
+        }
+        let g = Arc::new(store().await);
+        let x = extractor(
+            Arc::clone(&mem),
+            Arc::clone(&g),
+            r#"[{"subject":"x","predicate":"relates-to","object":"y"}]"#,
+            false,
+        );
+        let r = x.sweep(1, 2).await;
+        assert_eq!(r.extracted, 2, "capped at 2 LLM calls");
+        let r2 = x.sweep(2, 2).await;
+        assert_eq!(r2.extracted, 1, "the remaining topic next pass");
+    }
+
+    #[tokio::test]
+    async fn sweep_loop_first_tick_skipped_and_cancels() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "ship via ci").await.unwrap();
+        let g = Arc::new(store().await);
+        let x = Arc::new(extractor(
+            Arc::clone(&mem),
+            Arc::clone(&g),
+            r#"[{"subject":"deploy","predicate":"uses","object":"ci"}]"#,
+            false,
+        ));
+        let shutdown = CancellationToken::new();
+        let handle =
+            tokio::spawn(run_graph_sweep_loop(Arc::clone(&x), 3600, 10, shutdown.clone()));
+        assert!(g.all_triples().await.unwrap().is_empty(), "first tick skipped");
+        shutdown.cancel();
+        handle.await.unwrap();
     }
 
     #[tokio::test]

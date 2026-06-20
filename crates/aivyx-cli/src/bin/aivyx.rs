@@ -4131,6 +4131,9 @@ async fn run_async(
         // Chapter Codex — `[wiki]` config. Drives the daemon's
         // knowledge-wiki sweep (built + passed via DaemonConfig below).
         wiki: config_wiki,
+        // Chapter Lattice — `[graph]` config. Drives the daemon's
+        // typed-knowledge-graph extraction sweep (via DaemonConfig below).
+        graph: config_graph,
         // Phase 87 — `[persona_consolidation]` config. Wired
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
@@ -4866,6 +4869,31 @@ async fn run_async(
                 synthesizer: Arc::new(synth),
                 interval_secs: w.interval_secs,
                 max_pages: w.max_pages_per_sweep,
+            }
+        });
+    // Chapter Lattice (LT.3) — the typed-knowledge-graph sweep. Armed only
+    // when `[graph].enabled`: extracting a relation graph with the LLM has
+    // a cost the operator opts into. Reuses the same LLM provider + memory
+    // the rest of the daemon holds.
+    let graph_sweep: Option<aivyx_channel::knowledge_graph::GraphSweepConfig> = config_graph
+        .as_ref()
+        .filter(|g| g.enabled)
+        .map(|g| {
+            let store = Arc::new(
+                aivyx_channel::knowledge_graph::PersistentGraphStore::new(
+                    storage.domain(KeyDomain::KnowledgeGraph),
+                ),
+            );
+            let extractor = aivyx_channel::knowledge_graph::GraphExtractor::new(
+                Arc::clone(&memory),
+                Arc::clone(&provider),
+                store,
+                model.clone(),
+            );
+            aivyx_channel::knowledge_graph::GraphSweepConfig {
+                extractor: Arc::new(extractor),
+                interval_secs: g.interval_secs,
+                max_topics: g.max_topics_per_sweep,
             }
         });
     // Phase 172 — the durable correction ledger. Zero-config,
@@ -7150,6 +7178,7 @@ async fn run_async(
             cooccurrence_ledger: cooccurrence_ledger.clone(),
             wiki_sweep,
             wiki_store: Some(Arc::clone(&wiki_store)),
+            graph_sweep,
             // Phase 172 — durable correction ledger; folded by
             // the same recall-feedback pass.
             correction_ledger: correction_ledger.clone(),

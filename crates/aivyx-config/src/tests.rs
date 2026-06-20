@@ -7169,6 +7169,33 @@ fn wiki_section_parses_defaults_and_overrides() {
 }
 
 #[test]
+fn graph_section_parses_and_validates() {
+    let _env = EnvScope::new();
+    assert!(load_with_toml("\n", "graph-absent").graph.is_none());
+
+    let cfg = load_with_toml("\n[graph]\nenabled = true\n", "graph-default");
+    let g = cfg.graph.expect("section present");
+    assert!(g.enabled);
+    assert_eq!(g.max_topics_per_sweep, crate::DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP);
+    assert_eq!(g.interval_secs, crate::DEFAULT_GRAPH_INTERVAL_SECS);
+
+    let cfg = load_with_toml(
+        "\n[graph]\nenabled = true\nmax_topics_per_sweep = 4\ninterval_secs = 600\n",
+        "graph-override",
+    );
+    let g = cfg.graph.unwrap();
+    assert_eq!(g.max_topics_per_sweep, 4);
+    assert_eq!(g.interval_secs, 600);
+
+    // Enabled with a zero knob → Invalid.
+    let tmp = TempDir::new("graph-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[graph]\nenabled = true\ninterval_secs = 0\n").unwrap();
+    let opts = LoadOptions { toml_path: Some(toml_path), ..LoadOptions::test_env_only() };
+    assert!(AivyxConfig::load_from_env_and_toml(&opts).is_err());
+}
+
+#[test]
 fn wiki_enabled_rejects_zero_knobs() {
     let _env = EnvScope::new();
     let tmp = TempDir::new("wiki-bad");

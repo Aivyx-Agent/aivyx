@@ -250,6 +250,11 @@ pub struct DaemonConfig {
     /// Built whenever storage is available (independent of `[wiki]`
     /// .enabled — reads return an empty list until a sweep populates it).
     pub wiki_store: Option<Arc<crate::knowledge_wiki::PersistentWikiStore>>,
+    /// Chapter Lattice (LT.3) — typed-knowledge-graph sweep. `Some` when
+    /// `[graph].enabled` + an LLM provider are configured: the daemon
+    /// spawns a periodic triple-extraction sweep on its maintenance
+    /// cadence. `None` → no extraction (the byte-identical default).
+    pub graph_sweep: Option<crate::knowledge_graph::GraphSweepConfig>,
     /// Phase 172 — the durable correction ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
@@ -590,6 +595,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         document_roots,
         wiki_sweep,
         wiki_store,
+        graph_sweep,
     } = config;
     // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
     // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
@@ -600,6 +606,18 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             w.synthesizer,
             w.interval_secs,
             w.max_pages,
+            sweep_shutdown,
+        ))
+    });
+    // Chapter Lattice (LT.3) — spawn the typed-knowledge-graph extraction
+    // sweep when `[graph].enabled`. Best-effort + shutdown-aware; absent ⇒
+    // no extraction (byte-identical default).
+    let _graph_sweep_handle = graph_sweep.map(|g| {
+        let sweep_shutdown = shutdown.clone();
+        tokio::spawn(crate::knowledge_graph::run_graph_sweep_loop(
+            g.extractor,
+            g.interval_secs,
+            g.max_topics,
             sweep_shutdown,
         ))
     });
@@ -2801,6 +2819,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         seed_draft_llm: None,
         document_roots: Default::default(),
         wiki_sweep: None,
+        graph_sweep: None,
     }).await
 }
 
