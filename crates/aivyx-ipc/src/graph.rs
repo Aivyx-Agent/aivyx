@@ -103,6 +103,53 @@ pub fn canonical_predicate(s: &str) -> String {
     canonical_relation(s).0
 }
 
+/// Chapter Lexicon (operator-configurable vocabulary, pre-v0.4.0) — the
+/// built-in [`RELATION_LEXICON`] + [`INVERSE_LEXICON`] plus operator
+/// extensions from `[graph.vocabulary]`. Each extension is `(canonical,
+/// extra_synonyms)`; an operator phrase is checked **first** (so it can
+/// override a built-in mapping or introduce a new canonical type) and is
+/// forward-only (operator extras don't define inverses). An empty
+/// vocabulary (`Default`) is byte-identical to the free
+/// [`canonical_relation`].
+#[derive(Debug, Clone, Default)]
+pub struct RelationVocabulary {
+    extra: Vec<(String, Vec<String>)>,
+}
+
+impl RelationVocabulary {
+    /// Build from operator extensions; each `(canonical, synonyms)` pair
+    /// is cleaned to canonical-label form so lookups compare directly.
+    pub fn new(extra: Vec<(String, Vec<String>)>) -> Self {
+        let extra = extra
+            .into_iter()
+            .map(|(canon, syns)| {
+                (
+                    canonical_label(&canon),
+                    syns.iter().map(|s| canonical_label(s)).collect(),
+                )
+            })
+            .filter(|(c, _): &(String, Vec<String>)| !c.is_empty())
+            .collect();
+        Self { extra }
+    }
+
+    /// Fold a predicate, consulting operator extensions first, then the
+    /// built-in forward + inverse vocabulary. Same `(canonical, flip)`
+    /// contract as [`canonical_relation`].
+    pub fn canonical_relation(&self, s: &str) -> (String, bool) {
+        let cleaned = canonical_label(s);
+        if cleaned.is_empty() {
+            return (cleaned, false);
+        }
+        for (canon, syns) in &self.extra {
+            if &cleaned == canon || syns.iter().any(|x| x == &cleaned) {
+                return (canon.clone(), false);
+            }
+        }
+        canonical_relation(&cleaned)
+    }
+}
+
 /// One directed, typed relation: `subject —[predicate]→ object`.
 ///
 /// `subject` / `object` are canonical entity strings; `predicate` is a
@@ -238,6 +285,28 @@ mod tests {
         // The direction-agnostic helper folds both to the same type.
         assert_eq!(canonical_predicate("owned by"), "owns");
         assert_eq!(canonical_predicate("owns"), "owns");
+    }
+
+    #[test]
+    fn operator_vocabulary_overrides_and_extends() {
+        let v = RelationVocabulary::new(vec![
+            // Extend an existing type with a new phrase.
+            ("depends-on".into(), vec!["builds on".into(), "sits atop".into()]),
+            // A brand-new canonical type.
+            ("rivals".into(), vec!["competes with".into()]),
+            // Override: map a phrase the built-in would fold elsewhere.
+            ("owns".into(), vec!["part of".into()]),
+        ]);
+        assert_eq!(v.canonical_relation("builds on"), ("depends-on".into(), false));
+        assert_eq!(v.canonical_relation("competes with"), ("rivals".into(), false));
+        // Operator override wins over the built-in part-of synonym.
+        assert_eq!(v.canonical_relation("part of"), ("owns".into(), false));
+        // Anything not in the extras falls through to the built-in.
+        assert_eq!(v.canonical_relation("requires"), ("depends-on".into(), false));
+        assert_eq!(v.canonical_relation("owned by"), ("owns".into(), true));
+        // An empty vocabulary is identical to the free function.
+        let d = RelationVocabulary::default();
+        assert_eq!(d.canonical_relation("part of"), canonical_relation("part of"));
     }
 
     #[test]

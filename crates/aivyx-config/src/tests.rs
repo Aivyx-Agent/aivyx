@@ -7169,6 +7169,28 @@ fn wiki_section_parses_defaults_and_overrides() {
 }
 
 #[test]
+fn graph_vocabulary_subtable_parses() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[graph]\nenabled = true\n\
+         [graph.vocabulary]\ndepends-on = [\"builds on\", \"sits atop\"]\nrivals = [\"competes with\"]\n",
+        "graph-vocab",
+    );
+    let g = cfg.graph.expect("graph section");
+    assert!(g.enabled);
+    // BTreeMap → deterministic order: depends-on, rivals.
+    assert_eq!(g.vocabulary.len(), 2);
+    let deps = g.vocabulary.iter().find(|(c, _)| c == "depends-on").unwrap();
+    assert_eq!(deps.1, vec!["builds on".to_string(), "sits atop".to_string()]);
+    // The section is `Some` even when only [graph.vocabulary] is present.
+    let only_vocab = load_with_toml(
+        "\n[graph.vocabulary]\nowns = [\"stewards\"]\n",
+        "graph-vocab-only",
+    );
+    assert!(only_vocab.graph.is_some());
+}
+
+#[test]
 fn skill_authoring_section_parses_and_defaults() {
     let _env = EnvScope::new();
     let off = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "ska-off");

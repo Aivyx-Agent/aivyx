@@ -1224,6 +1224,16 @@ parent_role = "researcher"
 #   recall_hybrid           = true
 #   recall_graph_typed_weight = 1.0   # 0 = off (default)
 #
+# Relations are folded into a controlled vocabulary (Chapter Lexicon):
+# synonyms collapse to one canonical type ("depends on"/"requires" ->
+# depends-on) and inverse phrasings flip ("X owned-by Y" -> "Y owns X").
+# Extend or override that vocabulary for your domain — each line is
+# `canonical = ["synonym", ...]`; your phrases win over the built-ins:
+#
+#   [graph.vocabulary]
+#   depends-on = ["builds on", "sits atop"]
+#   rivals     = ["competes with"]   # a brand-new relation type
+#
 # ----------------------------------------------------------------
 # Recall feedback loop (Phase 77) — no config; learns on its own
 # ----------------------------------------------------------------

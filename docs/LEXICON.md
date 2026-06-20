@@ -126,11 +126,24 @@ extraction (+ the prompt hint) and at `graph.query`; the
 re-normalization-with-merge pass over existing triples on the sweep
 cadence.
 
-**Out:** an operator-configurable vocabulary (`[graph.vocabulary]`);
-inverse-relation detection / direction-flipping; LLM-judged relation
-clustering; any Studio edge-coloring-by-type beyond the (now cleaner)
-labels — a deferred polish; any change to entities (this chapter is about
-*predicates* only), the storage model, or the graph's tool/IPC surface.
+**Out:** ~~an operator-configurable vocabulary (`[graph.vocabulary]`)~~
+*(done — pre-v0.4.0; see addendum below)*; ~~inverse-relation detection /
+direction-flipping~~ *(done — pre-v0.4.0)*; LLM-judged relation clustering;
+any Studio edge-coloring-by-type beyond the (now cleaner) labels — a
+deferred polish; any change to entities (this chapter is about *predicates*
+only), the storage model, or the graph's tool/IPC surface.
+
+### Operator-configurable vocabulary (pre-v0.4.0 addendum)
+`[graph.vocabulary]` lets an operator extend or override the built-in
+lexicon per domain — a TOML sub-table of `canonical = ["synonym", …]`.
+Modeled as `RelationVocabulary` in `aivyx-ipc::graph` (the built-in
+forward + inverse vocabulary plus operator extras, **operator phrases
+checked first** so they override or introduce a canonical type;
+forward-only). Threaded from `GraphConfig.vocabulary` into the
+`GraphExtractor` (`with_vocabulary`) + the re-normalization sweep
+(`normalize_predicates(&vocab)`). Empty (the default) is byte-identical to
+the pure free functions. *Originally a documented deferral; completed in
+the pre-v0.4.0 cleanup.*
 
 ## 4. Phase plan (docs-first, small phases per convention)
 

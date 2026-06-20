@@ -4904,6 +4904,12 @@ async fn run_async(
                 Arc::clone(&provider),
                 Arc::clone(&graph_store),
                 model.clone(),
+            )
+            // Chapter Lexicon — operator `[graph.vocabulary]` extensions.
+            .with_vocabulary(
+                aivyx_channel::knowledge_graph::RelationVocabulary::new(
+                    g.vocabulary.clone(),
+                ),
             );
             aivyx_channel::knowledge_graph::GraphSweepConfig {
                 extractor: Arc::new(extractor),

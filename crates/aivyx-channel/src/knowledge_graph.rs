@@ -27,7 +27,7 @@ use aivyx_storage::DomainHandle;
 
 pub use aivyx_ipc::graph::{
     canonical_label, canonical_predicate, canonical_relation, GraphEntity, GraphPath,
-    GraphTriple,
+    GraphTriple, RelationVocabulary,
 };
 
 /// Prefix byte that marks a non-triple (metadata) row. A canonical triple
@@ -189,7 +189,10 @@ impl PersistentGraphStore {
     /// itself, a no-op) and best-effort. Returns the number of synonym
     /// rows re-mapped. The single fix for the fragmentation open-vocabulary
     /// extraction left behind before LX.1.
-    pub async fn normalize_predicates(&self) -> Result<usize, GraphStoreError> {
+    pub async fn normalize_predicates(
+        &self,
+        vocab: &aivyx_ipc::graph::RelationVocabulary,
+    ) -> Result<usize, GraphStoreError> {
         use std::collections::{HashMap, HashSet};
         let triples = self.all_triples().await?;
         // canonical (subject, predicate, object) → merged triple.
@@ -204,7 +207,7 @@ impl PersistentGraphStore {
         for t in &triples {
             // Fold the predicate + (for an inverse phrasing) swap
             // subject↔object so the re-keyed row points the canonical way.
-            let (canon, flip) = canonical_relation(&t.predicate);
+            let (canon, flip) = vocab.canonical_relation(&t.predicate);
             let (subj, obj) = if flip {
                 (t.object.clone(), t.subject.clone())
             } else {
@@ -462,6 +465,9 @@ pub struct GraphExtractor {
     store: Arc<PersistentGraphStore>,
     model: String,
     config: GraphExtractConfig,
+    /// Chapter Lexicon — built-in vocabulary + operator `[graph.vocabulary]`
+    /// extensions. Default (empty) ⇒ byte-identical to the built-in lexicon.
+    vocab: aivyx_ipc::graph::RelationVocabulary,
 }
 
 impl GraphExtractor {
@@ -477,11 +483,21 @@ impl GraphExtractor {
             store,
             model: model.into(),
             config: GraphExtractConfig::default(),
+            vocab: aivyx_ipc::graph::RelationVocabulary::default(),
         }
     }
 
     pub fn with_config(mut self, config: GraphExtractConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Chapter Lexicon — supply operator `[graph.vocabulary]` extensions.
+    pub fn with_vocabulary(
+        mut self,
+        vocab: aivyx_ipc::graph::RelationVocabulary,
+    ) -> Self {
+        self.vocab = vocab;
         self
     }
 
@@ -565,7 +581,7 @@ impl GraphExtractor {
             // as one canonical relation type; unknowns keep their label. An
             // INVERSE phrasing (`X owned-by Y`) folds to the forward type +
             // a subject↔object swap so the stored direction is canonical.
-            let (p, flip) = canonical_relation(&rt.predicate);
+            let (p, flip) = self.vocab.canonical_relation(&rt.predicate);
             let (s, o) = if flip {
                 (canonical_label(&rt.object), canonical_label(&rt.subject))
             } else {
@@ -652,7 +668,8 @@ impl GraphExtractor {
         // Chapter Lexicon (LX.2) — fold any pre-LX.1 free-text predicates
         // into the controlled vocabulary, merging synonym collisions.
         // Best-effort + idempotent, so it's safe to run every sweep.
-        report.remapped = self.store.normalize_predicates().await.unwrap_or(0);
+        report.remapped =
+            self.store.normalize_predicates(&self.vocab).await.unwrap_or(0);
         report
     }
 }
@@ -1113,7 +1130,7 @@ mod tests {
         .await
         .unwrap();
 
-        let remapped = g.normalize_predicates().await.unwrap();
+        let remapped = g.normalize_predicates(&aivyx_ipc::graph::RelationVocabulary::default()).await.unwrap();
         assert_eq!(remapped, 2, "requires + needs remapped");
         // All three collapse into one canonical edge.
         let all = g.all_triples().await.unwrap();
@@ -1133,10 +1150,10 @@ mod tests {
         g.put_triple(&triple("deploy", "requires", "ci")).await.unwrap();
         g.put_triple(&triple("alice", "rivals", "bob")).await.unwrap(); // not in lexicon
 
-        let first = g.normalize_predicates().await.unwrap();
+        let first = g.normalize_predicates(&aivyx_ipc::graph::RelationVocabulary::default()).await.unwrap();
         assert_eq!(first, 1, "only 'requires' is a synonym");
         // Second pass: nothing left to remap.
-        assert_eq!(g.normalize_predicates().await.unwrap(), 0);
+        assert_eq!(g.normalize_predicates(&aivyx_ipc::graph::RelationVocabulary::default()).await.unwrap(), 0);
         // The unknown relation is untouched (open-world).
         assert!(g.get_triple("alice", "rivals", "bob").await.unwrap().is_some());
         assert!(g.get_triple("deploy", "depends-on", "ci").await.unwrap().is_some());
@@ -1185,7 +1202,7 @@ mod tests {
         let g = store().await;
         // A pre-existing inverse-phrased triple.
         g.put_triple(&triple("ci", "owned by", "deploy")).await.unwrap();
-        let remapped = g.normalize_predicates().await.unwrap();
+        let remapped = g.normalize_predicates(&aivyx_ipc::graph::RelationVocabulary::default()).await.unwrap();
         assert_eq!(remapped, 1);
         // Re-keyed to the forward direction.
         assert!(g.get_triple("deploy", "owns", "ci").await.unwrap().is_some());

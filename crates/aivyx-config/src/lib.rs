@@ -2300,6 +2300,10 @@ pub struct GraphConfig {
     pub max_topics_per_sweep: usize,
     /// Seconds between sweeps.
     pub interval_secs: u64,
+    /// Chapter Lexicon — operator `[graph.vocabulary]` extensions:
+    /// `(canonical_relation, [extra synonyms])`. Merged on top of the
+    /// built-in relation lexicon (operator phrases win). Empty by default.
+    pub vocabulary: Vec<(String, Vec<String>)>,
 }
 
 /// Default per-sweep topic cap (LLM calls per pass).
@@ -4341,6 +4345,10 @@ struct RawGraph {
     max_topics_per_sweep: Option<usize>,
     #[serde(default)]
     interval_secs: Option<u64>,
+    /// Chapter Lexicon — `[graph.vocabulary]` sub-table: canonical
+    /// relation → extra synonym phrases.
+    #[serde(default)]
+    vocabulary: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Chapter Whetstone — `[skill_refinement]` deserialize target. Absent
@@ -5444,6 +5452,7 @@ impl AivyxConfig {
                 enabled: true,
                 max_topics_per_sweep: DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP,
                 interval_secs: DEFAULT_GRAPH_INTERVAL_SECS,
+                vocabulary: Vec::new(),
             })
         });
         let skill_refinement =
@@ -7904,7 +7913,8 @@ fn build_wiki_config(raw: &RawWiki) -> Result<Option<WikiConfig>, ConfigError> {
 fn build_graph_config(raw: &RawGraph) -> Result<Option<GraphConfig>, ConfigError> {
     let any_set = raw.enabled.is_some()
         || raw.max_topics_per_sweep.is_some()
-        || raw.interval_secs.is_some();
+        || raw.interval_secs.is_some()
+        || !raw.vocabulary.is_empty();
     if !any_set {
         return Ok(None);
     }
@@ -7927,10 +7937,16 @@ fn build_graph_config(raw: &RawGraph) -> Result<Option<GraphConfig>, ConfigError
             });
         }
     }
+    let vocabulary = raw
+        .vocabulary
+        .iter()
+        .map(|(canon, syns)| (canon.clone(), syns.clone()))
+        .collect();
     Ok(Some(GraphConfig {
         enabled,
         max_topics_per_sweep,
         interval_secs,
+        vocabulary,
     }))
 }
 
