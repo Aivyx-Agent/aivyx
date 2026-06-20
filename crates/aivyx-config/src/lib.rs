@@ -797,6 +797,10 @@ pub struct AivyxConfig {
     /// typed-knowledge-graph extraction. `Some` only arms it; it still
     /// no-ops unless `enabled = true`.
     pub graph: Option<GraphConfig>,
+    /// Chapter Whetstone — `[skill_refinement]` section. `None` when
+    /// absent (no skill-refinement pass). `Some` only arms it; it still
+    /// no-ops unless `enabled = true`.
+    pub skill_refinement: Option<SkillRefinementConfig>,
     /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
     /// behavior; `Smart` expands the coherent memory bundle into the
     /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
@@ -2299,6 +2303,41 @@ pub const DEFAULT_GRAPH_MAX_TOPICS_PER_SWEEP: usize = 20;
 /// Default graph sweep interval — hourly.
 pub const DEFAULT_GRAPH_INTERVAL_SECS: u64 = 3600;
 
+/// Chapter Whetstone — default underperformer EWMA floor (`0.0` =
+/// net-negative, recency-weighted).
+pub const DEFAULT_REFINE_FLOOR: f32 = 0.0;
+/// Chapter Whetstone — default confidence gate (folded windows) before a
+/// skill can be refined.
+pub const DEFAULT_REFINE_MIN_SAMPLES: u32 = 4;
+/// Chapter Whetstone — default cap on refinement proposals per cycle.
+pub const DEFAULT_REFINE_MAX_PER_CYCLE: usize = 2;
+
+/// Chapter Whetstone — `[skill_refinement]` config. The reflection-cadence
+/// pass that proposes a sharper version of an underperforming skill. Off
+/// by default; even `Some`, the pass no-ops unless `enabled`.
+#[derive(Debug, Clone)]
+pub struct SkillRefinementConfig {
+    /// Master switch. Default `false`.
+    pub enabled: bool,
+    /// Decayed-EWMA floor below which a skill is an underperformer.
+    pub floor: f32,
+    /// Minimum folded windows before a skill is refinement-eligible.
+    pub min_samples: u32,
+    /// Hard cap on refinement proposals filed per reflection cycle.
+    pub max_per_cycle: usize,
+}
+
+impl Default for SkillRefinementConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            floor: DEFAULT_REFINE_FLOOR,
+            min_samples: DEFAULT_REFINE_MIN_SAMPLES,
+            max_per_cycle: DEFAULT_REFINE_MAX_PER_CYCLE,
+        }
+    }
+}
+
 /// Chapter Synapse — the `[memory] profile` activation switch. One knob
 /// that expands into the coherent bundle of memory settings, so an
 /// operator opts into the full self-organizing memory stack
@@ -3301,6 +3340,9 @@ struct RawToml {
     /// `[graph]` section. Chapter Lattice — typed-graph extraction.
     #[serde(default)]
     graph: RawGraph,
+    /// `[skill_refinement]` section. Chapter Whetstone.
+    #[serde(default)]
+    skill_refinement: RawSkillRefinement,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -4255,6 +4297,42 @@ struct RawGraph {
     max_topics_per_sweep: Option<usize>,
     #[serde(default)]
     interval_secs: Option<u64>,
+}
+
+/// Chapter Whetstone — `[skill_refinement]` deserialize target. Absent
+/// section → `skill_refinement: None` (no pass).
+#[derive(Debug, Default, Deserialize)]
+struct RawSkillRefinement {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    floor: Option<f32>,
+    #[serde(default)]
+    min_samples: Option<u32>,
+    #[serde(default)]
+    max_per_cycle: Option<usize>,
+}
+
+/// Chapter Whetstone — build the `[skill_refinement]` config. `None` only
+/// when the section is entirely absent; any present field arms it (still
+/// no-op unless `enabled`).
+fn build_skill_refinement_config(
+    raw: &RawSkillRefinement,
+) -> Option<SkillRefinementConfig> {
+    let any_set = raw.enabled.is_some()
+        || raw.floor.is_some()
+        || raw.min_samples.is_some()
+        || raw.max_per_cycle.is_some();
+    if !any_set {
+        return None;
+    }
+    let d = SkillRefinementConfig::default();
+    Some(SkillRefinementConfig {
+        enabled: raw.enabled.unwrap_or(d.enabled),
+        floor: raw.floor.unwrap_or(d.floor),
+        min_samples: raw.min_samples.unwrap_or(d.min_samples),
+        max_per_cycle: raw.max_per_cycle.unwrap_or(d.max_per_cycle),
+    })
 }
 
 /// Phase 87 — `[persona_consolidation]` deserialize target.
@@ -5288,6 +5366,8 @@ impl AivyxConfig {
                 interval_secs: DEFAULT_GRAPH_INTERVAL_SECS,
             })
         });
+        let skill_refinement =
+            build_skill_refinement_config(&toml.skill_refinement);
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -6375,6 +6455,7 @@ impl AivyxConfig {
             recall_cluster,
             wiki,
             graph,
+            skill_refinement,
             memory_profile,
             persona_consolidation,
             correction_consolidation,

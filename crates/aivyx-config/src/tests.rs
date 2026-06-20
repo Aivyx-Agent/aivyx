@@ -7169,6 +7169,24 @@ fn wiki_section_parses_defaults_and_overrides() {
 }
 
 #[test]
+fn skill_refinement_section_parses_and_defaults() {
+    let _env = EnvScope::new();
+    // Absent → None.
+    let off = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "skr-off");
+    assert!(off.skill_refinement.is_none());
+    // Present → Some; unset fields take defaults; enabled honored.
+    let cfg = load_with_toml(
+        "\n[skill_refinement]\nenabled = true\nmin_samples = 6\n",
+        "skr-on",
+    );
+    let s = cfg.skill_refinement.expect("section present");
+    assert!(s.enabled);
+    assert_eq!(s.min_samples, 6);
+    assert_eq!(s.floor, crate::DEFAULT_REFINE_FLOOR);
+    assert_eq!(s.max_per_cycle, crate::DEFAULT_REFINE_MAX_PER_CYCLE);
+}
+
+#[test]
 fn memory_profile_off_is_byte_identical() {
     let _env = EnvScope::new();
     // No [memory] + a present [embedding] → profile Off, nothing armed.

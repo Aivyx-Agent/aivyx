@@ -429,6 +429,12 @@ pub struct DaemonConfig {
     /// similar tasks` section (Phase 116 Task 5).
     pub tool_relevance_ledger:
         Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
+    /// Chapter Whetstone (WH.3b) — the per-skill effectiveness ledger.
+    /// `Some` iff `[skill_refinement]` is configured; the turn loop folds
+    /// each turn's `SkillInvocation` outcomes into it for the WH.3
+    /// refinement pass to read.
+    pub skill_effectiveness_ledger:
+        Option<Arc<crate::skill_effectiveness::SkillEffectivenessLedger>>,
     /// Phase 173 — the autonomous-loop backlog (zero-config,
     /// always built when storage is configured) for the loop
     /// IPC handlers + the driver.
@@ -588,6 +594,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         tool_descriptors,
         skill_auto_proposer,
         tool_relevance_ledger,
+        skill_effectiveness_ledger,
         loop_backlog,
         loop_state,
         loop_config,
@@ -1364,6 +1371,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             tool_descriptors: Arc::clone(&tool_descriptors),
             skill_auto_proposer: skill_auto_proposer.clone(),
             tool_relevance_ledger: tool_relevance_ledger.clone(),
+            skill_effectiveness_ledger: skill_effectiveness_ledger.clone(),
             loop_backlog: loop_backlog.clone(),
             loop_state: loop_state.clone(),
             loop_config: loop_config.clone(),
@@ -1526,6 +1534,10 @@ struct ConnectionContext {
     /// `None` disables the recording hook + prompt section.
     tool_relevance_ledger:
         Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
+    /// Chapter Whetstone (WH.3b) — per-skill effectiveness ledger handle.
+    /// `None` disables the per-turn fold.
+    skill_effectiveness_ledger:
+        Option<Arc<crate::skill_effectiveness::SkillEffectivenessLedger>>,
     /// Phase 173 — the autonomous-loop backlog (always `Some`
     /// when storage is configured) for the `loop add/list/status`
     /// IPC handlers.
@@ -1588,6 +1600,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         tool_descriptors,
         skill_auto_proposer,
         tool_relevance_ledger,
+        skill_effectiveness_ledger,
         loop_backlog,
         loop_state,
         loop_config,
@@ -1853,6 +1866,50 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                         .await;
                                     });
                                 }
+                            }
+
+                            // Chapter Whetstone (WH.3b) — per-skill
+                            // effectiveness fold. Same detached, failure-
+                            // isolated shape: walk this turn's audit slice
+                            // for SkillInvocation entries and fold each
+                            // distinct skill by the turn outcome (helpful =
+                            // Completed). Fires only when [skill_refinement]
+                            // is configured (the ledger is `Some`).
+                            if let (Some(skill_ledger), Some(pre_len), Some(audit)) = (
+                                &skill_effectiveness_ledger,
+                                audit_pre_turn_len,
+                                &audit_log,
+                            ) {
+                                let helpful = matches!(
+                                    outcome,
+                                    TurnOutcome::Completed { .. }
+                                );
+                                let ledger_clone = Arc::clone(skill_ledger);
+                                let audit_clone = Arc::clone(audit);
+                                tokio::spawn(async move {
+                                    let head = audit_clone.len();
+                                    let limit = head.saturating_sub(pre_len);
+                                    if limit == 0 {
+                                        return;
+                                    }
+                                    let entries = match audit_clone
+                                        .entries_range(pre_len as u64, limit)
+                                    {
+                                        Ok(e) => e,
+                                        Err(_) => return,
+                                    };
+                                    let now_secs = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0);
+                                    crate::skill_effectiveness::record_turn_skills(
+                                        &ledger_clone,
+                                        &entries,
+                                        helpful,
+                                        now_secs,
+                                    )
+                                    .await;
+                                });
                             }
 
                             // Phase 112 + 115 — auto-proposer post-finalize
@@ -2742,6 +2799,7 @@ async fn run_single_connection_daemon(
         tool_descriptors: Arc::from(Vec::<ToolDescriptor>::new()),
         skill_auto_proposer: None,
         tool_relevance_ledger: None,
+        skill_effectiveness_ledger: None,
         loop_backlog: None,
         loop_state: None,
         loop_config: None,
@@ -2823,6 +2881,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         tool_descriptors: Vec::new(),
         skill_auto_proposer: None,
         tool_relevance_ledger: None,
+        skill_effectiveness_ledger: None,
         loop_backlog: None,
         loop_state: None,
         loop_config: None,

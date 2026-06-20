@@ -4134,6 +4134,10 @@ async fn run_async(
         // Chapter Lattice — `[graph]` config. Drives the daemon's
         // typed-knowledge-graph extraction sweep (via DaemonConfig below).
         graph: config_graph,
+        // Chapter Whetstone — `[skill_refinement]` config. Gates the
+        // per-skill effectiveness ledger (write-side fold, WH.3b) and the
+        // refinement reflection pass (WH.3c).
+        skill_refinement: config_skill_refinement,
         // Chapter Synapse — `[memory] profile` has already expanded into
         // the embedding/recall_cluster/wiki/graph fields at config-load,
         // so the daemon reads those as usual; the profile itself is
@@ -7073,6 +7077,19 @@ async fn run_async(
                     Arc::new(
                         aivyx_channel::tool_relevance_ledger::PersistentToolRelevanceLedger::new(
                             storage.domain(KeyDomain::ToolRelevanceLedger),
+                        ),
+                    )
+                }),
+            // Chapter Whetstone (WH.3b) — the per-skill effectiveness
+            // ledger. Built iff `[skill_refinement]` is present, so the
+            // default config stays byte-identical (no fold, no domain
+            // writes). The WH.3c reflection pass reads it.
+            skill_effectiveness_ledger: config_skill_refinement
+                .as_ref()
+                .map(|_| {
+                    Arc::new(
+                        aivyx_channel::skill_effectiveness::SkillEffectivenessLedger::new(
+                            storage.domain(KeyDomain::SkillHelpfulnessLedger),
                         ),
                     )
                 }),

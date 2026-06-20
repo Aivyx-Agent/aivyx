@@ -33,35 +33,10 @@ use crate::persona::{
 use crate::persona_proposal::PersistentPersonaProposalLog;
 use crate::skill_effectiveness::SkillEffectivenessLedger;
 
-/// Default decayed-EWMA floor below which a skill is an underperformer.
-/// `0.0` = net-negative (more bad turns than good, recency-weighted).
-pub const DEFAULT_REFINE_FLOOR: f32 = 0.0;
-/// Default minimum folded windows before a skill can be refined — the
-/// confidence gate so one bad turn never triggers a proposal.
-pub const DEFAULT_REFINE_MIN_SAMPLES: u32 = 4;
-/// Default cap on refinement proposals filed per cycle (don't flood the
-/// operator's review queue).
-pub const DEFAULT_REFINE_MAX_PER_CYCLE: usize = 2;
-
-/// Config for the refinement pass. Off by default — the loop is opt-in.
-#[derive(Debug, Clone)]
-pub struct SkillRefinementConfig {
-    pub enabled: bool,
-    pub floor: f32,
-    pub min_samples: u32,
-    pub max_per_cycle: usize,
-}
-
-impl Default for SkillRefinementConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            floor: DEFAULT_REFINE_FLOOR,
-            min_samples: DEFAULT_REFINE_MIN_SAMPLES,
-            max_per_cycle: DEFAULT_REFINE_MAX_PER_CYCLE,
-        }
-    }
-}
+// The `[skill_refinement]` config lives in `aivyx-config` (the canonical
+// home for operator config, like every other `*Config`); re-exported here
+// for the engine + the deps bundle.
+pub use aivyx_config::SkillRefinementConfig;
 
 /// Drafts a sharper procedure for an underperforming skill. Abstracted so
 /// the engine is testable without a live model; the production impl is

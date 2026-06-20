@@ -863,6 +863,7 @@ async fn two_concurrent_connections() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1198,6 +1199,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1331,6 +1333,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1785,6 +1788,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2093,6 +2097,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
         })
         .await
         .expect("daemon must complete");
@@ -2513,6 +2518,7 @@ async fn mission_queries_round_trip_over_ipc() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2924,6 +2930,7 @@ async fn audit_queries_round_trip_over_ipc() {
             tool_descriptors: Vec::new(),
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
+            skill_effectiveness_ledger: None,
         })
         .await
         .expect("daemon must complete successfully");
