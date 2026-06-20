@@ -34,16 +34,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Cache cargo registry + target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
+      # Swatinem/rust-cache caches only the reusable bits of `target`
+      # (dependency artifacts), cleaning the final per-crate outputs +
+      # test/example binaries it doesn't make sense to cache. The old
+      # `actions/cache` over the *whole* `target` grew to ~9.6 GB and
+      # overflowed the runner disk on restore ("No space left on device").
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
       - name: Install system dependencies
         # aivyx-voice -> alsa-sys needs the ALSA dev library (alsa.pc)
         # for pkg-config; the bare runner doesn't ship it.
