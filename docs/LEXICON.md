@@ -99,12 +99,17 @@ fragmentation the chapter exists to fix). Runs best-effort on the existing
 graph-extraction sweep cadence; idempotent (a canonical triple re-maps to
 itself, a no-op).
 
-### Direction is preserved; inverse phrasings stay open
-Synonyms are **same-direction** phrasings only. Inverse phrasings
-(`owned by`, `caused by`) are *not* folded into their forward type
-(that would silently flip subject↔object); they fall through to the
-open-world fallback. Inverse-relation normalization (detect + flip) is a
-documented deferral.
+### Direction is normalized — inverse phrasings flip (pre-v0.4.0 addendum)
+Forward synonyms are same-direction. **Inverse phrasings** (`owned by`,
+`caused by`, `required by`, `produced by`) now fold to their forward
+canonical type **with a subject↔object swap** so the stored direction is
+canonical (`X owned-by Y` ⇒ `Y owns X`) — `canonical_relation(s) ->
+(canonical, flip)` in `aivyx-ipc::graph` (an `INVERSE_LEXICON` disjoint
+from the forward synonyms; a guard test enforces no overlap). Applied at
+extraction and in the re-normalization sweep (both have subject/object to
+swap); `graph.query`'s filter uses the direction-agnostic
+`canonical_predicate` (it has no endpoints to flip). *Originally a
+documented deferral; completed in the pre-v0.4.0 cleanup.*
 
 ### Governance: a refinement, nothing new
 No new tool, no new capability base, no P10 amendment, no new storage

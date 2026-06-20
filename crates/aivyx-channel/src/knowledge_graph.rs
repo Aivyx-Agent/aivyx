@@ -26,7 +26,8 @@
 use aivyx_storage::DomainHandle;
 
 pub use aivyx_ipc::graph::{
-    canonical_label, canonical_predicate, GraphEntity, GraphPath, GraphTriple,
+    canonical_label, canonical_predicate, canonical_relation, GraphEntity, GraphPath,
+    GraphTriple,
 };
 
 /// Prefix byte that marks a non-triple (metadata) row. A canonical triple
@@ -201,9 +202,16 @@ impl PersistentGraphStore {
         let mut remapped = 0usize;
 
         for t in &triples {
-            let canon = canonical_predicate(&t.predicate);
-            let key = (t.subject.clone(), canon.clone(), t.object.clone());
-            if canon != t.predicate {
+            // Fold the predicate + (for an inverse phrasing) swap
+            // subject↔object so the re-keyed row points the canonical way.
+            let (canon, flip) = canonical_relation(&t.predicate);
+            let (subj, obj) = if flip {
+                (t.object.clone(), t.subject.clone())
+            } else {
+                (t.subject.clone(), t.object.clone())
+            };
+            let key = (subj.clone(), canon.clone(), obj.clone());
+            if canon != t.predicate || flip {
                 remapped += 1;
                 old_keys.push((t.subject.clone(), t.predicate.clone(), t.object.clone()));
                 changed.insert(key.clone());
@@ -221,7 +229,12 @@ impl PersistentGraphStore {
             } else {
                 groups.insert(
                     key.clone(),
-                    GraphTriple { predicate: canon, ..t.clone() },
+                    GraphTriple {
+                        subject: subj,
+                        predicate: canon,
+                        object: obj,
+                        ..t.clone()
+                    },
                 );
             }
         }
@@ -547,12 +560,17 @@ impl GraphExtractor {
         use std::collections::HashMap;
         let mut counts: HashMap<(String, String, String), u32> = HashMap::new();
         for rt in Self::parse_triples(&text) {
-            let s = canonical_label(&rt.subject);
             // Chapter Lexicon — fold the predicate into the controlled
             // vocabulary so synonyms (depends on / requires / needs) store
-            // as one canonical relation type; unknowns keep their label.
-            let p = canonical_predicate(&rt.predicate);
-            let o = canonical_label(&rt.object);
+            // as one canonical relation type; unknowns keep their label. An
+            // INVERSE phrasing (`X owned-by Y`) folds to the forward type +
+            // a subject↔object swap so the stored direction is canonical.
+            let (p, flip) = canonical_relation(&rt.predicate);
+            let (s, o) = if flip {
+                (canonical_label(&rt.object), canonical_label(&rt.subject))
+            } else {
+                (canonical_label(&rt.subject), canonical_label(&rt.object))
+            };
             // Reject empties and self-loops (an entity related to itself
             // by the same name is noise).
             if s.is_empty() || p.is_empty() || o.is_empty() || s == o {
@@ -1142,6 +1160,36 @@ mod tests {
         assert!(g.get_triple("deploy", "depends-on", "ci").await.unwrap().is_some());
         // The raw synonym is NOT stored as its own edge.
         assert!(g.get_triple("deploy", "requires", "ci").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn extraction_flips_inverse_phrasing() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("ci", "ci is owned by the deploy pipeline").await.unwrap();
+        let g = Arc::new(store().await);
+        // The LLM emits an inverse ("ci owned-by deploy"); it must store as
+        // the forward "deploy owns ci".
+        let x = extractor(
+            Arc::clone(&mem),
+            Arc::clone(&g),
+            r#"[{"subject":"ci","predicate":"owned by","object":"deploy"}]"#,
+            false,
+        );
+        assert!(matches!(x.regenerate("ci", 1).await, GraphRegenOutcome::Wrote(1)));
+        assert!(g.get_triple("deploy", "owns", "ci").await.unwrap().is_some());
+        assert!(g.get_triple("ci", "owned by", "deploy").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn normalize_flips_existing_inverse_triple() {
+        let g = store().await;
+        // A pre-existing inverse-phrased triple.
+        g.put_triple(&triple("ci", "owned by", "deploy")).await.unwrap();
+        let remapped = g.normalize_predicates().await.unwrap();
+        assert_eq!(remapped, 1);
+        // Re-keyed to the forward direction.
+        assert!(g.get_triple("deploy", "owns", "ci").await.unwrap().is_some());
+        assert!(g.get_triple("ci", "owned by", "deploy").await.unwrap().is_none());
     }
 
     #[tokio::test]
