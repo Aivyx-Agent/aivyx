@@ -180,6 +180,66 @@ impl PersistentGraphStore {
         Ok(traverse(&triples, start, direction, predicate, max_hops, max_results))
     }
 
+    /// Chapter Lexicon (LX.2) — re-map every stored triple's predicate
+    /// through the controlled vocabulary and **merge** synonym collisions:
+    /// when `deploy —requires→ ci` re-maps onto `deploy —depends-on→ ci`,
+    /// the two rows collapse into one with **summed `mentions`** and
+    /// unioned `source_seqs`. Idempotent (a canonical triple re-maps to
+    /// itself, a no-op) and best-effort. Returns the number of synonym
+    /// rows re-mapped. The single fix for the fragmentation open-vocabulary
+    /// extraction left behind before LX.1.
+    pub async fn normalize_predicates(&self) -> Result<usize, GraphStoreError> {
+        use std::collections::{HashMap, HashSet};
+        let triples = self.all_triples().await?;
+        // canonical (subject, predicate, object) → merged triple.
+        let mut groups: HashMap<(String, String, String), GraphTriple> = HashMap::new();
+        // Canonical keys that actually changed (a remap or a merge) and so
+        // must be (re)written; canonical no-collision rows are left alone.
+        let mut changed: HashSet<(String, String, String)> = HashSet::new();
+        // Old synonym keys to delete (predicate differed from canonical).
+        let mut old_keys: Vec<(String, String, String)> = Vec::new();
+        let mut remapped = 0usize;
+
+        for t in &triples {
+            let canon = canonical_predicate(&t.predicate);
+            let key = (t.subject.clone(), canon.clone(), t.object.clone());
+            if canon != t.predicate {
+                remapped += 1;
+                old_keys.push((t.subject.clone(), t.predicate.clone(), t.object.clone()));
+                changed.insert(key.clone());
+            }
+            if let Some(m) = groups.get_mut(&key) {
+                // A second row maps to this canonical key → merge.
+                m.mentions = m.mentions.saturating_add(t.mentions);
+                for s in &t.source_seqs {
+                    if !m.source_seqs.contains(s) {
+                        m.source_seqs.push(*s);
+                    }
+                }
+                m.updated_at = m.updated_at.max(t.updated_at);
+                changed.insert(key.clone());
+            } else {
+                groups.insert(
+                    key.clone(),
+                    GraphTriple { predicate: canon, ..t.clone() },
+                );
+            }
+        }
+        // Delete the synonym rows first, then write the merged canonical
+        // rows (only those that changed) — sorted seqs for determinism.
+        for (s, p, o) in old_keys {
+            self.delete_triple(&s, &p, &o).await?;
+        }
+        for (key, mut t) in groups {
+            if changed.contains(&key) {
+                t.source_seqs.sort_unstable();
+                t.source_seqs.dedup();
+                self.put_triple(&t).await?;
+            }
+        }
+        Ok(remapped)
+    }
+
     // ---- incremental-extraction bookkeeping (per topic) ----------------
 
     fn fingerprint_key(topic: &str) -> Vec<u8> {
@@ -571,6 +631,10 @@ impl GraphExtractor {
                 GraphRegenOutcome::NoEntries => report.no_entries += 1,
             }
         }
+        // Chapter Lexicon (LX.2) — fold any pre-LX.1 free-text predicates
+        // into the controlled vocabulary, merging synonym collisions.
+        // Best-effort + idempotent, so it's safe to run every sweep.
+        report.remapped = self.store.normalize_predicates().await.unwrap_or(0);
         report
     }
 }
@@ -588,6 +652,9 @@ pub struct GraphSweepReport {
     pub no_entries: usize,
     /// Total triples written this pass.
     pub triples: usize,
+    /// Chapter Lexicon (LX.2) — synonym predicates re-mapped to canonical
+    /// types this pass (the merge of pre-LX.1 free-text relations).
+    pub remapped: usize,
 }
 
 /// What the daemon needs to run the graph sweep loop: a ready extractor
@@ -989,6 +1056,72 @@ mod tests {
         assert!(g.all_triples().await.unwrap().is_empty(), "first tick skipped");
         shutdown.cancel();
         handle.await.unwrap();
+    }
+
+    // ---- LX.2 — re-normalize existing triples (merge) ---------------
+
+    #[tokio::test]
+    async fn normalize_merges_synonym_edges_into_one() {
+        let g = store().await;
+        // Two synonym edges of the same relation + the canonical one.
+        g.put_triple(&GraphTriple {
+            subject: "deploy".into(),
+            predicate: "requires".into(),
+            object: "ci".into(),
+            source_seqs: vec![1],
+            mentions: 2,
+            updated_at: 10,
+        })
+        .await
+        .unwrap();
+        g.put_triple(&GraphTriple {
+            subject: "deploy".into(),
+            predicate: "needs".into(),
+            object: "ci".into(),
+            source_seqs: vec![2, 1],
+            mentions: 3,
+            updated_at: 20,
+        })
+        .await
+        .unwrap();
+        g.put_triple(&GraphTriple {
+            subject: "deploy".into(),
+            predicate: "depends-on".into(),
+            object: "ci".into(),
+            source_seqs: vec![3],
+            mentions: 1,
+            updated_at: 5,
+        })
+        .await
+        .unwrap();
+
+        let remapped = g.normalize_predicates().await.unwrap();
+        assert_eq!(remapped, 2, "requires + needs remapped");
+        // All three collapse into one canonical edge.
+        let all = g.all_triples().await.unwrap();
+        assert_eq!(all.len(), 1);
+        let t = &all[0];
+        assert_eq!(t.predicate, "depends-on");
+        assert_eq!(t.mentions, 6, "2 + 3 + 1 summed");
+        assert_eq!(t.source_seqs, vec![1, 2, 3], "unioned + sorted");
+        assert_eq!(t.updated_at, 20, "max");
+        // The synonym rows are gone.
+        assert!(g.get_triple("deploy", "requires", "ci").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn normalize_is_idempotent_and_leaves_unknowns() {
+        let g = store().await;
+        g.put_triple(&triple("deploy", "requires", "ci")).await.unwrap();
+        g.put_triple(&triple("alice", "rivals", "bob")).await.unwrap(); // not in lexicon
+
+        let first = g.normalize_predicates().await.unwrap();
+        assert_eq!(first, 1, "only 'requires' is a synonym");
+        // Second pass: nothing left to remap.
+        assert_eq!(g.normalize_predicates().await.unwrap(), 0);
+        // The unknown relation is untouched (open-world).
+        assert!(g.get_triple("alice", "rivals", "bob").await.unwrap().is_some());
+        assert!(g.get_triple("deploy", "depends-on", "ci").await.unwrap().is_some());
     }
 
     // ---- LX.1 — lexicon folding at extraction + query ----------------
