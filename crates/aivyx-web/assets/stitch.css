@@ -441,6 +441,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .skills-pending { align-self: flex-start; cursor: pointer; border: 1px solid var(--color-accent, #6cf);
   background: rgba(108, 207, 255, 0.08); color: var(--color-accent, #6cf); border-radius: 8px;
   padding: 6px 12px; font-size: 12.5px; }
+.skills-proposals { display: flex; flex-direction: column; gap: 10px; }
 .skills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .skill-card { display: flex; flex-direction: column; gap: 8px; }
 .skill-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }

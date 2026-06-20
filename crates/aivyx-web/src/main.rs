@@ -1210,15 +1210,25 @@ fn skill_effectiveness(view: &SkillView) -> (&'static str, &'static str, f32) {
 #[component]
 fn SkillsPanel() -> Element {
     let ws = use_context::<Sender>();
-    let mut view = use_context::<Signal<View>>();
     let skills = use_context::<Signal<SkillsState>>();
+    // Chapter Repertoire (approve-in-place) — reuse the shared persona-
+    // proposal feed + ProposalCard, filtered to skill proposals.
+    let agents = use_context::<Signal<AgentsState>>();
 
-    // Load the inventory each time the view opens.
+    // Load the inventory + the pending proposals each time the view opens.
     use_future(move || async move {
         ws.send(skills_query());
+        ws.send(list_proposals_query());
     });
 
     let s = skills();
+    // Pending skill proposals (Whetstone refinements + Praxis authored) —
+    // approve / edit / reject right here, via the existing ProposalCard.
+    let skill_proposals: Vec<PersonaProposalSummary> = agents()
+        .proposals
+        .into_iter()
+        .filter(|p| p.category == "LearnedSkill" && p.status == "Pending")
+        .collect();
     // Effectiveness-descending, with unmeasured (samples 0) grouped last.
     let mut rows = s.skills.clone();
     rows.sort_by(|a, b| {
@@ -1237,10 +1247,15 @@ fn SkillsPanel() -> Element {
                 h3 { "Skills" }
                 span { class: "label-tech", "{s.skills.len()}" }
             }
-            if s.pending_proposals > 0 {
-                button { class: "skills-pending",
-                    onclick: move |_| view.set(View::Agents),
-                    "{s.pending_proposals} pending skill proposal(s) — review in Agents →"
+            if !skill_proposals.is_empty() {
+                div { class: "skills-proposals",
+                    div { class: "panel-head",
+                        h3 { class: "label-tech", "Pending proposals" }
+                        span { class: "chip amber", "{skill_proposals.len()}" }
+                    }
+                    for p in skill_proposals.iter() {
+                        { rsx! { ProposalCard { key: "{p.id}", p: p.clone() } } }
+                    }
                 }
             }
             if s.loaded && s.skills.is_empty() {
