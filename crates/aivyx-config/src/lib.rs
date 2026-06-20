@@ -801,6 +801,10 @@ pub struct AivyxConfig {
     /// absent (no skill-refinement pass). `Some` only arms it; it still
     /// no-ops unless `enabled = true`.
     pub skill_refinement: Option<SkillRefinementConfig>,
+    /// Chapter Praxis — `[skill_authoring]` section. `None` when absent
+    /// (no knowledge-derived authoring pass). `Some` only arms it; no-ops
+    /// unless `enabled = true`.
+    pub skill_authoring: Option<SkillAuthoringConfig>,
     /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
     /// behavior; `Smart` expands the coherent memory bundle into the
     /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
@@ -3380,6 +3384,9 @@ struct RawToml {
     /// `[skill_refinement]` section. Chapter Whetstone.
     #[serde(default)]
     skill_refinement: RawSkillRefinement,
+    /// `[skill_authoring]` section. Chapter Praxis.
+    #[serde(default)]
+    skill_authoring: RawSkillAuthoring,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -4368,6 +4375,42 @@ fn build_skill_refinement_config(
         enabled: raw.enabled.unwrap_or(d.enabled),
         floor: raw.floor.unwrap_or(d.floor),
         min_samples: raw.min_samples.unwrap_or(d.min_samples),
+        max_per_cycle: raw.max_per_cycle.unwrap_or(d.max_per_cycle),
+    })
+}
+
+/// Chapter Praxis — `[skill_authoring]` deserialize target. Absent
+/// section → `skill_authoring: None` (no pass).
+#[derive(Debug, Default, Deserialize)]
+struct RawSkillAuthoring {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    min_summary_chars: Option<usize>,
+    #[serde(default)]
+    min_edges: Option<usize>,
+    #[serde(default)]
+    max_per_cycle: Option<usize>,
+}
+
+/// Chapter Praxis — build the `[skill_authoring]` config. `None` only when
+/// the section is entirely absent; any present field arms it (still no-op
+/// unless `enabled`).
+fn build_skill_authoring_config(
+    raw: &RawSkillAuthoring,
+) -> Option<SkillAuthoringConfig> {
+    let any_set = raw.enabled.is_some()
+        || raw.min_summary_chars.is_some()
+        || raw.min_edges.is_some()
+        || raw.max_per_cycle.is_some();
+    if !any_set {
+        return None;
+    }
+    let d = SkillAuthoringConfig::default();
+    Some(SkillAuthoringConfig {
+        enabled: raw.enabled.unwrap_or(d.enabled),
+        min_summary_chars: raw.min_summary_chars.unwrap_or(d.min_summary_chars),
+        min_edges: raw.min_edges.unwrap_or(d.min_edges),
         max_per_cycle: raw.max_per_cycle.unwrap_or(d.max_per_cycle),
     })
 }
@@ -5405,6 +5448,8 @@ impl AivyxConfig {
         });
         let skill_refinement =
             build_skill_refinement_config(&toml.skill_refinement);
+        let skill_authoring =
+            build_skill_authoring_config(&toml.skill_authoring);
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -6493,6 +6538,7 @@ impl AivyxConfig {
             wiki,
             graph,
             skill_refinement,
+            skill_authoring,
             memory_profile,
             persona_consolidation,
             correction_consolidation,

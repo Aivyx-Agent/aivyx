@@ -441,6 +441,12 @@ pub struct DaemonConfig {
     pub skill_refinement_config: Option<aivyx_config::SkillRefinementConfig>,
     pub skill_refinement_drafter:
         Option<Arc<dyn crate::skill_refinement::RefinementDrafter>>,
+    /// Chapter Praxis (PX.2) — `[skill_authoring]` config + the production
+    /// specialization drafter. Both `Some` (with the wiki/graph stores +
+    /// proposal/persona logs) arm the reflection-cadence authoring pass.
+    pub skill_authoring_config: Option<aivyx_config::SkillAuthoringConfig>,
+    pub skill_authoring_drafter:
+        Option<Arc<dyn crate::skill_authoring::SpecializationDrafter>>,
     /// Phase 173 — the autonomous-loop backlog (zero-config,
     /// always built when storage is configured) for the loop
     /// IPC handlers + the driver.
@@ -587,6 +593,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         persona_consolidation_stat,
         skill_refinement_config,
         skill_refinement_drafter,
+        skill_authoring_config,
+        skill_authoring_drafter,
         persona_consolidation_phraser,
         correction_consolidation_config,
         correction_consolidation_stat,
@@ -1141,6 +1149,37 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // Chapter Praxis (PX.2) — skill-authoring deps: armed only when
+            // [skill_authoring] is enabled AND every piece is present (the
+            // wiki + graph stores + the proposal/persona chains + an
+            // LlmSpecializationDrafter). Any missing piece → None → skipped.
+            let rs_skill_authoring = match (
+                skill_authoring_config.clone(),
+                wiki_store.clone(),
+                graph_store.clone(),
+                persona_proposal_log.clone(),
+                persona_log.clone(),
+                skill_authoring_drafter.clone(),
+            ) {
+                (
+                    Some(cfg),
+                    Some(wiki),
+                    Some(graph),
+                    Some(plog),
+                    Some(persona),
+                    Some(drafter),
+                ) if cfg.enabled => {
+                    Some(crate::reflection_scheduler::SkillAuthoringDeps {
+                        config: cfg,
+                        wiki_store: wiki,
+                        graph_store: graph,
+                        proposal_log: plog,
+                        persona_log: persona,
+                        drafter,
+                    })
+                }
+                _ => None,
+            };
             for sched in &rs_schedules {
                 eprintln!(
                     "aivyx reflection schedule {:?} registered (cron={:?}, \
@@ -1160,6 +1199,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     rs_correction_consolidation,
                     rs_recall_judgment,
                     rs_skill_refinement,
+                    rs_skill_authoring,
                     rs_cadence_stats,
                     rs_shutdown,
                 )
@@ -2918,6 +2958,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
         loop_backlog: None,
         loop_state: None,
         loop_config: None,

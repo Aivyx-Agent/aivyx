@@ -7169,6 +7169,22 @@ fn wiki_section_parses_defaults_and_overrides() {
 }
 
 #[test]
+fn skill_authoring_section_parses_and_defaults() {
+    let _env = EnvScope::new();
+    let off = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "ska-off");
+    assert!(off.skill_authoring.is_none());
+    let cfg = load_with_toml(
+        "\n[skill_authoring]\nenabled = true\nmin_edges = 3\n",
+        "ska-on",
+    );
+    let s = cfg.skill_authoring.expect("section present");
+    assert!(s.enabled);
+    assert_eq!(s.min_edges, 3);
+    assert_eq!(s.min_summary_chars, crate::DEFAULT_AUTHOR_MIN_SUMMARY_CHARS);
+    assert_eq!(s.max_per_cycle, crate::DEFAULT_AUTHOR_MAX_PER_CYCLE);
+}
+
+#[test]
 fn skill_refinement_section_parses_and_defaults() {
     let _env = EnvScope::new();
     // Absent → None.

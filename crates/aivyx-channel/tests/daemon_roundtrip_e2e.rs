@@ -866,6 +866,8 @@ async fn two_concurrent_connections() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1204,6 +1206,8 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1340,6 +1344,8 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
             })
             .await
             .expect("daemon must complete successfully");
@@ -1797,6 +1803,8 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2108,6 +2116,8 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete");
@@ -2531,6 +2541,8 @@ async fn mission_queries_round_trip_over_ipc() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2945,6 +2957,8 @@ async fn audit_queries_round_trip_over_ipc() {
             skill_effectiveness_ledger: None,
         skill_refinement_config: None,
         skill_refinement_drafter: None,
+        skill_authoring_config: None,
+        skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete successfully");

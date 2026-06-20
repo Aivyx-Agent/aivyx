@@ -4138,6 +4138,9 @@ async fn run_async(
         // per-skill effectiveness ledger (write-side fold, WH.3b) and the
         // refinement reflection pass (WH.3c).
         skill_refinement: config_skill_refinement,
+        // Chapter Praxis — `[skill_authoring]` config. Gates the
+        // knowledge-derived specialized-skill authoring pass (PX.2).
+        skill_authoring: config_skill_authoring,
         // Chapter Synapse — `[memory] profile` has already expanded into
         // the embedding/recall_cluster/wiki/graph fields at config-load,
         // so the daemon reads those as usual; the profile itself is
@@ -5129,6 +5132,19 @@ async fn run_async(
     > = match &config_skill_refinement {
         Some(c) if c.enabled => Some(Arc::new(
             aivyx_channel::skill_refinement::LlmRefinementDrafter::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        )),
+        _ => None,
+    };
+    // Chapter Praxis (PX.2) — production specialization drafter, built iff
+    // `[skill_authoring]` is enabled.
+    let skill_authoring_drafter: Option<
+        Arc<dyn aivyx_channel::skill_authoring::SpecializationDrafter>,
+    > = match &config_skill_authoring {
+        Some(c) if c.enabled => Some(Arc::new(
+            aivyx_channel::skill_authoring::LlmSpecializationDrafter::new(
                 Arc::clone(&provider),
                 model.clone(),
             ),
@@ -7111,6 +7127,10 @@ async fn run_async(
             // reflection-cadence refinement pass.
             skill_refinement_config: config_skill_refinement.clone(),
             skill_refinement_drafter: skill_refinement_drafter.clone(),
+            // Chapter Praxis (PX.2) — config + drafter for the
+            // knowledge-derived authoring pass.
+            skill_authoring_config: config_skill_authoring.clone(),
+            skill_authoring_drafter: skill_authoring_drafter.clone(),
             // Phase 173 — autonomous loop: the always-built
             // backlog, the shared run state (Some iff armed), and
             // the [loop] config.

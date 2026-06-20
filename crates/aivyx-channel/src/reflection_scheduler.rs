@@ -407,6 +407,25 @@ pub struct SkillRefinementDeps {
         std::sync::Arc<dyn crate::skill_refinement::RefinementDrafter>,
 }
 
+/// Chapter Praxis (PX.2) — handles the skill-authoring pass needs. `None`
+/// (no `[skill_authoring]` / no wiki+graph substrate) → the pass is
+/// skipped. Even `Some`, no-ops unless `config.enabled`.
+pub struct SkillAuthoringDeps {
+    pub config: aivyx_config::SkillAuthoringConfig,
+    pub wiki_store:
+        std::sync::Arc<crate::knowledge_wiki::PersistentWikiStore>,
+    pub graph_store:
+        std::sync::Arc<crate::knowledge_graph::PersistentGraphStore>,
+    pub proposal_log: std::sync::Arc<
+        crate::persona_proposal::PersistentPersonaProposalLog,
+    >,
+    /// Read-only Persona chain handle — for the `learned_skills` dedup.
+    pub persona_log:
+        std::sync::Arc<crate::persona::PersistentPersonaLog>,
+    pub drafter:
+        std::sync::Arc<dyn crate::skill_authoring::SpecializationDrafter>,
+}
+
 /// Phase 91 — handles the LLM-judged recall pass needs.
 /// Bundled like [`PersonaConsolidationDeps`]. `None` (no
 /// `[recall_judgment]` / no recall-log + judge substrate) →
@@ -755,6 +774,7 @@ pub async fn run_reflection_scheduler(
     correction_consolidation: Option<CorrectionConsolidationDeps>,
     recall_judgment: Option<RecallJudgmentDeps>,
     skill_refinement: Option<SkillRefinementDeps>,
+    skill_authoring: Option<SkillAuthoringDeps>,
     cadence_stats: SharedRecentReflectionStats,
     shutdown: CancellationToken,
 ) {
@@ -854,6 +874,7 @@ pub async fn run_reflection_scheduler(
                     correction_consolidation.as_ref(),
                     recall_judgment.as_ref(),
                     skill_refinement.as_ref(),
+                    skill_authoring.as_ref(),
                 )
                 .await;
                 last_fired.insert(sched.name.clone(), now);
@@ -899,6 +920,7 @@ async fn fire_reflection(
     correction_consolidation: Option<&CorrectionConsolidationDeps>,
     recall_judgment: Option<&RecallJudgmentDeps>,
     skill_refinement: Option<&SkillRefinementDeps>,
+    skill_authoring: Option<&SkillAuthoringDeps>,
 ) {
     let now_ms = now.timestamp_millis().max(0) as u64;
     let summaries = match summarize_recent_outcomes(
@@ -971,6 +993,13 @@ async fn fire_reflection(
     // existing Agents UI.
     if let Some(deps) = skill_refinement {
         run_skill_refinement_pass(deps, sched, now_ms).await;
+    }
+
+    // Chapter Praxis (PX.2) — knowledge-derived skill authoring on the
+    // same cadence. Independent; no-op when absent or disabled. Files
+    // Pending proposals only.
+    if let Some(deps) = skill_authoring {
+        run_skill_authoring_pass(deps, sched, now_ms).await;
     }
 
     // Phase 91 — LLM-judged per-recall classification on the
@@ -1785,6 +1814,40 @@ async fn run_skill_refinement_pass(
     if stat.filed > 0 {
         eprintln!(
             "aivyx skill-refinement: filed {} refinement proposal(s) \
+             ({} considered) for schedule {:?}",
+            stat.filed, stat.considered, sched.name,
+        );
+    }
+}
+
+/// Chapter Praxis (PX.2) — drive the skill-authoring pass: read the wiki +
+/// graph stores and the effective persona's `learned_skills`, and propose
+/// specialized skills for knowledge-rich, skill-less topics. Propose-only.
+async fn run_skill_authoring_pass(
+    deps: &SkillAuthoringDeps,
+    sched: &ReflectionScheduleConfig,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let source_label = format!("skill-authoring:{}", sched.name);
+    let entries = deps.persona_log.entries();
+    let persona = crate::persona::compute_effective_persona(&entries);
+    let stat = crate::skill_authoring::propose_specialized_skills(
+        deps.wiki_store.as_ref(),
+        deps.graph_store.as_ref(),
+        &persona.learned_skills,
+        deps.drafter.as_ref(),
+        deps.proposal_log.as_ref(),
+        &deps.config,
+        &source_label,
+        now_ms,
+    )
+    .await;
+    if stat.filed > 0 {
+        eprintln!(
+            "aivyx skill-authoring: filed {} specialized-skill proposal(s) \
              ({} considered) for schedule {:?}",
             stat.filed, stat.considered, sched.name,
         );

@@ -1,15 +1,14 @@
 # Knowledge → Capability — specialized skills (Chapter Praxis)
 
-> **Status:** 🛠️ **PX.1 — the specialization engine shipped.**
-> `skill_authoring::propose_specialized_skills` selects knowledge-rich +
-> skill-less topics (a wiki-summary substance floor + a graph neighbourhood,
-> deduped against existing `learned_skills` by name/`domain`), synthesizes a
-> specialized skill from the `WikiPage.summary` + the topic's typed graph edges
-> via a `SpecializationDrafter` (production `LlmSpecializationDrafter`), and
-> files a governed single `AppendList` proposal (`version 1`, `provenance:
-> agent`, **`domain` = topic** — the first real use of the WH.1 field).
-> Deterministic ids dedup; propose-only. Live wiring is PX.2. The locked
-> reference for the
+> **Status:** 🛠️ **PX.2 — the authoring pass is now live.** The
+> `[skill_authoring]` config (`aivyx-config`) + a `SkillAuthoringDeps` bundle +
+> `run_skill_authoring_pass` on the reflection cadence (threaded through
+> `run_reflection_scheduler`/`fire_reflection` beside Whetstone's pass),
+> assembled in `daemon_server` from the **existing** `DaemonConfig` wiki/graph
+> stores + proposal/persona logs + a production `LlmSpecializationDrafter` built
+> in `aivyx.rs` — armed only when `[skill_authoring].enabled`. With PX.1's
+> engine, the agent now authors specialized skills from its own knowledge on the
+> cadence. Only finalize (PX.3) remains. The locked reference for the
 > chapter where the agent **authors its own specialized skills from its
 > consolidated knowledge**. The memory stack already turns experience into
 > *what the agent knows*: the [[CODEX]] wiki (per-topic consolidated
@@ -126,7 +125,7 @@ authored skill without operator approval (it stays a proposal).
 |---|---|---|
 | **PX.0** | **This design contract** | locked reference; banner flips per phase |
 | **PX.1** ✅ | **The specialization engine** | DONE. `skill_authoring.rs`: `propose_specialized_skills(wiki_store, graph_store, learned_skills_raw, drafter, proposal_log, config, …)` selects knowledge-rich + skill-less topics (`min_summary_chars` floor + `min_edges` neighbourhood via `out_edges` + dedup vs `learned_skills` name/`domain`), renders the wiki summary + `subject predicate object` edges, drafts `{trigger, procedure}` via a `SpecializationDrafter` (trait + production `LlmSpecializationDrafter` with a tolerant `parse_drafted` JSON), and files a governed `AppendList` proposal (`version 1`, `provenance: agent` + reason, `domain = topic`). `SkillAuthoringConfig` added to `aivyx-config`. 4 tests (rich+skill-less → proposal w/ domain + agent provenance; thin page / sparse graph / already-skilled / disabled → none; dedup on re-run; JSON parse tolerance). Channel 1008 + clippy green. |
-| **PX.2** | **Wire it live** | `[skill_authoring]` config (`aivyx-config`); a `SkillAuthoringDeps` bundle + `run_skill_authoring_pass` threaded through `run_reflection_scheduler`/`fire_reflection` (mirroring Whetstone's WH.3c), assembled in `daemon_server` from the **existing** `DaemonConfig` wiki/graph stores + proposal/persona logs + a production drafter built in `aivyx.rs`; gated by `[skill_authoring].enabled`. |
+| **PX.2** ✅ | **Wire it live** | DONE. `[skill_authoring]` config (`RawSkillAuthoring` + `build_skill_authoring_config` in `aivyx-config`, default `None`). A `SkillAuthoringDeps` bundle + `run_skill_authoring_pass` (reads the effective persona's `learned_skills` + the wiki/graph stores → `propose_specialized_skills`), threaded as a new `Option<SkillAuthoringDeps>` through `run_reflection_scheduler`/`fire_reflection` beside Whetstone's pass. `rs_skill_authoring` assembled in `daemon_server` from the existing `DaemonConfig` `wiki_store`/`graph_store` + proposal/persona logs + a production `LlmSpecializationDrafter` built in `aivyx.rs`, armed only when `[skill_authoring].enabled`. 1 config test + the daemon/e2e literals. Channel 1008 / e2e 30 / cli 470 / config 351 + clippy green. |
 | **PX.3** | **Finalize** | full suite + clippy + `cargo deny` green; README (Praxis in phases) + CHANGELOG + an `[skill_authoring]` example section; status flip; record. |
 
 **Discipline:** PX.1 is the testable engine (reads the stores, files
