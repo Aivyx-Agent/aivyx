@@ -204,6 +204,221 @@ impl PersistentGraphStore {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GraphExtractor — Chapter Lattice (LT.2)
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use aivyx_core::CancellationToken;
+use aivyx_llm::{ContentBlock, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd};
+use aivyx_memory::{Memory, MemoryEntry};
+use serde::Deserialize;
+
+/// Tuning for triple extraction. Defaults aim for a cheap, bounded pass.
+#[derive(Debug, Clone)]
+pub struct GraphExtractConfig {
+    /// Newest entries (per topic) to extract from.
+    pub max_entries: usize,
+    /// Per-entry body cap (chars) in the prompt.
+    pub max_entry_chars: usize,
+    /// LLM token budget for the triple list.
+    pub max_tokens: u32,
+    /// Hard cap on triples kept per topic per pass (defends a runaway
+    /// model dump).
+    pub max_triples: usize,
+}
+
+impl Default for GraphExtractConfig {
+    fn default() -> Self {
+        Self { max_entries: 50, max_entry_chars: 500, max_tokens: 700, max_triples: 64 }
+    }
+}
+
+/// What an extraction pass did for one topic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphRegenOutcome {
+    /// Up to date (fingerprint matched) — nothing re-extracted.
+    Skipped,
+    /// The topic has no entries to extract from.
+    NoEntries,
+    /// `n` triples were (re)extracted and stored.
+    Wrote(usize),
+}
+
+/// One LLM-emitted triple, before canonicalization/validation.
+#[derive(Debug, Deserialize)]
+struct RawTriple {
+    #[serde(default)]
+    subject: String,
+    #[serde(default)]
+    predicate: String,
+    #[serde(default)]
+    object: String,
+}
+
+/// Extracts directed typed triples from memory into the graph store.
+/// Best-effort throughout (no provider, an LLM error, an unparseable
+/// response, or a storage hiccup leaves the existing graph untouched) and
+/// incremental (a topic whose entries are unchanged is skipped).
+pub struct GraphExtractor {
+    memory: Arc<dyn Memory>,
+    provider: Arc<dyn LlmProvider>,
+    store: Arc<PersistentGraphStore>,
+    model: String,
+    config: GraphExtractConfig,
+}
+
+impl GraphExtractor {
+    pub fn new(
+        memory: Arc<dyn Memory>,
+        provider: Arc<dyn LlmProvider>,
+        store: Arc<PersistentGraphStore>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            memory,
+            provider,
+            store,
+            model: model.into(),
+            config: GraphExtractConfig::default(),
+        }
+    }
+
+    pub fn with_config(mut self, config: GraphExtractConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    fn system_prompt() -> &'static str {
+        "You extract a knowledge graph from an AI assistant's memory notes \
+         about one topic. Output ONLY a JSON array of directed relation \
+         triples, each `{\"subject\":\"...\",\"predicate\":\"...\",\"object\":\"...\"}`. \
+         The predicate is a short directed relation label (e.g. \
+         \"depends-on\", \"caused\", \"owns\", \"part-of\"); direction \
+         matters (subject → object). Extract ONLY relations the notes \
+         actually state — do not invent, infer beyond the text, or add \
+         commentary. Use concise noun-phrase entities. If the notes state \
+         no clear relations, output `[]`. No prose, no markdown fences."
+    }
+
+    /// Render entries into the user prompt. Pure + testable.
+    fn user_prompt(&self, topic: &str, entries: &[MemoryEntry]) -> String {
+        let mut s = format!("Topic: {topic}\n\nNotes:\n");
+        for e in entries {
+            let body: String = if e.body.chars().count() > self.config.max_entry_chars {
+                e.body.chars().take(self.config.max_entry_chars).collect::<String>() + "…"
+            } else {
+                e.body.clone()
+            };
+            s.push_str(&format!("- {}\n", body.replace('\n', " ")));
+        }
+        s.push_str("\nOutput the JSON triple array now.");
+        s
+    }
+
+    /// Tolerant parse of the model's response into raw triples: locate the
+    /// outermost `[ … ]` (ignoring any prose/fences around it) and decode.
+    /// Returns an empty vec on any failure — best-effort.
+    fn parse_triples(raw: &str) -> Vec<RawTriple> {
+        let (Some(start), Some(end)) = (raw.find('['), raw.rfind(']')) else {
+            return Vec::new();
+        };
+        if end <= start {
+            return Vec::new();
+        }
+        serde_json::from_str::<Vec<RawTriple>>(&raw[start..=end]).unwrap_or_default()
+    }
+
+    /// One-shot LLM extraction → validated, deduped `(s, p, o, count)`
+    /// triples (count = how many times the model emitted the same triple
+    /// in this batch → the `mentions` weight). Best-effort.
+    async fn extract(
+        &self,
+        topic: &str,
+        entries: &[MemoryEntry],
+    ) -> Vec<(String, String, String, u32)> {
+        let user = self.user_prompt(topic, entries);
+        let messages = vec![LlmMessage::User { content: vec![ContentBlock::Text { text: user }] }];
+        let request = LlmRequest {
+            model: &self.model,
+            system: Some(Self::system_prompt()),
+            messages: &messages,
+            tools: &[],
+            max_tokens: self.config.max_tokens,
+            temperature: Some(0.1),
+        };
+        let token = CancellationToken::new();
+        let Ok(mut stream) = self.provider.chat_stream(request, &token).await else {
+            return Vec::new();
+        };
+        while stream.next_event().await.map(|e| e.is_some()).unwrap_or(false) {}
+        let text = match stream.finish().await {
+            Ok(LlmStepEnd::FinalMessage { text, .. }) => text,
+            _ => return Vec::new(),
+        };
+
+        // Validate + canonicalize + dedup (counting repeats as mentions).
+        use std::collections::HashMap;
+        let mut counts: HashMap<(String, String, String), u32> = HashMap::new();
+        for rt in Self::parse_triples(&text) {
+            let s = canonical_label(&rt.subject);
+            let p = canonical_label(&rt.predicate);
+            let o = canonical_label(&rt.object);
+            // Reject empties and self-loops (an entity related to itself
+            // by the same name is noise).
+            if s.is_empty() || p.is_empty() || o.is_empty() || s == o {
+                continue;
+            }
+            *counts.entry((s, p, o)).or_insert(0) += 1;
+        }
+        let mut out: Vec<(String, String, String, u32)> =
+            counts.into_iter().map(|((s, p, o), n)| (s, p, o, n)).collect();
+        // Deterministic order, then cap.
+        out.sort();
+        out.truncate(self.config.max_triples);
+        out
+    }
+
+    /// Make a topic's triples current: pulls its entries, skips when the
+    /// fingerprint matches (incremental), otherwise extracts + stores the
+    /// triples and records the new fingerprint. Best-effort: any soft
+    /// failure returns [`GraphRegenOutcome::Skipped`].
+    pub async fn regenerate(&self, topic: &str, now_secs: u64) -> GraphRegenOutcome {
+        let entries = match self.memory.get_recent(topic, self.config.max_entries).await {
+            Ok(e) => e,
+            Err(_) => return GraphRegenOutcome::Skipped,
+        };
+        if entries.is_empty() {
+            return GraphRegenOutcome::NoEntries;
+        }
+        let seqs: Vec<u64> = entries.iter().map(|e| e.seq).collect();
+        let fingerprint = aivyx_ipc::wiki::WikiPage::fingerprint(&seqs);
+        if !self.store.needs_regen(topic, fingerprint).await {
+            return GraphRegenOutcome::Skipped;
+        }
+        let triples = self.extract(topic, &entries).await;
+        let mut wrote = 0usize;
+        for (subject, predicate, object, mentions) in triples {
+            let t = GraphTriple {
+                subject,
+                predicate,
+                object,
+                source_seqs: seqs.clone(),
+                mentions,
+                updated_at: now_secs,
+            };
+            if self.store.put_triple(&t).await.is_ok() {
+                wrote += 1;
+            }
+        }
+        // Record the fingerprint even when zero triples were found, so a
+        // topic with no relations isn't re-extracted every sweep.
+        let _ = self.store.set_topic_fingerprint(topic, fingerprint).await;
+        GraphRegenOutcome::Wrote(wrote)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +520,142 @@ mod tests {
         assert!(!g.needs_regen("deploy", 42).await);
         assert!(g.needs_regen("deploy", 43).await);
         assert!(g.needs_regen("never-extracted", 1).await);
+    }
+
+    // ---- LT.2 — GraphExtractor --------------------------------------
+
+    use aivyx_llm::{
+        LlmError, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    };
+    use aivyx_memory::InMemoryMemory;
+    use async_trait::async_trait;
+
+    struct ScriptedProvider {
+        text: String,
+        fail: bool,
+    }
+    struct ScriptedStream {
+        text: String,
+    }
+    #[async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            if self.fail {
+                return Err(LlmError::Transport("scripted failure".into()));
+            }
+            Ok(Box::new(ScriptedStream { text: self.text.clone() }))
+        }
+    }
+    #[async_trait]
+    impl LlmStream for ScriptedStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(None)
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            Ok(LlmStepEnd::FinalMessage { text: self.text, usage: LlmUsage::default() })
+        }
+    }
+
+    fn extractor(
+        memory: Arc<dyn Memory>,
+        store: Arc<PersistentGraphStore>,
+        text: &str,
+        fail: bool,
+    ) -> GraphExtractor {
+        GraphExtractor::new(
+            memory,
+            Arc::new(ScriptedProvider { text: text.into(), fail }),
+            store,
+            "fake-model",
+        )
+    }
+
+    #[test]
+    fn parse_triples_tolerates_prose_and_fences() {
+        let raw = "Sure! Here are the triples:\n```json\n\
+            [{\"subject\":\"deploy\",\"predicate\":\"depends-on\",\"object\":\"ci\"}]\n```";
+        let parsed = GraphExtractor::parse_triples(raw);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].subject, "deploy");
+        // Garbage → empty, never panics.
+        assert!(GraphExtractor::parse_triples("no json here").is_empty());
+        assert!(GraphExtractor::parse_triples("[").is_empty());
+    }
+
+    #[tokio::test]
+    async fn regenerate_extracts_and_stores_directed_triples() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "we ship via the ci pipeline").await.unwrap();
+        mem.put("deploy", "rollback reverts the deploy").await.unwrap();
+        let g = Arc::new(store().await);
+        let resp = r#"[
+            {"subject":"deploy","predicate":"depends-on","object":"ci"},
+            {"subject":"rollback","predicate":"reverts","object":"deploy"},
+            {"subject":"deploy","predicate":"is","object":"deploy"}
+        ]"#; // the self-loop must be dropped
+        let x = extractor(Arc::clone(&mem), Arc::clone(&g), resp, false);
+
+        match x.regenerate("deploy", 500).await {
+            GraphRegenOutcome::Wrote(n) => assert_eq!(n, 2, "self-loop dropped"),
+            other => panic!("expected Wrote, got {other:?}"),
+        }
+        let t = g.get_triple("deploy", "depends-on", "ci").await.unwrap().expect("stored");
+        assert_eq!(t.source_seqs.len(), 2);
+        assert_eq!(t.updated_at, 500);
+        assert!(g.get_triple("rollback", "reverts", "deploy").await.unwrap().is_some());
+        // Direction-sensitive: the reverse wasn't asserted.
+        assert!(g.get_triple("ci", "depends-on", "deploy").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn regenerate_is_incremental() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "ship via ci").await.unwrap();
+        let g = Arc::new(store().await);
+        let x = extractor(
+            Arc::clone(&mem),
+            Arc::clone(&g),
+            r#"[{"subject":"deploy","predicate":"uses","object":"ci"}]"#,
+            false,
+        );
+        assert!(matches!(x.regenerate("deploy", 1).await, GraphRegenOutcome::Wrote(1)));
+        // Unchanged entries → skipped (no second LLM pass).
+        assert_eq!(x.regenerate("deploy", 2).await, GraphRegenOutcome::Skipped);
+        // New entry → re-extracts.
+        mem.put("deploy", "deploy uses docker too").await.unwrap();
+        assert!(matches!(x.regenerate("deploy", 3).await, GraphRegenOutcome::Wrote(_)));
+    }
+
+    #[tokio::test]
+    async fn regenerate_best_effort_on_failure_and_no_entries() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let g = Arc::new(store().await);
+        // No entries.
+        let x = extractor(Arc::clone(&mem), Arc::clone(&g), "[]", false);
+        assert_eq!(x.regenerate("empty", 1).await, GraphRegenOutcome::NoEntries);
+        // LLM failure → Wrote(0), no triples, never errors.
+        mem.put("deploy", "note").await.unwrap();
+        let xf = extractor(Arc::clone(&mem), Arc::clone(&g), "", true);
+        assert_eq!(xf.regenerate("deploy", 1).await, GraphRegenOutcome::Wrote(0));
+        assert!(g.all_triples().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn regenerate_counts_repeats_as_mentions() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("deploy", "ci ci ci").await.unwrap();
+        let g = Arc::new(store().await);
+        let resp = r#"[
+            {"subject":"deploy","predicate":"uses","object":"ci"},
+            {"subject":"Deploy","predicate":"USES","object":"CI"}
+        ]"#; // same triple twice (different casing) → mentions 2
+        let x = extractor(Arc::clone(&mem), Arc::clone(&g), resp, false);
+        assert!(matches!(x.regenerate("deploy", 1).await, GraphRegenOutcome::Wrote(1)));
+        let t = g.get_triple("deploy", "uses", "ci").await.unwrap().unwrap();
+        assert_eq!(t.mentions, 2);
     }
 }
