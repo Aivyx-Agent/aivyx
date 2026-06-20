@@ -21,7 +21,12 @@ enable it.
   the directed graph; and `recall_graph_typed_weight > 0` lets the typed
   relations steer recall along *meaningful* edges (vs. mere co-occurrence).
   Opt-in via `[graph].enabled` (a periodic extraction sweep); always derived
-  from memory; zero new dependencies.
+  from memory; zero new dependencies. **Chapter Lexicon** then gives the graph
+  a **controlled relation vocabulary** — a curated set of canonical relation
+  types (`depends-on`, `causes`, `part-of`, …) that synonymous predicates fold
+  into, so `depends on` / `requires` / `needs` become one edge instead of three
+  (applied at extraction + query, with a sweep that merges existing synonyms);
+  unknown relations are kept as-is.
 - **Knowledge-wiki layer (Chapter Codex).** A derived, browsable layer over
   memory: the agent consolidates each topic's entries into a **`WikiPage`** —
   an LLM-written summary plus co-occurrence **backlinks** — persisted in a new
