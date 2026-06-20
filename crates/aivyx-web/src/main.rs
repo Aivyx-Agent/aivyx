@@ -1067,7 +1067,7 @@ fn WikiPanel() -> Element {
                 div { class: "panel-head", h3 { "Pages" } span { class: "label-tech", "{w.pages.len()}" } }
                 if w.pages.is_empty() {
                     p { class: "label-tech", style: "padding:8px",
-                        "No pages yet. Enable [wiki] and the agent consolidates each memory topic into a page."
+                        "No pages yet. Set [memory] profile = \"smart\" (or [wiki] enabled = true) and the agent consolidates each memory topic into a page."
                     }
                 }
                 for p in w.pages.iter() {
@@ -1178,7 +1178,7 @@ fn LatticePanel() -> Element {
             if g.entities.is_empty() {
                 div { class: "glass-card empty",
                     p { class: "label-tech",
-                        "No graph yet. Enable [graph] and the agent extracts typed relations — (subject)-[predicate]->(object) — from its memory."
+                        "No graph yet. Set [memory] profile = \"smart\" (or [graph] enabled = true) and the agent extracts typed relations — (subject)-[predicate]->(object) — from its memory."
                     }
                 }
             } else {

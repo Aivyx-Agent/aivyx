@@ -119,9 +119,11 @@ impl Tool for GraphQueryTool {
          relations extracted from memory. Input: { start, direction? \
          (out|in|both, default out), predicate? (only follow this \
          relation), max_hops? (default 3, max 6) }. Returns the reachable \
-         entities with the typed path to each. Use it to answer relational \
-         questions — \"what depends on X?\", \"what did Y cause?\" — that a \
-         plain memory recall can't."
+         entities with the typed path to each. Reach for it whenever the \
+         user asks how things relate, depend, connect, or what something \
+         caused/owns/contains — \"what depends on X?\", \"what did Y \
+         cause?\", \"how is A connected to B?\" — questions a plain memory \
+         recall can't answer by walking relations."
     }
 
     fn input_schema(&self) -> &Value {

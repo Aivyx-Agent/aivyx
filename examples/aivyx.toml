@@ -825,6 +825,25 @@ parent_role = "researcher"
 # deferred follow-ups.
 
 # ----------------------------------------------------------------
+# Smart memory — one switch (Chapter Synapse): [memory] profile
+# ----------------------------------------------------------------
+#
+# The memory stack below (graph-augmented recall + the knowledge-wiki
+# and typed-knowledge-graph layers + their extraction sweeps) is rich
+# but, by default, all OFF and spread across ~14 knobs. To turn on the
+# whole coherent stack with ONE line:
+#
+#   [memory]
+#   profile = "smart"      # default "off" (byte-identical)
+#
+# `smart` arms hybrid recall + the lexical / co-occurrence / wiki /
+# typed-graph fusion sources, AND the [wiki] + [graph] extraction sweeps
+# (with conservative caps). It needs an `[embedding]` section for the
+# semantic-recall parts (the sweeps + graph.query work without it). Any
+# knob you set explicitly below still wins — `profile` is a floor, not a
+# cage. Leave it `off` (or unset) for exactly today's behavior.
+#
+# ----------------------------------------------------------------
 # Semantic memory search (Phase 75) — optional `[embedding]`
 # ----------------------------------------------------------------
 #

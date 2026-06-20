@@ -1,15 +1,13 @@
 # Activating the Memory Stack — one switch, proven live (Chapter Synapse)
 
-> **Status:** ⚡ **SY.2 — end-to-end composition proof shipped.** A single
-> integration test (`tests/memory_stack_e2e.rs`) wires the **real** components —
-> memory + `WikiSynthesizer` + `GraphExtractor` + `graph.query` + recall fusion,
-> with one routing provider that answers the wiki call with a summary and the
-> graph call with JSON triples — and proves the whole pipeline composes: write
-> memories → sweep → a wiki page **and** typed triples → `graph.query` traverses
-> → recall fuses the wiki summary **and** the typed-graph-only neighbor into one
-> turn (also exercising Lexicon's `requires`→`depends-on` fold). The composition
-> proof the arc's isolated unit tests never gave. SY.1's `[memory] profile`
-> switch shipped. The locked reference for the
+> **Status:** ⚡ **SY.3 — affordances + activation docs shipped.** Sharpened
+> `graph.query`'s when-to-use description (reach for it on relate/depend/connect
+> questions); repointed the Studio Wiki/Graph empty states at `[memory] profile
+> = "smart"` (bundle rebuilt + `dist/` committed); added a "smart memory" one-
+> switch section to the example config + README; and wrote the **operator
+> live-verify runbook** (§6 — real Ollama). SY.1 (the switch) + SY.2 (the
+> end-to-end composition proof) shipped. Only finalize (SY.4) remains. The
+> locked reference for the
 > chapter that turns the **built-but-dormant** memory stack ([[LOOM]] →
 > [[CODEX]] → [[LATTICE]] → [[LEXICON]]) into **realized, verified value**.
 > Those five chapters shipped a sophisticated, deeply-tested memory
@@ -129,7 +127,7 @@ two flaky tests surfaced during the arc (`budget_gate`, persona-log) is a
 | **SY.0** | **This design contract** | locked reference; banner flips per phase |
 | **SY.1** ✅ | **`[memory] profile` switch** | DONE. `MemoryProfile` {`Off` (default), `Smart`} + `[memory] profile` on the existing `[memory]` section; the load-time expansion: `build_embedding_config(raw, smart)` arms `recall_hybrid` / `recall_graph_hops=1` / `recall_wiki_weight=1.0` / `recall_graph_typed_weight=1.0` when unset, and `[recall_cluster]` / `[wiki]` / `[graph]` are synthesized `enabled` (default caps) when *absent* (an explicitly-present section wins). Default `off` ⇒ byte-identical; expansion fills the fields the daemon already reads (zero daemon wiring; `Config.memory_profile` is introspection-only). 3 tests (off unchanged; smart arms the bundle; explicit `recall_hybrid=false` + `[wiki] enabled=false` beat smart). |
 | **SY.2** ✅ | **End-to-end integration proof** | DONE. `crates/aivyx-channel/tests/memory_stack_e2e.rs` — a `RoutingProvider` (answers the wiki call with a summary, the graph call with a JSON triple array, switching on the system prompt) + a `ConstEmbed`; seeds memory (`deploy` semantically reachable, `ci` reachable *only* via the graph), runs the wiki + graph sweeps, asserts a page + a *canonical* `depends-on` triple (Lexicon fold of `requires`), runs `graph.query` (store + the tool), then a `recall_hybrid` + wiki + typed-graph context and asserts the block fuses the semantic entry **+** the wiki summary **+** the typed-graph-only `ci` entry — the whole stack in one turn. Passes; clippy clean. |
-| **SY.3** | **Affordance + activation docs** | verify/tighten `graph.query`'s when-to-use description; repoint the Studio Wiki/Graph empty states at `[memory] profile`; add a "smart memory" section to the example config + README; the operator live-verify runbook (`docs/SYNAPSE.md` §runbook). Studio bundle rebuilt if the empty-state strings change. |
+| **SY.3** ✅ | **Affordance + activation docs** | DONE. `graph.query` description sharpened to a when-to-use affordance (relate/depend/connect/caused/owns/contains questions). Studio Wiki + Graph empty states repointed at `[memory] profile = "smart"` (bundle rebuilt `dx bundle --release` + `dist/` committed; wasm carries the new strings). A "smart memory — one switch" section added to `examples/aivyx.toml` + the README highlight. The operator live-verify runbook lands as **§6** (real-Ollama, ~10 min, steps + the one expected escalation). |
 | **SY.4** | **Finalize** | full suite + clippy + `cargo deny` green; status flip; record. |
 
 **Discipline:** SY.1's default stays `off` (byte-identical) — the switch
@@ -152,6 +150,48 @@ investment into realized, trustworthy value.
   or does the system prompt need a "you have a knowledge graph" line?
   Default to the description tweak; escalate only if SY.2/live-verify
   shows the model never reaches for it (SY.3).
+
+## 6. Operator live-verify runbook (SY.3)
+
+The automated end-to-end test (SY.2) proves the pipeline *composes*. This
+runbook is the human check that a **real model** drives it — the
+verification the arc skipped. ~10 minutes, needs Ollama + a tool-capable
+model.
+
+1. **Configure smart memory.** In `aivyx.toml`, set an `[embedding]`
+   section (a real or local OpenAI-compatible embedder) and the one
+   switch:
+   ```toml
+   [memory]
+   profile = "smart"
+   ```
+2. **Boot the daemon** (`aivyx`). You should see the sweep timers arm; no
+   error. Open the Studio (`:7843`) — the **Wiki** and **Graph** screens
+   are reachable (empty for now).
+3. **Give it something to remember.** Over a few turns, tell the agent
+   facts with relationships — e.g. "the deploy pipeline depends on CI",
+   "CI runs the nightly tests", "rollback reverts a deploy". (Memories are
+   written via the agent's `memory.write`.)
+4. **Wait one sweep interval** (default 1 h; lower `[wiki].interval_secs`
+   / `[graph].interval_secs` to a minute to verify fast). Watch the daemon
+   log for the breadcrumbs:
+   - `aivyx graph-sweep: N triple(s) from M topic(s) …`
+   - (the wiki sweep writes silently; check the screen)
+5. **Confirm the layers filled in (Studio).** The **Wiki** screen now
+   lists pages with LLM summaries; the **Graph** screen shows entity nodes
+   + directed, predicate-labeled edges (`deploy —depends-on→ ci`).
+6. **Confirm the agent reasons over it.** Ask a *relational* question the
+   raw notes don't answer directly — "what depends on the deploy
+   pipeline?" The agent should call **`graph.query`** (visible in the audit
+   chain) and answer from the graph.
+7. **Confirm recall fuses it.** Ask about a topic; the daemon log's
+   `aivyx recall: …` / `aivyx recall-graph: …` breadcrumbs should show the
+   wiki summary + typed-graph neighbors entering the turn's context.
+
+If steps 5–7 hold, the whole Loom→Lexicon stack is live and working from
+a single `profile = "smart"`. (If step 6 fails — the model never reaches
+for `graph.query` — tighten the tool description per §2; that's the only
+expected escalation.)
 
 ---
 

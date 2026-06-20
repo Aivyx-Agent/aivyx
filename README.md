@@ -140,7 +140,8 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
   backlinked page, and a **typed knowledge graph** of directed
   `(subject)-[predicate]->(object)` relations the agent extracts from memory
   and can **query** (`graph.query` — "what depends on X?") or fuse back into
-  recall. Each layer is derived, opt-in, and off by default.
+  recall. Each layer is derived, opt-in, and off by default — turn the whole
+  coherent stack on with one line, **`[memory] profile = "smart"`**.
 - **Multi-agent teams (Nonagon).** A lead convenes up to **9** least-privileged
   specialists, decomposes a mission into a DAG, delegates, verifies, and
   synthesizes — durable, resumable, on the one HMAC chain; **vertical packs**
