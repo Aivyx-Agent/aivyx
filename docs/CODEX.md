@@ -1,12 +1,13 @@
 # The Knowledge-Wiki Layer — synthesized topic pages (Chapter Codex)
 
-> **Status:** 📖 **CX.6 — recall-unit fusion live (opt-in).** A topic's
-> consolidated **page summary** now competes in Loom's weighted RRF as a single
-> high-signal unit: the hybrid recall path BM25-ranks page summaries against the
-> query and fuses the best as synthetic `(topic, u64::MAX)` entries. Gated by a
-> `recall_wiki_weight` `[embedding]` knob (default **0.0** ⇒ off, byte-identical);
-> reuses the same wiki store the IPC + sweep hold. Only finalize (CX.7) remains.
-> The locked reference for the
+> **Status:** ✅ **COMPLETE (CX.0–CX.7).** The codex is whole: per-topic
+> `WikiPage`s synthesized from memory (LLM consolidation + co-occurrence
+> backlinks, incremental, opt-in sweep), persisted in `KeyDomain::KnowledgeWiki`,
+> browsable in the Studio Wiki screen over read-only IPC, and fused back into
+> recall as opt-in high-signal units. Every behavior is **default-off /
+> byte-identical**; pages are always **derived** (memory stays the source of
+> truth); **zero new deps, no P10 amendment, no new capability base**; full
+> workspace suite + clippy + `cargo deny` green. The locked reference for the
 > chapter that gives Aivyx a **codex**: a synthesized, browsable, and
 > retrievable layer of per-topic *wiki pages* built from the agent's own
 > memory. Each page is an LLM-consolidated summary of a topic's memory
@@ -126,7 +127,7 @@ math beyond adding the page source.
 | **CX.4** ✅ | **Read-only IPC** | DONE. `QueryPayload::{ListWikiPages, GetWikiPage{topic}}` + `QueryResponsePayload::{ListWikiPages{pages}, GetWikiPage{page}}` (wasm-clean, reusing `WikiPageSummary`/`WikiPage`). Daemon handlers read the store (absent store / missing page → empty/`None`, never an error), threaded through `ConnectionContext.wiki_store` + `handle_query`. A `DaemonConfig.wiki_store` read handle is built **unconditionally** in `aivyx.rs` (separate from the opt-in sweep) so the codex browses before generation. Frame round-trip test for all four shapes; workspace builds (no exhaustive-match breakage). |
 | **CX.5** ✅ | **Studio Wiki screen** | DONE. New `View::Wiki` + nav item + `WikiState` (pages index + selected page) fanned in by `ws_task` (`ListWikiPages` / `GetWikiPage` arms) + `WikiPanel`/`WikiPageView` components (index rail → summary + clickable backlink chips that re-query `GetWikiPage` + source-entry count), reusing the `.mem` Memory-screen layout + a small `.wiki-backlinks` rule. `use_future` fires the index fetch on open. `cargo check -p aivyx-web` clean; bundle rebuilt + `dist/` re-committed (wasm carries "Knowledge Wiki" + the empty-state strings; existing screens intact). |
 | **CX.6** ✅ | **Recall-unit fusion** | DONE. In `SemanticMemoryContext`'s hybrid path, BM25-rank the synthesized page summaries (reusing `aivyx_memory::bm25`) against the query → fuse the best via `reciprocal_rank_fusion_weighted` as synthetic units keyed `(topic, WIKI_PAGE_SEQ = u64::MAX)` (a page never collides with a real entry's seq). `with_recall_wiki(store, weight)` builder + a `recall_wiki_weight` `[embedding]` knob (default **0.0** ⇒ off, byte-identical; defended `>= 0`); shares the CX.4 wiki store. Best-effort (store/BM25 failure omits the source); recall-never-errors preserved. Test: a page whose topic has no memory entry is recalled only when armed. |
-| **CX.7** | **Finalize** | full suite + clippy + `cargo deny` green; status flip; record. |
+| **CX.7** ✅ | **Finalize** | DONE. Fixed the 7 `DaemonConfig` literals in the `daemon_roundtrip_e2e` integration test (the new `wiki_sweep` / `wiki_store` fields). Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps across the chapter; banner flipped to COMPLETE; recorded. |
 
 **Discipline:** CX.1–CX.2 ship the page substrate **inert**; CX.3 is the
 first behavior (generation), gated to the existing cadence and best-effort;
