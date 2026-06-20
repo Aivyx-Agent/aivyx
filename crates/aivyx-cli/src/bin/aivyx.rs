@@ -5026,6 +5026,13 @@ async fn run_async(
                 Arc::clone(&wiki_store),
                 cfg.recall_wiki_weight,
             );
+            // Chapter Lattice (LT.6) — the typed knowledge-graph ranker.
+            // Default weight 0.0 ⇒ off; shares the same graph store the
+            // tool + IPC + sweep use.
+            sc = sc.with_recall_typed_graph(
+                Arc::clone(&graph_store),
+                cfg.recall_graph_typed_weight,
+            );
             Some(Arc::new(sc))
         }
         _ => None,

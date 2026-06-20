@@ -145,6 +145,13 @@ pub struct SemanticMemoryContext {
     /// RRF fusion. `0.0` (default) ⇒ off (byte-identical), even with a
     /// store attached.
     recall_wiki_weight: f32,
+    /// Chapter Lattice (LT.6) — the typed knowledge-graph store, so the
+    /// directed/typed relations can steer recall along *meaningful* edges
+    /// (depends-on, caused, …). `None` ⇒ no typed-graph source (default).
+    typed_graph_store: Option<Arc<crate::knowledge_graph::PersistentGraphStore>>,
+    /// Chapter Lattice (LT.6) — weight of the typed-graph ranker in the
+    /// hybrid RRF fusion. `0.0` (default) ⇒ off (byte-identical).
+    recall_graph_typed_weight: f32,
 }
 
 /// Chapter Codex (CX.6) — the sentinel `seq` a wiki page carries when it
@@ -181,7 +188,24 @@ impl SemanticMemoryContext {
             recall_graph_weight: 1.0,
             wiki_store: None,
             recall_wiki_weight: 0.0,
+            typed_graph_store: None,
+            recall_graph_typed_weight: 0.0,
         }
+    }
+
+    /// Chapter Lattice (LT.6) — attach the typed knowledge-graph store +
+    /// the weight of the typed-graph ranker in the hybrid fusion. With
+    /// `weight = 0.0` (the default) the source stays off even when a store
+    /// is attached, so recall is byte-identical. Fires only in the
+    /// `recall_hybrid` path.
+    pub fn with_recall_typed_graph(
+        mut self,
+        store: Arc<crate::knowledge_graph::PersistentGraphStore>,
+        weight: f32,
+    ) -> Self {
+        self.typed_graph_store = Some(store);
+        self.recall_graph_typed_weight = weight;
+        self
     }
 
     /// Chapter Codex (CX.6) — attach the knowledge-wiki store + the weight
@@ -598,6 +622,59 @@ impl ContextProvider for SemanticMemoryContext {
                             sources.push((self.recall_wiki_weight, wiki_ranks));
                         }
                     }
+                }
+            }
+
+            // Chapter Lattice (LT.6) — the typed-graph ranker. From the
+            // semantic seed topics, walk the directed/typed knowledge
+            // graph (both directions, a couple hops) and pull in the
+            // related *entities that are also memory topics* — associative
+            // recall along meaningful relations, not just co-occurrence.
+            // Best-effort throughout.
+            if let (Some(graph), true) =
+                (&self.typed_graph_store, self.recall_graph_typed_weight > 0.0)
+            {
+                const TYPED_HOPS: u32 = 2;
+                const TYPED_CAP: usize = 16;
+                let seed_topics: Vec<String> =
+                    semantic.iter().map(|(e, _)| e.topic.clone()).collect();
+                let seen: HashSet<String> = seed_topics.iter().cloned().collect();
+                let mut reached: Vec<String> = Vec::new();
+                let mut added: HashSet<String> = HashSet::new();
+                for topic in &seed_topics {
+                    let Ok(paths) = graph
+                        .query(
+                            topic,
+                            crate::knowledge_graph::GraphDirection::Both,
+                            None,
+                            TYPED_HOPS,
+                            TYPED_CAP,
+                        )
+                        .await
+                    else {
+                        continue;
+                    };
+                    for p in paths {
+                        // Skip the seed topics themselves; dedup neighbors.
+                        if seen.contains(&p.entity) || !added.insert(p.entity.clone()) {
+                            continue;
+                        }
+                        reached.push(p.entity);
+                    }
+                }
+                let mut typed_ranks: Vec<(String, u64)> = Vec::new();
+                for entity in reached.into_iter().take(self.rag_top_k) {
+                    // Only entities that resolve to a memory topic have an
+                    // entry to inject.
+                    if let Ok(mut es) = self.memory.get_recent(&entity, 1).await {
+                        if let Some(mem) = es.pop() {
+                            typed_ranks.push((mem.topic.clone(), mem.seq));
+                            lookup.entry((mem.topic.clone(), mem.seq)).or_insert(mem);
+                        }
+                    }
+                }
+                if !typed_ranks.is_empty() {
+                    sources.push((self.recall_graph_typed_weight, typed_ranks));
                 }
             }
 
@@ -1975,6 +2052,83 @@ mod tests {
         assert!(
             block_on.contains("autoscaling and node pool"),
             "wiki armed → the consolidated page summary is recalled: {block_on}",
+        );
+    }
+
+    /// Chapter Lattice (LT.6) — a typed graph relation steers recall: a
+    /// topic the query can't reach semantically/lexically is pulled in by
+    /// walking a directed `(deploy)-[depends-on]->(ci)` edge from the
+    /// literal hit — and only when the typed-graph source is armed.
+    #[tokio::test]
+    async fn typed_graph_relation_steers_recall_when_armed() {
+        use crate::knowledge_graph::{GraphTriple, PersistentGraphStore};
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-typed-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let st: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("s.redb")),
+            MasterKey::from_raw([93u8; 32]),
+        )
+        .await
+        .unwrap();
+        let graph =
+            Arc::new(PersistentGraphStore::new(st.domain(KeyDomain::KnowledgeGraph)));
+        // notes -depends-on-> ci ; "ci" is a memory topic the query can't
+        // reach semantically (orthogonal vector) or lexically.
+        graph
+            .put_triple(&GraphTriple {
+                subject: "notes".into(),
+                predicate: "depends-on".into(),
+                object: "ci".into(),
+                source_seqs: vec![1],
+                mentions: 2,
+                updated_at: 1,
+            })
+            .await
+            .unwrap();
+
+        let m: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let ns = m.put("notes", "favorite color is purple").await.unwrap();
+        m.put_vector("notes", ns, vec![1.0, 1.0]).await.unwrap();
+        // "ci" is a memory topic but has NO vector → the semantic ranker
+        // can't see it, and its body shares no query words → lexical can't
+        // either. Only the typed graph (notes -depends-on-> ci) reaches it.
+        m.put("ci", "the ci pipeline runbook").await.unwrap();
+
+        // Off → ci not recalled.
+        let off = SemanticMemoryContext::new(
+            Arc::clone(&m),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_hybrid(true)
+        .with_recall_typed_graph(Arc::clone(&graph), 0.0);
+        let b_off = off.recall("what is my favorite color", sid()).await;
+        assert!(
+            b_off.map(|b| !b.contains("ci pipeline runbook")).unwrap_or(true),
+            "typed graph off → ci must not appear",
+        );
+
+        // Armed → the directed relation pulls ci in.
+        let on = SemanticMemoryContext::new(
+            Arc::clone(&m),
+            Arc::new(FakeProvider { fail: false }),
+            5,
+            0.0,
+        )
+        .with_recall_hybrid(true)
+        .with_recall_typed_graph(Arc::clone(&graph), 2.0);
+        let b_on = on
+            .recall("what is my favorite color", sid())
+            .await
+            .expect("a block");
+        assert!(
+            b_on.contains("ci pipeline runbook"),
+            "typed graph armed → the related topic is recalled: {b_on}",
         );
     }
 

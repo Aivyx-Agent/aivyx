@@ -1954,6 +1954,15 @@ pub struct EmbeddingConfig {
     /// letting one consolidated paragraph out-cover scattered fragments
     /// per token. Defended to `>= 0`.
     pub recall_wiki_weight: f32,
+    /// Chapter Lattice (LT.6) — weight of the **typed knowledge-graph**
+    /// ranker in the hybrid RRF fusion. `0.0` (default) ⇒ off (byte-
+    /// identical). Any value `> 0` arms it (requires `recall_hybrid` + an
+    /// extracted graph): from the recalled topics, the directed/typed
+    /// graph is walked a couple of hops and the related entities that are
+    /// also memory topics are pulled in — associative recall along
+    /// *meaningful* relations (depends-on, caused, …), not just
+    /// co-occurrence. Defended to `>= 0`.
+    pub recall_graph_typed_weight: f32,
 }
 
 /// Chapter Loom (LM.4) — recall-fusion defaults. All chosen so the
@@ -1965,6 +1974,8 @@ pub const DEFAULT_RECALL_GRAPH_DECAY: f32 = 0.5;
 pub const DEFAULT_RECALL_GRAPH_WEIGHT: f32 = 1.0;
 /// Chapter Codex (CX.6) — wiki-page ranker weight default: off.
 pub const DEFAULT_RECALL_WIKI_WEIGHT: f32 = 0.0;
+/// Chapter Lattice (LT.6) — typed-graph ranker weight default: off.
+pub const DEFAULT_RECALL_GRAPH_TYPED_WEIGHT: f32 = 0.0;
 
 /// Default embeddings endpoint — the OpenAI public API. An
 /// operator who wants on-device embedding overrides this with
@@ -4028,6 +4039,8 @@ struct RawEmbedding {
     recall_graph_weight: Option<f32>,
     #[serde(default)]
     recall_wiki_weight: Option<f32>,
+    #[serde(default)]
+    recall_graph_typed_weight: Option<f32>,
 }
 
 /// Phase 80 — `[proactive]` deserialize target. Absent section
@@ -7304,6 +7317,10 @@ fn build_embedding_config(
         .recall_wiki_weight
         .unwrap_or(DEFAULT_RECALL_WIKI_WEIGHT)
         .max(0.0);
+    let recall_graph_typed_weight = raw
+        .recall_graph_typed_weight
+        .unwrap_or(DEFAULT_RECALL_GRAPH_TYPED_WEIGHT)
+        .max(0.0);
 
     // env > TOML; encrypted-store fall-through happens in phase 2.
     let api_key = env_secret(ENV_EMBEDDING_API_KEY)
@@ -7335,6 +7352,7 @@ fn build_embedding_config(
         recall_graph_decay,
         recall_graph_weight,
         recall_wiki_weight,
+        recall_graph_typed_weight,
     }))
 }
 
