@@ -1,12 +1,15 @@
 # Activating the Memory Stack — one switch, proven live (Chapter Synapse)
 
-> **Status:** ⚡ **SY.1 — the `[memory] profile` switch shipped.** One config
-> knob: `off` (default, byte-identical) / `smart`. `smart` expands at config-
-> load into the coherent bundle — `recall_hybrid` on, the wiki + typed-graph +
-> co-occurrence recall sources armed (weight 1.0 / 1 hop), and `[recall_cluster]`
-> / `[wiki]` / `[graph]` synthesized `enabled` — while any explicitly-set value
-> still wins. No daemon wiring needed (the expansion fills the fields the daemon
-> already reads). The end-to-end proof is SY.2. The locked reference for the
+> **Status:** ⚡ **SY.2 — end-to-end composition proof shipped.** A single
+> integration test (`tests/memory_stack_e2e.rs`) wires the **real** components —
+> memory + `WikiSynthesizer` + `GraphExtractor` + `graph.query` + recall fusion,
+> with one routing provider that answers the wiki call with a summary and the
+> graph call with JSON triples — and proves the whole pipeline composes: write
+> memories → sweep → a wiki page **and** typed triples → `graph.query` traverses
+> → recall fuses the wiki summary **and** the typed-graph-only neighbor into one
+> turn (also exercising Lexicon's `requires`→`depends-on` fold). The composition
+> proof the arc's isolated unit tests never gave. SY.1's `[memory] profile`
+> switch shipped. The locked reference for the
 > chapter that turns the **built-but-dormant** memory stack ([[LOOM]] →
 > [[CODEX]] → [[LATTICE]] → [[LEXICON]]) into **realized, verified value**.
 > Those five chapters shipped a sophisticated, deeply-tested memory
@@ -125,7 +128,7 @@ two flaky tests surfaced during the arc (`budget_gate`, persona-log) is a
 |---|---|---|
 | **SY.0** | **This design contract** | locked reference; banner flips per phase |
 | **SY.1** ✅ | **`[memory] profile` switch** | DONE. `MemoryProfile` {`Off` (default), `Smart`} + `[memory] profile` on the existing `[memory]` section; the load-time expansion: `build_embedding_config(raw, smart)` arms `recall_hybrid` / `recall_graph_hops=1` / `recall_wiki_weight=1.0` / `recall_graph_typed_weight=1.0` when unset, and `[recall_cluster]` / `[wiki]` / `[graph]` are synthesized `enabled` (default caps) when *absent* (an explicitly-present section wins). Default `off` ⇒ byte-identical; expansion fills the fields the daemon already reads (zero daemon wiring; `Config.memory_profile` is introspection-only). 3 tests (off unchanged; smart arms the bundle; explicit `recall_hybrid=false` + `[wiki] enabled=false` beat smart). |
-| **SY.2** | **End-to-end integration proof** | one integration test wiring the real memory + wiki synthesizer + graph extractor + recall fusion with a multi-response scripted provider: memories → sweep → wiki page + typed triples → `graph.query` → recall fuses both. The composition proof the arc lacked. |
+| **SY.2** ✅ | **End-to-end integration proof** | DONE. `crates/aivyx-channel/tests/memory_stack_e2e.rs` — a `RoutingProvider` (answers the wiki call with a summary, the graph call with a JSON triple array, switching on the system prompt) + a `ConstEmbed`; seeds memory (`deploy` semantically reachable, `ci` reachable *only* via the graph), runs the wiki + graph sweeps, asserts a page + a *canonical* `depends-on` triple (Lexicon fold of `requires`), runs `graph.query` (store + the tool), then a `recall_hybrid` + wiki + typed-graph context and asserts the block fuses the semantic entry **+** the wiki summary **+** the typed-graph-only `ci` entry — the whole stack in one turn. Passes; clippy clean. |
 | **SY.3** | **Affordance + activation docs** | verify/tighten `graph.query`'s when-to-use description; repoint the Studio Wiki/Graph empty states at `[memory] profile`; add a "smart memory" section to the example config + README; the operator live-verify runbook (`docs/SYNAPSE.md` §runbook). Studio bundle rebuilt if the empty-state strings change. |
 | **SY.4** | **Finalize** | full suite + clippy + `cargo deny` green; status flip; record. |
 
