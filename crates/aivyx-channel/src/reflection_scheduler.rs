@@ -416,6 +416,9 @@ pub struct SkillAuthoringDeps {
         std::sync::Arc<crate::knowledge_wiki::PersistentWikiStore>,
     pub graph_store:
         std::sync::Arc<crate::knowledge_graph::PersistentGraphStore>,
+    /// Raw memory — the topic's entries widen the synthesis context beyond
+    /// the consolidated wiki/graph (concrete detail).
+    pub memory: std::sync::Arc<dyn aivyx_memory::Memory>,
     pub proposal_log: std::sync::Arc<
         crate::persona_proposal::PersistentPersonaProposalLog,
     >,
@@ -1837,6 +1840,7 @@ async fn run_skill_authoring_pass(
     let stat = crate::skill_authoring::propose_specialized_skills(
         deps.wiki_store.as_ref(),
         deps.graph_store.as_ref(),
+        &deps.memory,
         &persona.learned_skills,
         deps.drafter.as_ref(),
         deps.proposal_log.as_ref(),

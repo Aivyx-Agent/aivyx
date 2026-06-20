@@ -112,10 +112,11 @@ selection → wiki+graph synthesis → governed `AppendList` proposal with
 impl; the `[skill_authoring]` opt-in config + the reflection-cadence pass
 wiring; tests.
 
-**Out:** a dedicated **Studio Skills library** (authored skills surface in
-the Agents proposal UI; the library is still a deferred follow-on); pulling
-in **raw memory/recall** beyond the consolidated wiki+graph (keep the
-source to the *consolidated* layers in v1); a structured step/parameter
+**Out:** ~~a dedicated **Studio Skills library**~~ *(done — Chapter
+Repertoire)*; ~~pulling in **raw memory** beyond the consolidated
+wiki+graph~~ *(done — pre-v0.4.0: the topic's recent memory entries now
+widen the synthesis context alongside the wiki summary + graph relations,
+threaded through `SkillAuthoringDeps.memory`)*; a structured step/parameter
 DSL for the procedure (free-text body, as today); auto-*applying* an
 authored skill without operator approval (it stays a proposal).
 

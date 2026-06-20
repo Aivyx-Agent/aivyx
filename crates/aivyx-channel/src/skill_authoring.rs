@@ -47,12 +47,15 @@ pub struct DraftedSkill {
 #[async_trait]
 pub trait SpecializationDrafter: Send + Sync {
     /// Draft a skill for `topic` from its wiki `summary` + rendered graph
-    /// `relations`. `None` to skip (draft failure / empty / ungrounded).
+    /// `relations` + a sample of the raw memory `entries` (concrete detail
+    /// the summary abstracted away). `None` to skip (draft failure / empty
+    /// / ungrounded).
     async fn draft(
         &self,
         topic: &str,
         summary: &str,
         relations: &str,
+        entries: &str,
     ) -> Option<DraftedSkill>;
 }
 
@@ -71,6 +74,9 @@ pub struct SkillAuthoringStat {
     pub deduped: usize,
 }
 
+/// How many raw memory entries to sample into the synthesis context.
+const AUTHOR_MAX_ENTRIES: usize = 12;
+
 /// Chapter Praxis — author specialized skills for knowledge-rich, skill-
 /// less topics.
 ///
@@ -81,6 +87,7 @@ pub struct SkillAuthoringStat {
 pub async fn propose_specialized_skills(
     wiki_store: &PersistentWikiStore,
     graph_store: &PersistentGraphStore,
+    memory: &std::sync::Arc<dyn aivyx_memory::Memory>,
     learned_skills_raw: &[String],
     drafter: &dyn SpecializationDrafter,
     proposal_log: &PersistentPersonaProposalLog,
@@ -146,8 +153,16 @@ pub async fn propose_specialized_skills(
             .map(|t| format!("{} {} {}", t.subject, t.predicate, t.object))
             .collect::<Vec<_>>()
             .join("\n");
+        // Raw memory entries for the topic — concrete detail the wiki
+        // summary abstracted away. Best-effort (an error → empty).
+        let entries = memory
+            .get_recent(&page.topic, AUTHOR_MAX_ENTRIES)
+            .await
+            .map(|es| es.iter().map(|e| format!("- {}", e.body)).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
 
-        let Some(drafted) = drafter.draft(&page.topic, &page.summary, &relations).await
+        let Some(drafted) =
+            drafter.draft(&page.topic, &page.summary, &relations, &entries).await
         else {
             continue;
         };
@@ -242,10 +257,16 @@ impl SpecializationDrafter for LlmSpecializationDrafter {
         topic: &str,
         summary: &str,
         relations: &str,
+        entries: &str,
     ) -> Option<DraftedSkill> {
+        let entries_block = if entries.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\nRaw memory notes (concrete detail):\n{entries}\n")
+        };
         let user = format!(
             "Topic: {topic}\n\nWhat the assistant knows (summary):\n{summary}\n\n\
-             Typed relations (subject predicate object):\n{relations}\n\n\
+             Typed relations (subject predicate object):\n{relations}\n{entries_block}\n\
              Write the skill as the specified JSON.",
         );
         let messages = vec![LlmMessage::user_text(user)];
@@ -278,7 +299,7 @@ mod tests {
     struct FixedDrafter(Option<DraftedSkill>);
     #[async_trait]
     impl SpecializationDrafter for FixedDrafter {
-        async fn draft(&self, _t: &str, _s: &str, _r: &str) -> Option<DraftedSkill> {
+        async fn draft(&self, _t: &str, _s: &str, _r: &str, _e: &str) -> Option<DraftedSkill> {
             self.0.clone()
         }
     }
@@ -286,6 +307,7 @@ mod tests {
     struct Harness {
         wiki: Arc<PersistentWikiStore>,
         graph: Arc<PersistentGraphStore>,
+        memory: Arc<dyn aivyx_memory::Memory>,
         proposals: PersistentPersonaProposalLog,
     }
 
@@ -303,6 +325,7 @@ mod tests {
         Harness {
             wiki: Arc::new(PersistentWikiStore::new(store.domain(KeyDomain::KnowledgeWiki))),
             graph: Arc::new(PersistentGraphStore::new(store.domain(KeyDomain::KnowledgeGraph))),
+            memory: Arc::new(aivyx_memory::InMemoryMemory::new()),
             proposals: PersistentPersonaProposalLog::open(
                 store.domain(KeyDomain::PersonaProposals),
                 vec![0u8; 32],
@@ -358,7 +381,7 @@ mod tests {
         let h = harness().await;
         seed_rich_topic(&h, "deploy").await;
         let stat = propose_specialized_skills(
-            &h.wiki, &h.graph, &[], &FixedDrafter(drafted()),
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()),
             &h.proposals, &cfg(), "reflection", 1000,
         )
         .await;
@@ -393,7 +416,7 @@ mod tests {
             .await
             .unwrap();
         let s = propose_specialized_skills(
-            &h.wiki, &h.graph, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
         )
         .await;
         assert_eq!(s.filed, 0);
@@ -410,7 +433,7 @@ mod tests {
         }
         .to_json_value()];
         let s2 = propose_specialized_skills(
-            &h.wiki, &h.graph, &existing, &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &existing, &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
         )
         .await;
         assert_eq!(s2.filed, 0);
@@ -419,10 +442,36 @@ mod tests {
         // Disabled config → nothing.
         let off = SkillAuthoringConfig { enabled: false, ..cfg() };
         let s3 = propose_specialized_skills(
-            &h.wiki, &h.graph, &[], &FixedDrafter(drafted()), &h.proposals, &off, "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &off, "r", 1000,
         )
         .await;
         assert_eq!(s3.filed, 0);
+    }
+
+    #[tokio::test]
+    async fn raw_memory_entries_reach_the_drafter() {
+        use std::sync::Mutex;
+        struct Capturing(Mutex<String>);
+        #[async_trait]
+        impl SpecializationDrafter for Capturing {
+            async fn draft(&self, _t: &str, _s: &str, _r: &str, entries: &str) -> Option<DraftedSkill> {
+                *self.0.lock().unwrap() = entries.to_string();
+                drafted()
+            }
+        }
+        let h = harness().await;
+        seed_rich_topic(&h, "deploy").await;
+        h.memory.put("deploy", "step: run the smoke test before ship").await.unwrap();
+        let drafter = Capturing(Mutex::new(String::new()));
+        let stat = propose_specialized_skills(
+            &h.wiki, &h.graph, &h.memory, &[], &drafter, &h.proposals, &cfg(), "r", 1000,
+        )
+        .await;
+        assert_eq!(stat.filed, 1);
+        assert!(
+            drafter.0.lock().unwrap().contains("run the smoke test"),
+            "the topic's raw memory entry is in the synthesis context",
+        );
     }
 
     #[tokio::test]
@@ -430,12 +479,12 @@ mod tests {
         let h = harness().await;
         seed_rich_topic(&h, "deploy").await;
         let first = propose_specialized_skills(
-            &h.wiki, &h.graph, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
         )
         .await;
         assert_eq!(first.filed, 1);
         let second = propose_specialized_skills(
-            &h.wiki, &h.graph, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 2000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 2000,
         )
         .await;
         assert_eq!(second.filed, 0);
