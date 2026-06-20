@@ -4871,23 +4871,26 @@ async fn run_async(
                 max_pages: w.max_pages_per_sweep,
             }
         });
-    // Chapter Lattice (LT.3) — the typed-knowledge-graph sweep. Armed only
-    // when `[graph].enabled`: extracting a relation graph with the LLM has
-    // a cost the operator opts into. Reuses the same LLM provider + memory
-    // the rest of the daemon holds.
+    // Chapter Lattice — the typed-knowledge-graph store. Built
+    // unconditionally (a cheap domain handle) so the `graph.query` tool
+    // (LT.4) can read it even before/without extraction; queries just
+    // return nothing until a sweep populates it.
+    let graph_store = Arc::new(
+        aivyx_channel::knowledge_graph::PersistentGraphStore::new(
+            storage.domain(KeyDomain::KnowledgeGraph),
+        ),
+    );
+    // LT.3 — the extraction sweep, armed only when `[graph].enabled`:
+    // building a relation graph with the LLM has a cost the operator opts
+    // into. Reuses the same store, LLM provider, and memory.
     let graph_sweep: Option<aivyx_channel::knowledge_graph::GraphSweepConfig> = config_graph
         .as_ref()
         .filter(|g| g.enabled)
         .map(|g| {
-            let store = Arc::new(
-                aivyx_channel::knowledge_graph::PersistentGraphStore::new(
-                    storage.domain(KeyDomain::KnowledgeGraph),
-                ),
-            );
             let extractor = aivyx_channel::knowledge_graph::GraphExtractor::new(
                 Arc::clone(&memory),
                 Arc::clone(&provider),
-                store,
+                Arc::clone(&graph_store),
                 model.clone(),
             );
             aivyx_channel::knowledge_graph::GraphSweepConfig {
@@ -5472,6 +5475,16 @@ async fn run_async(
     // per Phase 14 Task 2's ceiling decision.
     let role_switch_tool: Arc<RoleSwitchTool> = Arc::new(RoleSwitchTool::new());
     tool_list.push(Arc::clone(&role_switch_tool) as Arc<dyn Tool>);
+
+    // Chapter Lattice (LT.4) — the `graph.query` knowledge-graph traversal
+    // tool, gated by `graph.read`. Always registered; the capability gate
+    // decides who may call it. Reads the same store the extraction sweep
+    // (LT.3) writes — queries return nothing until a sweep populates it.
+    {
+        let graph_query = aivyx_channel::graph_query_tool::GraphQueryTool::new();
+        let _ = graph_query.set_store(Arc::clone(&graph_store));
+        tool_list.push(Arc::new(graph_query) as Arc<dyn Tool>);
+    }
 
     let mission_create_tool: Arc<MissionCreateTool> = Arc::new(MissionCreateTool::new());
     tool_list.push(Arc::clone(&mission_create_tool) as Arc<dyn Tool>);
@@ -6181,6 +6194,9 @@ async fn run_async(
         Scope::parse("memory.write").unwrap(),
         Scope::parse("memory.forget").unwrap(),
         Scope::parse("memory.gc").unwrap(),
+        // Chapter Lattice — the default agent may query its own typed
+        // knowledge graph (a read of derived memory, like memory.read).
+        Scope::parse("graph.read").unwrap(),
         fs_read_scope,
         fs_write_scope,
         fs_metadata_scope,

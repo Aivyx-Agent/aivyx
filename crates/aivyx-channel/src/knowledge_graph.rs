@@ -161,6 +161,23 @@ impl PersistentGraphStore {
         Ok(out)
     }
 
+    /// Chapter Lattice (LT.4) — multi-hop typed traversal from `start`.
+    /// Follows directed edges per `direction`, optionally filtered to a
+    /// single `predicate`, up to `max_hops`, returning the reachable
+    /// entities with the typed path to each (capped at `max_results`).
+    /// Loads the triple set once and delegates to the pure [`traverse`].
+    pub async fn query(
+        &self,
+        start: &str,
+        direction: GraphDirection,
+        predicate: Option<&str>,
+        max_hops: u32,
+        max_results: usize,
+    ) -> Result<Vec<GraphPath>, GraphStoreError> {
+        let triples = self.all_triples().await?;
+        Ok(traverse(&triples, start, direction, predicate, max_hops, max_results))
+    }
+
     // ---- incremental-extraction bookkeeping (per topic) ----------------
 
     fn fingerprint_key(topic: &str) -> Vec<u8> {
@@ -202,6 +219,107 @@ impl PersistentGraphStore {
             _ => true,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Traversal — Chapter Lattice (LT.4)
+// ---------------------------------------------------------------------------
+
+/// Which way to follow a directed edge from the current entity during a
+/// [`traverse`]: outgoing (`subject → object`), incoming (`object →
+/// subject`), or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphDirection {
+    Out,
+    In,
+    Both,
+}
+
+impl GraphDirection {
+    /// Parse the tool's string argument; unknown / missing → `Out`.
+    pub fn from_arg(s: Option<&str>) -> Self {
+        match s.map(|x| x.trim().to_lowercase()).as_deref() {
+            Some("in") => GraphDirection::In,
+            Some("both") => GraphDirection::Both,
+            _ => GraphDirection::Out,
+        }
+    }
+}
+
+/// Pure multi-hop BFS over a triple set. From `start`, follow edges per
+/// `direction` (optionally only edges whose predicate equals
+/// `predicate`), up to `max_hops`, recording the typed path (the
+/// predicate labels) to each newly-reached entity. Each entity is
+/// reported once, at its **shortest** path (BFS order); the start entity
+/// is never reported. Deterministic: adjacency is built from the
+/// caller-ordered `triples`, the frontier is processed in sorted order,
+/// and the output is sorted (hops asc, then entity asc) before the
+/// `max_results` cut.
+pub fn traverse(
+    triples: &[GraphTriple],
+    start: &str,
+    direction: GraphDirection,
+    predicate: Option<&str>,
+    max_hops: u32,
+    max_results: usize,
+) -> Vec<GraphPath> {
+    use std::collections::{HashMap, HashSet};
+    if max_hops == 0 || max_results == 0 {
+        return Vec::new();
+    }
+    let start = canonical_label(start);
+    let pred = predicate.map(canonical_label).filter(|p| !p.is_empty());
+
+    // Adjacency: entity → Vec<(predicate, neighbor)>, honoring direction +
+    // the optional predicate filter.
+    let mut adj: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for t in triples {
+        if let Some(p) = &pred {
+            if &t.predicate != p {
+                continue;
+            }
+        }
+        if matches!(direction, GraphDirection::Out | GraphDirection::Both) {
+            adj.entry(&t.subject).or_default().push((&t.predicate, &t.object));
+        }
+        if matches!(direction, GraphDirection::In | GraphDirection::Both) {
+            adj.entry(&t.object).or_default().push((&t.predicate, &t.subject));
+        }
+    }
+    // Sort each adjacency list for deterministic frontier order.
+    for v in adj.values_mut() {
+        v.sort();
+    }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(start.clone());
+    // BFS frontier: (entity, path-of-predicates-to-it).
+    let mut frontier: Vec<(String, Vec<String>)> = vec![(start, Vec::new())];
+    let mut out: Vec<GraphPath> = Vec::new();
+
+    for hop in 1..=max_hops {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next: Vec<(String, Vec<String>)> = Vec::new();
+        for (entity, path) in &frontier {
+            let Some(edges) = adj.get(entity.as_str()) else { continue };
+            for (predicate, neighbor) in edges {
+                if !seen.insert((*neighbor).to_string()) {
+                    continue; // already reached at an equal-or-shorter path
+                }
+                let mut p = path.clone();
+                p.push((*predicate).to_string());
+                out.push(GraphPath { entity: (*neighbor).to_string(), hops: hop, path: p.clone() });
+                next.push(((*neighbor).to_string(), p));
+            }
+        }
+        frontier = next;
+    }
+
+    out.sort_by(|a, b| a.hops.cmp(&b.hops).then_with(|| a.entity.cmp(&b.entity)));
+    out.truncate(max_results);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +723,78 @@ mod tests {
         assert!(!g.needs_regen("deploy", 42).await);
         assert!(g.needs_regen("deploy", 43).await);
         assert!(g.needs_regen("never-extracted", 1).await);
+    }
+
+    // ---- LT.4 — traversal -------------------------------------------
+
+    fn chain() -> Vec<GraphTriple> {
+        // deploy -depends-on-> ci -triggers-> rollback ; deploy -uses-> docker
+        vec![
+            triple("deploy", "depends-on", "ci"),
+            triple("ci", "triggers", "rollback"),
+            triple("deploy", "uses", "docker"),
+        ]
+    }
+
+    #[test]
+    fn traverse_out_multi_hop_with_paths() {
+        let t = chain();
+        let r = traverse(&t, "deploy", GraphDirection::Out, None, 3, 50);
+        // ci(1), docker(1), rollback(2).
+        let names: Vec<&str> = r.iter().map(|p| p.entity.as_str()).collect();
+        assert_eq!(names, vec!["ci", "docker", "rollback"]);
+        let rb = r.iter().find(|p| p.entity == "rollback").unwrap();
+        assert_eq!(rb.hops, 2);
+        assert_eq!(rb.path, vec!["depends-on", "triggers"]);
+    }
+
+    #[test]
+    fn traverse_hop_cap_limits_depth() {
+        let t = chain();
+        let r = traverse(&t, "deploy", GraphDirection::Out, None, 1, 50);
+        // Only direct neighbors at 1 hop; rollback (2 hops) excluded.
+        assert!(!r.iter().any(|p| p.entity == "rollback"));
+        assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn traverse_predicate_filter_and_direction() {
+        let t = chain();
+        // Only "uses" edges out of deploy → docker.
+        let r = traverse(&t, "deploy", GraphDirection::Out, Some("uses"), 3, 50);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].entity, "docker");
+        // Incoming edges of rollback → ci.
+        let inb = traverse(&t, "rollback", GraphDirection::In, None, 1, 50);
+        assert_eq!(inb.len(), 1);
+        assert_eq!(inb[0].entity, "ci");
+    }
+
+    #[test]
+    fn traverse_is_cycle_safe_and_deterministic() {
+        let cyc = vec![
+            triple("a", "r", "b"),
+            triple("b", "r", "c"),
+            triple("c", "r", "a"), // cycle back to a
+        ];
+        let r = traverse(&cyc, "a", GraphDirection::Out, None, 10, 50);
+        // a is the start (never reported); b, c reached once each → no loop.
+        let names: Vec<&str> = r.iter().map(|p| p.entity.as_str()).collect();
+        assert_eq!(names, vec!["b", "c"]);
+        // Deterministic across runs.
+        for _ in 0..3 {
+            assert_eq!(traverse(&cyc, "a", GraphDirection::Out, None, 10, 50), r);
+        }
+    }
+
+    #[tokio::test]
+    async fn store_query_delegates_to_traverse() {
+        let g = store().await;
+        for t in chain() {
+            g.put_triple(&t).await.unwrap();
+        }
+        let r = g.query("Deploy", GraphDirection::Out, None, 3, 50).await.unwrap();
+        assert!(r.iter().any(|p| p.entity == "rollback" && p.hops == 2));
     }
 
     // ---- LT.2 — GraphExtractor --------------------------------------

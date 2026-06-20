@@ -647,6 +647,32 @@ substrate base). The `known_bases_count_matches_phase_143_a3_addendum`
 test pins the new total at **86**, so this addendum and the runtime
 stay in sync.
 
+## Chapter Lattice addendum — `graph.read` (LT.4) (2026-06-20)
+
+> *Added at Chapter Lattice LT.4, the typed knowledge-graph chapter.
+> `graph.read` gates the `graph.query` tool — a read-only **multi-hop,
+> directed, typed traversal** of the agent's own knowledge graph
+> (entities + `(subject)-[predicate]->(object)` relations extracted from
+> memory). **Infrastructure, not substrate:** the agent querying its own
+> derived self-knowledge, exactly like `skills.list` / `audit.read` —
+> the graph is derived from memory, not a new operator-owned resource
+> primitive. So it grows `KNOWN_BASES` **without a P10 substrate-count
+> amendment** (the same precedent as `skills.*` / `loop.*` /
+> `reflection.*` — every prior infrastructure base). Bare base (like
+> `skills.list`), `CEILING_TRUSTED` only; SemiTrusted does not get it by
+> default.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Lattice | `graph.read` | LT.4 — gates `graph.query`, a read-only multi-hop traversal of the typed knowledge graph; infrastructure (no P10 amendment), Trusted-tier-only at the ceiling |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **86 → 87** (the one new `graph.read`
+infrastructure base). The `known_bases_count_matches_phase_143_a3_addendum`
+test pins the new total at **87**, so this addendum and the runtime stay
+in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

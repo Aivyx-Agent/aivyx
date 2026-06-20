@@ -620,6 +620,27 @@ Rule 4 is intentional: tools must be specific. Unrestricted requests are visible
 > uses them to manage itself's identity layer) so they are
 > not counted against P10's substrate-tool cap.
 
+**`graph` — typed knowledge graph** *(added in Chapter Lattice)*
+
+| Scope | Qualifier | Description |
+|---|---|---|
+| `graph.read` | — | Query the agent's typed knowledge graph — a read-only multi-hop directed traversal (`graph.query`) |
+
+> **Chapter Lattice — typed knowledge graph.** `graph.read`
+> gates `graph.query`, a read-only multi-hop traversal of the
+> agent's own knowledge graph (entities + directed
+> `(subject)-[predicate]->(object)` relations extracted from
+> memory). Like `skills.*`, it is an **infrastructure tool**
+> per P10's taxonomy — the agent querying its own *derived*
+> self-knowledge, not a new operator-owned resource primitive —
+> so it grows `KNOWN_BASES` (86 → 87) **without a P10 substrate-
+> count amendment**, exactly the `skills.*` / `loop.*` /
+> `reflection.*` precedent. Bare base (like `skills.list`),
+> `CEILING_TRUSTED` only; SemiTrusted does not get it by
+> default. See
+> [`docs/amendments/2026-04-17-capability-taxonomy-growth.md`](docs/amendments/2026-04-17-capability-taxonomy-growth.md)
+> (Lattice addendum).
+
 **`llm` — language model**
 
 | Scope | Qualifier | Description |

@@ -312,6 +312,16 @@ const KNOWN_BASES: &[&str] = &[
     // approved skill set.
     "skills.list",
     "skills.invoke",
+    // Chapter Lattice — `graph.read` gates the `graph.query`
+    // tool: a read-only multi-hop traversal of the agent's own
+    // typed knowledge graph (entities + directed relations
+    // extracted from memory). Infrastructure, not substrate —
+    // the agent querying its OWN derived self-knowledge, like
+    // `skills.list` / `audit.read` — so it grows `KNOWN_BASES`
+    // without a P10 substrate-count amendment (the graph is
+    // derived from memory, not a new operator-owned resource).
+    // Trusted-tier only (reflection-layer read).
+    "graph.read",
     // Phase 184 — Conversational skill-teaching. `skills.write`
     // gates the operator-authored edit tools (`skills.teach` /
     // `skills.update` / `skills.forget`) that append LearnedSkill
@@ -946,6 +956,10 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "skills.propose",
         "skills.list",
         "skills.invoke",
+        // Chapter Lattice — `graph.read` (the `graph.query` tool).
+        // Trusted-tier only, like the other reflection-layer reads;
+        // SemiTrusted does not get it by default.
+        "graph.read",
         // Phase 184 — operator-authored skill editing (Trusted
         // only; identity-modifying).
         "skills.write",
@@ -1898,11 +1912,14 @@ mod tests {
         // first Broaden-track everyday-PA domain, audit F4).
         // Chapter Forge (FG.2) adds git.write — the destructive git
         // sibling A12 anticipated — gating the git.commit tool.
+        // Chapter Lattice adds graph.read — the read gate for the
+        // graph.query knowledge-graph traversal tool (infrastructure,
+        // no P10 amendment).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            86,
+            87,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
@@ -1916,6 +1933,22 @@ mod tests {
         assert_eq!(r.base(), "budget.read");
         let w = Scope::parse("budget.write").expect("budget.write");
         assert_eq!(w.base(), "budget.write");
+    }
+
+    #[test]
+    fn graph_read_base_parses_and_is_trusted_only() {
+        // Chapter Lattice — the knowledge-graph read base parses (bare,
+        // like skills.list) and sits at Trusted+ only.
+        let g = Scope::parse("graph.read").expect("graph.read");
+        assert_eq!(g.base(), "graph.read");
+        assert!(
+            CEILING_TRUSTED.grants(&g),
+            "Trusted ceiling must grant graph.read"
+        );
+        assert!(
+            !CEILING_SEMITRUSTED.grants(&g),
+            "SemiTrusted ceiling must deny graph.read by default"
+        );
     }
 
     #[test]

@@ -74,6 +74,19 @@ sibling A12 anticipated — gating `git.commit`. Trusted-tier only (writing
 history is as sensitive as `shell.exec` / `fs.delete`); reuses `git.read`'s
 `[git] repos` allow-set. See `docs/amendments/2026-06-19-substrate-tool-count-fifteen.md`.*
 
+## Knowledge graph (infrastructure)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `graph.query` | `graph.read` | Trusted | read-only multi-hop directed/typed traversal of the agent's knowledge graph (entities + `(subject)-[predicate]->(object)` relations extracted from memory) |
+
+*The `graph.read` base was added at Chapter Lattice LT.4. It is
+**infrastructure**, not substrate (the agent querying its own *derived*
+self-knowledge, like `skills.list` / `audit.read`) — so it grows
+`KNOWN_BASES` (86 → 87) with **no P10 substrate-count amendment**. Bare
+base, Trusted-tier only. See the Lattice addendum in
+`docs/amendments/2026-04-17-capability-taxonomy-growth.md`.*
+
 ## LLM (substrate)
 
 | Tool | Scope | Min tier | Notes |
@@ -224,6 +237,6 @@ user-facing; the scope base groups capabilities):
 ---
 
 *This catalog is organized around `KNOWN_BASES`; the drift-guard test asserts every
-one of the 86 bases appears here. Runtime, per-instance tool introspection (live
+one of the 87 bases appears here. Runtime, per-instance tool introspection (live
 names + schemas the agent sees) is provided by the `tools.list` tool — Chapter Atlas
 AT.2.*
