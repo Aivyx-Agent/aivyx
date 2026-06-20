@@ -11,6 +11,14 @@ enable it.
 
 ### Added
 
+- **One-switch smart memory (Chapter Synapse).** The whole memory stack above
+  (graph-augmented recall + the knowledge-wiki and typed-graph layers + their
+  extraction sweeps) was opt-in and spread across ~14 knobs. **`[memory] profile
+  = "smart"`** now arms the coherent bundle with one line (explicitly-set knobs
+  still win; the default stays `off` ⇒ byte-identical). Plus the end-to-end
+  integration proof the layered arc lacked — the real memory + wiki synthesizer
+  + graph extractor + `graph.query` + recall fusion, verified to compose into a
+  single turn — and an operator live-verify runbook.
 - **Typed knowledge graph (Chapter Lattice).** A real, **directed, typed**
   graph the agent extracts from memory: nodes are entities, edges are directed
   `(subject)-[predicate]->(object)` relations (`deploy` —*depends-on*→ `ci`),

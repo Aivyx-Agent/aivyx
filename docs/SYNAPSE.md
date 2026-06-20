@@ -1,12 +1,13 @@
 # Activating the Memory Stack — one switch, proven live (Chapter Synapse)
 
-> **Status:** ⚡ **SY.3 — affordances + activation docs shipped.** Sharpened
-> `graph.query`'s when-to-use description (reach for it on relate/depend/connect
-> questions); repointed the Studio Wiki/Graph empty states at `[memory] profile
-> = "smart"` (bundle rebuilt + `dist/` committed); added a "smart memory" one-
-> switch section to the example config + README; and wrote the **operator
-> live-verify runbook** (§6 — real Ollama). SY.1 (the switch) + SY.2 (the
-> end-to-end composition proof) shipped. Only finalize (SY.4) remains. The
+> **Status:** ✅ **COMPLETE (SY.0–SY.4).** The built-but-dormant memory stack is
+> now **activated and proven**: one `[memory] profile = "smart"` switch arms the
+> whole coherent stack (recall fusion + the wiki + typed-graph layers + their
+> sweeps), an end-to-end integration test proves it composes, the `graph.query`
+> affordance + Studio empty states + example config + README make it
+> discoverable, and a §6 runbook live-verifies it with a real model. Default
+> stays `off` (byte-identical); a pure refinement — **no new capability, base,
+> amendment, or dependency**; full suite + clippy + `cargo deny` green. The
 > locked reference for the
 > chapter that turns the **built-but-dormant** memory stack ([[LOOM]] →
 > [[CODEX]] → [[LATTICE]] → [[LEXICON]]) into **realized, verified value**.
@@ -128,7 +129,7 @@ two flaky tests surfaced during the arc (`budget_gate`, persona-log) is a
 | **SY.1** ✅ | **`[memory] profile` switch** | DONE. `MemoryProfile` {`Off` (default), `Smart`} + `[memory] profile` on the existing `[memory]` section; the load-time expansion: `build_embedding_config(raw, smart)` arms `recall_hybrid` / `recall_graph_hops=1` / `recall_wiki_weight=1.0` / `recall_graph_typed_weight=1.0` when unset, and `[recall_cluster]` / `[wiki]` / `[graph]` are synthesized `enabled` (default caps) when *absent* (an explicitly-present section wins). Default `off` ⇒ byte-identical; expansion fills the fields the daemon already reads (zero daemon wiring; `Config.memory_profile` is introspection-only). 3 tests (off unchanged; smart arms the bundle; explicit `recall_hybrid=false` + `[wiki] enabled=false` beat smart). |
 | **SY.2** ✅ | **End-to-end integration proof** | DONE. `crates/aivyx-channel/tests/memory_stack_e2e.rs` — a `RoutingProvider` (answers the wiki call with a summary, the graph call with a JSON triple array, switching on the system prompt) + a `ConstEmbed`; seeds memory (`deploy` semantically reachable, `ci` reachable *only* via the graph), runs the wiki + graph sweeps, asserts a page + a *canonical* `depends-on` triple (Lexicon fold of `requires`), runs `graph.query` (store + the tool), then a `recall_hybrid` + wiki + typed-graph context and asserts the block fuses the semantic entry **+** the wiki summary **+** the typed-graph-only `ci` entry — the whole stack in one turn. Passes; clippy clean. |
 | **SY.3** ✅ | **Affordance + activation docs** | DONE. `graph.query` description sharpened to a when-to-use affordance (relate/depend/connect/caused/owns/contains questions). Studio Wiki + Graph empty states repointed at `[memory] profile = "smart"` (bundle rebuilt `dx bundle --release` + `dist/` committed; wasm carries the new strings). A "smart memory — one switch" section added to `examples/aivyx.toml` + the README highlight. The operator live-verify runbook lands as **§6** (real-Ollama, ~10 min, steps + the one expected escalation). |
-| **SY.4** | **Finalize** | full suite + clippy + `cargo deny` green; status flip; record. |
+| **SY.4** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps; README phases line + CHANGELOG note the switch; banner flipped to COMPLETE; recorded. |
 
 **Discipline:** SY.1's default stays `off` (byte-identical) — the switch
 is *opt-in*, just *one* opt-in instead of ten. SY.2 changes no behavior
