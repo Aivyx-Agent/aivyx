@@ -5,7 +5,7 @@
 //! analogue of `web.extract`):
 //!
 //! - [`DataCsvTool`] (`data.csv`, SH.1) — delimited text → rows.
-//! - `data.xlsx` (SH.2) — spreadsheet → a sheet's rows *(pending)*.
+//! - [`DataXlsxTool`] (`data.xlsx`, SH.2) — spreadsheet → a sheet's rows.
 //! - `data.pdf` (SH.3) — PDF → extracted text *(pending)*.
 //!
 //! ## Governance (see `docs/SHEAF.md`)
@@ -22,6 +22,8 @@
 
 pub mod csv_reader;
 pub mod sandbox;
+pub mod xlsx_reader;
 
 pub use csv_reader::DataCsvTool;
 pub use sandbox::ReaderSandbox;
+pub use xlsx_reader::DataXlsxTool;

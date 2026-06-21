@@ -21,15 +21,12 @@ use serde_json::{json, Value};
 use aivyx_capability::Scope;
 use aivyx_core::{Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
-use crate::sandbox::ReaderSandbox;
+use crate::sandbox::{cap_cell, ReaderSandbox};
 
 /// Default and hard-ceiling row caps. `max_rows` may lower the default
 /// but never raise it past the ceiling (bounding context + memory).
 const DEFAULT_MAX_ROWS: usize = 1_000;
 const HARD_MAX_ROWS: usize = 100_000;
-/// Per-cell character cap — a single pathological cell can't blow the
-/// context. Mirrors `fs.read`'s truncation discipline.
-const MAX_CELL_CHARS: usize = 4_096;
 
 pub struct DataCsvTool {
     id: ToolId,
@@ -177,16 +174,6 @@ pub fn parse_csv(
     Ok(CsvData { headers, rows, row_count, rows_truncated })
 }
 
-/// Truncate an oversize cell at a char boundary, marking the cut.
-fn cap_cell(s: &str) -> String {
-    if s.chars().count() <= MAX_CELL_CHARS {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(MAX_CELL_CHARS).collect();
-    out.push('…');
-    out
-}
-
 fn parse_delimiter(input: &Value) -> Result<u8, String> {
     match input.get("delimiter") {
         None | Some(Value::Null) => Ok(b','),
@@ -226,6 +213,7 @@ fn fail(tool: ToolId, detail: String) -> ToolOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::MAX_CELL_CHARS;
 
     fn rows_of(data: &CsvData) -> Vec<Vec<&str>> {
         data.rows

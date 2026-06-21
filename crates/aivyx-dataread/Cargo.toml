@@ -25,9 +25,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # CSV parsing (Chapter Sheaf SH.1). Already in the workspace dep tree;
-# MIT/Unlicense — permissive, clears deny.toml. xlsx (calamine) and pdf
-# parsers land additively in SH.2 / SH.3.
+# MIT/Unlicense — permissive, clears deny.toml.
 csv = "1"
+
+# XLSX spreadsheet parsing (Chapter Sheaf SH.2). MIT — permissive,
+# clears deny.toml. Reads the binary zip+XML format `fs.read` cannot
+# expose; parsed in-memory from the sandbox-read bytes (no temp files).
+calamine = "0.26"
 
 [package.metadata.dist]
 dist = false

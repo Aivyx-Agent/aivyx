@@ -25,6 +25,22 @@ use serde_json::Value;
 /// caps apply *on top* of this per format.
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Per-cell character cap shared by the tabular readers — a single
+/// pathological cell can't blow the context. Mirrors `fs.read`'s
+/// truncation discipline.
+pub const MAX_CELL_CHARS: usize = 4_096;
+
+/// Truncate an oversize cell at a char boundary, marking the cut with
+/// an ellipsis.
+pub fn cap_cell(s: &str) -> String {
+    if s.chars().count() <= MAX_CELL_CHARS {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(MAX_CELL_CHARS).collect();
+    out.push('…');
+    out
+}
+
 /// A canonicalized read sandbox shared by all readers. Construct once
 /// at agent assembly (like `FsReadToolConfig::build`); cheap to clone
 /// (an `Arc<Path>`) across the readers and concurrent turns.

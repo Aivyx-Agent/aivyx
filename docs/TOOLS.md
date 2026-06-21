@@ -53,6 +53,7 @@ only parse bytes the agent could already `fs.read`. Registered beside `fs.read`.
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
 | `data.csv` | `fs.read` | Trusted | read a CSV/TSV file into `{headers, rows, …}` (SH.1) |
+| `data.xlsx` | `fs.read` | Trusted | read an .xlsx sheet into `{sheet, sheet_names, headers, rows, …}` (SH.2, `calamine`) |
 
 ## Network & web (substrate)
 
