@@ -16,9 +16,14 @@
 //! - [`calc`] — Chapter Abacus (AB.1): `calc.eval`, a
 //!   pure-compute arithmetic evaluator (`calc.eval` scope,
 //!   SemiTrusted-reachable — no I/O, no data).
+//! - [`convert`] — Chapter Abacus (AB.2): `convert.units` +
+//!   `convert.time`, pure-compute unit + timezone conversion
+//!   (both gated by the `convert.units` group scope,
+//!   SemiTrusted-reachable).
 
 pub mod budget;
 pub mod calc;
+pub mod convert;
 pub mod health_check;
 pub mod tasks;
 pub mod web_search;
@@ -28,6 +33,7 @@ pub use budget::{
     BudgetTrendTool, BudgetUpdate,
 };
 pub use calc::CalcEval;
+pub use convert::{ConvertTime, ConvertUnits};
 pub use health_check::{
     HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove,
 };

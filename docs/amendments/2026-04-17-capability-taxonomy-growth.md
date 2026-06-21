@@ -700,6 +700,31 @@ tool-process base). The `known_bases_count_matches_phase_143_a3_addendum`
 test pins the new total at **88**, so this addendum and the runtime stay
 in sync.
 
+## Chapter Abacus addendum — `convert.units` (AB.2) (2026-06-21)
+
+> *Added at Chapter Abacus AB.2, the convert group of the utilities
+> pack. One base, `convert.units`, gates **both** convert tools —
+> `convert.units` (unit conversion across length / mass / temperature
+> / volume / digital families, a hand-rolled curated table) and
+> `convert.time` (IANA-named-timezone conversion via the bundled
+> `chrono-tz` zone database, the chapter's one new dependency). Same
+> tool-process tier + SemiTrusted floor as `calc.eval` (AB.1): both
+> are side-effect-free and offline, so they need no P10 substrate
+> amendment and are reachable below Trusted. Per the per-group base
+> decision (OQ-1), the convert group is one base, not two. See
+> docs/ABACUS.md §2.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Abacus | `convert.units` | AB.2 — gates `convert.units` (curated unit table) and `convert.time` (`chrono-tz` IANA zones); tool-process tier (no P10 amendment), SemiTrusted-reachable (no I/O, no operator data) |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **88 → 89** (the one new `convert.units`
+group base). The `known_bases_count_matches_phase_143_a3_addendum`
+test pins the new total at **89**, so this addendum and the runtime stay
+in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

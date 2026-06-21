@@ -141,8 +141,11 @@ const KNOWN_BASES: &[&str] = &[
     // surface gated *below* Trusted: present in CEILING_SEMITRUSTED
     // (and therefore reachable at Trusted/Kernel too). See
     // docs/ABACUS.md §2.
-    //   calc.eval — calc.eval (arithmetic expression evaluator).
+    //   calc.eval     — calc.eval (arithmetic expression evaluator).
+    //   convert.units — convert.units + convert.time (the convert
+    //                   group; one base, AB.2).
     "calc.eval",
+    "convert.units",
     // Calendar (Phase 128 — Chapter F #2, aivyx-calendar
     // third-party tool process). Two bases for the
     // five-tool surface (Q3b operator-picked):
@@ -1013,8 +1016,10 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // here so Trusted (and Kernel) hold it too, but its real
         // home is CEILING_SEMITRUSTED below: a calculator touches no
         // network/data, so it is safe below the Trusted tier the
-        // rest of the toolkit pins to.
+        // rest of the toolkit pins to. AB.2 adds convert.units (the
+        // convert group: convert.units + convert.time).
         "calc.eval",
+        "convert.units",
         // Phase 128 — Google Calendar third-party tool
         // process (Chapter F #2). Two bases for the
         // five-tool surface (Q3b); Trusted-only default
@@ -1105,8 +1110,10 @@ static CEILING_SEMITRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // toolkit base reachable at SemiTrusted: a calculator has no
         // side effects and exposes no operator data, so a
         // semi-trusted remote context may use it without a Trusted
-        // role grant. See docs/ABACUS.md §2.
+        // role grant. See docs/ABACUS.md §2. AB.2 adds convert.units
+        // (the convert group: convert.units + convert.time).
         "calc.eval",
+        "convert.units",
     ])
 });
 
@@ -1938,12 +1945,13 @@ mod tests {
         // no P10 amendment).
         // Chapter Abacus (AB.1) adds calc.eval — the first pure-compute
         // utility in the aivyx-toolkit pack, and the first toolkit base
-        // reachable at SemiTrusted (no I/O, no operator data).
+        // reachable at SemiTrusted (no I/O, no operator data). AB.2 adds
+        // convert.units (the convert group: convert.units + convert.time).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            88,
+            89,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

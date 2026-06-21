@@ -13,14 +13,15 @@
 //! 4. Spawn the health polling loop in a background tokio
 //!    task (tokio aborts it when main returns on
 //!    ToolShutdown).
-//! 5. Register all 16 tools into a single
+//! 5. Register all 18 tools into a single
 //!    `Vec<Arc<dyn Tool>>` and hand to
 //!    `run_multi_tool_subprocess`. Phase 125
 //!    shipped 8 tools; Phases 143, 144, 147,
 //!    149, 150 expanded the surface with
 //!    budget CRUD + trend + categories +
 //!    health.check.remove; Chapter Abacus
-//!    (AB.1) adds calc.eval.
+//!    adds calc.eval (AB.1) + convert.units
+//!    + convert.time (AB.2).
 //!
 //! Operator-facing failure modes are surfaced at startup
 //! (missing config file, $HOME unset, etc) with operator-
@@ -38,9 +39,9 @@ use aivyx_toolkit::health_store::HealthStore;
 use aivyx_toolkit::task_store::TaskStore;
 use aivyx_toolkit::tools::{
     BudgetCategoriesTool, BudgetDelete, BudgetRecord, BudgetSummaryTool,
-    BudgetTrendTool, BudgetUpdate, CalcEval, HealthCheckAdd, HealthCheckList,
-    HealthCheckRecentChanges, HealthCheckRemove, TaskComplete, TaskCreate, TaskDelete,
-    TaskList, WebSearch,
+    BudgetTrendTool, BudgetUpdate, CalcEval, ConvertTime, ConvertUnits, HealthCheckAdd,
+    HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove, TaskComplete,
+    TaskCreate, TaskDelete, TaskList, WebSearch,
 };
 use aivyx_toolkit::{run_multi_tool_subprocess, ToolkitConfig};
 
@@ -141,10 +142,12 @@ async fn main() -> ExitCode {
         Arc::new(BudgetDelete::new(Arc::clone(&budget_store))),
         Arc::new(BudgetTrendTool::new(Arc::clone(&budget_store))),
         Arc::new(BudgetCategoriesTool::new(Arc::clone(&budget_store))),
-        // Chapter Abacus (AB.1) — pure-compute utilities. No store,
-        // no keys, no network; SemiTrusted-reachable (see
-        // docs/ABACUS.md §2).
+        // Chapter Abacus — pure-compute utilities. No store, no keys,
+        // no network; SemiTrusted-reachable (see docs/ABACUS.md §2).
+        // AB.1: calc.eval. AB.2: convert.units + convert.time.
         Arc::new(CalcEval::new()),
+        Arc::new(ConvertUnits::new()),
+        Arc::new(ConvertTime::new()),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-toolkit").await {

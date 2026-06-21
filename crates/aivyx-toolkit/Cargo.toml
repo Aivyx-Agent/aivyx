@@ -58,6 +58,12 @@ uuid = { workspace = true }
 # correctly inside the Task struct.
 chrono = { workspace = true, features = ["serde"] }
 
+# Chrono-tz for `convert.time` (Chapter Abacus AB.2) — IANA named
+# timezone lookup (e.g. `America/New_York` → `Europe/Berlin`). The
+# zone database is bundled, so conversion stays offline like the rest
+# of the pure-compute utilities pack.
+chrono-tz = { workspace = true }
+
 thiserror = { workspace = true }
 
 [dev-dependencies]

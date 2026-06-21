@@ -132,6 +132,10 @@ bytes = "1"
 # Cron expression parsing for scheduled execution (Phase 26)
 cron = "0.16"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# IANA named-timezone database for `convert.time` (Chapter Abacus AB.2).
+# MIT OR Apache-2.0; the zone table is bundled (no espeak-style native dep),
+# so the conversion stays offline like the rest of the utilities pack.
+chrono-tz = { version = "0.10", default-features = false }
 
 # HTTP server for webhook triggers (Phase 27) — already transitive via reqwest
 hyper = { version = "1", features = ["server", "http1"] }
