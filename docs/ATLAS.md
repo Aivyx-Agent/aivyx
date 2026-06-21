@@ -130,7 +130,10 @@ chapter, gated by the substrate cap / its own base + amendment where applicable:
   (beyond `time.now`).~~ — ✅ **shipped in Chapter Abacus** (`calc.eval`,
   `convert.units` + `convert.time`, `date.diff` + `date.add`; three SemiTrusted
   group bases in the `aivyx-toolkit` tool process). See `docs/ABACUS.md`.
-- **Structured-data readers** — CSV / PDF / spreadsheet.
+- ~~**Structured-data readers** — CSV / PDF / spreadsheet.~~ — ✅ **shipped in
+  Chapter Sheaf** (`data.csv`, `data.xlsx`, `data.pdf` in the new `aivyx-dataread`
+  crate; reuse the `fs.read` capability + sandbox — infrastructure tier, no new
+  base, no P10 amendment). See `docs/SHEAF.md`.
 - **Integrations** (tool processes, need keys): GitHub/GitLab, weather, maps/places,
   Google Tasks/Keep, Microsoft 365.
 

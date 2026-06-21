@@ -39,5 +39,14 @@ calamine = "0.26"
 pdf-extract = "0.7"
 lopdf = "0.34"
 
+[dev-dependencies]
+# SH.5 live-verify only: writes a real .xlsx fixture so the reader is
+# exercised against genuine bytes. Dev-only (MIT). The PDF fixture is
+# generated with the already-present `lopdf` (a writer too), so no PDF
+# writer dep is needed.
+rust_xlsxwriter = "0.79"
+# Drives the in-process readers' async `execute()` in the live-verify.
+tokio = { workspace = true, features = ["rt", "macros"] }
+
 [package.metadata.dist]
 dist = false
