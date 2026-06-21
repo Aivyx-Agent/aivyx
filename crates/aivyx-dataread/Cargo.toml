@@ -33,5 +33,11 @@ csv = "1"
 # expose; parsed in-memory from the sandbox-read bytes (no temp files).
 calamine = "0.26"
 
+# PDF text extraction (Chapter Sheaf SH.3). MIT; brings `lopdf` (also
+# used directly for the page count). Text layer only — no OCR. The
+# chapter's licensing/robustness risk: gated on `cargo deny` clearing.
+pdf-extract = "0.7"
+lopdf = "0.34"
+
 [package.metadata.dist]
 dist = false

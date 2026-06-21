@@ -6,7 +6,7 @@
 //!
 //! - [`DataCsvTool`] (`data.csv`, SH.1) — delimited text → rows.
 //! - [`DataXlsxTool`] (`data.xlsx`, SH.2) — spreadsheet → a sheet's rows.
-//! - `data.pdf` (SH.3) — PDF → extracted text *(pending)*.
+//! - [`DataPdfTool`] (`data.pdf`, SH.3) — PDF → extracted text.
 //!
 //! ## Governance (see `docs/SHEAF.md`)
 //!
@@ -21,9 +21,11 @@
 //! this crate rather than bloating `aivyx-core`.
 
 pub mod csv_reader;
+pub mod pdf_reader;
 pub mod sandbox;
 pub mod xlsx_reader;
 
 pub use csv_reader::DataCsvTool;
+pub use pdf_reader::DataPdfTool;
 pub use sandbox::ReaderSandbox;
 pub use xlsx_reader::DataXlsxTool;

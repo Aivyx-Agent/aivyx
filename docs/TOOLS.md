@@ -54,6 +54,7 @@ only parse bytes the agent could already `fs.read`. Registered beside `fs.read`.
 |---|---|---|---|
 | `data.csv` | `fs.read` | Trusted | read a CSV/TSV file into `{headers, rows, …}` (SH.1) |
 | `data.xlsx` | `fs.read` | Trusted | read an .xlsx sheet into `{sheet, sheet_names, headers, rows, …}` (SH.2, `calamine`) |
+| `data.pdf` | `fs.read` | Trusted | extract a PDF's text layer into `{text, pages, …}` (SH.3, `pdf-extract`; no OCR) |
 
 ## Network & web (substrate)
 
