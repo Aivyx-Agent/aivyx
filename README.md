@@ -171,10 +171,30 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 The full phase-by-phase arc lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the
 recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
 
+### What's next
+
+The latest arc (v0.5.0) made a **small local model reliably drive the agent
+loop** — grammar-constrained tool calls (Chapter Stencil) and the harness that
+keeps the model from running away (Chapter Bridle). From here:
+
+- **GPU-accelerated local inference.** The in-process mistral.rs path runs on
+  CPU today; a CUDA backend is a build-flag away once the upstream
+  `cudarc`/`mistralrs` stack supports newer CUDA toolkits — the one tracked
+  blocker on a fast local on-ramp.
+- **Local tool-calling, hardened further.** Carry the grammar approach to the
+  `llama-server` `/completion` path (GBNF), and let the breaker and `respond`
+  preamble inform a lighter-weight prompt strategy for non-constrained backends.
+- **Verticals as packs.** The free PA core stays the substrate; domain crews
+  ship as **vertical packs** (a Nonagon team + tools over a `TeamConfig`), with
+  the Kitchen BOH pack as the working template.
+
+Direction is set per-arc as the running core demands it — never built ahead of a
+real need.
+
 ## Release pipeline status
 
 The release pipeline is **active** on the public repo. The latest
-release is `v0.2.0` (early pre-release; `v0.1.0` was the first):
+release is `v0.5.0` (the local tool-calling release):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
   for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
