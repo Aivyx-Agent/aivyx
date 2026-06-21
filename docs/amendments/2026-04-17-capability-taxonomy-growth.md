@@ -673,6 +673,33 @@ infrastructure base). The `known_bases_count_matches_phase_143_a3_addendum`
 test pins the new total at **87**, so this addendum and the runtime stay
 in sync.
 
+## Chapter Abacus addendum — `calc.eval` (AB.1) (2026-06-21)
+
+> *Added at Chapter Abacus AB.1, the second new-tools breadth chapter
+> after Forge (the utilities pack off the Atlas §6 backlog). `calc.eval`
+> gates the `calc.eval` tool — an exact arithmetic-expression evaluator
+> in the `aivyx-toolkit` tool process. **Tool-process tier, not
+> substrate:** it sits beside `web.search` / `task.*` / `budget.*`, so
+> it grows `KNOWN_BASES` **without a P10 substrate-count amendment**
+> (same precedent as every Chapter F/G tool-process base). Its one
+> distinguishing note is the **tier floor**: unlike every other toolkit
+> base (Trusted-only, like `email.*`), a calculator is side-effect-free
+> and offline — no network, no filesystem, no operator data — so it is
+> the **first toolkit base reachable at SemiTrusted** (present in
+> `CEILING_SEMITRUSTED`, and therefore Trusted/Kernel too). See
+> docs/ABACUS.md §2.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Abacus | `calc.eval` | AB.1 — gates `calc.eval`, a pure-compute arithmetic evaluator; tool-process tier (no P10 amendment), the first toolkit base reachable at SemiTrusted (no I/O, no operator data) |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **87 → 88** (the one new `calc.eval`
+tool-process base). The `known_bases_count_matches_phase_143_a3_addendum`
+test pins the new total at **88**, so this addendum and the runtime stay
+in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

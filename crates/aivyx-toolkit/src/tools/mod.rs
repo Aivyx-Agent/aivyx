@@ -13,8 +13,12 @@
 //! - [`health_check`] — Task 6: `health.check.add / list /
 //!   recent_changes` (`health.read` + `health.write` scopes;
 //!   wraps Task 5's polling-loop substrate).
+//! - [`calc`] — Chapter Abacus (AB.1): `calc.eval`, a
+//!   pure-compute arithmetic evaluator (`calc.eval` scope,
+//!   SemiTrusted-reachable — no I/O, no data).
 
 pub mod budget;
+pub mod calc;
 pub mod health_check;
 pub mod tasks;
 pub mod web_search;
@@ -23,6 +27,7 @@ pub use budget::{
     BudgetCategoriesTool, BudgetDelete, BudgetRecord, BudgetSummaryTool,
     BudgetTrendTool, BudgetUpdate,
 };
+pub use calc::CalcEval;
 pub use health_check::{
     HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove,
 };

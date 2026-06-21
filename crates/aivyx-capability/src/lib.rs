@@ -134,6 +134,15 @@ const KNOWN_BASES: &[&str] = &[
     // process surface).
     "budget.read",
     "budget.write",
+    // Chapter Abacus (AB.1) — pure-compute utilities pack in the
+    // aivyx-toolkit tool process. Unlike every other toolkit base
+    // above, these are side-effect-free and offline (no network, no
+    // filesystem, no operator data), so they are the first toolkit
+    // surface gated *below* Trusted: present in CEILING_SEMITRUSTED
+    // (and therefore reachable at Trusted/Kernel too). See
+    // docs/ABACUS.md §2.
+    //   calc.eval — calc.eval (arithmetic expression evaluator).
+    "calc.eval",
     // Calendar (Phase 128 — Chapter F #2, aivyx-calendar
     // third-party tool process). Two bases for the
     // five-tool surface (Q3b operator-picked):
@@ -1000,6 +1009,12 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // `capability_scopes`.
         "budget.read",
         "budget.write",
+        // Chapter Abacus (AB.1) — pure-compute utilities. Listed
+        // here so Trusted (and Kernel) hold it too, but its real
+        // home is CEILING_SEMITRUSTED below: a calculator touches no
+        // network/data, so it is safe below the Trusted tier the
+        // rest of the toolkit pins to.
+        "calc.eval",
         // Phase 128 — Google Calendar third-party tool
         // process (Chapter F #2). Two bases for the
         // five-tool surface (Q3b); Trusted-only default
@@ -1086,6 +1101,12 @@ static CEILING_SEMITRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "memory.read",
         "memory.write",
         "config.read",
+        // Chapter Abacus (AB.1) — pure-compute utilities. The first
+        // toolkit base reachable at SemiTrusted: a calculator has no
+        // side effects and exposes no operator data, so a
+        // semi-trusted remote context may use it without a Trusted
+        // role grant. See docs/ABACUS.md §2.
+        "calc.eval",
     ])
 });
 
@@ -1915,11 +1936,14 @@ mod tests {
         // Chapter Lattice adds graph.read — the read gate for the
         // graph.query knowledge-graph traversal tool (infrastructure,
         // no P10 amendment).
+        // Chapter Abacus (AB.1) adds calc.eval — the first pure-compute
+        // utility in the aivyx-toolkit pack, and the first toolkit base
+        // reachable at SemiTrusted (no I/O, no operator data).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            87,
+            88,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

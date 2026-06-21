@@ -209,6 +209,7 @@ base, Trusted-tier only. See the Lattice addendum in
 | `task.create` / `task.list` / `task.complete` / `task.delete` | `task.write`, `task.read` | Trusted | lightweight task list |
 | `health.check.add` / `health.check.list` / `recent_changes` | `health.write`, `health.read` | Trusted | personal health-check log |
 | `budget.record` / `budget.summary` | `budget.write`, `budget.read` | Trusted | personal budget tracking |
+| `calc.eval` | `calc.eval` | SemiTrusted | exact arithmetic evaluator (Chapter Abacus — pure compute, no I/O, so reachable below Trusted) |
 
 ## Kitchen vertical (tool process `aivyx-kitchen`)
 

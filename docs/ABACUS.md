@@ -108,7 +108,7 @@ feed → network → an integration, not a pure-compute util).
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **AB.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
-| **AB.1** | **`calc.eval` + the governance spine** | First tool *and* the path everything reuses: add the `calc.eval` base to `KNOWN_BASES` + tier ceiling (SemiTrusted), implement the evaluator (dep decision resolved here vs `cargo deny`), register it in `main.rs`, prove end-to-end through the harness. Lands the base/ceiling/registration pattern once so AB.2–AB.3 are pure tool adds. |
+| **AB.1** ✅ | **`calc.eval` + the governance spine** | DONE. `calc.eval` base added to `KNOWN_BASES` (88) + both ceilings — present in `CEILING_SEMITRUSTED` (the first toolkit base below Trusted) and re-listed in `CEILING_TRUSTED`; A3-addendum table + running count (87→88) recorded. Evaluator is **hand-rolled** recursive descent (OQ-3 resolved: zero new deps), supporting `+ - * / % ^`, parens, unary `±`, and `sqrt/abs/round/floor/ceil/min/max`; conventional precedence (`-2^2 == -4`, right-assoc `^`, `2^-3` works); non-finite results (÷0, `sqrt(-1)`) are tool errors. `CalcEval` registered in `main.rs` (16 tools) + `tools/mod.rs`; `docs/TOOLS.md` catalog entry added (passes the Atlas drift-guard). Scope/tier/granularity decisions locked: per-group base (OQ-1) + SemiTrusted floor (OQ-2). 22 unit tests (precedence/functions/error matrix + tool metadata); toolkit + capability suites green; clippy clean. |
 | **AB.2** | **`convert.units` + `convert.time`** | The `convert.units` base; the curated unit table; `chrono-tz` added for named-timezone conversion (the one new dep, cleared by `cargo deny`). |
 | **AB.3** | **`date.diff` + `date.add`** | The `date.compute` base; duration arithmetic over `chrono`; defaults-to-now behavior documented (the one non-pure edge). |
 | **AB.4** | **Catalog + drift-guard** | `docs/TOOLS.md` entries for the new tools/bases; confirm `tools_catalog_documents_every_known_base` passes; extend `check_tool_quality` coverage to the new tools (the Atlas AT.3 guard, now over the toolkit tier per Atlas's own recommendation). |
@@ -122,16 +122,15 @@ AB.1 (the evaluator's parse/precedence/error matrix) and AB.2 (the conversion ta
 
 ## 5. Open questions (resolve in-phase)
 
-- **OQ-1 — base granularity (AB.1).** One base per group (`calc.eval` /
-  `convert.units` / `date.compute`, locked default) vs. a **single `util.compute`**
-  base for the whole pack (minimal `KNOWN_BASES` growth, coarser gating). Decide in
-  AB.1; lean per-group for catalog legibility unless the single base proves cleaner.
-- **OQ-2 — tier floor (AB.1).** `SemiTrusted` (locked default — reachable like
-  `web.fetch`) vs. **`Untrusted`** (a calculator is arguably safe for *any* context).
-  Confirm against the trust-tier model; `SemiTrusted` is the conservative pick.
-- **OQ-3 — evaluator dependency (AB.1).** Hand-rolled shunting-yard (zero deps,
-  locked default) vs. `fasteval`/`meval` (more functions, a dep to vet). Resolve
-  against `cargo deny` + the actual function set the agent needs.
+- **OQ-1 — base granularity (AB.1).** ✅ **Resolved: per-group base.** AB.1 shipped
+  `calc.eval` as its own base; AB.2/AB.3 follow with `convert.units` / `date.compute`.
+  Per-group won for catalog legibility over a single `util.compute` base.
+- **OQ-2 — tier floor (AB.1).** ✅ **Resolved: `SemiTrusted`.** `calc.eval` is in
+  `CEILING_SEMITRUSTED` — reachable like `web.fetch`, the conservative pick over
+  `Untrusted` (revisit if a use case wants math from a fully-untrusted context).
+- **OQ-3 — evaluator dependency (AB.1).** ✅ **Resolved: hand-rolled, zero deps.**
+  A recursive-descent evaluator over a hand-written tokenizer; the function set is
+  small enough that a crate would be more surface than it saves.
 - **OQ-4 — `calc.eval` function whitelist (AB.1).** Which functions beyond bare
   arithmetic (`sqrt`, `min`/`max`, `round`, `%`)? Keep it small and auditable; grow
   only on demand. No user-defined functions, no variables (that's a REPL, not a tool).
