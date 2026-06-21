@@ -5,8 +5,15 @@ Reads newline-delimited JSON-RPC 2.0 from stdin, writes responses to stdout.
 Implements: initialize, notifications/initialized, tools/list, tools/call.
 """
 import json
+import os
 import sys
 
+# Chapter Conduit (CD.5) — env probe. The daemon passes per-server env
+# vars to a stdio child; this lets an integration test prove the value
+# actually arrived. The tool is only advertised when the var is present,
+# so its mere presence is evidence of delivery (and existing tests that
+# expect exactly two tools are unaffected).
+ENV_PROBE_VAR = "AIVYX_MCP_ENV_PROBE"
 
 TOOLS = [
     {
@@ -52,10 +59,17 @@ def handle(msg):
         return None  # notification, no response
 
     if method == "tools/list":
+        tools = list(TOOLS)
+        if ENV_PROBE_VAR in os.environ:
+            tools.append({
+                "name": "env_probe",
+                "description": f"Returns the value of {ENV_PROBE_VAR} as seen by this child",
+                "inputSchema": {"type": "object", "properties": {}},
+            })
         return {
             "jsonrpc": "2.0",
             "id": msg_id,
-            "result": {"tools": TOOLS},
+            "result": {"tools": tools},
         }
 
     if method == "tools/call":
@@ -70,6 +84,15 @@ def handle(msg):
                 "id": msg_id,
                 "result": {
                     "content": [{"type": "text", "text": text}],
+                    "isError": False,
+                },
+            }
+        if name == "env_probe":
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [{"type": "text", "text": os.environ.get(ENV_PROBE_VAR, "")}],
                     "isError": False,
                 },
             }

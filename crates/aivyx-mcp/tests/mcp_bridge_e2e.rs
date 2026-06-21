@@ -314,3 +314,50 @@ async fn sandboxed_bridge_preserves_server_name() {
     assert_eq!(bridge.server_name(), "named-sandboxed");
     bridge.shutdown().await.expect("shutdown");
 }
+
+// ---------------------------------------------------------------------------
+// Chapter Conduit (CD.5) — env actually reaches the child process.
+// ---------------------------------------------------------------------------
+
+/// The end-to-end proof of the secret path: an `env` entry handed to
+/// `start_with_sandbox` lands in the spawned MCP server's environment.
+/// The mock server only advertises its `env_probe` tool when
+/// `AIVYX_MCP_ENV_PROBE` is set, so the tool's presence *is* evidence of
+/// delivery; calling it confirms the exact value round-trips. Credential-
+/// free + deterministic (OQ-5).
+#[tokio::test]
+async fn env_reaches_child_process() {
+    let env = vec![(
+        "AIVYX_MCP_ENV_PROBE".to_string(),
+        "s3cr3t-conduit".to_string(),
+    )];
+    let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(
+        "python3",
+        &[mock_server_path().to_str().unwrap()],
+        &env,
+        None, // no sandbox
+        None, // no stderr capture needed here
+        "env-probe",
+    )
+    .await
+    .expect("bridge must start");
+
+    let tools = bridge.discover_tools().await.expect("discover");
+    assert!(
+        tools.iter().any(|t| t.name() == "env_probe"),
+        "env var must have reached the child (env_probe tool present)",
+    );
+
+    let result = bridge
+        .call_tool("env_probe", serde_json::json!({}))
+        .await
+        .expect("call_tool env_probe");
+    assert!(!result.is_error);
+    assert_eq!(
+        result.content[0].text.as_deref(),
+        Some("s3cr3t-conduit"),
+        "the child saw the exact value we passed via env",
+    );
+
+    bridge.shutdown().await.expect("shutdown");
+}
