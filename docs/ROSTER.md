@@ -1,0 +1,132 @@
+# Team Roster — create & edit the Nonagon from the Studio (Chapter Roster)
+
+> **Status:** 🟡 **PLANNED (RO.0–RO.5).** The write half of [Chapter Y](DAEMON_TEAMS.md)'s
+> read-only Teams screen and the deferred "Teams" step of [Chapter Genesis](ONBOARDING.md):
+> the operator can now **define a team** — pick the lead, add/remove specialists
+> (≤9), and edit each member's role / soul / trust ceiling / capability scopes /
+> tool allowlist — and have it **persisted + adopted on the next daemon start**.
+> The team config becomes a **loadable `[team]`-rooted file** (the same shape packs
+> like `kitchen-boh.toml` already use), written through the [Chapter U](FRONTEND.md)
+> settings-write machinery, validated by `TeamConfig::validate` before it lands, and
+> surfaced as edits in the existing Teams screen + a starter-team choice in the
+> Genesis onboarding flow. **No new capability base, no P10 amendment, no new
+> dependency** — and the **NT-02 attenuation invariant is untouched**: declaring a
+> scope the lead lacks still buys a specialist nothing (`attenuate_for_member` runs
+> at spawn, exactly as today).
+
+## 1. Why this chapter
+
+Teams are the last major capability the operator can *see* but not *shape*. The
+daemon holds a hardcoded `aivyx_team::default_nonagon()` (built at
+`aivyx-cli/src/bin/aivyx.rs:7090`); [Chapter Y](DAEMON_TEAMS.md) renders it
+read-only over `GetTeamRoster`, and [Chapter Genesis](ONBOARDING.md) explicitly
+deferred team creation to "a future Chapter Roster." So today an operator who wants
+a different lead, a tighter specialist, or a domain team has to hand-edit a TOML
+file the Studio can't write and the wizard never offers. Roster closes that: the
+same roster the Teams screen shows is now the roster the operator *authored*, from
+the GUI, with the engine's safety model (validation + attenuation) intact.
+
+## 2. Architecture & governance decisions (locked)
+
+### The team config becomes a loadable file — not hardcoded, not in `aivyx.toml`
+The daemon reads its `TeamConfig` from a **dedicated `[team]`-rooted file** (default
+path: `team.toml` beside `aivyx.toml`; overridable via a single new pointer key
+`[team] config_path` in `aivyx.toml`). Absent file → fall back to
+`default_nonagon()` (today's behavior, byte-identical). This matches how packs
+already ship a team (`crates/aivyx-kitchen/assets/kitchen-boh.toml`) and how
+`TeamConfig::load` already works — the team document is **self-contained** (`[team]`
++ `[[team.member]]` array-of-tables + `[team.dialogue]`), so it does not belong
+inside the hand-maintained `aivyx.toml`. The writer owns the *whole* file, which
+means **no `toml_edit` surgery** is needed — `TeamConfig::to_toml()` already
+round-trips it (proven by `roster.rs` tests). The writer is just
+`validate → to_toml → write_toml_0600` (reusing Chapter U's `0600` helper).
+
+### Write through the Chapter U machinery, validated before it lands
+A new **`SetTeamRoster`** write-IPC (the second config-write surface after
+[Chapter U](FRONTEND.md)/[V](FRONTEND.md) Settings/Agents). The handler:
+1. reconstructs the `TeamConfig` from the wire payload,
+2. runs **`TeamConfig::validate()`** (names, uniqueness, every scope parses to a
+   known base, lead-is-a-member, the ≤9-specialist Nonagon bound) — invalid roster
+   is **rejected with the validator's message**, nothing is written,
+3. writes the file `0600`,
+4. emits a **`TeamRosterChanged`** audit event on the HMAC chain, and
+5. returns **restart-required** (the team service is assembled at boot; a live
+   swap of a running Nonagon is out of scope — same "applied on next start" UX the
+   Settings screen already has).
+
+### NT-02 is unchanged — the write path widens no authority
+Roster persists *declared* member scopes; it does **not** touch
+`attenuate_for_member`, which still floors every specialist to `declared ∩ lead`
+at spawn. So a roster that declares a specialist scope the lead lacks is *valid*
+(it parses) but **buys nothing at runtime** — exactly as a hand-written pack does
+today. The screen surfaces this as a soft, non-blocking hint ("the lead doesn't
+hold `x`; this specialist won't get it"), never a hard error. **Removing the human
+from authoring a team never widens the team's authority** — the same principle
+Chapter H (headless) and Chapter U (settings) hold.
+
+### The screen edits the real type; onboarding plants a starter team
+The Teams screen gains an **edit mode** over the same wasm-clean `TeamConfig`
+[Chapter Y](DAEMON_TEAMS.md) already renders (no mirror type): edit member
+fields, add/remove a specialist (client-guarded to ≤9), re-pick the lead, **Save**
+(→ `SetTeamRoster`) with the restart-required banner. Genesis gains a **"Choose a
+team"** step: keep the default Nonagon, or start from a known pack, then continue —
+reusing the same `SetTeamRoster` primitive (CLI + web share it, the W/X seeding
+pattern).
+
+## 3. Scope
+
+**In:** the loadable `[team] config_path` + boot load-or-default in the daemon
+(RO.1); the shared team-file **writer** (`validate → to_toml → 0600`) + the
+`SetTeamRoster` IPC + daemon handler + `TeamRosterChanged` audit + restart-required
+(RO.2); the Studio Teams **edit mode** — member CRUD, lead pick, save, the
+no-widen hint (RO.3); the Genesis **starter-team** step + `aivyx team` write
+affordance (RO.4); tests; a served-in-browser/bundle-embed verify (RO.5).
+**Out:** **live** (no-restart) roster swap of a running Nonagon (restart only;
+additive later if wanted); editing the per-mission `MissionPlan`/DAG (this edits
+*who's on the team*, not *what they run* — that's `aivyx team run`); inventing new
+capability bases or tools from the screen (scopes must already parse to a known
+base); the vertical-pack **marketplace**/download (Genesis offers known packs, not
+a registry); any change to `attenuate_for_member` or the trust model.
+
+## 4. Phase plan (docs-first, small phases per convention)
+
+| Phase | Deliverable | Notes |
+|---|---|---|
+| **RO.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
+| **RO.1** | **Team config as a loadable file** | `[team] config_path` pointer in `aivyx.toml` (default `team.toml` beside it); the daemon's `default_nonagon()` site (`aivyx.rs:7090`) becomes load-or-default (`TeamConfig::load` → fall back to `default_nonagon()` when absent/unset — **byte-identical when no file**). |
+| **RO.2** | **The writer + `SetTeamRoster` IPC** | Shared team-file writer (`validate → to_toml → write_toml_0600`); `FrontendMessage::SetTeamRoster` + daemon handler (validate → write → `TeamRosterChanged` audit → restart-required); reject-with-message on invalid. |
+| **RO.3** | **The Studio Teams edit mode** | Edit-mode over the existing Teams screen: member field edits, add/remove specialist (≤9 guard), lead pick, **Save** → `SetTeamRoster`, restart-required banner + the no-widen soft hint. Reuses the U/V settings-write UX. |
+| **RO.4** | **Genesis starter-team + CLI** | A "Choose a team" step in the Create-your-agent flow (default Nonagon or a known pack) + an `aivyx team` write affordance, both over the RO.2 primitive (W/X share-the-primitive pattern). |
+| **RO.5** | **Finalize** | WASM bundle rebuilt + `dist/` committed; full workspace suite + clippy `-D warnings` + `cargo deny` green; verify (bundle-embed + the live write→load round-trip per the [[chapter-lantern]] in-sandbox precedent); chapter memory; status → COMPLETE. |
+
+**Discipline:** RO.1 makes the roster a file the daemon already knows how to load
+(`TeamConfig::load`) so RO.2/RO.3 write *one* definition; the load-or-default must
+be **byte-identical when no `team.toml` exists** (regression: the Chapter Y roster
+tests). Test band: **moderate** — the writer round-trip + handler validation/reject
++ the boot load-or-default + the web wiring; price **~25–40 new tests** (the edit
+screen itself is verified by the served/bundle check, per R–Z).
+
+## 5. Open questions (resolve in-phase)
+
+- **OQ-1 — team-file home (RO.1).** A dedicated `team.toml` beside `aivyx.toml`
+  (locked default — matches packs + `TeamConfig::load`, keeps array-of-tables out
+  of the hand-maintained config) vs. a `[team]` block inside `aivyx.toml` (would
+  force `toml_edit` array-of-tables surgery — rejected).
+- **OQ-2 — no-widen scope: hint vs. block (RO.3).** Declaring a member scope the
+  lead lacks is valid-but-inert. Lean **soft hint, non-blocking** (it's how packs
+  already behave; attenuation is the real guard) vs. a hard reject (over-strict —
+  would forbid forward-declaring a scope a future lead might hold).
+- **OQ-3 — live vs. restart (RO.2).** Restart-required (locked — the team service
+  is boot-assembled, same as Settings) vs. a live `team_missions` rebuild (a
+  running-mission-safety question; deferred, additive).
+- **OQ-4 — Genesis pack source (RO.4).** Offer the in-tree known packs (default
+  Nonagon + `kitchen-boh`) vs. a fuller pack picker. Lean **known packs only** —
+  the marketplace/registry is its own future chapter.
+
+---
+
+*Chapter Roster gives the operator the pen: the team the Studio shows is the team
+the operator drew — lead, specialists, each one's soul and least-privilege reach —
+written as the loadable file the engine already knew how to read, validated before
+it lands, and never able to grant more than the lead holds. The read-only window of
+Chapter Y becomes an editor; the deferred step of Chapter Genesis becomes real.*
