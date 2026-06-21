@@ -8787,6 +8787,53 @@ mod tests {
         ));
     }
 
+    // Chapter Conduit (CD.3/CD.4) — `aivyx mcp status` parse + snapshot.
+
+    #[test]
+    fn mcp_status_subcommand_parses() {
+        let parsed = parse_cli_args_from(&argv(&["mcp", "status"]))
+            .expect("`mcp status` must parse");
+        assert!(matches!(parsed.mode, CliMode::Mcp(McpSubcommand::Status)));
+    }
+
+    #[test]
+    fn mcp_status_rejects_extra_arg() {
+        let err = parse_cli_args_from(&argv(&["mcp", "status", "extra"]))
+            .expect_err("`mcp status extra` must error");
+        assert!(err.contains("status"), "got: {err}");
+    }
+
+    #[test]
+    fn mcp_status_snapshot_roundtrips() {
+        let snap = McpStatusSnapshot {
+            captured_unix: 1_782_000_000,
+            servers: vec![
+                McpServerStatus::ok("github", "stdio", 26),
+                McpServerStatus::failed(
+                    "broken",
+                    "stdio",
+                    "failed to start: spawn MCP server `npx`: not found".to_string(),
+                    vec!["npm ERR! could not determine executable".to_string()],
+                ),
+            ],
+        };
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let back: McpStatusSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.servers.len(), 2);
+        assert!(back.servers[0].connected && back.servers[0].tool_count == 26);
+        assert!(!back.servers[1].connected);
+        assert_eq!(back.servers[1].stderr_tail.len(), 1);
+    }
+
+    #[test]
+    fn format_stderr_tail_caps_to_five_lines() {
+        let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        let out = format_stderr_tail(&lines);
+        assert_eq!(out.matches("\n      ").count(), 5, "shows the last 5 lines");
+        assert!(out.contains("line 19") && !out.contains("line 14"));
+        assert!(format_stderr_tail(&[]).is_empty());
+    }
+
     #[test]
     fn mcp_recipes_with_name_parses() {
         let parsed =

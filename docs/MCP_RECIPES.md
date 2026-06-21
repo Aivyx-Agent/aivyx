@@ -75,6 +75,48 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 > automatically. Sandboxing is stdio-only (there's no local child to
 > wrap on a remote transport).
 
+> **Secrets & auth (Chapter Conduit).** Two `[[mcp_server]]` fields
+> carry credentials, both with `${VAR}` interpolation resolved from the
+> **daemon's own environment** at load — so the secret lives in your
+> shell/systemd environment, never in `aivyx.toml`. A `${VAR}` that is
+> unset at startup is a hard config error (fail loud, not a silent empty
+> token); write `$$` for a literal `$`.
+>
+> - **`env`** (stdio servers) — environment variables for the child,
+>   e.g. a token:
+>
+>   ```toml
+>   [[mcp_server]]
+>   name = "github"
+>   command = "npx"
+>   args = ["-y", "@modelcontextprotocol/server-github"]
+>   env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
+>   ```
+>
+> - **`headers`** (sse/http servers) — HTTP headers on every request,
+>   e.g. bearer auth to a remote server (rejected on stdio):
+>
+>   ```toml
+>   [[mcp_server]]
+>   name = "remote"
+>   transport = "http"
+>   url = "https://mcp.example.com/mcp"
+>   headers = { Authorization = "Bearer ${EXAMPLE_API_KEY}" }
+>   ```
+>
+> Operator headers can add auth but never override the protocol-reserved
+> headers (`Accept`, `Content-Type`, `MCP-Protocol-Version`,
+> `Mcp-Session-Id`). The native `env` field supersedes the older
+> sandbox-`--setenv` trick (and works with or without a sandbox; a bwrap
+> wrapper inherits the child's environment).
+
+> **Diagnosing a server that didn't come up.** Run **`aivyx mcp status`**
+> after starting the daemon: it lists each configured server as
+> connected (with its tool count) or failed (with the error and the
+> server's captured stderr — the usual culprits are a missing `command`,
+> an unset `${VAR}`, or a bad token). Stdio stderr is captured (last 50
+> lines) rather than discarded.
+
 ## Catalog at a glance
 
 | Recipe | Operator-touch frequency | Notes |
@@ -137,7 +179,9 @@ REST API.
 
 **Required env:** `GITHUB_PERSONAL_ACCESS_TOKEN` with the scopes
 the agent needs (typically `repo` for private repos +
-`read:org`).
+`read:org`). Supplied via the native `env` field below, interpolated
+from the daemon environment (keep the token in your shell, e.g.
+`export GITHUB_TOKEN=ghp_…`).
 **Capability scopes the agent gets:** `mcp.call:github:*`.
 
 ```toml
@@ -145,6 +189,9 @@ the agent needs (typically `repo` for private repos +
 name = "github"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
+# Chapter Conduit — the token reaches the child natively; the bwrap
+# wrapper below inherits it (no `--setenv` needed).
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
 
 [mcp_server.sandbox]
 # Network-only sandbox: no filesystem access, network kept so
@@ -155,7 +202,6 @@ args = [
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/etc/ssl", "/etc/ssl",
     "--dev", "/dev", "--proc", "/proc",
-    "--setenv", "GITHUB_PERSONAL_ACCESS_TOKEN", "${GITHUB_PERSONAL_ACCESS_TOKEN}",
     "--",
 ]
 ```
@@ -177,6 +223,8 @@ self-hosted instances.
 name = "gitlab"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-gitlab"]
+env = { GITLAB_PERSONAL_ACCESS_TOKEN = "${GITLAB_TOKEN}" }
+# Self-hosted? add: GITLAB_API_URL = "https://gitlab.mycorp.com"
 
 [mcp_server.sandbox]
 wrapper = "bwrap"
@@ -185,7 +233,6 @@ args = [
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/etc/ssl", "/etc/ssl",
     "--dev", "/dev", "--proc", "/proc",
-    "--setenv", "GITLAB_PERSONAL_ACCESS_TOKEN", "${GITLAB_PERSONAL_ACCESS_TOKEN}",
     "--",
 ]
 ```
@@ -241,6 +288,7 @@ tools through this server.
 name = "postgres"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-postgres"]
+env = { POSTGRES_CONNECTION_STRING = "${POSTGRES_CONNECTION_STRING}" }
 
 [mcp_server.sandbox]
 wrapper = "bwrap"
@@ -249,7 +297,6 @@ args = [
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/etc/ssl", "/etc/ssl",
     "--dev", "/dev", "--proc", "/proc",
-    "--setenv", "POSTGRES_CONNECTION_STRING", "${POSTGRES_CONNECTION_STRING}",
     "--",
 ]
 ```
@@ -331,6 +378,7 @@ rather than the bundled Aivyx surface.
 name = "brave-search"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-brave-search"]
+env = { BRAVE_API_KEY = "${BRAVE_API_KEY}" }
 
 [mcp_server.sandbox]
 wrapper = "bwrap"
@@ -339,7 +387,6 @@ args = [
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/etc/ssl", "/etc/ssl",
     "--dev", "/dev", "--proc", "/proc",
-    "--setenv", "BRAVE_API_KEY", "${BRAVE_API_KEY}",
     "--",
 ]
 ```
@@ -361,6 +408,7 @@ is the "operator talks to Aivyx from Slack" surface. They compose.
 name = "slack"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-slack"]
+env = { SLACK_BOT_TOKEN = "${SLACK_BOT_TOKEN}", SLACK_TEAM_ID = "${SLACK_TEAM_ID}" }
 
 [mcp_server.sandbox]
 wrapper = "bwrap"
@@ -369,8 +417,6 @@ args = [
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/etc/ssl", "/etc/ssl",
     "--dev", "/dev", "--proc", "/proc",
-    "--setenv", "SLACK_BOT_TOKEN", "${SLACK_BOT_TOKEN}",
-    "--setenv", "SLACK_TEAM_ID", "${SLACK_TEAM_ID}",
     "--",
 ]
 ```
