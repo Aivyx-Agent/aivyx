@@ -126,8 +126,10 @@ chapter, gated by the substrate cap / its own base + amendment where applicable:
   base + Amendment A13, confirm-first, Trusted-only). See `docs/FORGE.md`.
 - ~~**`web.extract`**~~ — ✅ **shipped in Chapter Forge** (readability over the existing
   `net.fetch` base, `dom_smoothie`). See `docs/FORGE.md`.
-- **Utilities pack** (toolkit): calculator, unit/timezone conversion, date math
-  (beyond `time.now`).
+- ~~**Utilities pack** (toolkit): calculator, unit/timezone conversion, date math
+  (beyond `time.now`).~~ — ✅ **shipped in Chapter Abacus** (`calc.eval`,
+  `convert.units` + `convert.time`, `date.diff` + `date.add`; three SemiTrusted
+  group bases in the `aivyx-toolkit` tool process). See `docs/ABACUS.md`.
 - **Structured-data readers** — CSV / PDF / spreadsheet.
 - **Integrations** (tool processes, need keys): GitHub/GitLab, weather, maps/places,
   Google Tasks/Keep, Microsoft 365.
