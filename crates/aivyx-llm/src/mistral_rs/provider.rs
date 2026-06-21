@@ -171,20 +171,6 @@ impl LlmProvider for MistralRsProvider {
         request: LlmRequest<'_>,
         _cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
-        // Build the request.
-        let mut builder = mistralrs::RequestBuilder::new();
-        if let Some(sys) = request.system {
-            builder = builder.add_message(
-                mistralrs::TextMessageRole::System,
-                sys.to_string(),
-            );
-        }
-        for msg in request.messages {
-            builder = append_message_to_builder(builder, msg);
-        }
-        builder = apply_tools(builder, request.tools)
-            .map_err(|e| LlmError::Config(format!("mistralrs tool conversion: {e}")))?;
-
         // Chapter Stencil (ST.3) — grammar-constrained tool-calling.
         // On tool-carrying turns, constrain decoding to a JSON-Schema
         // grammar so the model can only emit a valid, real-named call
@@ -194,6 +180,25 @@ impl LlmProvider for MistralRsProvider {
         // `content`, which we parse below. Off (the default) or on a
         // tool-less turn: the unchanged, unconstrained path.
         let constrain = self.constrain_tool_calls && !request.tools.is_empty();
+
+        // Build the request.
+        let mut builder = mistralrs::RequestBuilder::new();
+        // Chapter Bridle (BR.3) — when constrained, augment the system
+        // message with the `respond` preamble so the model knows the
+        // sentinel is how it replies in plain text and ends the turn.
+        // The grammar (Stencil) *admits* `respond`; without this note a
+        // small model never *chooses* it and loops (ST.4 finding). Off
+        // when unconstrained → the system prompt is unchanged.
+        let system_text = system_message_for(request.system, constrain);
+        if let Some(sys) = system_text {
+            builder = builder.add_message(mistralrs::TextMessageRole::System, sys);
+        }
+        for msg in request.messages {
+            builder = append_message_to_builder(builder, msg);
+        }
+        builder = apply_tools(builder, request.tools)
+            .map_err(|e| LlmError::Config(format!("mistralrs tool conversion: {e}")))?;
+
         if constrain {
             let grammar = tool_call_grammar(request.tools);
             builder = builder.set_constraint(mistralrs::Constraint::JsonSchema(grammar));
@@ -278,6 +283,32 @@ impl LlmProvider for MistralRsProvider {
         // for operators who want to bias the textual
         // extractor.
         None
+    }
+}
+
+/// Chapter Bridle (BR.3) — the instruction appended to the system
+/// message under grammar-constrained decoding. Stencil's grammar
+/// *admits* the `respond` sentinel as the plain-text escape, but a
+/// small model never *chooses* it unless told — ST.4 watched a 4B loop
+/// on one tool call because it had no way to "finish." This is that
+/// missing instruction.
+const RESPOND_PREAMBLE: &str = "\
+Tool-calling mode: every reply must be a single JSON object. To use a tool, emit \
+{\"name\":\"<tool>\",\"arguments\":{…}}. To answer the user in plain text — or when \
+you are done and need no tool — emit {\"name\":\"respond\",\"arguments\":{\"text\":\"…\"}}; \
+this ends your turn. Do not repeat the same tool call: if a call did not help, either \
+try a different one or `respond`.";
+
+/// Build the system message for a turn, appending [`RESPOND_PREAMBLE`]
+/// when decoding is constrained. Returns `None` when there is nothing
+/// to send (no base prompt and not constrained) so the unconstrained
+/// path stays byte-identical. Pure — unit-testable without the engine.
+fn system_message_for(base: Option<&str>, constrain: bool) -> Option<String> {
+    match (base, constrain) {
+        (Some(s), false) => Some(s.to_string()),
+        (None, false) => None,
+        (Some(s), true) => Some(format!("{s}\n\n{RESPOND_PREAMBLE}")),
+        (None, true) => Some(RESPOND_PREAMBLE.to_string()),
     }
 }
 
@@ -430,6 +461,32 @@ mod tests {
         // caller falls back to the native extraction.
         assert!(parse_constrained_output("not json at all").is_none());
         assert!(parse_constrained_output(r#"{"missing": "name"}"#).is_none());
+    }
+
+    // ---- Chapter Bridle (BR.3): constrained-mode `respond` preamble ----
+
+    #[test]
+    fn preamble_appended_only_when_constrained() {
+        // Unconstrained → the operator prompt passes through untouched
+        // (byte-identical), and an absent prompt stays absent.
+        assert_eq!(
+            system_message_for(Some("You are Aivyx."), false).as_deref(),
+            Some("You are Aivyx.")
+        );
+        assert_eq!(system_message_for(None, false), None);
+
+        // Constrained → the preamble is appended after the operator
+        // prompt (appended, never replacing it).
+        let got = system_message_for(Some("You are Aivyx."), true).unwrap();
+        assert!(got.starts_with("You are Aivyx."), "operator prompt preserved");
+        assert!(got.contains(RESPOND_PREAMBLE), "preamble present");
+        assert!(got.contains(RESPOND_SENTINEL), "names the respond sentinel");
+
+        // Constrained with no base prompt → the preamble alone.
+        assert_eq!(
+            system_message_for(None, true).as_deref(),
+            Some(RESPOND_PREAMBLE)
+        );
     }
 
     #[tokio::test]

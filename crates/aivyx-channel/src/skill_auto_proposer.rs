@@ -1053,6 +1053,11 @@ pub fn build_turn_summary(
         TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
             s.push_str(&format!("hit max_steps={max_steps} (runaway planner)"));
         }
+        TurnOutcome::Looping { repeat_limit, .. } => {
+            s.push_str(&format!(
+                "stopped after repeat_limit={repeat_limit} identical tool calls (runaway loop)"
+            ));
+        }
         TurnOutcome::Failed(_) => {
             s.push_str("failed");
         }

@@ -52,6 +52,20 @@ use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
 /// planner fails loudly rather than burning the host.
 pub const MAX_STEPS_PER_TURN: usize = 32;
 
+/// Chapter Bridle (BR.2) — default for the repeated-identical-tool-call
+/// breaker: if the planner emits the *same* tool call (identical
+/// `tool_id` + input) this many times in a row without a different call
+/// in between, the turn stops with [`TurnOutcome::Looping`] instead of
+/// burning the whole step + token budget on a stuck model. `3` lets a
+/// legitimate retry-after-transient happen once or twice while catching
+/// a true runaway fast (Stencil ST.4 saw a small local model repeat one
+/// `memory.write` ~18× until the deadline). Because it only fires on
+/// *identical* repeats, it cannot change a well-behaved turn — so it
+/// defaults on. `ConcreteAgent::with_repeat_call_limit(0)` disables it
+/// (restoring the pre-Bridle "only `MAX_STEPS_PER_TURN` bounds it"
+/// behavior).
+pub const DEFAULT_REPEAT_CALL_LIMIT: usize = 3;
+
 /// Wall-clock deadline for a single turn. Phase 3 task 4 adds the first
 /// code path that emits `TurnOutcome::TimedOut`. A background task
 /// spawned by the turn loop cancels the channel's cancellation token
@@ -174,6 +188,21 @@ pub struct ConcreteAgent {
     /// would be exceeded. `None` (the default) preserves pre-Throttle behavior
     /// byte-for-byte. See [`RateGate`].
     rate_gate: Option<Arc<dyn RateGate>>,
+    /// Chapter Bridle (BR.2) — consecutive-identical-tool-call breaker
+    /// threshold. When the planner emits the same `(tool_id, input)`
+    /// this many times in a row, the turn loop stops with
+    /// [`LoopOutcome::Looping`]. Defaults to [`DEFAULT_REPEAT_CALL_LIMIT`];
+    /// `0` disables the breaker. Counts *consecutive* repeats — any
+    /// distinct call resets the run — so a healthy turn never trips it.
+    repeat_call_limit: usize,
+    /// Chapter Bridle (BR.4) — wall-clock deadline for a single turn.
+    /// Defaults to [`TURN_TIMEOUT`] (120s); an operator running a slow
+    /// *local* backend (where a legitimate turn can exceed two minutes,
+    /// e.g. CPU GGUF inference) can raise it via `[agent]
+    /// turn_timeout_secs`. The const's "catch *stuck* turns, not slow
+    /// ones" intent is preserved — and BR.2's breaker now catches the
+    /// most common stuck case independent of this deadline.
+    turn_timeout: Duration,
 }
 
 impl ConcreteAgent {
@@ -194,7 +223,26 @@ impl ConcreteAgent {
             tool_allowlist: None,
             budget_gate: None,
             rate_gate: None,
+            repeat_call_limit: DEFAULT_REPEAT_CALL_LIMIT,
+            turn_timeout: TURN_TIMEOUT,
         }
+    }
+
+    /// Chapter Bridle (BR.2) — set the repeated-identical-tool-call
+    /// breaker threshold. `0` disables it (pre-Bridle behavior; only
+    /// `MAX_STEPS_PER_TURN` bounds a loop). Builder-style, mirroring
+    /// the other optional knobs.
+    pub fn with_repeat_call_limit(mut self, limit: usize) -> Self {
+        self.repeat_call_limit = limit;
+        self
+    }
+
+    /// Chapter Bridle (BR.4) — override the per-turn wall-clock
+    /// deadline (default [`TURN_TIMEOUT`]). For slow local backends;
+    /// builder-style, mirroring the other optional knobs.
+    pub fn with_turn_timeout(mut self, timeout: Duration) -> Self {
+        self.turn_timeout = timeout;
+        self
     }
 
     /// Attach a role-derived memory topic prefix. Builder-style so
@@ -340,8 +388,10 @@ impl Agent for ConcreteAgent {
         let deadline_task = {
             let deadline_fired = Arc::clone(&deadline_fired);
             let token = cancellation.clone();
+            // Chapter Bridle (BR.4) — per-agent, operator-configurable.
+            let timeout = self.turn_timeout;
             tokio::spawn(async move {
-                tokio::time::sleep(TURN_TIMEOUT).await;
+                tokio::time::sleep(timeout).await;
                 deadline_fired.store(true, Ordering::SeqCst);
                 token.cancel();
             })
@@ -352,6 +402,16 @@ impl Agent for ConcreteAgent {
         let mut final_message: String = String::new();
         let mut steps: usize = 0;
         let loop_outcome: LoopOutcome;
+
+        // Chapter Bridle (BR.2) — consecutive-identical-tool-call
+        // breaker state. `last_call_sig` holds the previous call's
+        // `(tool_id, input)` signature; `repeat_count` is how many
+        // times *in a row* it has now been emitted. Any distinct call
+        // resets the run (`repeat_count = 1`, new signature). `0` limit
+        // disables the breaker entirely.
+        let repeat_limit = self.repeat_call_limit;
+        let mut last_call_sig: Option<u64> = None;
+        let mut repeat_count: usize = 0;
 
         loop {
             if let Some(out) = classify_cancellation(&cancellation, &deadline_fired) {
@@ -395,6 +455,18 @@ impl Agent for ConcreteAgent {
                     auto_corrected_from,
                     extracted_from_text,
                 } => {
+                    // Chapter Bridle (BR.2) — repeated-call breaker.
+                    // Check *before* dispatch so a runaway loop never
+                    // executes the tripping call: 2 identical calls run,
+                    // the 3rd (at the default limit) stops the turn.
+                    let sig = call_signature(tool_id, &input);
+                    if note_repeat(sig, &mut last_call_sig, &mut repeat_count, repeat_limit) {
+                        loop_outcome = LoopOutcome::Looping {
+                            final_message: looping_message(repeat_limit),
+                            repeat_limit,
+                        };
+                        break;
+                    }
                     tool_calls_made += 1;
                     let env = TurnCallEnv {
                         turn_id,
@@ -449,6 +521,18 @@ impl Agent for ConcreteAgent {
                     // could pre-emit a "dispatched" audit entry
                     // and then race-then-cancel safely, at the
                     // cost of two audit events per call.
+                    // Chapter Bridle (BR.2) — the breaker also covers an
+                    // identical *batch* repeated in a row (rarer than
+                    // the single-call loop, but the same failure shape).
+                    // The signature folds every call in the batch.
+                    let sig = batch_signature(&batch);
+                    if note_repeat(sig, &mut last_call_sig, &mut repeat_count, repeat_limit) {
+                        loop_outcome = LoopOutcome::Looping {
+                            final_message: looping_message(repeat_limit),
+                            repeat_limit,
+                        };
+                        break;
+                    }
                     let env = TurnCallEnv {
                         turn_id,
                         channel,
@@ -519,6 +603,15 @@ impl Agent for ConcreteAgent {
                 duration,
                 max_steps: MAX_STEPS_PER_TURN,
             },
+            LoopOutcome::Looping {
+                final_message,
+                repeat_limit,
+            } => TurnOutcome::Looping {
+                final_message,
+                tool_calls_made,
+                duration,
+                repeat_limit,
+            },
             LoopOutcome::Escalated {
                 reason,
                 pending_tool,
@@ -583,10 +676,69 @@ enum LoopOutcome {
     Cancelled,
     TimedOut,
     MaxStepsExceeded,
+    /// Chapter Bridle (BR.2) — the loop broke because the same tool
+    /// call repeated `repeat_limit` times in a row. Carries a
+    /// synthesized `final_message` for the channel.
+    Looping {
+        final_message: String,
+        repeat_limit: usize,
+    },
     Escalated {
         reason: String,
         pending_tool: ToolId,
     },
+}
+
+// ---------------------------------------------------------------------------
+// Chapter Bridle (BR.2) — repeated-call breaker helpers.
+// ---------------------------------------------------------------------------
+
+/// Stable signature of one tool call: its registered `tool_id` plus its
+/// (pre-injection) input. `serde_json::Value` serializes with sorted
+/// keys by default (no `preserve_order` feature in the tree), so the
+/// same logical input always hashes identically.
+fn call_signature(tool_id: ToolId, input: &serde_json::Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    tool_id.hash(&mut h);
+    input.to_string().hash(&mut h);
+    h.finish()
+}
+
+/// Signature of a parallel batch: folds every call's signature in
+/// dispatch order, so an identical batch repeated in a row matches.
+fn batch_signature(batch: &[crate::planner::ToolCallRequest]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for req in batch {
+        call_signature(req.tool_id, &req.input).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Fold one step's signature into the running consecutive-repeat
+/// counter and report whether the breaker tripped. `last` holds the
+/// previous signature; a match increments `count`, anything else
+/// resets the run to this signature with `count = 1`. Returns `true`
+/// when `limit` is enabled (`!= 0`) and `count` has reached it.
+fn note_repeat(sig: u64, last: &mut Option<u64>, count: &mut usize, limit: usize) -> bool {
+    if *last == Some(sig) {
+        *count += 1;
+    } else {
+        *last = Some(sig);
+        *count = 1;
+    }
+    limit != 0 && *count >= limit
+}
+
+/// The synthesized assistant message for a turn stopped by the breaker,
+/// so the channel still shows the operator something rather than an
+/// empty reply.
+fn looping_message(repeat_limit: usize) -> String {
+    format!(
+        "I stopped because I repeated the same action {repeat_limit} times \
+         without making progress. Please rephrase or give me more detail."
+    )
 }
 
 /// Per-turn execution env shared across every `run_tool_call` in a
@@ -2035,6 +2187,42 @@ mod tests {
         ));
     }
 
+    /// Chapter Bridle (BR.4) — `with_turn_timeout` honors a *custom*
+    /// deadline: advancing virtual time past a 5s override (but far
+    /// short of the 120s default) still trips `TimedOut`, proving the
+    /// per-agent override replaces the const.
+    #[tokio::test(start_paused = true)]
+    async fn custom_turn_timeout_is_honored() {
+        let audit = RecordingAudit::new();
+        let registry = Arc::new(ToolRegistry::new(Vec::new()));
+        let custom = Duration::from_secs(5);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::empty(),
+            registry,
+            audit.clone(),
+            || Box::new(HangingPlanner),
+        )
+        .with_turn_timeout(custom);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "hang forever");
+
+        let turn_fut = agent.turn(message, &channel);
+        let advance_fut = async {
+            tokio::task::yield_now().await;
+            // Past the 5s override but nowhere near the 120s default —
+            // if the override weren't applied, this turn would hang.
+            tokio::time::advance(custom + Duration::from_secs(1)).await;
+        };
+        let (outcome, _) = tokio::join!(turn_fut, advance_fut);
+
+        assert!(
+            matches!(outcome, TurnOutcome::TimedOut { .. }),
+            "custom timeout must fire well before the 120s default, got {outcome:?}"
+        );
+    }
+
     // ---- Max-steps guard: a runaway planner is terminated with
     // MaxStepsExceeded ----
     //
@@ -2054,11 +2242,14 @@ mod tests {
 
         // Build a script of 64 ToolCalls with no FinalMessage. The
         // budget is MAX_STEPS_PER_TURN; anything past the budget should
-        // never run.
+        // never run. Each call has a *distinct* input so the Chapter
+        // Bridle repeated-call breaker (identical calls) does NOT fire —
+        // this test isolates the max-steps guard, which catches a
+        // planner that keeps *making progress* but never finishes.
         let plan: Vec<NextStep> = (0..64)
-            .map(|_| NextStep::ToolCall {
+            .map(|i| NextStep::ToolCall {
                 tool_id,
-                input: json!({}),
+                input: json!({ "i": i }),
                 auto_corrected_from: None,
                 extracted_from_text: None,
             })
@@ -2116,6 +2307,158 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    // ---- Chapter Bridle (BR.2): repeated-identical-tool-call breaker ----
+
+    /// Three identical calls in a row trip the default breaker: the
+    /// turn stops with `Looping` after executing two, *before* the
+    /// third runs.
+    #[tokio::test]
+    async fn repeated_identical_calls_trip_the_breaker() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+
+        // 10 identical calls, no FinalMessage. Default limit is 3.
+        let plan: Vec<NextStep> = (0..10)
+            .map(|_| NextStep::ToolCall {
+                tool_id,
+                input: json!({ "topic": "x" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            })
+            .collect();
+
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit.clone(),
+            plan,
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent
+            .turn(Message::text(channel.session, "loop"), &channel)
+            .await;
+
+        match outcome {
+            TurnOutcome::Looping {
+                tool_calls_made,
+                repeat_limit,
+                final_message,
+                ..
+            } => {
+                assert_eq!(repeat_limit, DEFAULT_REPEAT_CALL_LIMIT);
+                // Limit 3 → 2 calls execute, the 3rd trips before dispatch.
+                assert_eq!(tool_calls_made, DEFAULT_REPEAT_CALL_LIMIT - 1);
+                assert!(!final_message.is_empty(), "synthesized message present");
+            }
+            other => panic!("expected Looping, got {other:?}"),
+        }
+
+        // Exactly two tool calls reached the audit chain — the tripping
+        // call never executed.
+        let tool_calls = audit
+            .snapshot()
+            .into_iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .count();
+        assert_eq!(tool_calls, DEFAULT_REPEAT_CALL_LIMIT - 1);
+
+        let ended = audit
+            .snapshot()
+            .into_iter()
+            .find(|e| matches!(e, AuditTag::TurnEnded { .. }));
+        match ended {
+            Some(AuditTag::TurnEnded { outcome, .. }) => {
+                assert_eq!(outcome, TurnOutcomeSummary::Looping);
+            }
+            _ => panic!("TurnEnded with Looping summary expected"),
+        }
+    }
+
+    /// A different call in between resets the run — A,A,B,A is not a
+    /// loop, so the breaker does NOT fire. The turn finishes normally.
+    #[tokio::test]
+    async fn distinct_call_resets_the_repeat_run() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+
+        let mk = |topic: &str| NextStep::ToolCall {
+            tool_id,
+            input: json!({ "topic": topic }),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+        // A, A, B, A, A — never 3 identical in a row — then finish.
+        let plan = vec![
+            mk("a"),
+            mk("a"),
+            mk("b"),
+            mk("a"),
+            mk("a"),
+            NextStep::FinalMessage("done".into()),
+        ];
+
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit.clone(),
+            plan,
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent
+            .turn(Message::text(channel.session, "mixed"), &channel)
+            .await;
+
+        match outcome {
+            TurnOutcome::Completed {
+                final_message,
+                tool_calls_made,
+                ..
+            } => {
+                assert_eq!(final_message, "done");
+                assert_eq!(tool_calls_made, 5, "all five distinct-run calls ran");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// `with_repeat_call_limit(0)` disables the breaker — identical
+    /// calls then fall through to the max-steps guard (pre-Bridle
+    /// behavior).
+    #[tokio::test]
+    async fn breaker_disabled_falls_through_to_max_steps() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+
+        let plan: Vec<NextStep> = (0..64)
+            .map(|_| NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            })
+            .collect();
+
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit.clone(),
+            plan,
+        )
+        .with_repeat_call_limit(0);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent
+            .turn(Message::text(channel.session, "spam"), &channel)
+            .await;
+
+        assert!(
+            matches!(outcome, TurnOutcome::MaxStepsExceeded { .. }),
+            "breaker off → identical calls reach the max-steps guard, got {outcome:?}"
+        );
     }
 
     // ---- Phase 10 task 2: JSON-schema validation at the turn loop ----
@@ -2600,7 +2943,11 @@ mod tests {
             audit.clone(),
             move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
         )
-        .with_rate_gate(Some(gate));
+        .with_rate_gate(Some(gate))
+        // Disable the Bridle breaker: this test deliberately uses
+        // identical calls to exercise the *rate* cap, not the loop
+        // breaker (which would otherwise trip on the 3rd identical call).
+        .with_repeat_call_limit(0);
 
         let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
         let message = Message::text(channel.session, "fetch fetch fetch");
@@ -2658,7 +3005,11 @@ mod tests {
             registry,
             audit.clone(),
             move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
-        );
+        )
+        // Disable the Bridle breaker: this back-compat test uses
+        // identical calls to prove the ungated path runs all three;
+        // the breaker (orthogonal) would otherwise stop at the 3rd.
+        .with_repeat_call_limit(0);
         let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
         let _ = agent
             .turn(Message::text(channel.session, "go"), &channel)

@@ -200,6 +200,9 @@ fn finalize_footer(outcome: &TurnOutcome) -> String {
         TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
             format!("\n✕ planner exceeded {max_steps} steps per turn")
         }
+        TurnOutcome::Looping { repeat_limit, .. } => {
+            format!("\n✕ stopped after {repeat_limit} repeated identical tool calls")
+        }
         TurnOutcome::Failed(e) => format!("\n✕ failed: {e}"),
     }
 }

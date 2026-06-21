@@ -393,11 +393,13 @@ impl TriggerDispatch {
                     TurnOutcome::Failed(_)
                     | TurnOutcome::Cancelled { .. }
                     | TurnOutcome::TimedOut { .. }
-                    | TurnOutcome::MaxStepsExceeded { .. } => {
+                    | TurnOutcome::MaxStepsExceeded { .. }
+                    | TurnOutcome::Looping { .. } => {
                         // Cancel rather than fail — the mission itself didn't
                         // hit a gate rejection, the turn just didn't succeed.
                         // `MaxStepsExceeded` joins the other non-success
-                        // terminations here per L1/R3 audit fix.
+                        // terminations here per L1/R3 audit fix; Chapter
+                        // Bridle's `Looping` joins them for the same reason.
                         mission::cancel_mission(&mut record)
                             .map_err(|e| format!("cancel mission: {e}"))?;
                     }
@@ -795,6 +797,18 @@ pub fn render_notify_body(outcome: &TurnOutcome) -> String {
         TurnOutcome::Cancelled { .. } => "Turn cancelled".to_string(),
         TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
             format!("Turn aborted: planner exceeded {max_steps} steps")
+        }
+        TurnOutcome::Looping {
+            final_message,
+            repeat_limit,
+            ..
+        } => {
+            // Surface the synthesized message; note the cause.
+            if final_message.is_empty() {
+                format!("Turn stopped after {repeat_limit} repeated identical tool calls")
+            } else {
+                final_message.clone()
+            }
         }
     }
 }

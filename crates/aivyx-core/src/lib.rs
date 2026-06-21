@@ -535,6 +535,22 @@ pub enum TurnOutcome {
         duration: Duration,
         max_steps: usize,
     },
+    /// Chapter Bridle (BR.1/BR.2) — the turn was stopped because the
+    /// planner emitted the *same* tool call (identical `tool_id` +
+    /// input) `N` times in a row without making progress. Distinct
+    /// from [`TurnOutcome::MaxStepsExceeded`] so operators can tell a
+    /// runaway *loop* (a model stuck re-calling one tool — common on
+    /// small local models, esp. under grammar-constrained decoding)
+    /// from a long-but-progressing chain that merely hit the step
+    /// budget. Carries a synthesized `final_message` so the channel
+    /// still shows the operator something. The repeat threshold is the
+    /// agent's `repeat_call_limit`.
+    Looping {
+        final_message: String,
+        tool_calls_made: usize,
+        duration: Duration,
+        repeat_limit: usize,
+    },
     Failed(AivyxError),
 }
 
@@ -564,6 +580,8 @@ pub enum TurnOutcomeSummary {
     TimedOut,
     Cancelled,
     MaxStepsExceeded,
+    /// Chapter Bridle — stopped on a repeated identical tool call.
+    Looping,
     Failed,
 }
 
@@ -600,6 +618,7 @@ impl From<&TurnOutcome> for TurnOutcomeSummary {
             TurnOutcome::TimedOut { .. } => TurnOutcomeSummary::TimedOut,
             TurnOutcome::Cancelled { .. } => TurnOutcomeSummary::Cancelled,
             TurnOutcome::MaxStepsExceeded { .. } => TurnOutcomeSummary::MaxStepsExceeded,
+            TurnOutcome::Looping { .. } => TurnOutcomeSummary::Looping,
             TurnOutcome::Failed(_) => TurnOutcomeSummary::Failed,
         }
     }

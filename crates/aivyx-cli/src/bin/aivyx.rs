@@ -4274,6 +4274,9 @@ async fn run_async(
         // referenced when `provider = "mistralrs"`; for any other
         // provider the field is bound and ignored.
         mistralrs_options: config_mistralrs_options,
+        // Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override,
+        // passed to the SessionConfig below (slow local backends).
+        turn_timeout_secs,
         // Phase 135 — [voice] section. Bound here so the
         // ChannelKind::Voice dispatch arm reads the operator's
         // ASR + TTS paths.
@@ -7547,6 +7550,9 @@ async fn run_async(
                 // the same refiner slot through the combined
                 // `system_prompt_refiner` constructed above.
                 system_prompt_refiner: system_prompt_refiner.clone(),
+                // Chapter Bridle (BR.4) — operator override for the
+                // per-turn wall-clock deadline (slow local backends).
+                turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
             };
 
             let stdin = io::stdin();

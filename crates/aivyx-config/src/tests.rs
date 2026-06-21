@@ -3139,6 +3139,63 @@ model_path = "/models/qwen3-4b-q4_k_m.gguf"
 }
 
 #[test]
+fn agent_turn_timeout_secs_round_trips_and_defaults_none() {
+    // Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` is an opt-in
+    // override; unset (the common case) → `None` so the agent keeps the
+    // built-in 120s default. When set, it round-trips as seconds.
+    let env = EnvScope::new();
+
+    // Unset → None.
+    let tmp = TempDir::new("bridle-timeout-default");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+model = "qwen3"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(
+        cfg.turn_timeout_secs, None,
+        "unset turn_timeout_secs must be None (→ built-in default)"
+    );
+
+    // Set → that value.
+    let tmp2 = TempDir::new("bridle-timeout-set");
+    let toml_path2 = tmp2.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path2,
+        r#"
+[agent]
+model = "qwen3"
+turn_timeout_secs = 1800
+"#,
+    )
+    .unwrap();
+    let opts2 = LoadOptions {
+        toml_path: Some(toml_path2),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg2 = AivyxConfig::load_from_env_and_toml(&opts2).expect("load");
+    assert_eq!(cfg2.turn_timeout_secs, Some(1800));
+    drop(env);
+}
+
+#[test]
 fn provider_kind_mistralrs_is_in_process_and_not_openai_compat() {
     // Phase 134 distinct posture: in-process, not
     // OpenAI-compatible at the wire level.

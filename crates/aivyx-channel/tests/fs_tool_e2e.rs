@@ -277,6 +277,7 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         context_provider: None,
         system_prompt_refiner: None,
         prompt_refresher: None,
+        turn_timeout: None,
     }
 }
 

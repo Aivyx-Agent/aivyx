@@ -385,6 +385,26 @@ impl Tool for RoleSwitchTool {
                 }),
                 verified: Verification::NotApplicable,
             },
+            // Chapter Bridle — child sub-session stopped on a repeated
+            // identical tool call. Surfaced to the parent as a bounded
+            // completion (like the other non-Failed terminals) with the
+            // synthesized final message.
+            TurnOutcome::Looping {
+                final_message,
+                tool_calls_made,
+                duration,
+                repeat_limit,
+            } => ToolOutcome::Completed {
+                output: json!({
+                    "status": "looping",
+                    "target": target,
+                    "final_message": final_message,
+                    "tool_calls_made": tool_calls_made,
+                    "duration_ms": duration.as_millis() as u64,
+                    "repeat_limit": repeat_limit,
+                }),
+                verified: Verification::NotApplicable,
+            },
             TurnOutcome::Failed(err) => ToolOutcome::Completed {
                 output: json!({
                     "status": "failed",

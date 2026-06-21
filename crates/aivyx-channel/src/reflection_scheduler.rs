@@ -746,6 +746,7 @@ fn outcome_kind_label(summary: &TurnOutcomeSummary) -> &'static str {
         TurnOutcomeSummary::Cancelled => "cancelled",
         TurnOutcomeSummary::TimedOut => "timed_out",
         TurnOutcomeSummary::MaxStepsExceeded => "max_steps_exceeded",
+        TurnOutcomeSummary::Looping => "looping",
     }
 }
 

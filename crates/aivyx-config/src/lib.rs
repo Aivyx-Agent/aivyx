@@ -906,6 +906,11 @@ pub struct AivyxConfig {
     /// session-construction time. Empty when the operator
     /// uses a different provider.
     pub mistralrs_options: MistralRsOptions,
+    /// Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override for
+    /// the per-turn wall-clock deadline. `None` → the built-in 120s
+    /// default. Raised for slow local backends; the binary passes it to
+    /// `ConcreteAgent::with_turn_timeout`.
+    pub turn_timeout_secs: Option<u64>,
     /// Phase 135 — `[voice]` operator-configured options
     /// for the voice channel adapter. Empty when the
     /// operator doesn't run `--channel voice`.
@@ -4003,6 +4008,11 @@ struct RawAgent {
     system_prompt: Option<String>,
     #[serde(default)]
     provider: Option<ProviderKind>,
+    /// Chapter Bridle (BR.4) — per-turn wall-clock deadline override
+    /// (seconds). Unset → the built-in 120s default. For slow local
+    /// backends where a legitimate turn exceeds two minutes.
+    #[serde(default)]
+    turn_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6593,6 +6603,7 @@ impl AivyxConfig {
             tool_relevance,
             ollama_options,
             mistralrs_options,
+            turn_timeout_secs: toml.agent.turn_timeout_secs,
             voice_options,
             ollama_prompt_strategies,
             pricing,

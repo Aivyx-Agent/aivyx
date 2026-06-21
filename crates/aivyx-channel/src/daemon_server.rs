@@ -2046,7 +2046,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                         } else {
                                             let kind = match other {
                                                 TurnOutcome::Failed(_)
-                                                | TurnOutcome::MaxStepsExceeded { .. } =>
+                                                | TurnOutcome::MaxStepsExceeded { .. }
+                                                | TurnOutcome::Looping { .. } =>
                                                     FailureKind::Failed,
                                                 TurnOutcome::Cancelled { .. } =>
                                                     FailureKind::Cancelled,
@@ -3037,6 +3038,9 @@ fn format_outcome(outcome: &TurnOutcome) -> String {
         TurnOutcome::TimedOut { .. } => "timed out".into(),
         TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
             format!("aborted: planner exceeded {max_steps} steps")
+        }
+        TurnOutcome::Looping { repeat_limit, .. } => {
+            format!("stopped: {repeat_limit} repeated identical tool calls")
         }
         TurnOutcome::Escalated { reason, .. } => {
             format!("escalated: {reason}")

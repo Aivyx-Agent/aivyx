@@ -135,6 +135,9 @@ fn render_finalize_human(w: &mut dyn Write, outcome: &TurnOutcome) -> io::Result
         TurnOutcomeSummary::TimedOut => "timed out",
         TurnOutcomeSummary::Cancelled => "cancelled",
         TurnOutcomeSummary::MaxStepsExceeded => "max steps exceeded",
+        // Chapter Bridle — distinct from "max steps exceeded" so the
+        // operator sees *why* a turn stopped: a runaway repeated call.
+        TurnOutcomeSummary::Looping => "stopped: repeated tool call",
         TurnOutcomeSummary::Failed => "failed",
     };
     writeln!(w, "\n[turn {marker}]")
@@ -334,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_renders_all_five_outcome_kinds_distinctly() {
+    fn finalize_renders_all_outcome_kinds_distinctly() {
         let completed = render_final(&TurnOutcome::Completed {
             final_message: String::new(),
             tool_calls_made: 0,
@@ -353,16 +356,33 @@ mod tests {
             tool_calls_made: 0,
         });
         let failed = render_final(&TurnOutcome::Failed(AivyxError::Internal("boom".into())));
+        // Chapter Bridle — the repeated-call outcome must render with
+        // its own distinct marker, not collapse into "max steps".
+        let looping = render_final(&TurnOutcome::Looping {
+            final_message: "stopped".into(),
+            tool_calls_made: 3,
+            duration: Duration::ZERO,
+            repeat_limit: 3,
+        });
+        let max_steps = render_final(&TurnOutcome::MaxStepsExceeded {
+            tool_calls_made: 32,
+            duration: Duration::ZERO,
+            max_steps: 32,
+        });
 
         assert!(completed.contains("[turn completed]"));
         assert!(escalated.contains("[turn escalated]"));
         assert!(timed_out.contains("[turn timed out]"));
         assert!(cancelled.contains("[turn cancelled]"));
         assert!(failed.contains("[turn failed]"));
+        assert!(looping.contains("[turn stopped: repeated tool call]"));
+        assert!(max_steps.contains("[turn max steps exceeded]"));
+        // Bridle's loop marker must read differently from max-steps.
+        assert_ne!(looping, max_steps);
 
-        // All five markers must be distinct — otherwise the user
+        // All markers must be distinct — otherwise the user
         // can't tell why a turn ended.
-        let all = [completed, escalated, timed_out, cancelled, failed];
+        let all = [completed, escalated, timed_out, cancelled, failed, looping, max_steps];
         for i in 0..all.len() {
             for j in (i + 1)..all.len() {
                 assert_ne!(all[i], all[j], "markers {i} and {j} must differ");
