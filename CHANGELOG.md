@@ -5,6 +5,36 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Reliable local tool-calling (Chapter Stencil).** Small local models are
+  fragile on the agent loop — they hallucinate tool names and emit malformed
+  arguments, and four prompt-substrate phases proved it can't be fixed from the
+  prompt. Stencil adds the lever the prompt can't reach: **grammar-constrained
+  decoding** on the in-process mistral.rs engine. With **`[mistralrs]
+  constrain_tool_calls = true`** (default off), the decoder is constrained to a
+  JSON-Schema grammar built from the registered tools, so a small GGUF emits a
+  valid, *real-named* tool call — or a `respond` text escape — **by
+  construction**, not by hoping. Live-proven on Qwen3-4B: it called real
+  `fs.read` + `memory.write` with schema-valid arguments where prior phases
+  never got it to invoke a write tool at all. No new tool, capability base, P10
+  amendment, or dependency; byte-identical when off.
+- **Hardened local tool-calling (Chapter Bridle).** The harness that makes
+  Stencil's primitive usable in the wild — a grammar that forces a valid call is
+  necessary but not sufficient if the model then can't stop calling it (Stencil's
+  live run watched a constrained model loop on one tool call until the deadline).
+  Three guarded, default-safe fixes: **(A)** a turn-loop **repeated-call breaker**
+  that stops a turn after *N* consecutive identical tool calls (default 3) with a
+  distinct `[turn stopped: repeated tool call]` outcome — a generalizable safety
+  net for any local model, on by default because it only fires on identical
+  repeats; **(B)** a constrained-mode **`respond` preamble** that teaches the
+  model how to reply in plain text and finish (the root-cause fix for the loop);
+  and **(C)** an operator-configurable **`[agent] turn_timeout_secs`** so a
+  legitimately slow local backend can complete a turn (unset → the 120s default,
+  byte-identical). Live re-verified on Qwen3-4B: the looping scenario now ends
+  cleanly — one tool call, a plain-text answer, a completed turn. No new tool,
+  capability base, P10 amendment, or dependency.
+
 ## [0.4.0] — 2026-06-20
 
 The memory + skills release. Everything below is **opt-in and byte-identical by
