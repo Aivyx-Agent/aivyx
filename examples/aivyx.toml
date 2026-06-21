@@ -1760,6 +1760,26 @@ parent_role = "researcher"
 # ]
 
 # ----------------------------------------------------------------
+# Team — Chapter Roster (the Nonagon the daemon runs)
+# ----------------------------------------------------------------
+#
+# By default the daemon runs the built-in 9-role Nonagon
+# (`aivyx team roster` prints it). To run a customised team —
+# a different lead, tighter specialists, or a vertical pack like
+# the Kitchen BOH team — point `config_path` at a `[team]`-rooted
+# TOML file (the same shape `aivyx team run --config <file>` loads,
+# e.g. `crates/aivyx-kitchen/assets/kitchen-boh.toml`).
+#
+# A relative path is resolved against this `aivyx.toml`'s directory.
+# When unset, the daemon also looks for a conventional `team.toml`
+# beside this file; if neither exists it uses the default Nonagon.
+# The Studio's Teams screen writes this file (Chapter Roster);
+# changes apply on the next daemon start.
+#
+# [team]
+# config_path = "team.toml"
+
+# ----------------------------------------------------------------
 # Skills Auto-Creation — Phase 110 (Reflection Staging)
 # ----------------------------------------------------------------
 #

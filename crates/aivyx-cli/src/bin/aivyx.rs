@@ -4384,6 +4384,10 @@ async fn run_async(
         // ChannelKind::Voice dispatch arm reads the operator's
         // ASR + TTS paths.
         voice_options: config_voice_options,
+        // Chapter Roster (RO.1) — `[team] config_path`. Resolved at the
+        // team-mission build site below: a configured/conventional file
+        // loads via TeamConfig::load, else the built-in default_nonagon().
+        team_config_path: config_team_config_path,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -7084,10 +7088,22 @@ async fn run_async(
                 audit: Arc::clone(&audit),
                 base_tools: tools.snapshot(),
             };
+            // Chapter Roster (RO.1) — the daemon's startup team is now the
+            // operator's `[team] config_path` (or the conventional `team.toml`
+            // beside `aivyx.toml`), falling back to the built-in Nonagon when
+            // neither is present. `base_dir` is the loaded `aivyx.toml`'s
+            // directory (cwd for the default relative path).
+            let team_base_dir = std::path::Path::new(DEFAULT_TOML_PATH)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let startup_team =
+                team::resolve_daemon_team_config(config_team_config_path.as_deref(), &team_base_dir);
             let service = aivyx_channel::team_mission_driver::TeamMissionService::new(
                 state,
                 deps,
-                aivyx_team::default_nonagon(),
+                startup_team,
                 // Chapter H — the daemon's gate posture (Interactive for now;
                 // H.4/H.5 set headless for operator-absent runs).
                 aivyx_core::GatePolicy::default(),

@@ -11,6 +11,7 @@
 //!   `AuditHook`**, so the whole run lands on the one HMAC chain. Wired from
 //!   `run_async` (which owns the live provider + persistent audit).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aivyx_capability::TrustTier;
@@ -68,6 +69,48 @@ fn load_team(config: Option<&str>) -> Result<TeamConfig, String> {
         Some(path) => TeamConfig::load(path)
             .map_err(|e| format!("failed to load team config from {path:?}: {e}")),
         None => Ok(default_nonagon()),
+    }
+}
+
+/// Resolve the daemon's startup team (Chapter Roster RO.1). Resolution order:
+///
+/// 1. `[team] config_path` set → load that file (a relative path is resolved
+///    against `base_dir`, the directory of the loaded `aivyx.toml`).
+/// 2. unset → the conventional `team.toml` beside `aivyx.toml`, if it exists.
+/// 3. neither → the built-in [`default_nonagon`] (byte-identical to the
+///    pre-RO.1 daemon).
+///
+/// Never errors: a configured-but-broken (or unparseable conventional) file
+/// logs a warning and falls back to the default Nonagon so the daemon still
+/// boots. The write path ([Chapter U] machinery, RO.2) guarantees a valid
+/// file; this reader is the defensive boot half.
+pub fn resolve_daemon_team_config(configured: Option<&Path>, base_dir: &Path) -> TeamConfig {
+    // Which file to try — the configured path (resolved) or the conventional
+    // `team.toml`. An unset-and-absent conventional file means "no file".
+    let candidate: Option<PathBuf> = match configured {
+        Some(p) if p.is_absolute() => Some(p.to_path_buf()),
+        Some(p) => Some(base_dir.join(p)),
+        None => {
+            let conventional = base_dir.join("team.toml");
+            conventional.exists().then_some(conventional)
+        }
+    };
+    let Some(path) = candidate else {
+        return default_nonagon();
+    };
+    match TeamConfig::load(&path) {
+        Ok(cfg) => {
+            eprintln!("aivyx team: loaded team config from {}", path.display());
+            cfg
+        }
+        Err(e) => {
+            eprintln!(
+                "aivyx team: WARNING — failed to load team config {} ({e}); \
+                 falling back to the default Nonagon",
+                path.display()
+            );
+            default_nonagon()
+        }
     }
 }
 
@@ -230,6 +273,84 @@ mod tests {
         // A missing pack path is a clean error, not a panic.
         let err = load_team(Some("/no/such/team.toml")).unwrap_err();
         assert!(err.contains("failed to load team config"), "error: {err}");
+    }
+
+    // --- Chapter Roster (RO.1): the daemon's load-or-default resolver --------
+
+    /// A unique scratch dir under the system temp root (no tempfile dev-dep).
+    fn scratch(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "aivyx-roster-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Write a distinguishable (non-default) `[team]`-rooted file. Returns the path.
+    fn write_custom_team(path: &Path) {
+        use aivyx_team::config::{DialogueConfig, TeamConfig, TeamMember};
+        let m = |name: &str| TeamMember {
+            name: name.into(),
+            role: "R".into(),
+            soul: "s".into(),
+            tool_allowlist: vec![],
+            capability_scopes: vec![],
+            trust_ceiling: TrustTier::Trusted,
+        };
+        let cfg = TeamConfig {
+            name: "custom-team".into(),
+            description: String::new(),
+            lead: "boss".into(),
+            members: vec![m("boss"), m("helper")],
+            dialogue: DialogueConfig::default(),
+        };
+        std::fs::write(path, cfg.to_toml().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn resolve_unset_and_no_file_is_the_default_nonagon() {
+        let dir = scratch("none");
+        let team = resolve_daemon_team_config(None, &dir);
+        assert_eq!(team.name, "default-nonagon");
+        assert_eq!(team.lead, "coordinator");
+    }
+
+    #[test]
+    fn resolve_unset_loads_the_conventional_team_toml() {
+        let dir = scratch("conventional");
+        write_custom_team(&dir.join("team.toml"));
+        let team = resolve_daemon_team_config(None, &dir);
+        assert_eq!(team.name, "custom-team");
+        assert_eq!(team.lead, "boss");
+    }
+
+    #[test]
+    fn resolve_configured_relative_path_is_joined_to_base_dir() {
+        let dir = scratch("relative");
+        write_custom_team(&dir.join("my-team.toml"));
+        let team = resolve_daemon_team_config(Some(Path::new("my-team.toml")), &dir);
+        assert_eq!(team.name, "custom-team");
+    }
+
+    #[test]
+    fn resolve_configured_absolute_path_ignores_base_dir() {
+        let dir = scratch("absolute");
+        let elsewhere = scratch("absolute-target");
+        let abs = elsewhere.join("packed.toml");
+        write_custom_team(&abs);
+        let team = resolve_daemon_team_config(Some(&abs), &dir);
+        assert_eq!(team.name, "custom-team");
+    }
+
+    #[test]
+    fn resolve_configured_broken_path_falls_back_to_default_not_panic() {
+        let dir = scratch("broken");
+        let team = resolve_daemon_team_config(Some(Path::new("/no/such/team.toml")), &dir);
+        assert_eq!(team.name, "default-nonagon");
     }
 
     #[test]

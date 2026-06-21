@@ -1076,6 +1076,14 @@ pub struct AivyxConfig {
     /// to the scheme+host(+port) a remotely-exposed Studio is served at. Each
     /// entry must be a bare origin (scheme://host[:port], no path).
     pub web_ui_allowed_origins: Vec<String>,
+    /// Chapter Roster — the operator's team-config file. `[team] config_path`
+    /// points at a `[team]`-rooted TOML document (the same shape packs like
+    /// `kitchen-boh.toml` use, loaded via `aivyx_team::TeamConfig::load`). When
+    /// `None` *and* no conventional `team.toml` sits beside `aivyx.toml`, the
+    /// daemon falls back to the built-in `default_nonagon()` — so an operator
+    /// who never touches teams sees byte-identical behavior. A relative path is
+    /// resolved against the directory of the loaded `aivyx.toml`.
+    pub team_config_path: Option<PathBuf>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -3401,6 +3409,9 @@ struct RawToml {
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
+    /// `[team]` section. Chapter Roster — the operator's team-config file.
+    #[serde(default)]
+    team: RawTeam,
     #[serde(default)]
     email: RawEmail,
     /// `[embedding]` section. Phase 75 — semantic memory search.
@@ -3569,6 +3580,13 @@ struct RawDaemon {
     web_ui_port: Option<u16>,
     web_ui_host: Option<String>,
     web_ui_allowed_origins: Option<Vec<String>>,
+}
+
+/// `[team]` section. Chapter Roster — points the daemon at a `[team]`-rooted
+/// team-config file (absent → the built-in `default_nonagon()`).
+#[derive(Debug, Default, Deserialize)]
+struct RawTeam {
+    config_path: Option<String>,
 }
 
 /// `[profile]` section in the TOML file. Phase 57 (PRODUCT.md P13).
@@ -6729,6 +6747,10 @@ impl AivyxConfig {
                 }
                 entries
             },
+            // Chapter Roster — the operator's team-config file pointer. Stored
+            // as-given (relative paths are resolved against the loaded
+            // `aivyx.toml`'s directory at the daemon's team build site).
+            team_config_path: toml.team.config_path.map(PathBuf::from),
         })
     }
 

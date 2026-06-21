@@ -10462,3 +10462,22 @@ fn workspace_env_beats_toml_path() {
     assert_eq!(cfg.workspace_path.source, FieldSource::Env);
     drop(env);
 }
+
+// --- Chapter Roster (RO.1): `[team] config_path` -------------------------
+
+#[test]
+fn team_config_path_absent_section_is_none() {
+    // No `[team]` section → no team-config pointer (the daemon falls back to
+    // the conventional `team.toml` / built-in Nonagon).
+    let cfg = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "team-absent");
+    assert_eq!(cfg.team_config_path, None);
+}
+
+#[test]
+fn team_config_path_is_parsed_from_the_team_section() {
+    let cfg = load_with_toml(
+        "\n[team]\nconfig_path = \"teams/boh.toml\"\n",
+        "team-present",
+    );
+    assert_eq!(cfg.team_config_path, Some(PathBuf::from("teams/boh.toml")));
+}
