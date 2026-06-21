@@ -18,7 +18,8 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
-    MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary, PersonaProposalResolution,
+    McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary,
+    PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, SeedSkillWire, SettingsSnapshot, SkillView, StreamEventPayload,
     VoiceSettingsSnapshot,
@@ -83,6 +84,9 @@ enum View {
     Agents,
     Teams,
     Documents,
+    /// Chapter Lantern — the MCP screen: each configured MCP server's
+    /// last-start health (connected + tool count, or failed + reason).
+    Mcp,
     Voice,
     /// Chapter Genesis — the guided agent-creation flow (Profile → Persona seed
     /// → access). First-run lands here when the Profile isn't yet declared.
@@ -128,6 +132,17 @@ struct SkillsState {
 struct GraphKnowledgeState {
     entities: Vec<GraphEntity>,
     edges: Vec<GraphTriple>,
+}
+
+/// Chapter Lantern — MCP screen state: each configured server's last-start
+/// health + the snapshot's capture time. Read-only snapshot fanned in by
+/// `ws_task`. `loaded` flips on the first `GetMcpStatus` response so the
+/// panel can tell "still loading" from "genuinely no servers".
+#[derive(Clone, Default, PartialEq)]
+struct McpState {
+    servers: Vec<McpServerStatusView>,
+    captured_unix: u64,
+    loaded: bool,
 }
 
 /// Settings screen state — the on-disk config snapshot + the last write outcome.
@@ -303,6 +318,7 @@ fn App() -> Element {
     let documents = use_signal(DocumentsState::default);
     let voice = use_signal(VoiceState::default);
     let skills = use_signal(SkillsState::default);
+    let mcp = use_signal(McpState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -312,7 +328,7 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, dashboard, memory, wiki, lattice, settings, agents, roster, documents,
-            voice, skills, connected, session, transcript, streaming, gate,
+            voice, skills, mcp, connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -325,6 +341,7 @@ fn App() -> Element {
     use_context_provider(|| documents);
     use_context_provider(|| voice);
     use_context_provider(|| skills);
+    use_context_provider(|| mcp);
     // Chapter Repertoire — the Skills screen's "review in Agents" pointer
     // switches the active view.
     use_context_provider(|| view);
@@ -379,6 +396,7 @@ fn App() -> Element {
         View::Agents => "Agents",
         View::Teams => "Teams",
         View::Documents => "Documents",
+        View::Mcp => "MCP Servers",
         View::Voice => "Voice",
         View::Onboarding => "Create your agent",
     };
@@ -407,6 +425,7 @@ fn App() -> Element {
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
                         View::Documents => rsx! { DocumentsPanel {} },
+                        View::Mcp => rsx! { McpPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
                     }
@@ -453,6 +472,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Teams) }
             NavItem { icon: ICON_DOCUMENTS, label: "Documents", active: view() == View::Documents,
                 onclick: move |_| view.set(View::Documents) }
+            NavItem { icon: ICON_SETTINGS, label: "MCP", active: view() == View::Mcp,
+                onclick: move |_| view.set(View::Mcp) }
             NavItem { icon: ICON_VOICE, label: "Voice", active: view() == View::Voice,
                 onclick: move |_| view.set(View::Voice) }
             div { class: "nav-section label-tech", "Roadmap" }
@@ -1332,6 +1353,103 @@ fn SkillCard(view: SkillView) -> Element {
                     button { class: "btn-ghost", onclick: move |_| confirming.set(false), "Cancel" }
                 } else {
                     button { class: "btn-ghost", onclick: move |_| confirming.set(true), "Forget" }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCP screen — Chapter Lantern (LN.3). The web port of `aivyx mcp status`:
+// each configured MCP server's last-start health (connected + tool count,
+// or failed + reason + captured stderr), read from the daemon's snapshot
+// over GetMcpStatus. Read-only — adding/removing servers stays in
+// aivyx.toml (the screen shows, it does not edit).
+// ---------------------------------------------------------------------------
+
+fn mcp_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mcp-status".to_string(),
+        payload: QueryPayload::GetMcpStatus,
+    }
+}
+
+#[component]
+fn McpPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let mcp = use_context::<Signal<McpState>>();
+
+    // Load the snapshot each time the view opens (it only changes on a
+    // daemon restart, so on-open + a manual refresh is enough — no poll).
+    use_future(move || async move {
+        ws.send(mcp_query());
+    });
+
+    let m = mcp();
+    let connected = m.servers.iter().filter(|s| s.connected).count();
+    rsx! {
+        div { class: "mcp",
+            div { class: "panel-head",
+                h3 { "MCP Servers" }
+                if m.loaded && !m.servers.is_empty() {
+                    span { class: "label-tech", "{connected}/{m.servers.len()} connected" }
+                }
+                button {
+                    class: "btn-ghost",
+                    onclick: move |_| ws.send(mcp_query()),
+                    "Refresh"
+                }
+            }
+            if !m.loaded {
+                div { class: "glass-card empty",
+                    p { class: "label-tech", "Loading MCP status…" }
+                }
+            } else if m.servers.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech",
+                        "No MCP servers reported at the last daemon start. Add one with a `[[mcp_server]]` block in aivyx.toml (see docs/MCP_RECIPES.md), then restart the daemon."
+                    }
+                }
+            } else {
+                div { class: "mcp-grid",
+                    for sv in m.servers.iter() {
+                        { rsx! { McpServerCard { key: "{sv.name}", view: sv.clone() } } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn McpServerCard(view: McpServerStatusView) -> Element {
+    let (pill_class, pill_label) = if view.connected {
+        ("chip sage", "connected")
+    } else {
+        ("chip error", "failed")
+    };
+    rsx! {
+        div { class: "glass-card mcp-card",
+            div { class: "mcp-card-head",
+                span { class: "mcp-name", "{view.name}" }
+                span { class: "label-tech", "{view.transport}" }
+                span { class: pill_class, "{pill_label}" }
+            }
+            if view.connected {
+                p { class: "label-tech", "{view.tool_count} tool(s) registered" }
+            } else {
+                if let Some(err) = view.error.as_ref() {
+                    p { class: "mcp-error", "{err}" }
+                }
+                if !view.stderr_tail.is_empty() {
+                    details { class: "mcp-stderr",
+                        summary { class: "label-tech", "captured stderr ({view.stderr_tail.len()} line(s))" }
+                        pre {
+                            for line in view.stderr_tail.iter() {
+                                "{line}\n"
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3813,6 +3931,7 @@ async fn ws_task(
     mut documents: Signal<DocumentsState>,
     mut voice: Signal<VoiceState>,
     mut skills: Signal<SkillsState>,
+    mut mcp: Signal<McpState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -3975,6 +4094,16 @@ async fn ws_task(
                     s.skills = sk;
                     s.pending_proposals = pending_proposals;
                     s.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetMcpStatus { captured_unix, servers },
+                    ..
+                } => {
+                    // Chapter Lantern — the MCP screen's snapshot.
+                    let mut m = mcp.write();
+                    m.servers = servers;
+                    m.captured_unix = captured_unix;
+                    m.loaded = true;
                 }
                 DaemonEnvelope::SkillForgotten { ok, removed, name, .. } if ok && removed => {
                     // Chapter Repertoire — drop the forgotten skill locally.

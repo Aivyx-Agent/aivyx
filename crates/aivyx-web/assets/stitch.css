@@ -460,6 +460,18 @@ a { color: var(--color-primary); text-decoration: none; }
 .skill-eff-good, .skill-eff-fill.skill-eff-good { background: #4caf7d; color: #0b1a12; }
 .skill-eff-bad, .skill-eff-fill.skill-eff-bad { background: #d9714e; color: #1a0b06; }
 .skill-eff-neutral, .skill-eff-fill.skill-eff-neutral { background: #c9b85a; color: #1a160b; }
+
+/* Chapter Lantern — MCP screen. Mirrors the skills grid + cards. */
+.mcp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.mcp-card { display: flex; flex-direction: column; gap: 8px; }
+.mcp-card-head { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+.mcp-name { font-weight: 600; font-size: 15px; }
+.mcp-error { margin: 0; color: var(--color-error); font-size: 13px; line-height: 1.5; }
+.mcp-stderr { font-size: 12px; }
+.mcp-stderr summary { cursor: pointer; }
+.mcp-stderr pre { margin: 6px 0 0; padding: 8px; border-radius: 6px;
+  background: rgba(160, 160, 180, 0.12); overflow-x: auto; white-space: pre-wrap;
+  font-size: 11px; line-height: 1.4; }
 .skill-eff-unmeasured { background: rgba(160, 160, 180, 0.16); }
 .skill-proc summary { cursor: pointer; }
 .skill-proc .mem-body { margin-top: 6px; }
