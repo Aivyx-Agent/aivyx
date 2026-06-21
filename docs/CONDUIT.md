@@ -114,7 +114,7 @@ its own flow — Conduit only carries a static header/token); writing secrets in
 | **CD.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
 | **CD.1** ✅ | **stdio `env` + interpolation** | DONE. `[[mcp_server]] env` table → `McpServerConfig.env: Vec<(String,String)>` (sorted by key), with `interpolate_host_env` resolving `${VAR}` from the daemon environment at load — **unset var = hard `ConfigError::Invalid`**, `$$`→literal `$` escape, unterminated/empty `${}` rejected. Threaded `env` through `McpServerBridge::start_with_sandbox` → `StdioTransport::start` → `cmd.envs(...)` (a sandbox wrapper inherits + passes them). Backward-compat `start()` + the two CLI-flag `McpServerConfig` literals pass empty env. Unblocks the GitHub MCP server (`GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}"`). 3 config tests (literal+interp+sort / unset-var error / `$$` escape); mcp (359) + config (44) suites green; clippy `-D warnings` (all-targets) clean. End-to-end secret delivery proven in CD.5. |
 | **CD.2** ✅ | **SSE/HTTP `headers` + interpolation** | DONE. `[[mcp_server]] headers` → `McpServerConfig.headers` (sorted, same `${VAR}` interpolation via the now-field-parameterized `interpolate_host_env`); **rejected on stdio** (no HTTP request to attach them to). Stored in both `SseTransport` + `StreamableHttpTransport` and re-applied to **every** request (SSE GET + POSTs; HTTP POSTs) via a shared `apply_operator_headers` that **skips protocol-reserved names** (case-insensitive: `accept`/`content-type`/`mcp-protocol-version`/`mcp-session-id`) so an operator can add `Authorization` but never clobber the wire contract. `connect()` signatures gained a `headers` param; daemon + test call sites updated. Unblocks remote authenticated servers (`headers = { Authorization = "Bearer ${TOKEN}" }`). 2 config tests (http interpolation+sort / stdio-rejection); config (361) + mcp suites green; clippy `-D warnings` clean. |
-| **CD.3** | **Diagnostics** | Capture stdio stderr into a bounded ring buffer (replace `Stdio::null()`); surface per-server connect/fail + discovered tool/resource/prompt counts + last-error/stderr-tail via a read-only `aivyx mcp status`. |
+| **CD.3** ✅ | **Diagnostics** | DONE. Stdio stderr is captured into a bounded ring buffer (`StderrLog`, last 50 lines) — caller-owned so the daemon holds a clone without touching the `McpTransport` trait; `Stdio::null()` only when no log is passed (backward-compat). The daemon threads a per-server log through `start_with_sandbox`, includes the stderr tail in its startup failure log, and writes an `McpStatusSnapshot` (per-server connected/tool-count or failed/error+stderr-tail) to `$XDG_DATA_HOME/aivyx/mcp-status.json` at the end of the MCP loop. New **`aivyx mcp status`** renders it: `✓ name (transport) — N tool(s)` / `✗ name — FAILED` + reason + captured stderr, with a friendly "no snapshot yet" message. Live-verified the renderer on a crafted snapshot (1/2 connected). mcp + cli suites green; clippy `-D warnings` clean. |
 | **CD.4** | **Docs + tests** | `docs/MCP_RECIPES.md` gains a keyed example (GitHub via `${GITHUB_TOKEN}`) + an `Authorization`-header example; config round-trip + interpolation + override-precedence tests. |
 | **CD.5** | **Finalize + live-verify** | Drive a real MCP server end-to-end — at minimum one needing `env` (prove the secret path) and confirm `aivyx mcp status` reports it connected with its tools; full workspace suite + clippy + `cargo deny` green; chapter memory; status → COMPLETE. |
 
@@ -131,11 +131,14 @@ config-parsing + interpolation edge cases dominate; price **~25–35 new tests**
   needs (escape with `$${...}` if so).
 - **OQ-2 — unset-var behavior (CD.1).** Hard config error (locked default — a missing
   token should fail loudly at startup) vs. warn + omit. Lean error.
-- **OQ-3 — stderr buffer size (CD.3).** Lines vs. bytes; default N (e.g. last 50
-  lines / 8 KiB). Bounded either way; pick what reads best in `mcp status`.
-- **OQ-4 — status transport (CD.3).** A new read-only IPC query to the daemon (live
-  connection state) vs. a config-only static listing. Lean a daemon query so
-  `connected/failed` is *real*, reusing the read-only IPC pattern Studio screens use.
+- **OQ-3 — stderr buffer size (CD.3).** ✅ **Resolved: last 50 lines** (a line ring
+  buffer reads cleanly in `mcp status`; bounded so a chatty server can't grow memory).
+- **OQ-4 — status transport (CD.3).** ✅ **Resolved: a daemon-written snapshot file**
+  (not a live IPC query). The snapshot carries *real* connected/failed + tool counts +
+  the failure reason/stderr from the **last daemon start** — which is exactly the
+  "did my server come up, and why not?" question — while keeping the surface small
+  (no `aivyx-ipc` protocol change). Live runtime state (post-`list_changed`) is out of
+  scope; revisit with an IPC query only if a use case needs it.
 - **OQ-5 — live-verify target (CD.5).** Which real server proves the secret path — the
   GitHub MCP server (needs a real PAT) vs. a filesystem/everything server wrapped to
   require a dummy env var. Lean the latter for a credential-free, deterministic CI-able

@@ -39,7 +39,7 @@ pub use proxy::McpToolProxy;
 pub use resource_proxy::{McpResourceProxy, ResourceTool};
 pub use sse::SseTransport;
 pub use streamable_http::StreamableHttpTransport;
-pub use stdio::{SandboxConfig, StdioTransport};
+pub use stdio::{SandboxConfig, StderrLog, StdioTransport};
 pub use transport::McpServerBridge;
 pub use transport_trait::McpTransport;
 

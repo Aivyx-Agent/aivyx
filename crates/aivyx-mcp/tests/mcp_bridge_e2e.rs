@@ -270,6 +270,7 @@ async fn bridge_handshakes_through_env_sandbox_wrapper() {
         &[mock_server_path().to_str().unwrap()],
         &[],
         Some(&sandbox),
+        None,
         "sandboxed-mock",
     )
     .await
@@ -304,6 +305,7 @@ async fn sandboxed_bridge_preserves_server_name() {
         &[mock_server_path().to_str().unwrap()],
         &[],
         Some(&sandbox),
+        None,
         "named-sandboxed",
     )
     .await

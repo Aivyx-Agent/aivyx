@@ -774,6 +774,12 @@ fn run() -> Result<(), String> {
         return run_mcp_recipes(name.as_deref());
     }
 
+    // Chapter Conduit (CD.3) — `aivyx mcp status`. Pure stdout, reads the
+    // snapshot the daemon wrote at its last start; no provider/store/daemon.
+    if let CliMode::Mcp(McpSubcommand::Status) = mode {
+        return run_mcp_status();
+    }
+
     // Chapter J — `aivyx team roster`: render the default Nonagon. Pure
     // stdout, no storage/provider/daemon (like `mcp recipes`). `team run`
     // takes the run_async path below — it needs the live provider + audit.
@@ -1465,6 +1471,155 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+// ---------------------------------------------------------------------
+// Chapter Conduit (CD.3) — MCP startup status snapshot.
+//
+// The daemon writes this at the end of its MCP startup loop; `aivyx mcp
+// status` reads it. A snapshot (not a live IPC query) keeps the surface
+// small — no protocol-crate change — and answers the question that
+// matters when adding a server: "did it connect, and if not, why?"
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct McpServerStatus {
+    name: String,
+    transport: String,
+    connected: bool,
+    tool_count: usize,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    stderr_tail: Vec<String>,
+}
+
+impl McpServerStatus {
+    fn ok(name: &str, transport: &str, tool_count: usize) -> Self {
+        Self {
+            name: name.to_string(),
+            transport: transport.to_string(),
+            connected: true,
+            tool_count,
+            error: None,
+            stderr_tail: Vec::new(),
+        }
+    }
+    fn failed(name: &str, transport: &str, error: String, stderr_tail: Vec<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            transport: transport.to_string(),
+            connected: false,
+            tool_count: 0,
+            error: Some(error),
+            stderr_tail,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct McpStatusSnapshot {
+    /// Unix seconds at which the daemon wrote this snapshot.
+    captured_unix: u64,
+    servers: Vec<McpServerStatus>,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Shared path for the snapshot: `$XDG_DATA_HOME/aivyx/mcp-status.json`
+/// (or `$HOME/.local/share/aivyx/…`), beside the store. `None` if
+/// neither env var is set (no writable home — skip silently).
+fn mcp_status_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
+        })?;
+    Some(base.join("aivyx").join("mcp-status.json"))
+}
+
+/// Append a captured-stderr tail to a one-line startup error message.
+fn format_stderr_tail(tail: &[String]) -> String {
+    if tail.is_empty() {
+        return String::new();
+    }
+    let shown = tail.len().min(5);
+    let mut s = String::from("\n    captured server stderr (last lines):");
+    for line in &tail[tail.len() - shown..] {
+        s.push_str("\n      ");
+        s.push_str(line);
+    }
+    s
+}
+
+fn write_mcp_status_snapshot(servers: &[McpServerStatus]) -> std::io::Result<()> {
+    let Some(path) = mcp_status_path() else {
+        return Ok(()); // no home — nothing to write to
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let snapshot = McpStatusSnapshot {
+        captured_unix: unix_now(),
+        servers: servers.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&snapshot).map_err(std::io::Error::other)?;
+    std::fs::write(&path, json)
+}
+
+/// `aivyx mcp status` — render the daemon's last MCP startup snapshot.
+fn run_mcp_status() -> Result<(), String> {
+    let Some(path) = mcp_status_path() else {
+        return Err("cannot resolve the status path (neither $XDG_DATA_HOME nor $HOME is set)".into());
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "No MCP status recorded yet ({}).\n\
+                 Start the daemon with at least one `[[mcp_server]]` configured, \
+                 then re-run `aivyx mcp status`.",
+                path.display(),
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    let snapshot: McpStatusSnapshot =
+        serde_json::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+
+    let age = unix_now().saturating_sub(snapshot.captured_unix);
+    if snapshot.servers.is_empty() {
+        println!("No MCP servers were configured at the last daemon start ({age}s ago).");
+        return Ok(());
+    }
+    let connected = snapshot.servers.iter().filter(|s| s.connected).count();
+    println!(
+        "MCP servers — {connected}/{} connected (as of {age}s ago):\n",
+        snapshot.servers.len(),
+    );
+    for s in &snapshot.servers {
+        if s.connected {
+            println!(
+                "  ✓ {} ({}) — {} tool(s)",
+                s.name, s.transport, s.tool_count,
+            );
+        } else {
+            println!("  ✗ {} ({}) — FAILED", s.name, s.transport);
+            if let Some(err) = &s.error {
+                println!("      {err}");
+            }
+            for line in &s.stderr_tail {
+                println!("      stderr: {line}");
+            }
+        }
+    }
+    Ok(())
+}
+
 // `ChannelKind` lifted into `crates/aivyx-channel/src/role_render.rs`
 // in Phase 15 Task 3. The binary still constructs values of this
 // type from CLI parsing (`--channel local|telegram`), but the enum
@@ -1866,6 +2021,11 @@ enum McpSubcommand {
     /// recipe with a one-line description; named form prints
     /// the worked snippet for `<name>`.
     Recipes { name: Option<String> },
+    /// Chapter Conduit (CD.3) — `aivyx mcp status`: render the
+    /// snapshot the daemon wrote at its last start (per-server
+    /// connected/failed, tool counts, and the failure reason +
+    /// captured stderr for any that didn't come up).
+    Status,
 }
 
 /// Phase 105 — `aivyx audit` subcommand variants.
@@ -3019,10 +3179,27 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // operator-facing surface.
     if !args.is_empty() && args[0] == "mcp" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx mcp` requires a subcommand. Supported: recipes"
+            "`aivyx mcp` requires a subcommand. Supported: recipes, status"
                 .to_string()
         })?;
         match sub.as_str() {
+            "status" => {
+                if let Some(extra) = args.get(2) {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx mcp status`: `{extra}`"
+                    ));
+                }
+                return Ok(CliArgs {
+                    mode: CliMode::Mcp(McpSubcommand::Status),
+                    channel: ChannelKind::Local,
+                    role: None,
+                    no_daemon: false,
+                    mcp_servers: vec![],
+                    mcp_sse_servers: vec![],
+                    provider: None,
+                    web_ui_port: None,
+                });
+            }
             "recipes" => {
                 // Optional positional name. Anything starting
                 // with `--` is rejected loudly so a future
@@ -3058,7 +3235,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx mcp` subcommand: `{other}`. \
-                     Supported: recipes"
+                     Supported: recipes, status"
                 ));
             }
         }
@@ -5691,6 +5868,12 @@ async fn run_async(
     // exactly that server's tools when it signals a change.
     let mut mcp_server_tool_ids: std::collections::HashMap<String, Vec<aivyx_core::ToolId>> =
         std::collections::HashMap::new();
+    // Chapter Conduit (CD.3) — per-server stderr captures + the status
+    // snapshot built across the startup loop and written for
+    // `aivyx mcp status`.
+    let mut mcp_stderr_logs: std::collections::HashMap<String, aivyx_mcp::StderrLog> =
+        std::collections::HashMap::new();
+    let mut mcp_status_entries: Vec<McpServerStatus> = Vec::new();
     for mcp_cfg in &mcp_servers {
         let bridge_result = match mcp_cfg.transport {
             aivyx_config::McpTransportKind::Stdio => {
@@ -5716,11 +5899,17 @@ async fn run_async(
                         args: s.args.clone(),
                     }
                 });
+                // Chapter Conduit (CD.3) — capture this server's stderr
+                // so a misconfiguration (bad token, crash on start) is
+                // diagnosable instead of vanishing into /dev/null.
+                let stderr_log = aivyx_mcp::StderrLog::new();
+                mcp_stderr_logs.insert(mcp_cfg.name.clone(), stderr_log.clone());
                 aivyx_mcp::McpServerBridge::start_with_sandbox(
                     &resolved_cmd,
                     &args_ref,
                     &mcp_cfg.env,
                     mcp_sandbox.as_ref(),
+                    Some(&stderr_log),
                     &mcp_cfg.name,
                 )
                 .await
@@ -5752,6 +5941,17 @@ async fn run_async(
                 }
             }
         };
+        let transport_label = match mcp_cfg.transport {
+            aivyx_config::McpTransportKind::Stdio => "stdio",
+            aivyx_config::McpTransportKind::Sse => "sse",
+            aivyx_config::McpTransportKind::Http => "http",
+        };
+        let stderr_tail = || {
+            mcp_stderr_logs
+                .get(&mcp_cfg.name)
+                .map(|l| l.tail())
+                .unwrap_or_default()
+        };
         match bridge_result {
             Ok(bridge) => {
                 match bridge.discover_tools().await {
@@ -5762,32 +5962,53 @@ async fn run_async(
                             mcp_tools.iter().map(|t| t.id()).collect(),
                         );
                         tool_list.extend(mcp_tools);
-                        let transport_label = match mcp_cfg.transport {
-                            aivyx_config::McpTransportKind::Stdio => "stdio",
-                            aivyx_config::McpTransportKind::Sse => "sse",
-                            aivyx_config::McpTransportKind::Http => "http",
-                        };
                         eprintln!(
                             "aivyx: MCP server {:?} ({transport_label}) — {} tool(s) registered",
                             mcp_cfg.name, count,
                         );
+                        mcp_status_entries.push(McpServerStatus::ok(
+                            &mcp_cfg.name,
+                            transport_label,
+                            count,
+                        ));
                     }
                     Err(e) => {
+                        let tail = stderr_tail();
                         eprintln!(
-                            "aivyx: MCP server {:?} tool discovery failed: {e}",
+                            "aivyx: MCP server {:?} tool discovery failed: {e}{}",
                             mcp_cfg.name,
+                            format_stderr_tail(&tail),
                         );
+                        mcp_status_entries.push(McpServerStatus::failed(
+                            &mcp_cfg.name,
+                            transport_label,
+                            format!("tool discovery failed: {e}"),
+                            tail,
+                        ));
                     }
                 }
                 mcp_bridges.push(std::sync::Arc::new(bridge));
             }
             Err(e) => {
+                let tail = stderr_tail();
                 eprintln!(
-                    "aivyx: MCP server {:?} failed to start: {e}",
+                    "aivyx: MCP server {:?} failed to start: {e}{}",
                     mcp_cfg.name,
+                    format_stderr_tail(&tail),
                 );
+                mcp_status_entries.push(McpServerStatus::failed(
+                    &mcp_cfg.name,
+                    transport_label,
+                    format!("failed to start: {e}"),
+                    tail,
+                ));
             }
         }
+    }
+    // Chapter Conduit (CD.3) — persist the snapshot for `aivyx mcp
+    // status`. Best-effort: a write failure must not abort startup.
+    if let Err(e) = write_mcp_status_snapshot(&mcp_status_entries) {
+        eprintln!("aivyx: could not write MCP status snapshot: {e}");
     }
 
     // ---- Phase 49: tool processes (PRODUCT.md P12) ----------------------

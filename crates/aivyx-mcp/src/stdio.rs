@@ -31,6 +31,35 @@ pub struct SandboxConfig {
     pub args: Vec<String>,
 }
 
+/// Chapter Conduit (CD.3) — the last N stderr lines kept per stdio
+/// server, so a misconfigured server's own diagnostic survives instead
+/// of going to `/dev/null`. Caller-owned (the daemon holds a clone) so
+/// the tail can be read for the failure log and `aivyx mcp status`
+/// without putting it on the [`McpTransport`] trait.
+const MAX_STDERR_LINES: usize = 50;
+
+#[derive(Clone, Default)]
+pub struct StderrLog(Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+
+impl StderrLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(&self, line: String) {
+        let mut g = self.0.lock().unwrap();
+        if g.len() >= MAX_STDERR_LINES {
+            g.pop_front();
+        }
+        g.push_back(line);
+    }
+
+    /// The captured stderr lines, oldest first.
+    pub fn tail(&self) -> Vec<String> {
+        self.0.lock().unwrap().iter().cloned().collect()
+    }
+}
+
 /// Owns a child process and implements `McpTransport` over its
 /// stdin/stdout pipes. The child is spawned with `kill_on_drop(true)`
 /// so it is cleaned up when the transport is dropped.
@@ -53,6 +82,7 @@ impl StdioTransport {
         args: &[&str],
         env: &[(String, String)],
         sandbox: Option<&SandboxConfig>,
+        stderr_log: Option<&StderrLog>,
     ) -> Result<Self, String> {
         // Phase 55 — pick the spawn shape based on the sandbox
         // wrapper. Same factoring as `aivyx-tool::ToolProcessBridge::spawn`.
@@ -74,10 +104,18 @@ impl StdioTransport {
         // server's API token). Set on the spawned command; a sandbox
         // wrapper inherits and passes them to the wrapped child.
         cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        // Chapter Conduit (CD.3) — capture stderr into a bounded ring
+        // buffer when the caller wants diagnostics; otherwise discard
+        // it as before.
+        let stderr_mode = if stderr_log.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        };
         let mut child = cmd
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(stderr_mode)
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
@@ -94,6 +132,16 @@ impl StdioTransport {
 
         let stdin = child.stdin.take().ok_or("no stdin on child")?;
         let stdout = child.stdout.take().ok_or("no stdout on child")?;
+
+        // Drain captured stderr into the caller's ring buffer.
+        if let (Some(log), Some(stderr)) = (stderr_log.cloned(), child.stderr.take()) {
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    log.push(line);
+                }
+            });
+        }
 
         Ok(StdioTransport {
             child: Mutex::new(child),
@@ -157,7 +205,7 @@ mod tests {
             wrapper: "/definitely/not/a/real/sandbox-binary".into(),
             args: vec!["--isolated".into()],
         };
-        let result = StdioTransport::start("python3", &[], &[], Some(&sandbox)).await;
+        let result = StdioTransport::start("python3", &[], &[], Some(&sandbox), None).await;
         match result {
             Ok(_) => panic!("missing wrapper must error at spawn"),
             Err(err) => {
@@ -175,7 +223,7 @@ mod tests {
     #[tokio::test]
     async fn unsandboxed_failure_reports_command_name() {
         let result =
-            StdioTransport::start("/definitely/not/a/real/mcp-server", &[], &[], None).await;
+            StdioTransport::start("/definitely/not/a/real/mcp-server", &[], &[], None, None).await;
         match result {
             Ok(_) => panic!("missing command must error at spawn"),
             Err(err) => {
