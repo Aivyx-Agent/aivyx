@@ -638,6 +638,12 @@ pub struct AivyxConfig {
     /// `None` means `http://localhost:11434`. Explicit values override
     /// both defaults.
     pub openai_base_url: Option<Sourced<String>>,
+    /// Chapter Emboss (EB.2) — `[openai] constrain_tool_calls`. When
+    /// `true` *and* the provider is a llama.cpp-family OpenAI-compat
+    /// server (`llamacpp` / `jan`), the binary builds the provider with
+    /// grammar-constrained tool-calling. `false` (default) → the
+    /// unchanged passthrough. Ignored for cloud OpenAI.
+    pub openai_constrain_tool_calls: bool,
     /// Which LLM provider backend to use. Default: `Anthropic`.
     pub provider: Sourced<ProviderKind>,
     /// Model id. Always populated — falls through to [`DEFAULT_MODEL`]
@@ -3998,6 +4004,11 @@ struct RawOpenAi {
     api_key: Option<String>,
     #[serde(default)]
     base_url: Option<String>,
+    /// Chapter Emboss (EB.2) — grammar-constrained tool-calling for the
+    /// llama.cpp-family OpenAI-compat servers (`provider = "llamacpp"` /
+    /// `"jan"`). Unset → off. Ignored for cloud OpenAI.
+    #[serde(default)]
+    constrain_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -4989,6 +5000,9 @@ impl AivyxConfig {
                 .clone()
                 .map(|v| Sourced::new(v, FieldSource::Toml)),
         };
+
+        // --- openai_constrain_tool_calls (Chapter Emboss EB.2) ------
+        let openai_constrain_tool_calls = toml.openai.constrain_tool_calls.unwrap_or(false);
 
         // --- provider -----------------------------------------------
         let provider = match env_string(ENV_PROVIDER) {
@@ -6559,6 +6573,7 @@ impl AivyxConfig {
             anthropic_api_key,
             openai_api_key,
             openai_base_url,
+            openai_constrain_tool_calls,
             provider,
             model,
             system_prompt,

@@ -44,7 +44,9 @@ use mistralrs::{GgufModelBuilder, Model};
 use tokio_util::sync::CancellationToken;
 
 use crate::mistral_rs::convert::{append_message_to_builder, apply_tools};
-use crate::tool_grammar::{tool_call_grammar, RESPOND_SENTINEL};
+use crate::tool_grammar::{
+    parse_constrained_output, system_message_for, tool_call_grammar, ConstrainedOutput,
+};
 use crate::{
     LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
     NameResolution, ToolCallEnd,
@@ -286,71 +288,6 @@ impl LlmProvider for MistralRsProvider {
     }
 }
 
-/// Chapter Bridle (BR.3) — the instruction appended to the system
-/// message under grammar-constrained decoding. Stencil's grammar
-/// *admits* the `respond` sentinel as the plain-text escape, but a
-/// small model never *chooses* it unless told — ST.4 watched a 4B loop
-/// on one tool call because it had no way to "finish." This is that
-/// missing instruction.
-const RESPOND_PREAMBLE: &str = "\
-Tool-calling mode: every reply must be a single JSON object. To use a tool, emit \
-{\"name\":\"<tool>\",\"arguments\":{…}}. To answer the user in plain text — or when \
-you are done and need no tool — emit {\"name\":\"respond\",\"arguments\":{\"text\":\"…\"}}; \
-this ends your turn. Do not repeat the same tool call: if a call did not help, either \
-try a different one or `respond`.";
-
-/// Build the system message for a turn, appending [`RESPOND_PREAMBLE`]
-/// when decoding is constrained. Returns `None` when there is nothing
-/// to send (no base prompt and not constrained) so the unconstrained
-/// path stays byte-identical. Pure — unit-testable without the engine.
-fn system_message_for(base: Option<&str>, constrain: bool) -> Option<String> {
-    match (base, constrain) {
-        (Some(s), false) => Some(s.to_string()),
-        (None, false) => None,
-        (Some(s), true) => Some(format!("{s}\n\n{RESPOND_PREAMBLE}")),
-        (None, true) => Some(RESPOND_PREAMBLE.to_string()),
-    }
-}
-
-/// Outcome of parsing a grammar-constrained turn's output
-/// (Chapter Stencil ST.3). `tool_call_grammar` admits a single
-/// `{"name", "arguments"}` object; the `respond` sentinel maps to
-/// plain text, any other name to a real tool call.
-#[derive(Debug, PartialEq)]
-enum ConstrainedOutput {
-    ToolCall {
-        tool_name: String,
-        input: serde_json::Value,
-    },
-    Text(String),
-}
-
-/// Parse the JSON a grammar-constrained turn produced. Returns
-/// `None` when `content` isn't the expected shape — the grammar
-/// guarantees it is, so `None` is purely defensive (caller falls
-/// back to the native extraction).
-fn parse_constrained_output(content: &str) -> Option<ConstrainedOutput> {
-    let value: serde_json::Value = serde_json::from_str(content.trim()).ok()?;
-    let name = value.get("name")?.as_str()?;
-    let arguments = value
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    if name == RESPOND_SENTINEL {
-        let text = arguments
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or_default()
-            .to_string();
-        Some(ConstrainedOutput::Text(text))
-    } else {
-        Some(ConstrainedOutput::ToolCall {
-            tool_name: name.to_string(),
-            input: arguments,
-        })
-    }
-}
-
 /// LlmStream impl that surfaces a pre-computed response
 /// as one TextChunk + one StepEnd. Used by the
 /// non-streaming Phase 134 path.
@@ -422,72 +359,8 @@ mod tests {
         assert!(cfg.constrain_tool_calls);
     }
 
-    #[test]
-    fn parse_constrained_real_tool_call() {
-        let out = parse_constrained_output(
-            r#"{"name": "fs.read", "arguments": {"path": "/etc/hosts"}}"#,
-        )
-        .expect("well-formed constrained call parses");
-        assert_eq!(
-            out,
-            ConstrainedOutput::ToolCall {
-                tool_name: "fs.read".to_string(),
-                input: serde_json::json!({"path": "/etc/hosts"}),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_constrained_respond_sentinel_unwraps_to_text() {
-        let out = parse_constrained_output(
-            r#"{"name": "respond", "arguments": {"text": "All done."}}"#,
-        )
-        .expect("sentinel parses");
-        assert_eq!(out, ConstrainedOutput::Text("All done.".to_string()));
-    }
-
-    #[test]
-    fn parse_constrained_tolerates_surrounding_whitespace() {
-        let out = parse_constrained_output(
-            "\n  {\"name\": \"respond\", \"arguments\": {\"text\": \"hi\"}}\n",
-        )
-        .expect("trimmed JSON parses");
-        assert_eq!(out, ConstrainedOutput::Text("hi".to_string()));
-    }
-
-    #[test]
-    fn parse_constrained_rejects_non_json() {
-        // Defensive: non-JSON / non-object content yields None so the
-        // caller falls back to the native extraction.
-        assert!(parse_constrained_output("not json at all").is_none());
-        assert!(parse_constrained_output(r#"{"missing": "name"}"#).is_none());
-    }
-
-    // ---- Chapter Bridle (BR.3): constrained-mode `respond` preamble ----
-
-    #[test]
-    fn preamble_appended_only_when_constrained() {
-        // Unconstrained → the operator prompt passes through untouched
-        // (byte-identical), and an absent prompt stays absent.
-        assert_eq!(
-            system_message_for(Some("You are Aivyx."), false).as_deref(),
-            Some("You are Aivyx.")
-        );
-        assert_eq!(system_message_for(None, false), None);
-
-        // Constrained → the preamble is appended after the operator
-        // prompt (appended, never replacing it).
-        let got = system_message_for(Some("You are Aivyx."), true).unwrap();
-        assert!(got.starts_with("You are Aivyx."), "operator prompt preserved");
-        assert!(got.contains(RESPOND_PREAMBLE), "preamble present");
-        assert!(got.contains(RESPOND_SENTINEL), "names the respond sentinel");
-
-        // Constrained with no base prompt → the preamble alone.
-        assert_eq!(
-            system_message_for(None, true).as_deref(),
-            Some(RESPOND_PREAMBLE)
-        );
-    }
+    // The constrained-output parser + `respond` preamble tests moved to
+    // `tool_grammar.rs` with their functions (Chapter Emboss EB.1).
 
     #[tokio::test]
     async fn single_shot_stream_emits_text_then_final_message() {

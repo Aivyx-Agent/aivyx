@@ -4073,6 +4073,9 @@ async fn run_async(
         anthropic_api_key,
         openai_api_key,
         openai_base_url,
+        // Chapter Emboss (EB.2) — applied to the llama.cpp-family
+        // (llamacpp / jan) provider build sites below.
+        openai_constrain_tool_calls,
         provider: provider_kind,
         model,
         system_prompt: _legacy_system_prompt,
@@ -4561,7 +4564,10 @@ async fn run_async(
             let cfg = match openai_api_key {
                 Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
                 None => OpenAiConfig::without_api_key().with_base_url(base_url),
-            };
+            }
+            // Chapter Emboss (EB.2) — grammar-constrained tool-calling
+            // for llama-server (default off).
+            .with_constrain_tool_calls(openai_constrain_tool_calls);
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build llama-server provider: {e}"))?;
             Arc::new(p)
@@ -4582,7 +4588,10 @@ async fn run_async(
             let cfg = match openai_api_key {
                 Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
                 None => OpenAiConfig::without_api_key().with_base_url(base_url),
-            };
+            }
+            // Chapter Emboss (EB.2) — Jan is llama.cpp-backed; same
+            // grammar-constrained tool-calling knob (default off).
+            .with_constrain_tool_calls(openai_constrain_tool_calls);
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build Jan provider: {e}"))?;
             Arc::new(p)

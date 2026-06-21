@@ -45,6 +45,19 @@ pub struct OpenAiConfig {
     /// some Ollama versions may reject unknown fields. Default:
     /// `true`.
     pub include_stream_usage: bool,
+    /// Chapter Emboss (EB.2) — grammar-constrained tool-calling for
+    /// **llama.cpp-family** servers (`llama-server`, Jan). When `true`,
+    /// tool-carrying turns constrain decoding to the
+    /// [`tool_grammar::tool_call_grammar`] JSON-Schema (injected as the
+    /// `json_schema` extension on the chat-completions body, which
+    /// llama.cpp compiles to a GBNF grammar), so a small local GGUF
+    /// emits a valid, real-named call by construction. Default `false`
+    /// → the unchanged OpenAI-compat passthrough. Set only for the
+    /// llama.cpp-backed providers; cloud OpenAI does not support the
+    /// extension.
+    ///
+    /// [`tool_grammar::tool_call_grammar`]: crate::tool_grammar::tool_call_grammar
+    pub constrain_tool_calls: bool,
 }
 
 impl OpenAiConfig {
@@ -53,6 +66,7 @@ impl OpenAiConfig {
             api_key: Some(api_key.into()),
             base_url: None,
             include_stream_usage: true,
+            constrain_tool_calls: false,
         }
     }
 
@@ -63,6 +77,7 @@ impl OpenAiConfig {
             api_key: None,
             base_url: None,
             include_stream_usage: false,
+            constrain_tool_calls: false,
         }
     }
 
@@ -73,6 +88,13 @@ impl OpenAiConfig {
 
     pub fn with_include_stream_usage(mut self, include: bool) -> Self {
         self.include_stream_usage = include;
+        self
+    }
+
+    /// Chapter Emboss (EB.2) — enable grammar-constrained tool-calling
+    /// (llama.cpp-family servers only). Default off.
+    pub fn with_constrain_tool_calls(mut self, on: bool) -> Self {
+        self.constrain_tool_calls = on;
         self
     }
 }
@@ -159,7 +181,11 @@ impl LlmProvider for OpenAiProvider {
         request: LlmRequest<'_>,
         cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
-        let body = build_request_body(&request, self.config.include_stream_usage)?;
+        // Chapter Emboss (EB.3) — constrain only on tool-carrying turns
+        // and only when the operator enabled it (llama.cpp-family).
+        let constrain = self.config.constrain_tool_calls && !request.tools.is_empty();
+        let body =
+            build_request_body(&request, self.config.include_stream_usage, constrain)?;
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| LlmError::Parse(format!("request serialization: {e}")))?;
 
@@ -198,6 +224,7 @@ impl LlmProvider for OpenAiProvider {
             state: StreamState::default(),
             terminal: None,
             known_tool_names,
+            constrain,
         }))
     }
 }
@@ -209,13 +236,19 @@ impl LlmProvider for OpenAiProvider {
 fn build_request_body(
     request: &LlmRequest<'_>,
     include_stream_usage: bool,
+    constrain: bool,
 ) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
     }
 
     let mut messages: Vec<Value> = Vec::new();
-    if let Some(system) = request.system {
+    // Chapter Emboss (EB.3) — under grammar-constrained decoding, append
+    // the `respond` preamble to the system message so the model knows the
+    // sentinel is how it answers in plain text and ends the turn. Off →
+    // the operator system prompt passes through untouched.
+    let system = crate::tool_grammar::system_message_for(request.system, constrain);
+    if let Some(system) = system {
         messages.push(json!({"role": "system", "content": system}));
     }
     for msg in request.messages {
@@ -233,7 +266,16 @@ fn build_request_body(
         body["stream_options"] = json!({"include_usage": true});
     }
 
-    if !request.tools.is_empty() {
+    if constrain {
+        // Chapter Emboss (EB.3) — constrain decoding to the tool-call
+        // grammar via llama.cpp's `json_schema` extension (it compiles
+        // the schema to a GBNF grammar server-side). The constrained
+        // reply lands in message `content`, parsed at terminal — so we
+        // deliberately do NOT send the native `tools` array (which would
+        // make llama.cpp build its own competing grammar + route to
+        // `tool_calls`). The grammar *is* the tool definition.
+        body["json_schema"] = crate::tool_grammar::tool_call_grammar(request.tools);
+    } else if !request.tools.is_empty() {
         let tools: Vec<Value> = request
             .tools
             .iter()
@@ -372,6 +414,13 @@ struct OpenAiStream {
     /// `tool_name` against this at terminal-build time. Empty when
     /// the request advertised no tools (turn body was a plain chat).
     known_tool_names: std::collections::HashSet<String>,
+    /// Chapter Emboss (EB.3) — grammar-constrained turn. When `true`,
+    /// the reply is the constrained `{"name","arguments"}` JSON streamed
+    /// as `content`; content deltas are buffered silently (not emitted
+    /// as `TextChunk`, so the raw JSON never reaches the channel) and
+    /// the accumulated text is parsed at terminal into a real tool call
+    /// or an unwrapped `respond` reply.
+    constrain: bool,
 }
 
 #[async_trait]
@@ -444,6 +493,12 @@ impl OpenAiStream {
 
         if let Some(content) = choice.delta.content {
             self.state.accumulated_text.push_str(&content);
+            // Chapter Emboss (EB.3) — under constraint the content is the
+            // tool-call JSON; buffer it silently and reclassify at
+            // terminal rather than leaking raw JSON to the channel.
+            if self.constrain {
+                return Ok(None);
+            }
             return Ok(Some(LlmStreamEvent::TextChunk(content)));
         }
 
@@ -475,6 +530,47 @@ impl OpenAiStream {
     fn build_terminal(&mut self) -> Result<LlmStepEnd, LlmError> {
         let usage = self.state.usage;
         let reason = self.state.finish_reason.as_deref().unwrap_or("stop");
+
+        // Chapter Emboss (EB.3) — grammar-constrained turn: the reply is
+        // the constrained JSON in `accumulated_text` (we omitted the
+        // native `tools`, so `finish_reason` is never `tool_calls`).
+        // Parse it: a real name → one tool call; the `respond` sentinel
+        // → a plain-text final message. A parse miss (the grammar makes
+        // it well-formed, so this is defensive) falls through to the
+        // normal extraction below with the raw text.
+        if self.constrain {
+            let text = std::mem::take(&mut self.state.accumulated_text);
+            match crate::tool_grammar::parse_constrained_output(&text) {
+                Some(crate::tool_grammar::ConstrainedOutput::ToolCall {
+                    tool_name,
+                    input,
+                }) => {
+                    let name_resolution = if self.known_tool_names.contains(&tool_name) {
+                        crate::NameResolution::Known
+                    } else {
+                        crate::NameResolution::Unknown {
+                            original: tool_name.clone(),
+                        }
+                    };
+                    return Ok(LlmStepEnd::ToolCalls {
+                        calls: vec![crate::ToolCallEnd {
+                            call_id: "llamacpp-constrained-call".to_string(),
+                            tool_name,
+                            input,
+                            name_resolution,
+                        }],
+                        text_so_far: String::new(),
+                        usage,
+                    });
+                }
+                Some(crate::tool_grammar::ConstrainedOutput::Text(t)) => {
+                    return Ok(LlmStepEnd::FinalMessage { text: t, usage });
+                }
+                None => {
+                    return Ok(LlmStepEnd::FinalMessage { text, usage });
+                }
+            }
+        }
 
         if reason == "tool_calls" {
             let mut calls = Vec::with_capacity(self.state.pending_tools.len());
@@ -876,7 +972,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
         };
-        let body = build_request_body(&req, true).unwrap();
+        let body = build_request_body(&req, true, false).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "you are helpful");
@@ -899,11 +995,144 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
         };
-        let body = build_request_body(&req, true).unwrap();
+        let body = build_request_body(&req, true, false).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
         assert_eq!(tool_arr.len(), 1);
         assert_eq!(tool_arr[0]["type"], "function");
         assert_eq!(tool_arr[0]["function"]["name"], "read_file");
+    }
+
+    // ---- Chapter Emboss (EB.3): grammar-constrained tool-calling ----
+
+    /// A constrained body carries the `json_schema` grammar, omits the
+    /// native `tools` array, and prepends the `respond` preamble to the
+    /// system message.
+    #[tokio::test]
+    async fn constrained_body_uses_json_schema_and_omits_tools() {
+        let (msgs, _) = simple_request();
+        let tools = vec![LlmToolDescriptor {
+            name: "fs.read".into(),
+            description: "Read a file".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "path": { "type": "string" } },
+                "required": ["path"],
+            }),
+        }];
+        let req = LlmRequest {
+            model: "qwen3",
+            system: Some("You are Aivyx."),
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 100,
+            temperature: None,
+        };
+        let body = build_request_body(&req, false, true).unwrap();
+
+        // The grammar is present as `json_schema` (a oneOf union)…
+        assert!(body.get("json_schema").is_some(), "json_schema injected");
+        assert!(body["json_schema"].get("oneOf").is_some(), "grammar is the union");
+        // …and the native `tools` array is omitted (the grammar IS the
+        // tool definition).
+        assert!(body.get("tools").is_none(), "native tools omitted under constraint");
+        // The system message carries the operator prompt + the preamble.
+        let sys = body["messages"][0]["content"].as_str().unwrap();
+        assert!(sys.starts_with("You are Aivyx."));
+        assert!(sys.contains(crate::tool_grammar::RESPOND_SENTINEL));
+    }
+
+    fn constrained_provider(sse: &str) -> OpenAiProvider {
+        let config = OpenAiConfig::without_api_key().with_constrain_tool_calls(true);
+        OpenAiProvider::with_transport(config, Box::new(FakeTransport::new(sse)))
+    }
+
+    fn fs_read_request_tools() -> Vec<LlmToolDescriptor> {
+        vec![LlmToolDescriptor {
+            name: "fs.read".into(),
+            description: "Read a file".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "path": { "type": "string" } },
+                "required": ["path"],
+            }),
+        }]
+    }
+
+    /// Under constraint, the model emits the tool-call JSON as `content`
+    /// (finish_reason "stop"); content deltas are suppressed (no leaked
+    /// JSON) and the terminal reclassifies it into a real `fs.read` call.
+    #[tokio::test]
+    async fn constrained_stream_parses_content_json_into_tool_call() {
+        // The constrained JSON, split across two content deltas to
+        // exercise accumulation.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"name\\\": \\\"fs.read\\\", \\\"argum\"},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"ents\\\": {\\\"path\\\": \\\"probe.txt\\\"}}\"},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":12}}\n\n\
+data: [DONE]\n\n";
+        let provider = constrained_provider(sse);
+        let tools = fs_read_request_tools();
+        let (msgs, _) = simple_request();
+        let req = LlmRequest {
+            model: "qwen3",
+            system: None,
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 1000,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+
+        // No TextChunk should leak — the constrained JSON is buffered
+        // silently and reclassified at terminal.
+        let mut leaked = 0;
+        while stream.next_event().await.unwrap().is_some() {
+            leaked += 1;
+        }
+        assert_eq!(leaked, 0, "constrained stream must not leak content events");
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::ToolCalls { calls, usage, text_so_far } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool_name, "fs.read");
+                assert_eq!(calls[0].input["path"], "probe.txt");
+                // fs.read was advertised → Known (no fuzzy recovery needed).
+                assert!(matches!(calls[0].name_resolution, crate::NameResolution::Known));
+                assert!(text_so_far.is_empty(), "no text leaks alongside the call");
+                assert_eq!(usage.output_tokens, 12);
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+    }
+
+    /// Under constraint, a `respond` sentinel unwraps to a plain-text
+    /// final message (the model's way of declining a tool).
+    #[tokio::test]
+    async fn constrained_stream_unwraps_respond_to_final_text() {
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"name\\\": \\\"respond\\\", \\\"arguments\\\": {\\\"text\\\": \\\"All done.\\\"}}\"},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+        let provider = constrained_provider(sse);
+        let tools = fs_read_request_tools();
+        let (msgs, _) = simple_request();
+        let req = LlmRequest {
+            model: "qwen3",
+            system: None,
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 1000,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        while stream.next_event().await.unwrap().is_some() {}
+        let end = stream.finish().await.unwrap();
+        match end {
+            LlmStepEnd::FinalMessage { text, .. } => assert_eq!(text, "All done."),
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -947,6 +1176,19 @@ data: [DONE]\n\n";
     }
 
     #[test]
+    fn constrain_tool_calls_defaults_off_and_builder_sets_it() {
+        // Chapter Emboss (EB.2) — both constructors default the flag
+        // off (byte-identical passthrough); the builder flips it.
+        assert!(!OpenAiConfig::new("sk-test").constrain_tool_calls);
+        assert!(!OpenAiConfig::without_api_key().constrain_tool_calls);
+        assert!(
+            OpenAiConfig::without_api_key()
+                .with_constrain_tool_calls(true)
+                .constrain_tool_calls
+        );
+    }
+
+    #[test]
     fn with_api_key_config_has_some_key_and_stream_usage() {
         let cfg = OpenAiConfig::new("sk-test");
         assert!(cfg.api_key.is_some());
@@ -964,7 +1206,7 @@ data: [DONE]\n\n";
             max_tokens: 2048,
             temperature: None,
         };
-        let body = build_request_body(&req, false).unwrap();
+        let body = build_request_body(&req, false, false).unwrap();
         assert!(
             body.get("stream_options").is_none(),
             "stream_options must be absent when include_stream_usage is false: {body}"
@@ -982,7 +1224,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
         };
-        let body = build_request_body(&req, true).unwrap();
+        let body = build_request_body(&req, true, false).unwrap();
         assert!(
             body.get("stream_options").is_some(),
             "stream_options must be present when include_stream_usage is true: {body}"

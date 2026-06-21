@@ -130,9 +130,10 @@ replace — the existing textual-tool-call substrate (belt-and-suspenders: the
 grammar prevents malformed output; the parser still rescues any model run without
 the flag).
 
-**Out (deferred):** the `llama-server` / OpenAI-compat **`/completion` GBNF** path
-(would need a second native-endpoint code path beyond the OpenAI-compat
-passthrough); Ollama (no grammar knob on its `/api/chat`); `Regex`/`Lark`
+**Out (deferred):** the `llama-server` / OpenAI-compat path — **now shipped as
+[Chapter Emboss](EMBOSS.md)**, which injects the *same* `tool_call_grammar` as a
+`json_schema` constraint on the existing `/v1/chat/completions` body (no native
+`/completion` endpoint needed); Ollama (no grammar knob on its `/api/chat`); `Regex`/`Lark`
 constraints for non-tool structured output; and any change to the agent loop,
 trust tiers, or sandboxing. MistralRs-only, by the scoping decision.
 

@@ -112,3 +112,11 @@ in-process mistral.rs engine (`[mistralrs] constrain_tool_calls = true`, default
 off). The decoder is constrained to a JSON-Schema grammar built from the registered
 tools, so a small GGUF emits a valid, real-named tool call (or a `respond` text
 escape) *by construction*, not by hoping. Live-proven on Qwen3-4B.
+
+**Chapter Emboss** ([`docs/EMBOSS.md`](EMBOSS.md)) extends the *same* grammar to the
+**`llama-server`** path (`provider = "llamacpp"` / Jan, the OpenAI-compatible local
+backends): set `[openai] constrain_tool_calls = true` and Aivyx injects
+`tool_call_grammar(tools)` as a `json_schema` constraint on the chat-completions
+body, so a GGUF served over HTTP is constrained the same way the in-process engine
+is. Default off. The grammar primitive now covers **both** local engines Aivyx
+ships. Live-proven against a real `llama-server` on Qwen3-4B.
