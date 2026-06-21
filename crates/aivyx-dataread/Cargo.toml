@@ -1,0 +1,33 @@
+[package]
+name = "aivyx-dataread"
+description = "Structured-data reader tools for Aivyx (Chapter Sheaf — csv/xlsx/pdf over fs.read)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The Tool trait + the fs sandbox helper (`lexical_resolve`, pub since
+# Chapter Z) these readers reuse — they add no new capability, only
+# parse bytes the agent could already `fs.read`.
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# CSV parsing (Chapter Sheaf SH.1). Already in the workspace dep tree;
+# MIT/Unlicense — permissive, clears deny.toml. xlsx (calamine) and pdf
+# parsers land additively in SH.2 / SH.3.
+csv = "1"
+
+[package.metadata.dist]
+dist = false

@@ -45,6 +45,15 @@ computes the capability the call needs, which the daemon enforces **before**
 | `fs.metadata` | `fs.metadata` | SemiTrusted | stat a path (size/kind/mtime) |
 | `workspace.read` / `.write` / `.list` / `.delete` / `.note` | `workspace` | Trusted | the agent's own private notebook dir (Chapter O), independent of `fs_root` |
 
+## Structured-data readers (infrastructure — Chapter Sheaf)
+
+Reuse the `fs.read` capability + sandbox (no new base, no new I/O reach): they
+only parse bytes the agent could already `fs.read`. Registered beside `fs.read`.
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `data.csv` | `fs.read` | Trusted | read a CSV/TSV file into `{headers, rows, …}` (SH.1) |
+
 ## Network & web (substrate)
 
 | Tool | Scope | Min tier | Notes |

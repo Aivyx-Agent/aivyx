@@ -168,6 +168,7 @@ use aivyx_channel::{
 };
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
 use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
+use aivyx_dataread::{DataCsvTool, ReaderSandbox};
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsDeleteToolConfig,
     FsMetadataToolConfig, FsReadToolConfig, FsWriteToolConfig, LlmPlanner, LlmPlannerConfig,
@@ -5346,10 +5347,21 @@ async fn run_async(
     // registration-time gating is stricter: the audit chain for a
     // SemiTrusted channel never sees `shell.exec` mentioned, not
     // even as a denial. That strictness is the point.
+    // Chapter Sheaf (SH.1) — structured-data readers reuse the exact
+    // `fs.read` capability + sandbox (the canonicalized root above), so
+    // they need no new scope and are registered for every channel just
+    // like `fs.read`/`fs.metadata`; the ceiling strips `fs.read` for
+    // SemiTrusted channels at dispatch, gating these identically.
+    let data_csv = DataCsvTool::new(
+        ReaderSandbox::new(canonical_root.clone())
+            .map_err(|e| format!("failed to build data.csv reader sandbox: {e}"))?,
+    );
+
     let mut tool_list: Vec<Arc<dyn Tool>> = vec![
         Arc::new(fs_read) as Arc<dyn Tool>,
         Arc::new(fs_write) as Arc<dyn Tool>,
         Arc::new(fs_metadata) as Arc<dyn Tool>,
+        Arc::new(data_csv) as Arc<dyn Tool>,
         Arc::new(memory_read) as Arc<dyn Tool>,
         Arc::new(memory_write) as Arc<dyn Tool>,
         Arc::new(memory_forget) as Arc<dyn Tool>,

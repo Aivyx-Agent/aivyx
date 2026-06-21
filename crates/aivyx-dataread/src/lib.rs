@@ -1,0 +1,27 @@
+//! Structured-data reader tools for Aivyx — **Chapter Sheaf**.
+//!
+//! Three readers turn an operator file the agent can already reach via
+//! `fs.read` into legible structured content (the file-content
+//! analogue of `web.extract`):
+//!
+//! - [`DataCsvTool`] (`data.csv`, SH.1) — delimited text → rows.
+//! - `data.xlsx` (SH.2) — spreadsheet → a sheet's rows *(pending)*.
+//! - `data.pdf` (SH.3) — PDF → extracted text *(pending)*.
+//!
+//! ## Governance (see `docs/SHEAF.md`)
+//!
+//! Each reader **reuses the existing `fs.read` capability and the
+//! `aivyx_core` filesystem sandbox** ([`crate::sandbox::ReaderSandbox`],
+//! built on `aivyx_core::tools::fs::lexical_resolve`): it can only read
+//! a file the agent could already `fs.read`, adding **no new capability
+//! base and no new I/O reach**. That makes the readers an
+//! **infrastructure-tier** addition — a transform over already-readable
+//! bytes, not a new irreducible capability — so they grow no P10
+//! substrate count. Heavy format parsers (xlsx/pdf) are isolated in
+//! this crate rather than bloating `aivyx-core`.
+
+pub mod csv_reader;
+pub mod sandbox;
+
+pub use csv_reader::DataCsvTool;
+pub use sandbox::ReaderSandbox;

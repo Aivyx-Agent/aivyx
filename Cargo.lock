@@ -173,6 +173,7 @@ dependencies = [
  "aivyx-core",
  "aivyx-cost",
  "aivyx-crypto",
+ "aivyx-dataread",
  "aivyx-discord",
  "aivyx-llm",
  "aivyx-mcp",
@@ -276,6 +277,18 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "zeroize",
+]
+
+[[package]]
+name = "aivyx-dataread"
+version = "0.5.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "async-trait",
+ "csv",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

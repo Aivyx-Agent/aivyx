@@ -65,6 +65,9 @@ aivyx-tui = { path = "../aivyx-tui" }
 # dependency set, now relocated here with the binary.
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+# Chapter Sheaf — structured-data reader tools (data.csv, …); reuse the
+# fs.read capability + sandbox, registered beside fs.read below.
+aivyx-dataread = { path = "../aivyx-dataread" }
 # Chapter J — the Nonagon. `aivyx team run/roster` assembles a team
 # (TeamAssembly) and runs a mission lead in-process on the same audit chain.
 aivyx-team = { path = "../aivyx-team" }
