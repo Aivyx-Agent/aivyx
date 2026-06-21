@@ -268,6 +268,7 @@ async fn bridge_handshakes_through_env_sandbox_wrapper() {
     let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(
         "python3",
         &[mock_server_path().to_str().unwrap()],
+        &[],
         Some(&sandbox),
         "sandboxed-mock",
     )
@@ -301,6 +302,7 @@ async fn sandboxed_bridge_preserves_server_name() {
     let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(
         "python3",
         &[mock_server_path().to_str().unwrap()],
+        &[],
         Some(&sandbox),
         "named-sandboxed",
     )

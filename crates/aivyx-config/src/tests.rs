@@ -1936,6 +1936,121 @@ command = "/usr/bin/my-server"
     drop(env);
 }
 
+// Chapter Conduit (CD.1) — `[[mcp_server]] env` + `${VAR}` interpolation.
+
+#[test]
+fn mcp_server_env_literals_and_interpolation() {
+    let env = EnvScope::new();
+    env.set("CONDUIT_TEST_TOKEN", "ghp_secret123");
+    let tmp = TempDir::new("mcp-env");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${CONDUIT_TEST_TOKEN}", LOG = "debug" }
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let gh = &cfg.mcp_servers[0];
+    // Sorted by key: GITHUB_PERSONAL_ACCESS_TOKEN before LOG.
+    assert_eq!(
+        gh.env,
+        vec![
+            ("GITHUB_PERSONAL_ACCESS_TOKEN".to_string(), "ghp_secret123".to_string()),
+            ("LOG".to_string(), "debug".to_string()),
+        ],
+        "${{VAR}} resolved from the daemon env; literal kept; sorted by key",
+    );
+    drop(env);
+}
+
+#[test]
+fn mcp_server_env_unset_var_is_a_config_error() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-env-unset");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "github"
+command = "npx"
+env = { TOKEN = "${CONDUIT_DEFINITELY_UNSET_VAR}" }
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("unset var must fail");
+    match err {
+        ConfigError::Invalid { field, reason } => {
+            assert_eq!(field, "mcp_server.env");
+            assert!(reason.contains("unset"), "reason names the unset var: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn mcp_server_env_dollar_escape_is_literal() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-env-escape");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "lit"
+command = "x"
+env = { PRICE = "$${NOT_A_VAR}" }
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.mcp_servers[0].env[0].1, "${NOT_A_VAR}", "$$ escapes to literal $");
+    drop(env);
+}
+
 #[test]
 fn no_mcp_server_section_gives_empty_vec() {
     let env = EnvScope::new();

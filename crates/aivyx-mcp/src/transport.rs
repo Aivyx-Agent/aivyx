@@ -140,7 +140,7 @@ impl McpServerBridge {
         args: &[&str],
         server_name: impl Into<String>,
     ) -> Result<Self, String> {
-        Self::start_with_sandbox(command, args, None, server_name).await
+        Self::start_with_sandbox(command, args, &[], None, server_name).await
     }
 
     /// Phase 55 — spawn an MCP server through an optional command
@@ -151,10 +151,11 @@ impl McpServerBridge {
     pub async fn start_with_sandbox(
         command: &str,
         args: &[&str],
+        env: &[(String, String)],
         sandbox: Option<&crate::stdio::SandboxConfig>,
         server_name: impl Into<String>,
     ) -> Result<Self, String> {
-        let stdio = crate::stdio::StdioTransport::start(command, args, sandbox).await?;
+        let stdio = crate::stdio::StdioTransport::start(command, args, env, sandbox).await?;
         Self::from_transport(Arc::new(stdio), server_name).await
     }
 

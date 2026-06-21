@@ -1448,6 +1448,12 @@ pub struct McpServerConfig {
     pub command: Option<String>,
     /// Command-line arguments (stdio transport only).
     pub args: Vec<String>,
+    /// Chapter Conduit (CD.1) — environment variables passed to a stdio
+    /// server's child process (e.g. `GITHUB_PERSONAL_ACCESS_TOKEN`).
+    /// `${VAR}` values are resolved from the daemon's own environment at
+    /// load time so secrets stay out of `aivyx.toml`. Sorted by key for
+    /// deterministic ordering. Empty for remote transports.
+    pub env: Vec<(String, String)>,
     /// SSE endpoint URL (SSE transport only).
     pub url: Option<String>,
     pub enabled: bool,
@@ -3642,6 +3648,11 @@ struct RawMcpServer {
     /// SSE endpoint URL (SSE transport).
     #[serde(default)]
     url: Option<String>,
+    /// Chapter Conduit (CD.1) — env vars for a stdio server's child.
+    /// Values may be literals or `${VAR}` references resolved from the
+    /// daemon environment at load time.
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
     #[serde(default = "default_true")]
     enabled: bool,
     /// When `true`, resolve `command` to the current binary path at runtime.
@@ -5897,6 +5908,15 @@ impl AivyxConfig {
             if !r.enabled {
                 continue;
             }
+            // Chapter Conduit (CD.1) — resolve env, interpolating
+            // `${VAR}` from the daemon environment so secrets stay out
+            // of the config file. Sorted by key for determinism.
+            let mut env: Vec<(String, String)> = Vec::new();
+            for (k, v) in r.env.unwrap_or_default() {
+                let resolved = interpolate_host_env(&v, &r.name, &k)?;
+                env.push((k, resolved));
+            }
+            env.sort_by(|a, b| a.0.cmp(&b.0));
             let transport = match r.transport.as_str() {
                 "stdio" => McpTransportKind::Stdio,
                 "sse" => McpTransportKind::Sse,
@@ -5971,6 +5991,7 @@ impl AivyxConfig {
                 transport,
                 command: r.command,
                 args: r.args.unwrap_or_default(),
+                env,
                 url: r.url,
                 enabled: true,
                 bundled: r.bundled,
@@ -6953,6 +6974,63 @@ impl AivyxConfig {
 // --------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------
+
+/// Chapter Conduit (CD.1) — interpolate `${VAR}` references in an MCP
+/// `env` value against the daemon's own environment, so an operator
+/// keeps the actual secret in their shell/systemd environment rather
+/// than in `aivyx.toml`. A literal `$$` is an escape for a single `$`
+/// (so a value that genuinely needs `${` writes `$${`). A reference to
+/// an unset host variable is a hard config error (a missing token
+/// should fail loudly at startup, not silently pass an empty string).
+fn interpolate_host_env(
+    raw: &str,
+    server: &str,
+    key: &str,
+) -> Result<String, ConfigError> {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(dollar) = rest.find('$') {
+        out.push_str(&rest[..dollar]);
+        let after = &rest[dollar..];
+        if let Some(stripped) = after.strip_prefix("$$") {
+            // `$$` → literal `$`.
+            out.push('$');
+            rest = stripped;
+        } else if after.starts_with("${") {
+            let close = after.find('}').ok_or_else(|| ConfigError::Invalid {
+                field: "mcp_server.env",
+                reason: format!(
+                    "server {server:?}: env `{key}` has an unterminated `${{` \
+                     (expected `${{VAR}}`)"
+                ),
+            })?;
+            let var = &after[2..close];
+            if var.is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "mcp_server.env",
+                    reason: format!(
+                        "server {server:?}: env `{key}` has an empty `${{}}` reference"
+                    ),
+                });
+            }
+            let val = std::env::var(var).map_err(|_| ConfigError::Invalid {
+                field: "mcp_server.env",
+                reason: format!(
+                    "server {server:?}: env `{key}` references `${{{var}}}`, which is \
+                     unset in the daemon environment"
+                ),
+            })?;
+            out.push_str(&val);
+            rest = &after[close + 1..];
+        } else {
+            // A bare `$` not starting an escape or reference — keep it.
+            out.push('$');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
 
 /// Read an env var, treating empty strings as unset. Matches the
 /// Phase 8 binary's behavior so `export FOO=` never trips a parse

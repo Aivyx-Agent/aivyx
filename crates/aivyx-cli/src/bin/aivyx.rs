@@ -4292,6 +4292,9 @@ async fn run_async(
             transport: aivyx_config::McpTransportKind::Stdio,
             command: Some(cli.command),
             args: cli.args,
+            // CLI-flag MCP servers inherit the daemon's environment
+            // as-is; per-server env overrides are a TOML-config feature.
+            env: Vec::new(),
             url: None,
             enabled: true,
             bundled: false,
@@ -4308,6 +4311,7 @@ async fn run_async(
             transport: aivyx_config::McpTransportKind::Sse,
             command: None,
             args: Vec::new(),
+            env: Vec::new(),
             url: Some(cli.url),
             enabled: true,
             bundled: false,
@@ -5713,6 +5717,7 @@ async fn run_async(
                 aivyx_mcp::McpServerBridge::start_with_sandbox(
                     &resolved_cmd,
                     &args_ref,
+                    &mcp_cfg.env,
                     mcp_sandbox.as_ref(),
                     &mcp_cfg.name,
                 )

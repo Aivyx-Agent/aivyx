@@ -51,6 +51,7 @@ impl StdioTransport {
     pub async fn start(
         command: &str,
         args: &[&str],
+        env: &[(String, String)],
         sandbox: Option<&SandboxConfig>,
     ) -> Result<Self, String> {
         // Phase 55 — pick the spawn shape based on the sandbox
@@ -69,6 +70,10 @@ impl StdioTransport {
                 c
             }
         };
+        // Chapter Conduit (CD.1) — operator-supplied env vars (e.g. a
+        // server's API token). Set on the spawned command; a sandbox
+        // wrapper inherits and passes them to the wrapped child.
+        cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         let mut child = cmd
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -152,7 +157,7 @@ mod tests {
             wrapper: "/definitely/not/a/real/sandbox-binary".into(),
             args: vec!["--isolated".into()],
         };
-        let result = StdioTransport::start("python3", &[], Some(&sandbox)).await;
+        let result = StdioTransport::start("python3", &[], &[], Some(&sandbox)).await;
         match result {
             Ok(_) => panic!("missing wrapper must error at spawn"),
             Err(err) => {
@@ -170,7 +175,7 @@ mod tests {
     #[tokio::test]
     async fn unsandboxed_failure_reports_command_name() {
         let result =
-            StdioTransport::start("/definitely/not/a/real/mcp-server", &[], None).await;
+            StdioTransport::start("/definitely/not/a/real/mcp-server", &[], &[], None).await;
         match result {
             Ok(_) => panic!("missing command must error at spawn"),
             Err(err) => {
