@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-21
+
+The local tool-calling release. A small local model (an in-process GGUF on the
+mistral.rs engine) can now reliably **drive the agent loop to completion** —
+emitting a valid, real-named tool call by construction, then finishing its turn
+instead of looping. Both chapters are **opt-in and byte-identical by default**;
+no new tool, capability base, P10 amendment, or dependency.
+
 ### Added
 
 - **Reliable local tool-calling (Chapter Stencil).** Small local models are

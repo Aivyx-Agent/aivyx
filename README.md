@@ -12,13 +12,13 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (v0.4.0 — source-available, BUSL-1.1, 2026-06-20)
+## Status (v0.5.0 — source-available, BUSL-1.1, 2026-06-21)
 
 | | |
 |---|---|
 | Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), and Repertoire (a Studio Skills library showing every skill + its effectiveness) — and 15 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.4.0`** (the memory + skills release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
+| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.5.0`** (the local tool-calling release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Wiki (knowledge pages) · Graph (typed knowledge graph) · Skills (the skill library) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 33 |
 | Rust tests | 4,921 passing |
