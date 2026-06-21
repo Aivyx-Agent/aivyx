@@ -31,6 +31,8 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 pub struct StreamableHttpTransport {
     client: reqwest::Client,
     endpoint: String,
+    /// Operator headers (CD.2) re-applied to every request.
+    headers: Vec<(String, String)>,
     /// Server-assigned session id (from the `initialize` response),
     /// echoed on every subsequent request once known.
     session_id: Mutex<Option<String>>,
@@ -41,7 +43,7 @@ pub struct StreamableHttpTransport {
 impl StreamableHttpTransport {
     /// Build a transport for an MCP endpoint URL. No handshake here —
     /// the bridge drives `initialize` through `send`/`receive`.
-    pub async fn connect(endpoint: &str) -> Result<Self, String> {
+    pub async fn connect(endpoint: &str, headers: &[(String, String)]) -> Result<Self, String> {
         if endpoint.trim().is_empty() {
             return Err("streamable-http: empty endpoint URL".into());
         }
@@ -51,6 +53,7 @@ impl StreamableHttpTransport {
         Ok(StreamableHttpTransport {
             client,
             endpoint: endpoint.to_string(),
+            headers: headers.to_vec(),
             session_id: Mutex::new(None),
             queue: Mutex::new(VecDeque::new()),
         })
@@ -128,11 +131,18 @@ impl McpTransport for StreamableHttpTransport {
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream")
-            .header("MCP-Protocol-Version", PROTOCOL_VERSION)
-            .body(message.to_string());
+            .header("MCP-Protocol-Version", PROTOCOL_VERSION);
         if let Some(sid) = self.session_id() {
             req = req.header("Mcp-Session-Id", sid);
         }
+        // Chapter Conduit (CD.2) — operator headers (e.g. Authorization),
+        // never overriding the protocol-reserved names above.
+        req = crate::apply_operator_headers(
+            req,
+            &self.headers,
+            &["content-type", "accept", "mcp-protocol-version", "mcp-session-id"],
+        )
+        .body(message.to_string());
 
         let resp = req
             .send()
@@ -172,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn connect_rejects_empty_endpoint() {
-        assert!(StreamableHttpTransport::connect("  ").await.is_err());
+        assert!(StreamableHttpTransport::connect("  ", &[]).await.is_err());
     }
 
     #[test]
@@ -202,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_captures_session_and_queues_in_order() {
-        let t = StreamableHttpTransport::connect("http://x/mcp").await.unwrap();
+        let t = StreamableHttpTransport::connect("http://x/mcp", &[]).await.unwrap();
         t.ingest(
             Some("application/json"),
             r#"{"id":1,"result":{}}"#,
@@ -224,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_session_header_is_ignored() {
-        let t = StreamableHttpTransport::connect("http://x/mcp").await.unwrap();
+        let t = StreamableHttpTransport::connect("http://x/mcp", &[]).await.unwrap();
         t.ingest(Some("application/json"), r#"{"id":1}"#, Some("  "));
         assert!(t.session_id().is_none());
     }

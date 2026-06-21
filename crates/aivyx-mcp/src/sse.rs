@@ -94,6 +94,8 @@ pub struct SseTransport {
     post_url: String,
     /// HTTP client shared between `send` calls.
     client: reqwest::Client,
+    /// Operator headers (CD.2) re-applied to every POST.
+    headers: Vec<(String, String)>,
     /// Receiver end of the channel fed by the background SSE reader.
     rx: Mutex<mpsc::Receiver<Result<String, String>>>,
 }
@@ -102,12 +104,13 @@ impl SseTransport {
     /// Connect to an MCP server's SSE endpoint. Performs the initial
     /// GET, waits for the `endpoint` event, and spawns a background
     /// task to feed subsequent `message` events into a channel.
-    pub async fn connect(sse_url: &str) -> Result<Self, String> {
+    pub async fn connect(sse_url: &str, headers: &[(String, String)]) -> Result<Self, String> {
         let client = reqwest::Client::new();
 
-        let response = client
-            .get(sse_url)
-            .header("Accept", "text/event-stream")
+        // Chapter Conduit (CD.2) — operator headers (e.g. Authorization)
+        // on the initial GET; `Accept` is protocol-reserved.
+        let get = client.get(sse_url).header("Accept", "text/event-stream");
+        let response = crate::apply_operator_headers(get, headers, &["accept"])
             .send()
             .await
             .map_err(|e| format!("SSE GET {sse_url}: {e}"))?;
@@ -154,6 +157,7 @@ impl SseTransport {
         Ok(SseTransport {
             post_url,
             client,
+            headers: headers.to_vec(),
             rx: Mutex::new(rx),
         })
     }
@@ -234,10 +238,11 @@ async fn sse_reader_task(
 #[async_trait]
 impl McpTransport for SseTransport {
     async fn send(&self, message: &str) -> Result<(), String> {
-        let resp = self
+        let post = self
             .client
             .post(&self.post_url)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+        let resp = crate::apply_operator_headers(post, &self.headers, &["content-type"])
             .body(message.to_string())
             .send()
             .await

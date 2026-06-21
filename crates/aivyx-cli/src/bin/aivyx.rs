@@ -4293,8 +4293,9 @@ async fn run_async(
             command: Some(cli.command),
             args: cli.args,
             // CLI-flag MCP servers inherit the daemon's environment
-            // as-is; per-server env overrides are a TOML-config feature.
+            // as-is; per-server env/header overrides are a TOML feature.
             env: Vec::new(),
+            headers: Vec::new(),
             url: None,
             enabled: true,
             bundled: false,
@@ -4312,6 +4313,7 @@ async fn run_async(
             command: None,
             args: Vec::new(),
             env: Vec::new(),
+            headers: Vec::new(),
             url: Some(cli.url),
             enabled: true,
             bundled: false,
@@ -5725,7 +5727,7 @@ async fn run_async(
             }
             aivyx_config::McpTransportKind::Sse => {
                 let url = mcp_cfg.url.as_deref().unwrap_or("");
-                match aivyx_mcp::SseTransport::connect(url).await {
+                match aivyx_mcp::SseTransport::connect(url, &mcp_cfg.headers).await {
                     Ok(transport) => {
                         aivyx_mcp::McpServerBridge::from_transport(
                             std::sync::Arc::new(transport),
@@ -5738,7 +5740,7 @@ async fn run_async(
             }
             aivyx_config::McpTransportKind::Http => {
                 let url = mcp_cfg.url.as_deref().unwrap_or("");
-                match aivyx_mcp::StreamableHttpTransport::connect(url).await {
+                match aivyx_mcp::StreamableHttpTransport::connect(url, &mcp_cfg.headers).await {
                     Ok(transport) => {
                         aivyx_mcp::McpServerBridge::from_transport(
                             std::sync::Arc::new(transport),

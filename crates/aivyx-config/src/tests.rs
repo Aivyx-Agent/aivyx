@@ -2051,6 +2051,86 @@ env = { PRICE = "$${NOT_A_VAR}" }
     drop(env);
 }
 
+// Chapter Conduit (CD.2) — `[[mcp_server]] headers` for remote transports.
+
+#[test]
+fn mcp_server_headers_interpolate_for_http() {
+    let env = EnvScope::new();
+    env.set("CONDUIT_BEARER", "tok-xyz");
+    let tmp = TempDir::new("mcp-headers");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "remote"
+transport = "http"
+url = "https://mcp.example.com/mcp"
+headers = { Authorization = "Bearer ${CONDUIT_BEARER}", X-Trace = "on" }
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    let s = &cfg.mcp_servers[0];
+    assert_eq!(s.transport, McpTransportKind::Http);
+    // Sorted by key: Authorization before X-Trace.
+    assert_eq!(
+        s.headers,
+        vec![
+            ("Authorization".to_string(), "Bearer tok-xyz".to_string()),
+            ("X-Trace".to_string(), "on".to_string()),
+        ],
+    );
+    drop(env);
+}
+
+#[test]
+fn mcp_server_headers_rejected_on_stdio() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("mcp-headers-stdio");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[anthropic]
+api_key = "sk-test"
+
+[[mcp_server]]
+name = "local"
+command = "npx"
+headers = { Authorization = "Bearer x" }
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("headers on stdio must fail");
+    match err {
+        ConfigError::Invalid { field, .. } => assert_eq!(field, "mcp_server.headers"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    drop(env);
+}
+
 #[test]
 fn no_mcp_server_section_gives_empty_vec() {
     let env = EnvScope::new();

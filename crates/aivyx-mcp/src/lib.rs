@@ -43,6 +43,24 @@ pub use stdio::{SandboxConfig, StdioTransport};
 pub use transport::McpServerBridge;
 pub use transport_trait::McpTransport;
 
+/// Chapter Conduit (CD.2) — apply operator-supplied HTTP headers to a
+/// request, skipping any whose name (case-insensitive) collides with a
+/// protocol-reserved header. The operator can add auth (`Authorization`,
+/// `X-Api-Key`, …) but can never clobber the MCP wire contract.
+pub(crate) fn apply_operator_headers(
+    mut req: reqwest::RequestBuilder,
+    headers: &[(String, String)],
+    reserved: &[&str],
+) -> reqwest::RequestBuilder {
+    for (k, v) in headers {
+        if reserved.iter().any(|r| r.eq_ignore_ascii_case(k)) {
+            continue;
+        }
+        req = req.header(k, v);
+    }
+    req
+}
+
 /// A canned-response transport for unit tests: every `send` is recorded
 /// and each `receive` pops the next pre-loaded reply, so a bridge can be
 /// driven through `initialize` + method calls without a real server.

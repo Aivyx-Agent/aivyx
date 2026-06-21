@@ -1454,6 +1454,12 @@ pub struct McpServerConfig {
     /// load time so secrets stay out of `aivyx.toml`. Sorted by key for
     /// deterministic ordering. Empty for remote transports.
     pub env: Vec<(String, String)>,
+    /// Chapter Conduit (CD.2) — HTTP headers sent on every request to a
+    /// remote (SSE / Streamable-HTTP) server, e.g. `Authorization`.
+    /// `${VAR}` values are resolved from the daemon environment at load.
+    /// Operator headers never override the protocol-required ones.
+    /// Sorted by key. Empty for the stdio transport (no HTTP request).
+    pub headers: Vec<(String, String)>,
     /// SSE endpoint URL (SSE transport only).
     pub url: Option<String>,
     pub enabled: bool,
@@ -3653,6 +3659,9 @@ struct RawMcpServer {
     /// daemon environment at load time.
     #[serde(default)]
     env: Option<std::collections::HashMap<String, String>>,
+    /// Chapter Conduit (CD.2) — HTTP headers for sse/http transports.
+    #[serde(default)]
+    headers: Option<std::collections::HashMap<String, String>>,
     #[serde(default = "default_true")]
     enabled: bool,
     /// When `true`, resolve `command` to the current binary path at runtime.
@@ -5908,15 +5917,6 @@ impl AivyxConfig {
             if !r.enabled {
                 continue;
             }
-            // Chapter Conduit (CD.1) — resolve env, interpolating
-            // `${VAR}` from the daemon environment so secrets stay out
-            // of the config file. Sorted by key for determinism.
-            let mut env: Vec<(String, String)> = Vec::new();
-            for (k, v) in r.env.unwrap_or_default() {
-                let resolved = interpolate_host_env(&v, &r.name, &k)?;
-                env.push((k, resolved));
-            }
-            env.sort_by(|a, b| a.0.cmp(&b.0));
             let transport = match r.transport.as_str() {
                 "stdio" => McpTransportKind::Stdio,
                 "sse" => McpTransportKind::Sse,
@@ -5986,12 +5986,40 @@ impl AivyxConfig {
                 }
                 None => None,
             };
+            // Chapter Conduit (CD.1/CD.2) — resolve env + headers,
+            // interpolating `${VAR}` from the daemon environment so
+            // secrets stay out of the config file. Sorted by key.
+            let mut env: Vec<(String, String)> = Vec::new();
+            for (k, v) in r.env.unwrap_or_default() {
+                let resolved = interpolate_host_env(&v, &r.name, &k, "mcp_server.env")?;
+                env.push((k, resolved));
+            }
+            env.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut headers: Vec<(String, String)> = Vec::new();
+            for (k, v) in r.headers.unwrap_or_default() {
+                let resolved = interpolate_host_env(&v, &r.name, &k, "mcp_server.headers")?;
+                headers.push((k, resolved));
+            }
+            headers.sort_by(|a, b| a.0.cmp(&b.0));
+            // `headers` is for the remote transports — a stdio server
+            // has no HTTP request to attach them to.
+            if transport == McpTransportKind::Stdio && !headers.is_empty() {
+                return Err(ConfigError::Invalid {
+                    field: "mcp_server.headers",
+                    reason: format!(
+                        "server {:?}: `headers` is for the sse/http transports only \
+                         (a stdio server has no HTTP request to attach them to)",
+                        r.name,
+                    ),
+                });
+            }
             mcp_servers.push(McpServerConfig {
                 name: r.name,
                 transport,
                 command: r.command,
                 args: r.args.unwrap_or_default(),
                 env,
+                headers,
                 url: r.url,
                 enabled: true,
                 bundled: r.bundled,
@@ -6986,6 +7014,7 @@ fn interpolate_host_env(
     raw: &str,
     server: &str,
     key: &str,
+    field: &'static str,
 ) -> Result<String, ConfigError> {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -6998,25 +7027,25 @@ fn interpolate_host_env(
             rest = stripped;
         } else if after.starts_with("${") {
             let close = after.find('}').ok_or_else(|| ConfigError::Invalid {
-                field: "mcp_server.env",
+                field,
                 reason: format!(
-                    "server {server:?}: env `{key}` has an unterminated `${{` \
+                    "server {server:?}: `{key}` has an unterminated `${{` \
                      (expected `${{VAR}}`)"
                 ),
             })?;
             let var = &after[2..close];
             if var.is_empty() {
                 return Err(ConfigError::Invalid {
-                    field: "mcp_server.env",
+                    field,
                     reason: format!(
-                        "server {server:?}: env `{key}` has an empty `${{}}` reference"
+                        "server {server:?}: `{key}` has an empty `${{}}` reference"
                     ),
                 });
             }
             let val = std::env::var(var).map_err(|_| ConfigError::Invalid {
-                field: "mcp_server.env",
+                field,
                 reason: format!(
-                    "server {server:?}: env `{key}` references `${{{var}}}`, which is \
+                    "server {server:?}: `{key}` references `${{{var}}}`, which is \
                      unset in the daemon environment"
                 ),
             })?;
