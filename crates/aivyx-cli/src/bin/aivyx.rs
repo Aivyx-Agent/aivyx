@@ -1472,74 +1472,13 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------
-// Chapter Conduit (CD.3) — MCP startup status snapshot.
-//
-// The daemon writes this at the end of its MCP startup loop; `aivyx mcp
-// status` reads it. A snapshot (not a live IPC query) keeps the surface
-// small — no protocol-crate change — and answers the question that
-// matters when adding a server: "did it connect, and if not, why?"
+// Chapter Conduit (CD.3) — MCP startup status. The snapshot type + the
+// path/read/write helpers live in `aivyx_channel::mcp_status` (Chapter
+// Lantern LN.1 lifted them there so the daemon's `GetMcpStatus` handler,
+// the Studio screen, and this CLI all share one definition). This binary
+// keeps only the CLI display: the startup-log stderr formatter and the
+// `aivyx mcp status` renderer.
 // ---------------------------------------------------------------------
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct McpServerStatus {
-    name: String,
-    transport: String,
-    connected: bool,
-    tool_count: usize,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
-    stderr_tail: Vec<String>,
-}
-
-impl McpServerStatus {
-    fn ok(name: &str, transport: &str, tool_count: usize) -> Self {
-        Self {
-            name: name.to_string(),
-            transport: transport.to_string(),
-            connected: true,
-            tool_count,
-            error: None,
-            stderr_tail: Vec::new(),
-        }
-    }
-    fn failed(name: &str, transport: &str, error: String, stderr_tail: Vec<String>) -> Self {
-        Self {
-            name: name.to_string(),
-            transport: transport.to_string(),
-            connected: false,
-            tool_count: 0,
-            error: Some(error),
-            stderr_tail,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct McpStatusSnapshot {
-    /// Unix seconds at which the daemon wrote this snapshot.
-    captured_unix: u64,
-    servers: Vec<McpServerStatus>,
-}
-
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// Shared path for the snapshot: `$XDG_DATA_HOME/aivyx/mcp-status.json`
-/// (or `$HOME/.local/share/aivyx/…`), beside the store. `None` if
-/// neither env var is set (no writable home — skip silently).
-fn mcp_status_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })?;
-    Some(base.join("aivyx").join("mcp-status.json"))
-}
 
 /// Append a captured-stderr tail to a one-line startup error message.
 fn format_stderr_tail(tail: &[String]) -> String {
@@ -1555,43 +1494,26 @@ fn format_stderr_tail(tail: &[String]) -> String {
     s
 }
 
-fn write_mcp_status_snapshot(servers: &[McpServerStatus]) -> std::io::Result<()> {
-    let Some(path) = mcp_status_path() else {
-        return Ok(()); // no home — nothing to write to
-    };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let snapshot = McpStatusSnapshot {
-        captured_unix: unix_now(),
-        servers: servers.to_vec(),
-    };
-    let json = serde_json::to_string_pretty(&snapshot).map_err(std::io::Error::other)?;
-    std::fs::write(&path, json)
-}
-
 /// `aivyx mcp status` — render the daemon's last MCP startup snapshot.
 fn run_mcp_status() -> Result<(), String> {
-    let Some(path) = mcp_status_path() else {
-        return Err("cannot resolve the status path (neither $XDG_DATA_HOME nor $HOME is set)".into());
-    };
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    use aivyx_channel::mcp_status;
+    let snapshot = match mcp_status::read_snapshot() {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            let where_ = mcp_status::snapshot_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<no $XDG_DATA_HOME / $HOME>".to_string());
             println!(
-                "No MCP status recorded yet ({}).\n\
+                "No MCP status recorded yet ({where_}).\n\
                  Start the daemon with at least one `[[mcp_server]]` configured, \
                  then re-run `aivyx mcp status`.",
-                path.display(),
             );
             return Ok(());
         }
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+        Err(e) => return Err(format!("reading the MCP status snapshot: {e}")),
     };
-    let snapshot: McpStatusSnapshot =
-        serde_json::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
 
-    let age = unix_now().saturating_sub(snapshot.captured_unix);
+    let age = mcp_status::unix_now().saturating_sub(snapshot.captured_unix);
     if snapshot.servers.is_empty() {
         println!("No MCP servers were configured at the last daemon start ({age}s ago).");
         return Ok(());
@@ -5873,7 +5795,7 @@ async fn run_async(
     // `aivyx mcp status`.
     let mut mcp_stderr_logs: std::collections::HashMap<String, aivyx_mcp::StderrLog> =
         std::collections::HashMap::new();
-    let mut mcp_status_entries: Vec<McpServerStatus> = Vec::new();
+    let mut mcp_status_entries: Vec<aivyx_channel::mcp_status::McpServerStatusView> = Vec::new();
     for mcp_cfg in &mcp_servers {
         let bridge_result = match mcp_cfg.transport {
             aivyx_config::McpTransportKind::Stdio => {
@@ -5966,7 +5888,7 @@ async fn run_async(
                             "aivyx: MCP server {:?} ({transport_label}) — {} tool(s) registered",
                             mcp_cfg.name, count,
                         );
-                        mcp_status_entries.push(McpServerStatus::ok(
+                        mcp_status_entries.push(aivyx_channel::mcp_status::McpServerStatusView::connected(
                             &mcp_cfg.name,
                             transport_label,
                             count,
@@ -5979,7 +5901,7 @@ async fn run_async(
                             mcp_cfg.name,
                             format_stderr_tail(&tail),
                         );
-                        mcp_status_entries.push(McpServerStatus::failed(
+                        mcp_status_entries.push(aivyx_channel::mcp_status::McpServerStatusView::failed(
                             &mcp_cfg.name,
                             transport_label,
                             format!("tool discovery failed: {e}"),
@@ -5996,7 +5918,7 @@ async fn run_async(
                     mcp_cfg.name,
                     format_stderr_tail(&tail),
                 );
-                mcp_status_entries.push(McpServerStatus::failed(
+                mcp_status_entries.push(aivyx_channel::mcp_status::McpServerStatusView::failed(
                     &mcp_cfg.name,
                     transport_label,
                     format!("failed to start: {e}"),
@@ -6007,7 +5929,7 @@ async fn run_async(
     }
     // Chapter Conduit (CD.3) — persist the snapshot for `aivyx mcp
     // status`. Best-effort: a write failure must not abort startup.
-    if let Err(e) = write_mcp_status_snapshot(&mcp_status_entries) {
+    if let Err(e) = aivyx_channel::mcp_status::write_snapshot(&mcp_status_entries) {
         eprintln!("aivyx: could not write MCP status snapshot: {e}");
     }
 
@@ -8803,27 +8725,9 @@ mod tests {
         assert!(err.contains("status"), "got: {err}");
     }
 
-    #[test]
-    fn mcp_status_snapshot_roundtrips() {
-        let snap = McpStatusSnapshot {
-            captured_unix: 1_782_000_000,
-            servers: vec![
-                McpServerStatus::ok("github", "stdio", 26),
-                McpServerStatus::failed(
-                    "broken",
-                    "stdio",
-                    "failed to start: spawn MCP server `npx`: not found".to_string(),
-                    vec!["npm ERR! could not determine executable".to_string()],
-                ),
-            ],
-        };
-        let json = serde_json::to_string(&snap).expect("serialize");
-        let back: McpStatusSnapshot = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.servers.len(), 2);
-        assert!(back.servers[0].connected && back.servers[0].tool_count == 26);
-        assert!(!back.servers[1].connected);
-        assert_eq!(back.servers[1].stderr_tail.len(), 1);
-    }
+    // (The snapshot serde round-trip is covered by
+    // `aivyx_channel::mcp_status::tests::snapshot_write_read_and_absent`,
+    // the shared home the types moved to in Chapter Lantern LN.1.)
 
     #[test]
     fn format_stderr_tail_caps_to_five_lines() {

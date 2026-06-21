@@ -255,6 +255,12 @@ pub enum QueryPayload {
     /// (decayed EWMA + samples), plus the count of pending skill proposals.
     /// Read-only. Responds with [`QueryResponsePayload::GetSkills`].
     GetSkills,
+    /// Chapter Lantern — the Studio MCP screen: each configured MCP
+    /// server's last-start health (connected + tool count, or failed +
+    /// reason + captured stderr), read from the daemon's status
+    /// snapshot. Read-only. Responds with
+    /// [`QueryResponsePayload::GetMcpStatus`].
+    GetMcpStatus,
     /// Phase 78 — read-only learning-observability query.
     /// `window_secs = None` → the handler's default lookback.
     /// `#[serde(default)]` so older clients/frames decode.
@@ -534,6 +540,54 @@ pub struct SkillView {
     pub invocations: u32,
 }
 
+/// Chapter Lantern — one MCP server's last-start health for the Studio
+/// MCP screen. Mirrors the daemon's status snapshot (Chapter Conduit
+/// CD.3): `connected` with a `tool_count`, or failed with an `error`
+/// and the last lines of captured `stderr`. Wasm-clean (the Studio
+/// renders it directly).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerStatusView {
+    pub name: String,
+    /// `"stdio"`, `"sse"`, or `"http"`.
+    pub transport: String,
+    pub connected: bool,
+    /// Tools the server registered when connected; `0` if it failed.
+    pub tool_count: usize,
+    /// Failure reason (`None` when connected).
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Last captured stderr lines (stdio servers; empty otherwise).
+    #[serde(default)]
+    pub stderr_tail: Vec<String>,
+}
+
+impl McpServerStatusView {
+    /// A server that connected and registered `tool_count` tools.
+    pub fn connected(name: &str, transport: &str, tool_count: usize) -> Self {
+        Self {
+            name: name.to_string(),
+            transport: transport.to_string(),
+            connected: true,
+            tool_count,
+            error: None,
+            stderr_tail: Vec::new(),
+        }
+    }
+
+    /// A server that failed to start or discover, with the reason and
+    /// any captured stderr.
+    pub fn failed(name: &str, transport: &str, error: String, stderr_tail: Vec<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            transport: transport.to_string(),
+            connected: false,
+            tool_count: 0,
+            error: Some(error),
+            stderr_tail,
+        }
+    }
+}
+
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
 /// [`DaemonMessage::QueryResponse`] with the same correlation `id`
 /// the query was sent with.
@@ -671,6 +725,14 @@ pub enum QueryResponsePayload {
     GetSkills {
         skills: Vec<SkillView>,
         pending_proposals: usize,
+    },
+    /// Chapter Lantern — response to [`QueryPayload::GetMcpStatus`]: each
+    /// configured MCP server's last-start health, plus the unix time the
+    /// snapshot was captured (`0` when no snapshot exists yet — the
+    /// daemon hasn't started with any `[[mcp_server]]` configured).
+    GetMcpStatus {
+        captured_unix: u64,
+        servers: Vec<McpServerStatusView>,
     },
     /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
     /// Newest-first paginated entries for one topic.

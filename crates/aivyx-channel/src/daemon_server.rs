@@ -3656,6 +3656,16 @@ async fn handle_query(
                 roster: svc.team_config(),
             }
         }
+        QueryPayload::GetMcpStatus => {
+            // Chapter Lantern — the Studio MCP screen. Read the daemon's
+            // last-start status snapshot (Chapter Conduit CD.3). Absent or
+            // unreadable → an empty board (captured_unix 0), never an error.
+            let snapshot = crate::mcp_status::read_snapshot().ok().flatten();
+            let (captured_unix, servers) = snapshot
+                .map(|s| (s.captured_unix, s.servers))
+                .unwrap_or((0, Vec::new()));
+            QueryResponsePayload::GetMcpStatus { captured_unix, servers }
+        }
         QueryPayload::ListDir { root, path } => {
             // Chapter Z — read-only directory listing, scoped + escape-guarded.
             let dir = match resolve_document_root(document_roots, &root) {
