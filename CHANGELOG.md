@@ -5,6 +5,51 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-21
+
+The toolbox release. Three chapters **widen what the agent can do** without
+touching the security model: a pack of exact pure-compute utilities, readers
+that turn operator files into legible structured content, and the wiring that
+makes the whole MCP server ecosystem an operator-config story. None adds a P10
+substrate amendment or a new capability surface beyond what each tier already
+allows.
+
+### Added
+
+- **Utilities pack (Chapter Abacus).** Five exact, deterministic helpers a
+  language model is structurally bad at doing in its head, in the existing
+  `aivyx-toolkit` process: **`calc.eval`** (a hand-rolled, zero-dependency
+  arithmetic evaluator — `+ - * / % ^`, parens, `sqrt/abs/round/floor/ceil/
+  min/max`), **`convert.units`** + **`convert.time`** (length/mass/temperature/
+  volume/digital via a curated table, and IANA-timezone conversion via
+  `chrono-tz`), and **`date.diff`** + **`date.add`** (calendar-correct date
+  arithmetic). Three group bases (`calc.eval`, `convert.units`, `date.compute`)
+  — the **first toolkit surface reachable below the Trusted tier** (SemiTrusted),
+  because pure compute touches no network, filesystem, or operator data.
+- **Structured-data readers (Chapter Sheaf).** Three tools in the new
+  `aivyx-dataread` crate that turn a file the agent can already reach into
+  legible structured content — the file analogue of `web.extract`:
+  **`data.csv`** (delimited text → rows), **`data.xlsx`** (a spreadsheet's
+  binary zip+XML, which `fs.read` cannot expose, via `calamine`), and
+  **`data.pdf`** (a PDF's text layer via `pdf-extract`, no OCR). Each **reuses
+  the existing `fs.read` capability and sandbox** — it only parses bytes the
+  agent could already read, so it adds no new capability base and no new I/O
+  reach (infrastructure tier, no P10 amendment).
+- **MCP servers that actually work, especially keyed ones (Chapter Conduit).**
+  The MCP client could connect to servers but not *authenticate* to them, and a
+  misconfigured server failed silently. Conduit adds **`[[mcp_server]] env`**
+  (secrets to a stdio child — the GitHub MCP server's
+  `GITHUB_PERSONAL_ACCESS_TOKEN` was previously unconfigurable) and
+  **`[[mcp_server]] headers`** (e.g. `Authorization: Bearer` to a remote server,
+  never overriding protocol-reserved headers), both with **`${VAR}`
+  interpolation** resolved from the daemon environment so secrets stay out of
+  `aivyx.toml`. Stdio **stderr is now captured** (last 50 lines) instead of
+  discarded, and **`aivyx mcp status`** reports each configured server as
+  connected (with its tool count) or failed (with the reason and captured
+  stderr). No new capability base, P10 amendment, or dependency — the
+  GitHub/weather/Google-Tasks integrations are now operator config, not in-tree
+  builds.
+
 ## [0.5.0] — 2026-06-21
 
 The local tool-calling release. A small local model (an in-process GGUF on the

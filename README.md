@@ -12,13 +12,13 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
-## Status (v0.5.0 — source-available, BUSL-1.1, 2026-06-21)
+## Status (v0.6.0 — source-available, BUSL-1.1, 2026-06-21)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), and Repertoire (a Studio Skills library showing every skill + its effectiveness) — and 15 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), Repertoire (a Studio Skills library showing every skill + its effectiveness), Stencil + Bridle + Emboss (reliable local tool-calling via grammar-constrained decoding on both local engines), Abacus (a pure-compute utilities pack — calc / unit + timezone convert / date math), Sheaf (structured-data readers — CSV / XLSX / PDF over `fs.read`), and Conduit (operator-added MCP servers that work — `env` / `headers` / `aivyx mcp status`) — and 15 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.5.0`** (the local tool-calling release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
+| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.6.0`** (the toolbox release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Wiki (knowledge pages) · Graph (typed knowledge graph) · Skills (the skill library) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 33 |
 | Rust tests | 4,921 passing |
@@ -173,17 +173,18 @@ recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
 
 ### What's next
 
-The latest arc (v0.5.0) made a **small local model reliably drive the agent
-loop** — grammar-constrained tool calls (Chapter Stencil) and the harness that
-keeps the model from running away (Chapter Bridle). From here:
+The latest arc (v0.6.0, the toolbox release) **widened what the agent can do**:
+a pure-compute utilities pack (Chapter Abacus), structured-data readers over
+`fs.read` (Chapter Sheaf), and the wiring that turns the whole MCP server
+ecosystem into an operator-config story — secrets, headers, and `aivyx mcp
+status` (Chapter Conduit). That last one reframes "new integrations": GitHub,
+weather, Google Tasks and the rest are now a few lines of `[[mcp_server]]`
+config, not in-tree builds. From here:
 
 - **GPU-accelerated local inference.** The in-process mistral.rs path runs on
   CPU today; a CUDA backend is a build-flag away once the upstream
   `cudarc`/`mistralrs` stack supports newer CUDA toolkits — the one tracked
   blocker on a fast local on-ramp.
-- **Local tool-calling, hardened further.** Carry the grammar approach to the
-  `llama-server` `/completion` path (GBNF), and let the breaker and `respond`
-  preamble inform a lighter-weight prompt strategy for non-constrained backends.
 - **Verticals as packs.** The free PA core stays the substrate; domain crews
   ship as **vertical packs** (a Nonagon team + tools over a `TeamConfig`), with
   the Kitchen BOH pack as the working template.
@@ -194,7 +195,7 @@ real need.
 ## Release pipeline status
 
 The release pipeline is **active** on the public repo. The latest
-release is `v0.5.0` (the local tool-calling release):
+release is `v0.6.0` (the toolbox release):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
   for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
