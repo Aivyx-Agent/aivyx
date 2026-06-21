@@ -20,10 +20,15 @@
 //!   `convert.time`, pure-compute unit + timezone conversion
 //!   (both gated by the `convert.units` group scope,
 //!   SemiTrusted-reachable).
+//! - [`date`] — Chapter Abacus (AB.3): `date.diff` + `date.add`,
+//!   calendar-correct date arithmetic (both gated by the
+//!   `date.compute` group scope, SemiTrusted-reachable; a missing
+//!   date defaults to now — the pack's one clock dependence).
 
 pub mod budget;
 pub mod calc;
 pub mod convert;
+pub mod date;
 pub mod health_check;
 pub mod tasks;
 pub mod web_search;
@@ -34,6 +39,7 @@ pub use budget::{
 };
 pub use calc::CalcEval;
 pub use convert::{ConvertTime, ConvertUnits};
+pub use date::{DateAdd, DateDiff};
 pub use health_check::{
     HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove,
 };

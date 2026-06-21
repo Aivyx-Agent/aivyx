@@ -211,6 +211,7 @@ base, Trusted-tier only. See the Lattice addendum in
 | `budget.record` / `budget.summary` | `budget.write`, `budget.read` | Trusted | personal budget tracking |
 | `calc.eval` | `calc.eval` | SemiTrusted | exact arithmetic evaluator (Chapter Abacus — pure compute, no I/O, so reachable below Trusted) |
 | `convert.units` / `convert.time` | `convert.units` | SemiTrusted | unit conversion (length/mass/temp/volume/digital) + IANA-timezone conversion (Chapter Abacus — pure compute; one group base) |
+| `date.diff` / `date.add` | `date.compute` | SemiTrusted | calendar-correct date arithmetic (signed span; add/subtract a duration) — Chapter Abacus; a missing date defaults to now |
 
 ## Kitchen vertical (tool process `aivyx-kitchen`)
 

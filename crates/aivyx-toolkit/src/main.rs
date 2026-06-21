@@ -13,15 +13,16 @@
 //! 4. Spawn the health polling loop in a background tokio
 //!    task (tokio aborts it when main returns on
 //!    ToolShutdown).
-//! 5. Register all 18 tools into a single
+//! 5. Register all 20 tools into a single
 //!    `Vec<Arc<dyn Tool>>` and hand to
 //!    `run_multi_tool_subprocess`. Phase 125
 //!    shipped 8 tools; Phases 143, 144, 147,
 //!    149, 150 expanded the surface with
 //!    budget CRUD + trend + categories +
 //!    health.check.remove; Chapter Abacus
-//!    adds calc.eval (AB.1) + convert.units
-//!    + convert.time (AB.2).
+//!    adds calc.eval (AB.1) + convert.units +
+//!    convert.time (AB.2) + date.diff +
+//!    date.add (AB.3).
 //!
 //! Operator-facing failure modes are surfaced at startup
 //! (missing config file, $HOME unset, etc) with operator-
@@ -39,9 +40,9 @@ use aivyx_toolkit::health_store::HealthStore;
 use aivyx_toolkit::task_store::TaskStore;
 use aivyx_toolkit::tools::{
     BudgetCategoriesTool, BudgetDelete, BudgetRecord, BudgetSummaryTool,
-    BudgetTrendTool, BudgetUpdate, CalcEval, ConvertTime, ConvertUnits, HealthCheckAdd,
-    HealthCheckList, HealthCheckRecentChanges, HealthCheckRemove, TaskComplete,
-    TaskCreate, TaskDelete, TaskList, WebSearch,
+    BudgetTrendTool, BudgetUpdate, CalcEval, ConvertTime, ConvertUnits, DateAdd,
+    DateDiff, HealthCheckAdd, HealthCheckList, HealthCheckRecentChanges,
+    HealthCheckRemove, TaskComplete, TaskCreate, TaskDelete, TaskList, WebSearch,
 };
 use aivyx_toolkit::{run_multi_tool_subprocess, ToolkitConfig};
 
@@ -145,9 +146,12 @@ async fn main() -> ExitCode {
         // Chapter Abacus — pure-compute utilities. No store, no keys,
         // no network; SemiTrusted-reachable (see docs/ABACUS.md §2).
         // AB.1: calc.eval. AB.2: convert.units + convert.time.
+        // AB.3: date.diff + date.add.
         Arc::new(CalcEval::new()),
         Arc::new(ConvertUnits::new()),
         Arc::new(ConvertTime::new()),
+        Arc::new(DateDiff::new()),
+        Arc::new(DateAdd::new()),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-toolkit").await {

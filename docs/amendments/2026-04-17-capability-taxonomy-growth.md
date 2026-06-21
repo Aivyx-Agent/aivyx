@@ -725,6 +725,32 @@ group base). The `known_bases_count_matches_phase_143_a3_addendum`
 test pins the new total at **89**, so this addendum and the runtime stay
 in sync.
 
+## Chapter Abacus addendum — `date.compute` (AB.3) (2026-06-21)
+
+> *Added at Chapter Abacus AB.3, the date group of the utilities pack.
+> One base, `date.compute`, gates **both** date tools — `date.diff`
+> (the signed span between two instants) and `date.add` (add a
+> possibly-negative duration to a date). Both reuse the existing
+> `chrono` dependency (no new dep). Same tool-process tier +
+> SemiTrusted floor as `calc.eval` / `convert.units`: they compute over
+> their inputs with no I/O, so no P10 substrate amendment and reachable
+> below Trusted. The one wrinkle, scoped to this group: a missing
+> date defaults to **now** (`Utc::now()`) — the pack's only clock
+> dependence — so the tools answer "from now" when no explicit date is
+> given. See docs/ABACUS.md §2.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Abacus | `date.compute` | AB.3 — gates `date.diff` + `date.add`, calendar-correct date arithmetic over `chrono`; tool-process tier (no P10 amendment), SemiTrusted-reachable (a missing date defaults to now) |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **89 → 90** (the one new `date.compute`
+group base). The `known_bases_count_matches_phase_143_a3_addendum`
+test pins the new total at **90**, so this addendum and the runtime stay
+in sync. *(Chapter Abacus is complete: three group bases — `calc.eval`,
+`convert.units`, `date.compute` — for the five-tool utilities pack.)*
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —
