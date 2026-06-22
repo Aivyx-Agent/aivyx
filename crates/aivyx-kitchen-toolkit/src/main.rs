@@ -17,7 +17,7 @@ use aivyx_core::Tool;
 use aivyx_kitchen_toolkit::config::{default_config_path, load_config};
 use aivyx_kitchen_toolkit::tools::{
     BatchComplete, BatchStart, InventoryAdjust, InventoryList, InventoryLowStock,
-    InventoryValue, RecipeSearch, SupplierList,
+    InventoryValue, OrderSend, RecipeSearch, SupplierList,
 };
 use aivyx_kitchen_toolkit::{run_multi_tool_subprocess, KitchenClient};
 
@@ -57,6 +57,8 @@ async fn main() -> ExitCode {
         Arc::new(InventoryAdjust::new(Arc::clone(&client))),
         Arc::new(BatchStart::new(Arc::clone(&client))),
         Arc::new(BatchComplete::new(Arc::clone(&client))),
+        // BG.3 — kitchen.order.send (confirm-first).
+        Arc::new(OrderSend::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-kitchen-toolkit").await {

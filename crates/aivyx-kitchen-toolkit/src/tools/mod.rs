@@ -17,11 +17,13 @@ use crate::client::KitchenClient;
 
 mod batch;
 mod inventory;
+mod order;
 mod recipe;
 mod supplier;
 
 pub use batch::{BatchComplete, BatchStart};
 pub use inventory::{InventoryAdjust, InventoryList, InventoryLowStock, InventoryValue};
+pub use order::OrderSend;
 pub use recipe::RecipeSearch;
 pub use supplier::SupplierList;
 
@@ -35,6 +37,13 @@ pub(crate) fn kitchen_read_scope() -> Scope {
 /// lifecycle). `kitchen.write` is already in `KNOWN_BASES`.
 pub(crate) fn kitchen_write_scope() -> Scope {
     Scope::parse("kitchen.write").expect("kitchen.write is in KNOWN_BASES")
+}
+
+/// The scope for `kitchen.order.send` (BG.3) — the confirm-first PO dispatch.
+/// Its own base (separate from `kitchen.write`) so a roster can grant stock
+/// edits without granting the power to place orders. Already in `KNOWN_BASES`.
+pub(crate) fn kitchen_order_send_scope() -> Scope {
+    Scope::parse("kitchen.order.send").expect("kitchen.order.send is in KNOWN_BASES")
 }
 
 /// Run a write RPC and build the tool outcome. The KitchenDB response (the
