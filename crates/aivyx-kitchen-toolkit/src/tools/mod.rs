@@ -16,12 +16,14 @@ use aivyx_core::{AivyxError, ToolContext, ToolId, ToolOutcome, Verification};
 use crate::client::KitchenClient;
 
 mod batch;
+mod haccp;
 mod inventory;
 mod order;
 mod recipe;
 mod supplier;
 
 pub use batch::{BatchComplete, BatchStart};
+pub use haccp::HaccpLog;
 pub use inventory::{InventoryAdjust, InventoryList, InventoryLowStock, InventoryValue};
 pub use order::OrderSend;
 pub use recipe::RecipeSearch;
@@ -44,6 +46,13 @@ pub(crate) fn kitchen_write_scope() -> Scope {
 /// edits without granting the power to place orders. Already in `KNOWN_BASES`.
 pub(crate) fn kitchen_order_send_scope() -> Scope {
     Scope::parse("kitchen.order.send").expect("kitchen.order.send is in KNOWN_BASES")
+}
+
+/// The scope for `kitchen.haccp.log` (BG.4) — append-only food-safety logging.
+/// Its own base so the compliance specialist can hold ONLY this. Already in
+/// `KNOWN_BASES`.
+pub(crate) fn kitchen_haccp_scope() -> Scope {
+    Scope::parse("kitchen.haccp.log").expect("kitchen.haccp.log is in KNOWN_BASES")
 }
 
 /// Run a write RPC and build the tool outcome. The KitchenDB response (the

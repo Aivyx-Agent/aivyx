@@ -13,13 +13,8 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use aivyx_core::Tool;
 use aivyx_kitchen_toolkit::config::{default_config_path, load_config};
-use aivyx_kitchen_toolkit::tools::{
-    BatchComplete, BatchStart, InventoryAdjust, InventoryList, InventoryLowStock,
-    InventoryValue, OrderSend, RecipeSearch, SupplierList,
-};
-use aivyx_kitchen_toolkit::{run_multi_tool_subprocess, KitchenClient};
+use aivyx_kitchen_toolkit::{all_tools, run_multi_tool_subprocess, KitchenClient};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -46,22 +41,7 @@ async fn main() -> ExitCode {
         db.organization_id,
     ));
 
-    let tools: Vec<Arc<dyn Tool>> = vec![
-        // BG.1 — kitchen.read.
-        Arc::new(InventoryList::new(Arc::clone(&client))),
-        Arc::new(InventoryLowStock::new(Arc::clone(&client))),
-        Arc::new(InventoryValue::new(Arc::clone(&client))),
-        Arc::new(RecipeSearch::new(Arc::clone(&client))),
-        Arc::new(SupplierList::new(Arc::clone(&client))),
-        // BG.2 — kitchen.write.
-        Arc::new(InventoryAdjust::new(Arc::clone(&client))),
-        Arc::new(BatchStart::new(Arc::clone(&client))),
-        Arc::new(BatchComplete::new(Arc::clone(&client))),
-        // BG.3 — kitchen.order.send (confirm-first).
-        Arc::new(OrderSend::new(Arc::clone(&client))),
-    ];
-
-    match run_multi_tool_subprocess(tools, "aivyx-kitchen-toolkit").await {
+    match run_multi_tool_subprocess(all_tools(client), "aivyx-kitchen-toolkit").await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-kitchen-toolkit: harness exited with error: {e}");

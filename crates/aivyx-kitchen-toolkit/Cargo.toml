@@ -44,6 +44,9 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time", "io-util", "net"] }
+# Coherence test only — the BOH pack's kitchen.* tool names must match the names
+# this toolkit provides. aivyx-kitchen does not depend on this crate (no cycle).
+aivyx-kitchen = { path = "../aivyx-kitchen" }
 
 # Excluded from `dist` releases — only the top-level `aivyx` binary is published
 # as a release artifact. This tool-process binary ships with the daemon / is

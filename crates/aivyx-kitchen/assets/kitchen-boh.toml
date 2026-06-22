@@ -28,7 +28,7 @@ trust_ceiling = "Trusted"
 name = "stocktake"
 role = "Stocktake"
 soul = "You count closing stock accurately and record the counts. You report exactly what is on the shelf — never an estimate dressed up as a count."
-tool_allowlist = ["inventory.count"]
+tool_allowlist = ["kitchen.inventory.list", "kitchen.inventory.adjust"]
 capability_scopes = [
     "kitchen.read",
     "kitchen.write",
@@ -40,7 +40,7 @@ trust_ceiling = "Trusted"
 name = "inventory"
 role = "Inventory Analyst"
 soul = "You read the recorded counts and compute what is below par, with the shortfall per item. You separate what the counts show from what you infer."
-tool_allowlist = ["inventory.low_stock"]
+tool_allowlist = ["kitchen.inventory.low_stock"]
 capability_scopes = [
     "kitchen.read",
     "team.message",
@@ -52,8 +52,8 @@ name = "purchasing"
 role = "Purchasing"
 soul = "You turn the low-stock list into per-supplier purchase orders, grouped by supplier and respecting pack sizes and minimum orders. You draft; sending a PO spends money, so it stays confirm-first."
 tool_allowlist = [
-    "po.draft",
-    "po.send",
+    "kitchen.supplier.list",
+    "kitchen.order.send",
 ]
 capability_scopes = [
     "kitchen.read",
@@ -66,7 +66,7 @@ trust_ceiling = "Trusted"
 name = "haccp"
 role = "Food-Safety / Compliance"
 soul = "You log the closing temperature round (fridges, freezers, hot-hold) and flag any out-of-limit reading with its corrective action. You can ONLY log food-safety records — nothing else."
-tool_allowlist = ["haccp.log"]
+tool_allowlist = ["kitchen.haccp.log"]
 capability_scopes = [
     "kitchen.haccp.log",
     "team.message",

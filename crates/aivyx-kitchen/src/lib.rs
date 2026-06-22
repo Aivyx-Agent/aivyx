@@ -62,7 +62,7 @@ pub fn kitchen_boh_team() -> TeamConfig {
             "Stocktake",
             "You count closing stock accurately and record the counts. You report exactly what \
              is on the shelf — never an estimate dressed up as a count.",
-            &["inventory.count"],
+            &["kitchen.inventory.list", "kitchen.inventory.adjust"],
             &["kitchen.read", "kitchen.write", "team.message"],
         ),
         member(
@@ -70,7 +70,7 @@ pub fn kitchen_boh_team() -> TeamConfig {
             "Inventory Analyst",
             "You read the recorded counts and compute what is below par, with the shortfall per \
              item. You separate what the counts show from what you infer.",
-            &["inventory.low_stock"],
+            &["kitchen.inventory.low_stock"],
             &["kitchen.read", "team.message"],
         ),
         member(
@@ -79,7 +79,7 @@ pub fn kitchen_boh_team() -> TeamConfig {
             "You turn the low-stock list into per-supplier purchase orders, grouped by supplier \
              and respecting pack sizes and minimum orders. You draft; sending a PO spends money, \
              so it stays confirm-first.",
-            &["po.draft", "po.send"],
+            &["kitchen.supplier.list", "kitchen.order.send"],
             &["kitchen.read", "kitchen.order.send", "team.message"],
         ),
         member(
@@ -88,7 +88,7 @@ pub fn kitchen_boh_team() -> TeamConfig {
             "You log the closing temperature round (fridges, freezers, hot-hold) and flag any \
              out-of-limit reading with its corrective action. You can ONLY log food-safety \
              records — nothing else.",
-            &["haccp.log"],
+            &["kitchen.haccp.log"],
             &["kitchen.haccp.log", "team.message"],
         ),
     ];
