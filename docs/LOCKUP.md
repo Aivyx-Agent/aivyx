@@ -80,7 +80,7 @@ deferred from Brigade BG.4); a second vertical.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **LK.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
-| **LK.1** | **`kitchen.order.draft` tool** | New tool in `aivyx-kitchen-toolkit` (order module): optional `items` (array of `{sku, quantity}`) + optional `notes` → `draft_purchase_order` (org-scoped; KitchenDB groups per-supplier). `kitchen.write` scope, **not** confirm-first, `run_write`. Added to `all_tools()` (→ 11 tools). Param-mapping + name/scope tests. |
+| **LK.1** ✅ | **`kitchen.order.draft` tool** | DONE. New tool in `order.rs`: optional `items` (array of `{sku, quantity}`, each validated to non-empty sku + positive qty) + optional `notes` → `draft_purchase_order` (no items → empty params, KitchenDB auto-drafts from low-stock; client injects `p_organization_id`). **`kitchen.write` scope** (not confirm-first; the confirm-first boundary stays on `order.send`), `run_write`. Added to `all_tools()` (→ **11 tools**); the harness e2e + `all_tools` registry tests updated to 11. +5 tests (empty/items+notes mapping, bad-items rejects, name/scope-is-write). Crate at 45 tests + coherence + e2e; clippy `-D warnings` green. |
 | **LK.2** | **Wire purchasing + prove the loop + finalize** | Add `kitchen.write` scope + `kitchen.order.draft` to purchasing in `kitchen_boh_team()` + `kitchen-boh.toml`; extend `boh_coherence.rs`; add a "no dead step" mission test (every `overnight_close_mission()` delegate step's specialist holds a fulfilling `kitchen.*` tool). Live overnight-close runbook. Full workspace suite + clippy `-D warnings` + `cargo deny`; chapter memory; status → COMPLETE. |
 
 **Discipline:** `kitchen.order.draft` reuses the BG.1 client + BG.2 `run_write` —

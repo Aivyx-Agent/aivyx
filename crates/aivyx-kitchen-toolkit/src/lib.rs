@@ -30,8 +30,9 @@ pub use config::{default_config_path, load_config, KitchenConfig, KitchenDbConfi
 
 /// The full `kitchen.*` tool surface, in one place so the binary and the
 /// coherence tests register the identical set. BG.1 read + BG.2 write + BG.3
-/// order + BG.4 HACCP — nine tools across four scope bases (`kitchen.read`,
-/// `kitchen.write`, `kitchen.order.send`, `kitchen.haccp.log`).
+/// order.send + BG.4 HACCP + LK.1 order.draft — eleven tools across four scope
+/// bases (`kitchen.read`, `kitchen.write`, `kitchen.order.send`,
+/// `kitchen.haccp.log`).
 pub fn all_tools(client: Arc<KitchenClient>) -> Vec<Arc<dyn Tool>> {
     vec![
         // kitchen.read
@@ -44,6 +45,7 @@ pub fn all_tools(client: Arc<KitchenClient>) -> Vec<Arc<dyn Tool>> {
         Arc::new(tools::InventoryAdjust::new(Arc::clone(&client))),
         Arc::new(tools::BatchStart::new(Arc::clone(&client))),
         Arc::new(tools::BatchComplete::new(Arc::clone(&client))),
+        Arc::new(tools::OrderDraft::new(Arc::clone(&client))),
         // kitchen.order.send (confirm-first)
         Arc::new(tools::OrderSend::new(Arc::clone(&client))),
         // kitchen.haccp.log (append-only)
@@ -71,6 +73,7 @@ mod tests {
                 "kitchen.inventory.adjust",
                 "kitchen.batch.start",
                 "kitchen.batch.complete",
+                "kitchen.order.draft",
                 "kitchen.order.send",
                 "kitchen.haccp.log",
             ]

@@ -140,7 +140,7 @@ async fn real_binary_serves_inventory_list_over_the_harness() {
 
     // The harness registered the full kitchen surface.
     let descriptors = bridge.descriptors();
-    assert_eq!(descriptors.len(), 10, "expected 10 kitchen tools registered");
+    assert_eq!(descriptors.len(), 11, "expected 11 kitchen tools registered");
     let list = descriptors
         .iter()
         .find(|d| d.name == "kitchen.inventory.list")

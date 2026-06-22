@@ -25,7 +25,7 @@ mod supplier;
 pub use batch::{BatchComplete, BatchStart};
 pub use haccp::HaccpLog;
 pub use inventory::{InventoryAdjust, InventoryList, InventoryLowStock, InventoryValue};
-pub use order::OrderSend;
+pub use order::{OrderDraft, OrderSend};
 pub use recipe::RecipeSearch;
 pub use supplier::SupplierList;
 
