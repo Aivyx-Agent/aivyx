@@ -32,8 +32,8 @@ members = [
     "crates/aivyx-team",
     "crates/aivyx-team-types",
     "crates/aivyx-ipc",
-    "crates/aivyx-kitchen",
-    "crates/aivyx-kitchen-toolkit",
+    "crates/verticals/aivyx-kitchen",
+    "crates/verticals/aivyx-kitchen-toolkit",
     "crates/aivyx-cost",
     "crates/aivyx-web",
 ]
@@ -76,8 +76,8 @@ default-members = [
     "crates/aivyx-team",
     "crates/aivyx-team-types",
     "crates/aivyx-ipc",
-    "crates/aivyx-kitchen",
-    "crates/aivyx-kitchen-toolkit",
+    "crates/verticals/aivyx-kitchen",
+    "crates/verticals/aivyx-kitchen-toolkit",
     "crates/aivyx-cost",
 ]
 

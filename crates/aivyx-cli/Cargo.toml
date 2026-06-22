@@ -73,8 +73,8 @@ aivyx-dataread = { path = "../aivyx-dataread" }
 aivyx-team = { path = "../aivyx-team" }
 # Chapter Mise — `aivyx connect kitchen` plants the bundled BOH pack
 # (KITCHEN_BOH_TOML) and probes KitchenDB reachability via KitchenClient.
-aivyx-kitchen = { path = "../aivyx-kitchen" }
-aivyx-kitchen-toolkit = { path = "../aivyx-kitchen-toolkit" }
+aivyx-kitchen = { path = "../verticals/aivyx-kitchen" }
+aivyx-kitchen-toolkit = { path = "../verticals/aivyx-kitchen-toolkit" }
 # Chapter K — cost governance. `aivyx cost` prices the chain's LlmCost events.
 aivyx-cost = { path = "../aivyx-cost" }
 aivyx-config = { path = "../aivyx-config" }

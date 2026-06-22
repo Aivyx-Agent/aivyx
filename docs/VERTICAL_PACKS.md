@@ -47,7 +47,7 @@ A vertical pack is up to six things, each riding an existing primitive:
 The **Team** component is what makes a pack a *force multiplier*: the same
 free engine, shaped into a domain expert crew. The kitchen pack's BOH Nonagon
 (Aria + stocktake / inventory / purchasing / HACCP) is the worked example —
-see [`NONAGON.md`](NONAGON.md) §9 and `crates/aivyx-kitchen`.
+see [`NONAGON.md`](NONAGON.md) §9 and `crates/verticals/aivyx-kitchen`.
 
 The only Rust that changes outside the new crate is **additive scope
 bases** in `aivyx-capability` (exactly how `web.search`, `gmail.*`,

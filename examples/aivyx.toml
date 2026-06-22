@@ -1768,7 +1768,7 @@ parent_role = "researcher"
 # a different lead, tighter specialists, or a vertical pack like
 # the Kitchen BOH team — point `config_path` at a `[team]`-rooted
 # TOML file (the same shape `aivyx team run --config <file>` loads,
-# e.g. `crates/aivyx-kitchen/assets/kitchen-boh.toml`).
+# e.g. `crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`).
 #
 # A relative path is resolved against this `aivyx.toml`'s directory.
 # When unset, the daemon also looks for a conventional `team.toml`

@@ -33,7 +33,7 @@ The daemon reads its `TeamConfig` from a **dedicated `[team]`-rooted file** (def
 path: `team.toml` beside `aivyx.toml`; overridable via a single new pointer key
 `[team] config_path` in `aivyx.toml`). Absent file → fall back to
 `default_nonagon()` (today's behavior, byte-identical). This matches how packs
-already ship a team (`crates/aivyx-kitchen/assets/kitchen-boh.toml`) and how
+already ship a team (`crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`) and how
 `TeamConfig::load` already works — the team document is **self-contained** (`[team]`
 + `[[team.member]]` array-of-tables + `[team.dialogue]`), so it does not belong
 inside the hand-maintained `aivyx.toml`. The writer owns the *whole* file, which

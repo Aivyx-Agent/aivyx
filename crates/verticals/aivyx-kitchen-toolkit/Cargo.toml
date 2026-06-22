@@ -21,9 +21,9 @@ path = "src/main.rs"
 # Tool-process SDK — the multi-tool harness (Chapter F/G substrate pattern,
 # same as aivyx-toolkit / aivyx-gmail). The kitchen.* scope bases already live
 # in aivyx-capability's KNOWN_BASES, so this crate adds none.
-aivyx-tool = { path = "../aivyx-tool" }
-aivyx-core = { path = "../aivyx-core" }
-aivyx-capability = { path = "../aivyx-capability" }
+aivyx-tool = { path = "../../aivyx-tool" }
+aivyx-core = { path = "../../aivyx-core" }
+aivyx-capability = { path = "../../aivyx-capability" }
 
 # Async runtime — we ARE the child process; `io-util` for the harness frames,
 # `fs` for the config file.

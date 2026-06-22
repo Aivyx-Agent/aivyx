@@ -14,5 +14,5 @@ readme.workspace = true
 # A vertical pack is config over the free engine: the kitchen team is a
 # customised TeamConfig + a MissionPlan, both aivyx-team types. TrustTier
 # comes from aivyx-capability. NO substrate fork — packs inherit the engine.
-aivyx-team = { path = "../aivyx-team" }
-aivyx-capability = { path = "../aivyx-capability" }
+aivyx-team = { path = "../../aivyx-team" }
+aivyx-capability = { path = "../../aivyx-capability" }

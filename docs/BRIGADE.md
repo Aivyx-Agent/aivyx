@@ -152,7 +152,7 @@ command = "aivyx-kitchen-toolkit"
 
 **3. Run the BOH brigade on it** — point the team at the bundled pack (Chapter
 Roster's `[team] config_path`, or `aivyx team init --pack
-crates/aivyx-kitchen/assets/kitchen-boh.toml`):
+crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`):
 
 ```toml
 [team]

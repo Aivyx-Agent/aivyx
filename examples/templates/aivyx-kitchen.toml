@@ -10,7 +10,7 @@
 #   2. Create ~/.aivyx/tool-processes/kitchen/config.toml with your
 #      KitchenDB connection (postgrest_url, api_key, organization_id).
 #   3. Install the starter skills bundle (the kitchen routines) — see
-#      crates/aivyx-kitchen/src/pack.rs / `aivyx_kitchen::pack::skills_json()`.
+#      crates/verticals/aivyx-kitchen/src/pack.rs / `aivyx_kitchen::pack::skills_json()`.
 #
 # ----------------------------------------------------------------
 # Provider — default to local Ollama (no API key, no egress)
