@@ -1,6 +1,6 @@
 # Kitchen Toolkit — give the BOH brigade real tools (Chapter Brigade)
 
-> **Status:** 🟡 **PLANNED (BG.0–BG.5).** The first vertical pack's specialists
+> **Status:** ✅ **COMPLETE (BG.0–BG.5).** The first vertical pack's specialists
 > can lead, delegate, and talk — but they can't *act*: the BOH Nonagon
 > ([Chapter J](NONAGON.md) + the editable roster of [Chapter Roster](ROSTER.md))
 > declares `kitchen.*` scopes, yet **no `kitchen.*` tools exist**. Chapter Brigade
@@ -97,7 +97,7 @@ hosted KitchenDB (the operator runs their own).
 | **BG.2** ✅ | **Gated write tools** | DONE. 3 `kitchen.write` tools reusing the BG.1 client via a new `run_write` helper (wraps the KitchenDB row as `{<key>:v}`, `Verification::Unverified` — Ok from the DB, no separate confirming read): `kitchen.inventory.adjust` (`sku`+signed `delta`+optional `reason` → `adjust_inventory`), `kitchen.batch.start` (`recipe_id`+positive `quantity`+optional `notes` → `start_production_batch`), `kitchen.batch.complete` (`batch_id`+optional `actual_yield` → `complete_production_batch`). KitchenDB owns the batch state machine + stock math; the tools only map params. No new base (`kitchen.write` already in KNOWN_BASES). +8 tests (param mapping incl. required/positivity/type rejects + names/scopes); crate at 31 tests, clippy `-D warnings` green. |
 | **BG.3** ✅ | **PO dispatch (confirm-first)** | DONE. `kitchen.order.send` (own base, distinct from `kitchen.write` — a roster can grant stock edits without ordering power) dispatches a drafted PO (`purchase_order_id` + optional `notes` → `send_purchase_order`). A pure `decide_order` applies the gate: malformed → `Failed`; well-formed but unconfirmed → **`ToolOutcome::RequiresEscalation`** (the daemon turns it into a human gate; [Chapter H](HEADLESS_MODE.md) auto-blocks it); `confirmed: true` → the RPC. +5 tests (escalate-when-unconfirmed incl. `confirmed:false`, send-when-confirmed with trimming, hard-error-on-missing-id-even-when-confirmed, name/scope); crate at 36 tests, clippy `-D warnings` green. |
 | **BG.4** ✅ | **HACCP + registration** | DONE. `kitchen.haccp.log` (own base; append-only; `check_type` required + optional `value`/`unit`/`location`/`passed`/`notes` → `log_haccp_record`; one HMAC audit row per call = tamper-evident, no new `AuditEvent`). `all_tools()` registry (10 tools across 4 bases) shared by the binary + tests. **Reconciled the BOH pack** (`kitchen_boh_team()` + `kitchen-boh.toml`) — its specialist `tool_allowlist`s named aspirational tools (`inventory.count`/`po.draft`/`haccp.log`) that didn't exist; now name the real toolkit tools (stocktake→`kitchen.inventory.list`+`.adjust`, inventory→`.low_stock`, purchasing→`kitchen.supplier.list`+`kitchen.order.send`, haccp→`kitchen.haccp.log`). A cross-crate **coherence test** (`tests/boh_coherence.rs`, `aivyx-kitchen` dev-dep, no cycle) fails if the pack ever references a `kitchen.*` tool the toolkit doesn't provide. Registration recipe (§6) + crate at 41 tests, clippy `-D warnings` green. |
-| **BG.5** | **Finalize** | RPC + harness tests green; an end-to-end `multi_harness` IPC drive of the **real release binary** against a **mock PostgREST** (per [[chapter-abacus]] AB.5); an operator live-KitchenDB runbook; full workspace suite + clippy `-D warnings` + `cargo deny`; chapter memory; status → COMPLETE. |
+| **BG.5** ✅ | **Finalize** | DONE. `tests/harness_e2e.rs` drives the **real built `aivyx-kitchen-toolkit` binary** over the multi-tool harness (`ToolProcessBridge::spawn` + `ToolProxy::execute`, HOME pointed at a temp config) against an **in-process mock PostgREST**: registers all 10 tools, runs `kitchen.inventory.list`, asserts the shaped `{items,count}` — full config→register→IPC→RPC→shape path on a built artifact (graceful-skip if spawn is blocked). Operator live-KitchenDB runbook added (§7). Full workspace suite (103 ok suites, 0 failures) + clippy `-D warnings` + `cargo deny` green. |
 
 **Discipline:** the RPC client is structured so the request-build + JSON-parse halves
 are testable without a live server (a transport seam + canned fixtures); the live
@@ -164,6 +164,28 @@ names, **capability-attenuated to `declared ∩ lead`** at spawn (NT-02): stockt
 gets `kitchen.inventory.list` + `.adjust`, purchasing gets `kitchen.supplier.list`
 + the confirm-first `kitchen.order.send`, HACCP gets only `kitchen.haccp.log`.
 The `tests/boh_coherence.rs` drift guard keeps the pack and the toolkit in lockstep.
+
+## 7. Operator live-KitchenDB verification (runbook)
+
+In-tree tests run against an **in-process mock PostgREST** (`tests/harness_e2e.rs`
+drives the real binary end to end); the operator's live `kitchen_os_db` is a
+**runbook, not a CI dependency**. To verify against a real KitchenDB (~5 min):
+
+1. **Confirm the RPC names.** The toolkit assumes `get_inventory`,
+   `get_low_stock_items`, `get_inventory_value`, `search_recipes`,
+   `get_suppliers`, `adjust_inventory`, `start_production_batch`,
+   `complete_production_batch`, `send_purchase_order`, `log_haccp_record` —
+   each org-scoped via `p_organization_id` (OQ-3). Reconcile against
+   `\df public.*` in the live DB; rename the `*_FN` constants if they differ.
+2. **Write the config** (§6 step 1) with the live `base_url` / `api_key` /
+   `organization_id`.
+3. **Smoke a read** directly:
+   `curl -s -X POST "$BASE/rpc/get_inventory" -H "apikey: $KEY" \
+   -H 'Content-Type: application/json' -d '{"p_organization_id":"'$ORG'"}'` —
+   confirms the URL + key + tenant before the agent touches it.
+4. **Register** the `[[tool_process]]` (§6 step 2), restart the daemon, and ask
+   the agent (or run the BOH `team run` overnight-close) — `kitchen.inventory.*`
+   reads should return live rows; `kitchen.order.send` should pause for approval.
 
 ---
 
