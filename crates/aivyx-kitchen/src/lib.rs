@@ -79,8 +79,8 @@ pub fn kitchen_boh_team() -> TeamConfig {
             "You turn the low-stock list into per-supplier purchase orders, grouped by supplier \
              and respecting pack sizes and minimum orders. You draft; sending a PO spends money, \
              so it stays confirm-first.",
-            &["kitchen.supplier.list", "kitchen.order.send"],
-            &["kitchen.read", "kitchen.order.send", "team.message"],
+            &["kitchen.supplier.list", "kitchen.order.draft", "kitchen.order.send"],
+            &["kitchen.read", "kitchen.write", "kitchen.order.send", "team.message"],
         ),
         member(
             "haccp",

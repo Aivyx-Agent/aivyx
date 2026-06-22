@@ -53,10 +53,12 @@ role = "Purchasing"
 soul = "You turn the low-stock list into per-supplier purchase orders, grouped by supplier and respecting pack sizes and minimum orders. You draft; sending a PO spends money, so it stays confirm-first."
 tool_allowlist = [
     "kitchen.supplier.list",
+    "kitchen.order.draft",
     "kitchen.order.send",
 ]
 capability_scopes = [
     "kitchen.read",
+    "kitchen.write",
     "kitchen.order.send",
     "team.message",
 ]

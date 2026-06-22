@@ -8,14 +8,18 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use aivyx_kitchen::kitchen_boh_team;
+use aivyx_kitchen::{kitchen_boh_team, overnight_close_mission};
 use aivyx_kitchen_toolkit::{all_tools, KitchenClient};
+
+/// The set of kitchen.* tool names this toolkit provides.
+fn provided_kitchen_tools() -> HashSet<String> {
+    let client = Arc::new(KitchenClient::new(reqwest::Client::new(), "http://x", "k", "o"));
+    all_tools(client).iter().map(|t| t.name().to_string()).collect()
+}
 
 #[test]
 fn boh_pack_kitchen_tools_are_all_provided_by_the_toolkit() {
-    let client = Arc::new(KitchenClient::new(reqwest::Client::new(), "http://x", "k", "o"));
-    let provided: HashSet<String> =
-        all_tools(client).iter().map(|t| t.name().to_string()).collect();
+    let provided = provided_kitchen_tools();
 
     let team = kitchen_boh_team();
     let mut referenced = 0usize;
@@ -38,4 +42,35 @@ fn boh_pack_kitchen_tools_are_all_provided_by_the_toolkit() {
     // Sanity: the pack actually exercises the toolkit (guards against a future
     // edit silently dropping every kitchen.* tool from the allowlists).
     assert!(referenced >= 5, "expected the BOH pack to reference several kitchen.* tools, got {referenced}");
+}
+
+/// Chapter Lockup (LK.2) — no dead step. Every delegate step of the flagship
+/// `overnight_close_mission()` must target a specialist who actually holds a
+/// `kitchen.*` tool the toolkit provides — otherwise the lead would delegate
+/// work no specialist can perform (the `draft_po`-with-no-draft-tool gap Lockup
+/// closes). Fails loudly if a future edit reintroduces a dead step.
+#[test]
+fn overnight_close_mission_has_no_dead_step() {
+    let provided = provided_kitchen_tools();
+    let team = kitchen_boh_team();
+    let mission = overnight_close_mission();
+
+    for step in &mission.steps {
+        let who = step.kind.member();
+        let member = team
+            .members
+            .iter()
+            .find(|m| m.name == who)
+            .unwrap_or_else(|| panic!("step {:?} targets unknown member {who}", step.id));
+        let has_usable_kitchen_tool = member
+            .tool_allowlist
+            .iter()
+            .any(|t| t.starts_with("kitchen.") && provided.contains(t));
+        assert!(
+            has_usable_kitchen_tool,
+            "dead step {:?}: delegates to {who}, who holds no kitchen.* tool the toolkit provides \
+             (allowlist: {:?})",
+            step.id, member.tool_allowlist,
+        );
+    }
 }

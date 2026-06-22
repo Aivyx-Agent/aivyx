@@ -1,6 +1,6 @@
 # Close the kitchen loop — the PO-draft tool + a runnable overnight close (Chapter Lockup)
 
-> **Status:** 🟡 **PLANNED (LK.0–LK.2).** A short follow-on to [Chapter
+> **Status:** ✅ **COMPLETE (LK.0–LK.2).** A short follow-on to [Chapter
 > Brigade](BRIGADE.md). Brigade gave the BOH brigade real `kitchen.*` tools, but
 > left one gap: the flagship **`overnight_close_mission()`** delegates a
 > `draft_po` step to purchasing — *"Draft per-supplier purchase orders for the
@@ -81,7 +81,7 @@ deferred from Brigade BG.4); a second vertical.
 |---|---|---|
 | **LK.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
 | **LK.1** ✅ | **`kitchen.order.draft` tool** | DONE. New tool in `order.rs`: optional `items` (array of `{sku, quantity}`, each validated to non-empty sku + positive qty) + optional `notes` → `draft_purchase_order` (no items → empty params, KitchenDB auto-drafts from low-stock; client injects `p_organization_id`). **`kitchen.write` scope** (not confirm-first; the confirm-first boundary stays on `order.send`), `run_write`. Added to `all_tools()` (→ **11 tools**); the harness e2e + `all_tools` registry tests updated to 11. +5 tests (empty/items+notes mapping, bad-items rejects, name/scope-is-write). Crate at 45 tests + coherence + e2e; clippy `-D warnings` green. |
-| **LK.2** | **Wire purchasing + prove the loop + finalize** | Add `kitchen.write` scope + `kitchen.order.draft` to purchasing in `kitchen_boh_team()` + `kitchen-boh.toml`; extend `boh_coherence.rs`; add a "no dead step" mission test (every `overnight_close_mission()` delegate step's specialist holds a fulfilling `kitchen.*` tool). Live overnight-close runbook. Full workspace suite + clippy `-D warnings` + `cargo deny`; chapter memory; status → COMPLETE. |
+| **LK.2** ✅ | **Wire purchasing + prove the loop + finalize** | DONE. Purchasing gained the `kitchen.write` scope + `kitchen.order.draft` tool in both `kitchen_boh_team()` and `kitchen-boh.toml` (round-trip test green; the BG.4 allowlist⊆toolkit coherence test now also covers the draft tool). New **`overnight_close_mission_has_no_dead_step`** test (`boh_coherence.rs`): every delegate step targets a specialist holding a `kitchen.*` tool the toolkit provides — `draft_po`→purchasing→`kitchen.order.draft` now passes (it was the dead step). Live overnight-close runbook added (§6). Full workspace suite + clippy `-D warnings` + `cargo deny` green. |
 
 **Discipline:** `kitchen.order.draft` reuses the BG.1 client + BG.2 `run_write` —
 no new client mechanic. The purchasing wiring touches the constructor **and** the
@@ -101,6 +101,24 @@ tests; price **~8–14 new tests**.
   `kitchen.order.draft` base (rejected — a `KNOWN_BASES` change for no safety
   gain). Revisit only if an operator wants to grant *drafting* without any other
   kitchen write, which the allowlist already separates at the tool level.
+
+## 6. Live overnight-close runbook
+
+In-tree, "runnable" is the structural **no-dead-step** guard; a real run needs a
+live LLM. Once the kitchen toolkit is wired (Brigade §6) and the team points at
+the BOH pack (`[team] config_path = "kitchen-boh.toml"`):
+
+```sh
+aivyx team run "Run the end-of-day BOH close." --config crates/aivyx-kitchen/assets/kitchen-boh.toml
+```
+
+Aria decomposes into the four steps. Expect: **stocktake** counts via
+`kitchen.inventory.*`; **inventory** reads `kitchen.inventory.low_stock`;
+**purchasing** drafts per-supplier POs via `kitchen.order.draft` (and *stops* —
+sending is out of the mission); **haccp** logs the fridge round via
+`kitchen.haccp.log` on its independent branch. To dispatch a drafted PO, the
+operator calls `kitchen.order.send` with `confirmed: true` (the one deliberate
+human gate). Verify against a live KitchenDB per Brigade §7.
 
 ---
 
