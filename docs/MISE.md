@@ -1,6 +1,6 @@
 # Package the kitchen vertical — one-command setup + doctor checks (Chapter Mise)
 
-> **Status:** 🟡 **PLANNED (MI.0–MI.2).** [Brigade](BRIGADE.md) + [Lockup](LOCKUP.md)
+> **Status:** ✅ **COMPLETE (MI.0–MI.2).** [Brigade](BRIGADE.md) + [Lockup](LOCKUP.md)
 > made the kitchen vertical *work*; Mise makes it *installable*. Today an operator
 > assembles it by hand — write `~/.aivyx/tool-processes/kitchen/config.toml`,
 > append a `[[tool_process]]`, point `[team] config_path` at the BOH pack, hope
@@ -87,7 +87,7 @@ is a separate cleanup if a second non-OAuth service ever appears).
 |---|---|---|
 | **MI.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
 | **MI.1** ✅ | **`aivyx connect kitchen`** | DONE. New `connect_kitchen.rs` routed from `connect`'s dispatch (non-OAuth branch, before the OAuth `find_service`). Writes `[kitchen_db]` config `0600` (`render_kitchen_config_toml`), auto-wires `append_tool_process("kitchen","aivyx-kitchen-toolkit")` (idempotent via `tool_process_present`), plants `KITCHEN_BOH_TOML` beside `aivyx.toml` + `set_team_config_path_if_absent` (**no-clobber**), then **probes** KitchenDB (`get_suppliers`) as the connected signal (success → restart hint; failure → actionable error + non-zero). Fields from env (`AIVYX_KITCHEN_BASE_URL`/`_API_KEY`/`_ORGANIZATION_ID`) for headless, else TTY prompts. Reuses connect's helpers (made `pub(crate)`: `prompt_line`/`prompt_yes_no`/`set_file_0600`); `aivyx-cli` gained `aivyx-kitchen` + `aivyx-kitchen-toolkit` deps. Listed in `aivyx connect`. 4 tests (config render+escape, round-trips into the toolkit loader, team-config no-clobber ×2); clippy `-D warnings` green. |
-| **MI.2** | **`aivyx doctor` kitchen + finalize** | A kitchen section in `doctor` (config / tool_process / team config_path / KitchenDB reachable — each pass/fail+hint; skipped when unconfigured). Install-doc/runbook refresh. Full workspace suite + clippy `-D warnings` + `cargo deny`; chapter memory; status → COMPLETE. |
+| **MI.2** ✅ | **`aivyx doctor` kitchen + finalize** | DONE. `check_kitchen(home)` in `doctor.rs` adds a kitchen section, **skipped silently when the vertical isn't installed** (`kitchen_config_path` absent → `true`): config parses → `[[tool_process]] kitchen` wired → `[team] config_path` points at a loadable pack (`check_team_pack`) → KitchenDB reachable (reuses `connect_kitchen::probe_kitchen_db`); each `pass`/`fail`+hint, folded into doctor's overall result (`provider_ok && kitchen_ok`). Setup recipe added (§6). 2 tests (skip-when-absent, team-pack missing/unloadable); doctor suite green; clippy `-D warnings` + full workspace suite + `cargo deny` green. |
 
 **Discipline:** the config-write + tool-process-wire reuse the existing
 `connect.rs` helpers; the probe reuses `KitchenClient` (no new client mechanic).
@@ -112,6 +112,30 @@ Test band: **moderate** — config render + wire idempotency + pack-plant + prob
 - **OQ-4 — connect registry shape (MI.1).** A dedicated kitchen branch (locked) vs.
   generalizing `ConnectService` to non-OAuth. Defer the generalization until a
   second non-OAuth service exists (YAGNI).
+
+## 6. Setup recipe
+
+```sh
+# 1. Wire the vertical (interactive — prompts for the KitchenDB connection):
+aivyx connect kitchen
+#    …or headless:
+AIVYX_KITCHEN_BASE_URL=https://your-kitchen/rest/v1 \
+AIVYX_KITCHEN_API_KEY=… \
+AIVYX_KITCHEN_ORGANIZATION_ID=… \
+  aivyx connect kitchen
+
+# 2. Confirm it's healthy (config / tool_process / team pack / KitchenDB):
+aivyx doctor
+
+# 3. Restart the daemon to load the kitchen tools, then run the brigade:
+aivyx daemon stop && aivyx daemon run
+aivyx team run "Run the end-of-day BOH close." --config crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml
+```
+
+`connect kitchen` writes `~/.aivyx/tool-processes/kitchen/config.toml` (0600),
+wires `[[tool_process]] kitchen`, plants `kitchen-boh.toml` + sets
+`[team] config_path` (never clobbering an existing one), and probes KitchenDB.
+`doctor` re-checks all four and is silent when the vertical isn't installed.
 
 ---
 

@@ -8,7 +8,7 @@
 //! starved `num_ctx` — that ruined first impressions). Cloud providers get a
 //! lighter config-presence check. Read-only; no daemon, no passphrase.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions, ProviderKind};
 use aivyx_llm::ollama::{
@@ -23,10 +23,18 @@ pub async fn run_doctor() -> Result<(), String> {
     let cfg = load_config_for_inspection()?;
     println!("aivyx doctor — checking your setup\n");
 
-    let all_ok = match cfg.provider.value {
+    let provider_ok = match cfg.provider.value {
         ProviderKind::Ollama => check_ollama(&cfg).await,
         other => check_cloud(other, &cfg),
     };
+
+    // Chapter Mise — the kitchen vertical health section, only when it's
+    // installed (config present). Skipped silently otherwise.
+    let kitchen_ok = match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) => check_kitchen(&home).await,
+        None => true,
+    };
+    let all_ok = provider_ok && kitchen_ok;
 
     println!();
     if all_ok {
@@ -170,6 +178,125 @@ fn check_cloud(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
     }
 }
 
+/// `~/.aivyx/tool-processes/kitchen/config.toml` — the kitchen vertical's
+/// presence marker. `Some(path)` iff the file exists (the vertical is installed).
+fn kitchen_config_path(home: &Path) -> Option<PathBuf> {
+    let p = home
+        .join(".aivyx")
+        .join("tool-processes")
+        .join("kitchen")
+        .join("config.toml");
+    p.exists().then_some(p)
+}
+
+/// Chapter Mise — the kitchen vertical health section. Returns `true` when the
+/// vertical is **not installed** (skipped silently) or when every check passes;
+/// `false` if installed-but-broken. Checks: config parses → `[[tool_process]]`
+/// wired → `[team] config_path` points at a loadable pack → KitchenDB reachable.
+async fn check_kitchen(home: &Path) -> bool {
+    let Some(cfg_path) = kitchen_config_path(home) else {
+        return true; // vertical not installed — nothing to report.
+    };
+    println!("\nKitchen vertical:\n");
+
+    // 1. config.toml parses as [kitchen_db].
+    let db = match aivyx_kitchen_toolkit::load_config(&cfg_path) {
+        Ok(d) => {
+            pass(&format!("kitchen config at {}", cfg_path.display()));
+            d
+        }
+        Err(e) => {
+            fail("kitchen config is unreadable", &format!("{e}"));
+            return false;
+        }
+    };
+
+    let mut ok = true;
+
+    // 2. [[tool_process]] kitchen wired + 3. [team] config_path → a loadable pack.
+    match crate::connect::find_aivyx_toml(home) {
+        Some(toml_path) => match std::fs::read_to_string(&toml_path)
+            .ok()
+            .and_then(|b| b.parse::<toml_edit::DocumentMut>().ok())
+        {
+            Some(doc) => {
+                if crate::connect::tool_process_present(&doc, "kitchen") {
+                    pass("[[tool_process]] kitchen is wired");
+                } else {
+                    fail(
+                        "the kitchen tool process isn't wired in aivyx.toml",
+                        "Run `aivyx connect kitchen` to wire it.",
+                    );
+                    ok = false;
+                }
+                ok &= check_team_pack(&doc, &toml_path);
+            }
+            None => {
+                fail(
+                    &format!("could not parse {}", toml_path.display()),
+                    "Fix the TOML, then re-run `aivyx doctor`.",
+                );
+                ok = false;
+            }
+        },
+        None => {
+            fail(
+                "no aivyx.toml found to wire the kitchen tool process into",
+                "Run `aivyx connect kitchen` from your config directory.",
+            );
+            ok = false;
+        }
+    }
+
+    // 4. KitchenDB reachable (reuses the connect-kitchen probe).
+    match crate::connect_kitchen::probe_kitchen_db(&db.base_url, &db.api_key, &db.organization_id)
+        .await
+    {
+        Ok(n) => pass(&format!("KitchenDB reachable ({n} supplier(s) visible)")),
+        Err(hint) => {
+            fail("KitchenDB is not reachable", &hint);
+            ok = false;
+        }
+    }
+    ok
+}
+
+/// Check `[team] config_path` is set to a pack file that loads as a valid
+/// `TeamConfig` (resolved against the `aivyx.toml` directory).
+fn check_team_pack(doc: &toml_edit::DocumentMut, toml_path: &Path) -> bool {
+    let Some(rel) = doc
+        .get("team")
+        .and_then(|t| t.get("config_path"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        fail(
+            "no [team] config_path — the kitchen brigade won't auto-load",
+            "Run `aivyx connect kitchen` (it plants kitchen-boh.toml and sets the pointer).",
+        );
+        return false;
+    };
+    let pack = {
+        let p = Path::new(rel);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            toml_path.parent().unwrap_or(Path::new(".")).join(p)
+        }
+    };
+    match aivyx_team::TeamConfig::load(&pack) {
+        Ok(team) => {
+            pass(&format!("team pack `{}` loads ({} members)", rel, team.members.len()));
+            true
+        }
+        Err(e) => {
+            fail(&format!("[team] config_path `{rel}` does not load"), &format!("{e}"));
+            false
+        }
+    }
+}
+
 fn truncate(s: &str, max: usize) -> String {
     let s = s.trim();
     if s.chars().count() <= max {
@@ -208,5 +335,27 @@ mod tests {
         // No Ollama → a clear Err the check turns into actionable output.
         let res = test_generation("http://127.0.0.1:1", RECOMMENDED_LOCAL_MODEL).await;
         assert!(res.is_err(), "unreachable Ollama must error");
+    }
+
+    #[tokio::test]
+    async fn check_kitchen_skips_when_not_installed() {
+        // A home with no kitchen config → the section is skipped + counts as OK
+        // (the vertical is simply not installed).
+        let home = std::env::temp_dir().join(format!("doctor-nokitchen-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(kitchen_config_path(&home).is_none());
+        assert!(check_kitchen(&home).await, "absent vertical must not fail doctor");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn check_team_pack_flags_missing_and_unloadable() {
+        // No [team] config_path → fail.
+        let doc: toml_edit::DocumentMut = "".parse().unwrap();
+        assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx.toml")));
+        // Set but pointing at a nonexistent file → fail.
+        let doc: toml_edit::DocumentMut =
+            "[team]\nconfig_path = \"no-such-pack.toml\"\n".parse().unwrap();
+        assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx.toml")));
     }
 }
