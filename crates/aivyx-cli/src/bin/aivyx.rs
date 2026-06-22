@@ -112,6 +112,8 @@ mod mcp_recipes;
 mod init;
 #[path = "aivyx_modules/connect.rs"]
 mod connect;
+#[path = "aivyx_modules/connect_kitchen.rs"]
+mod connect_kitchen;
 #[path = "aivyx_modules/init_templates.rs"]
 mod init_templates;
 #[path = "aivyx_modules/learning.rs"]

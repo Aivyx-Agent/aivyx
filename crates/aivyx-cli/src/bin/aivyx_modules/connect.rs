@@ -153,7 +153,7 @@ pub fn write_oauth_config(
 }
 
 #[cfg(unix)]
-fn set_file_0600(path: &Path) {
+pub(crate) fn set_file_0600(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(
         path,
@@ -162,13 +162,13 @@ fn set_file_0600(path: &Path) {
 }
 
 #[cfg(not(unix))]
-fn set_file_0600(_path: &Path) {}
+pub(crate) fn set_file_0600(_path: &Path) {}
 
 // ---------------------------------------------------------------------------
 // The guided flow.
 // ---------------------------------------------------------------------------
 
-fn prompt_line(
+pub(crate) fn prompt_line(
     prompt: &str,
     reader: &mut dyn BufRead,
     writer: &mut dyn Write,
@@ -182,7 +182,7 @@ fn prompt_line(
     Ok(buf.trim().to_string())
 }
 
-fn prompt_yes_no(
+pub(crate) fn prompt_yes_no(
     prompt: &str,
     default: bool,
     reader: &mut dyn BufRead,
@@ -215,6 +215,9 @@ pub fn list_services(
         writeln!(writer, "  {:<16} {} — {status}", s.key, s.display)
             .map_err(|e| format!("write error: {e}"))?;
     }
+    // Chapter Mise — the kitchen vertical (non-OAuth: KitchenDB connection).
+    writeln!(writer, "  {:<16} Kitchen / BOH — vertical pack (KitchenDB)", "kitchen")
+        .map_err(|e| format!("write error: {e}"))?;
     writeln!(
         writer,
         "\nRun `aivyx connect <service>` to set one up.\n\
@@ -318,6 +321,10 @@ pub async fn run_connect(service: Option<&str>) -> Result<(), String> {
         None => return list_services(&mut writer, &home),
         Some(k) => k,
     };
+    // Chapter Mise — the kitchen vertical is non-OAuth; route it to its own flow.
+    if key.trim().eq_ignore_ascii_case("kitchen") {
+        return crate::connect_kitchen::run_connect_kitchen(&mut reader, &mut writer, &home).await;
+    }
     let svc = find_service(key).ok_or_else(|| {
         let known = SERVICES
             .iter()

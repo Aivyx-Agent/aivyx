@@ -184,6 +184,8 @@ dependencies = [
  "aivyx-crypto",
  "aivyx-dataread",
  "aivyx-discord",
+ "aivyx-kitchen",
+ "aivyx-kitchen-toolkit",
  "aivyx-llm",
  "aivyx-mcp",
  "aivyx-memory",
