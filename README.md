@@ -46,6 +46,12 @@ from the local-first install. See
 [`docs/INSTALL.md`](docs/INSTALL.md#docker--the-server-appliance)
 and [`docs/DOCKER.md`](docs/DOCKER.md).
 
+**On Windows?** There's no native Windows binary yet (the daemon's
+Unix-socket IPC + `0600` secret-at-rest model are Unix-specific).
+Run the same Linux binary under **WSL2**, or use the **Docker**
+appliance above — both fully supported. See
+[`docs/INSTALL.md`](docs/INSTALL.md#windows-wsl2-or-docker).
+
 **Onboarding fast-path:** after `cargo build --release --bin
 aivyx`, run `./target/release/aivyx init --template coder` (or
 `researcher` / `personal`) to skip the from-scratch config and run

@@ -34,11 +34,67 @@ version drift.
 | macOS x86_64 | `aivyx` | Intel Macs, macOS 10.13+ |
 | macOS aarch64 | `aivyx` | Apple Silicon (M1 / M2 / M3 / M4), macOS 11+ |
 
-Native Windows is **not yet supported**. The daemon's IPC layer
-uses Unix domain sockets (mode 0600, OS-user identity); a Windows
-port needs a NamedPipe replacement. Until that lands, run Aivyx
-inside [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) — it
-behaves as a regular Linux x86_64 install.
+Native Windows is **not yet supported** — see [Windows
+(WSL2 or Docker)](#windows-wsl2-or-docker) below for the two
+supported ways to run Aivyx on a Windows machine today.
+
+## Windows (WSL2 or Docker)
+
+There is no native `*-pc-windows-msvc` binary yet, and it is a
+deliberate deferral rather than an oversight: two load-bearing
+subsystems are Unix-specific.
+
+1. **Daemon IPC is Unix-domain-socket-only.** Every Aivyx frontend
+   (REPL, TUI, Web Studio, voice) is a thin client that talks to the
+   local daemon over a Unix domain socket. A native Windows build
+   needs a NamedPipe (or token-authenticated loopback) transport
+   before any of it functions.
+2. **The secret-at-rest guarantee is Unix file permissions.** OAuth
+   tokens, the config file, and the encrypted store rely on `0600`/
+   `0700` mode bits and OS-user identity. Windows uses ACLs instead;
+   preserving the same posture needs an ACL-equivalent layer, not a
+   no-op stub.
+
+Both are real ports, so until a dedicated Windows effort lands, use
+one of the two fully-supported paths below — **both run the exact same
+Linux binary**, with no loss of functionality.
+
+### Option A — WSL2 (recommended for desktop use)
+
+[WSL2](https://learn.microsoft.com/en-us/windows/wsl/) runs a real
+Linux kernel under Windows. Aivyx installs and behaves there exactly
+as a Linux x86_64 install — the local-first model holds (the agent
+reaches your files inside the WSL2 filesystem, accessible from Windows
+at `\\wsl$\`).
+
+```powershell
+# In Windows PowerShell (one-time):
+wsl --install            # installs WSL2 + a default Ubuntu
+# then open the "Ubuntu" terminal and treat it as Linux:
+```
+
+```sh
+# Inside the WSL2 (Ubuntu) shell — the normal Linux install:
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
+  | sh
+aivyx --version
+aivyx init
+```
+
+The Web Studio is reachable from a Windows browser at
+`http://127.0.0.1:7843` (WSL2 forwards localhost to Windows
+automatically).
+
+### Option B — Docker Desktop (recommended for always-on/server use)
+
+If you have Docker Desktop on Windows, run the
+[server appliance](#docker--the-server-appliance) — the daemon + Web
+Studio in a container, no WSL distro to manage directly (Docker
+Desktop uses its own WSL2 backend). This is the homelab / always-on
+profile rather than the local-first desktop one; see the
+[Docker section](#docker--the-server-appliance) for the framing and
+security posture.
 
 ## Build from source
 
