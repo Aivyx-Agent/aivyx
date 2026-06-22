@@ -392,6 +392,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-kitchen-toolkit"
+version = "0.6.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-tool",
+ "async-trait",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "aivyx-llm"
 version = "0.6.0"
 dependencies = [

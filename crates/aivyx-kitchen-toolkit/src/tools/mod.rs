@@ -1,0 +1,90 @@
+//! The `kitchen.*` tool surface.
+//!
+//! Chapter Brigade. Each tool is a thin wrapper over [`KitchenClient`]: it
+//! names a KitchenDB RPC, maps its JSON input to the RPC's params, and shapes
+//! the response. The domain logic lives in KitchenDB — the tools never compute
+//! inventory math or PO rules themselves.
+//!
+//! BG.1 ships the read surface (`kitchen.read`). Later phases add the gated
+//! write tools, `kitchen.order.send`, and `kitchen.haccp.log`.
+
+use serde_json::{json, Value};
+
+use aivyx_capability::Scope;
+use aivyx_core::{AivyxError, ToolContext, ToolId, ToolOutcome, Verification};
+
+use crate::client::KitchenClient;
+
+mod inventory;
+mod recipe;
+mod supplier;
+
+pub use inventory::{InventoryList, InventoryLowStock, InventoryValue};
+pub use recipe::RecipeSearch;
+pub use supplier::SupplierList;
+
+/// The shared read scope for every BG.1 tool. `kitchen.read` is already in
+/// `aivyx-capability`'s `KNOWN_BASES`, so this always parses.
+pub(crate) fn kitchen_read_scope() -> Scope {
+    Scope::parse("kitchen.read").expect("kitchen.read is in KNOWN_BASES")
+}
+
+/// Run a read RPC and build the tool outcome. A successful array response is
+/// wrapped as `{ <collection_key>: [...], "count": n }`; any other JSON value
+/// is wrapped as `{ <collection_key>: value }`. Failures map to a `Failed`
+/// outcome carrying the [`KitchenError`](crate::client::KitchenError) message.
+pub(crate) async fn run_read(
+    client: &KitchenClient,
+    tool_id: ToolId,
+    function: &str,
+    params: Value,
+    collection_key: &str,
+    _ctx: &ToolContext<'_>,
+) -> ToolOutcome {
+    match client.call_rpc(function, params).await {
+        Ok(value) => ToolOutcome::Completed {
+            output: shape_rows(value, collection_key),
+            verified: Verification::NotApplicable,
+        },
+        Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+            tool: tool_id,
+            detail: format!("kitchen: {e}"),
+        }),
+    }
+}
+
+/// Wrap a KitchenDB RPC result for the LLM. An array → `{ key: rows, count }`;
+/// any other value (scalar / object — e.g. an aggregate) → `{ key: value }`.
+pub(crate) fn shape_rows(value: Value, key: &str) -> Value {
+    match value {
+        Value::Array(rows) => {
+            let count = rows.len();
+            json!({ key: rows, "count": count })
+        }
+        other => json!({ key: other }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shape_rows_wraps_an_array_with_count() {
+        let shaped = shape_rows(json!([{"sku": "A"}, {"sku": "B"}]), "items");
+        assert_eq!(shaped["count"], 2);
+        assert_eq!(shaped["items"], json!([{"sku": "A"}, {"sku": "B"}]));
+    }
+
+    #[test]
+    fn shape_rows_wraps_a_scalar_without_count() {
+        let shaped = shape_rows(json!(1234.5), "value");
+        assert_eq!(shaped["value"], 1234.5);
+        assert!(shaped.get("count").is_none());
+    }
+
+    #[test]
+    fn kitchen_read_scope_parses() {
+        assert_eq!(kitchen_read_scope().to_string(), "kitchen.read");
+    }
+}

@@ -1,0 +1,52 @@
+[package]
+name = "aivyx-kitchen-toolkit"
+description = "Kitchen vertical tool process for Aivyx — KitchenDB (PostgREST) RPC client + kitchen.* tools (Chapter Brigade)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-kitchen-toolkit"
+path = "src/main.rs"
+
+[dependencies]
+# Tool-process SDK — the multi-tool harness (Chapter F/G substrate pattern,
+# same as aivyx-toolkit / aivyx-gmail). The kitchen.* scope bases already live
+# in aivyx-capability's KNOWN_BASES, so this crate adds none.
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async runtime — we ARE the child process; `io-util` for the harness frames,
+# `fs` for the config file.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "io-std", "fs"] }
+async-trait = { workspace = true }
+
+# HTTP + JSON — the KitchenDB PostgREST RPC calls. rustls-tls (workspace
+# default) keeps the OpenSSL-free posture.
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# TOML for the operator config at
+# `~/.aivyx/tool-processes/kitchen/config.toml`.
+toml = "0.8"
+
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "io-util", "net"] }
+
+# Excluded from `dist` releases — only the top-level `aivyx` binary is published
+# as a release artifact. This tool-process binary ships with the daemon / is
+# built from source.
+[package.metadata.dist]
+dist = false
