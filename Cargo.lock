@@ -397,6 +397,7 @@ version = "0.6.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-kitchen",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
