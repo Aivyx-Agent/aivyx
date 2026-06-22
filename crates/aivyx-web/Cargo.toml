@@ -26,6 +26,11 @@ web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Elem
 # `Date::now()` for relative timestamps in the Command Center audit feed.
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
+# End-user guide (the in-app Guide screen): the docs/guide/*.md pages are
+# bundled with include_str! and rendered to HTML at runtime. Pure-Rust, no_std-
+# friendly, wasm-clean; `default-features = false` drops the CLI `getopts` dep we
+# don't need, keeping just the parser + the `html` renderer.
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # Excluded from `dist` releases. This crate is the browser GUI and compiles
 # ONLY for wasm32-unknown-unknown (web-sys / wasm-bindgen); cargo-dist would

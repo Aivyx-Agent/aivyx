@@ -31,6 +31,9 @@ use aivyx_ipc::{
 use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 use aivyx_ipc::graph::{GraphEntity, GraphTriple};
 
+/// End-user guide content + markdown rendering for the Guide screen.
+mod guide;
+
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
 /// Page size for memory topic-entry and search queries.
@@ -88,6 +91,9 @@ enum View {
     /// last-start health (connected + tool count, or failed + reason).
     Mcp,
     Voice,
+    /// The in-app end-user guide — the `docs/guide/*.md` pages rendered in the
+    /// Studio (see `guide.rs`). Pure static content, no daemon IPC.
+    Guide,
     /// Chapter Genesis — the guided agent-creation flow (Profile → Persona seed
     /// → access). First-run lands here when the Profile isn't yet declared.
     Onboarding,
@@ -412,6 +418,7 @@ fn App() -> Element {
         View::Documents => "Documents",
         View::Mcp => "MCP Servers",
         View::Voice => "Voice",
+        View::Guide => "Guide",
         View::Onboarding => "Create your agent",
     };
 
@@ -441,6 +448,7 @@ fn App() -> Element {
                         View::Documents => rsx! { DocumentsPanel {} },
                         View::Mcp => rsx! { McpPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
+                        View::Guide => rsx! { GuidePanel {} },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
                     }
                 }
@@ -490,6 +498,8 @@ fn Sidebar(view: Signal<View>) -> Element {
                 onclick: move |_| view.set(View::Mcp) }
             NavItem { icon: ICON_VOICE, label: "Voice", active: view() == View::Voice,
                 onclick: move |_| view.set(View::Voice) }
+            NavItem { icon: ICON_DOCUMENTS, label: "Guide", active: view() == View::Guide,
+                onclick: move |_| view.set(View::Guide) }
             div { class: "nav-section label-tech", "Roadmap" }
             div { style: "flex:1" }
             a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
@@ -516,6 +526,39 @@ fn NavItemSoon(icon: Asset, label: &'static str) -> Element {
             span { class: "ico", style: "--ico: url({icon})" }
             "{label}"
             span { class: "soon", "soon" }
+        }
+    }
+}
+
+/// The Guide screen — a page list plus the rendered markdown body. Pure static
+/// content (bundled `docs/guide/*.md`), no daemon IPC. `selected` is the index
+/// into [`guide::PAGES`]; the HTML is memoized so switching an unrelated signal
+/// never re-parses the markdown.
+#[component]
+fn GuidePanel() -> Element {
+    let mut selected = use_signal(|| 0usize);
+    let body_html = use_memo(move || {
+        let idx = selected().min(guide::PAGES.len().saturating_sub(1));
+        guide::render(guide::PAGES[idx].body)
+    });
+
+    rsx! {
+        div { class: "guide",
+            nav { class: "guide-nav",
+                div { class: "guide-nav-head label-tech", "User guide" }
+                for (i, page) in guide::PAGES.iter().enumerate() {
+                    button {
+                        key: "{page.id}",
+                        class: if selected() == i { "guide-link active" } else { "guide-link" },
+                        onclick: move |_| selected.set(i),
+                        "{page.title}"
+                    }
+                }
+            }
+            article {
+                class: "guide-content glass-card",
+                dangerous_inner_html: body_html(),
+            }
         }
     }
 }

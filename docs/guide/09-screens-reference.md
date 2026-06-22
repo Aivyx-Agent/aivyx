@@ -1,0 +1,50 @@
+# The Studio screens at a glance
+
+A quick reference to every screen in the sidebar. Several have their own detailed
+page in this guide; this is the map.
+
+| Screen | What it's for |
+|---|---|
+| **Create** | The guided setup that gives your assistant its identity (see *Create your agent*). |
+| **Command** | Your home dashboard — at-a-glance status, active missions, a live activity feed, and whether the assistant is busy. |
+| **Missions** | Hand off larger multi-step jobs and watch them run; approve gates (see *Chatting and running missions*). |
+| **Chat** | A direct conversation with your assistant. |
+| **Memory** | Browse and search everything your assistant has learned. |
+| **Wiki** | Your assistant's knowledge as readable per-topic pages. |
+| **Graph** | The same knowledge as a visual map of connected topics. |
+| **Settings** | Access level and spending budgets (see *Access and settings*). |
+| **Agents** | Edit the Profile and approve the character changes your assistant proposes (see *Skills and personality*). |
+| **Skills** | The library of things your assistant has learned to do. |
+| **Teams** | View and edit your team of specialists (see *Teams*). |
+| **Documents** | A file browser over the folders your assistant can access. |
+| **MCP** | The status of any external tool servers you've connected. |
+| **Voice** | Set up talking to your assistant out loud. |
+
+## Command Center
+
+The landing dashboard. It pulls together the things you most often want to glance
+at — how many missions are active, recent activity, the assistant's current
+status, and the integrity of the audit log — without you having to open each
+screen.
+
+## Documents
+
+A file browser scoped to exactly what your assistant can reach (set by your
+access level). Browse folders, open files, and make edits. Anything destructive —
+deleting a file, overwriting one — is confirmed first, and every change is
+recorded.
+
+## Voice
+
+Aivyx can talk and listen. Voice runs as a local loop on your own machine — your
+audio is processed locally, not streamed to a cloud service. The Voice screen is
+where you configure it and see whether it's ready; you start a voice session from
+the command line.
+
+## MCP servers
+
+MCP is an open standard for plugging external tool servers into an assistant —
+things like a GitHub connector, a database, or a web-search service. You add
+servers in your config file; the **MCP** screen shows each one's status: whether
+it connected, how many tools it offers, and any errors. This is how you extend
+your assistant with capabilities beyond what ships in the box.
