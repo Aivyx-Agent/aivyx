@@ -1,0 +1,17 @@
+# Private / commercial vertical packs live here. They must NEVER land in the
+# public (BUSL-1.1) repo, so this directory ignores everything by default.
+#
+# Only this `.gitignore` and the explanatory `README.md` are tracked — they
+# keep the directory present in a fresh checkout so the workspace member glob
+# `crates/verticals-private/*` in the root Cargo.toml always has a valid base
+# (Cargo silently ignores glob matches that lack a Cargo.toml, so an empty
+# private dir builds fine).
+#
+# Drop a pack crate in here (e.g. `crates/verticals-private/aivyx-acme/`) and it
+# joins the workspace automatically — building against the same lockfile/target
+# as the core — while staying invisible to git. It depends on the stable
+# `aivyx-vertical-sdk` facade exactly like the open Kitchen example, so its path
+# deps (`../../aivyx-vertical-sdk`) match the in-tree packs.
+*
+!.gitignore
+!README.md

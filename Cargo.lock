@@ -389,8 +389,7 @@ dependencies = [
 name = "aivyx-kitchen"
 version = "0.6.0"
 dependencies = [
- "aivyx-capability",
- "aivyx-team",
+ "aivyx-vertical-sdk",
 ]
 
 [[package]]
@@ -401,6 +400,7 @@ dependencies = [
  "aivyx-core",
  "aivyx-kitchen",
  "aivyx-tool",
+ "aivyx-vertical-sdk",
  "async-trait",
  "reqwest 0.12.28",
  "serde",
@@ -625,6 +625,16 @@ dependencies = [
  "ratatui",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "aivyx-vertical-sdk"
+version = "0.6.0"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-team",
+ "aivyx-tool",
 ]
 
 [[package]]

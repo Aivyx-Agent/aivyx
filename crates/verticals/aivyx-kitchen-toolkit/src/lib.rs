@@ -22,9 +22,9 @@ pub mod tools;
 
 use std::sync::Arc;
 
-use aivyx_core::Tool;
+use aivyx_vertical_sdk::tool::Tool;
 
-pub use aivyx_tool::run_multi_tool_subprocess;
+pub use aivyx_vertical_sdk::tool::run_multi_tool_subprocess;
 pub use client::{KitchenClient, KitchenError};
 pub use config::{default_config_path, load_config, KitchenConfig, KitchenDbConfig};
 

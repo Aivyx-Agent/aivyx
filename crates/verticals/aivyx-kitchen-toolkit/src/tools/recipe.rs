@@ -6,8 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use aivyx_capability::Scope;
-use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome};
+use aivyx_vertical_sdk::capability::Scope;
+use aivyx_vertical_sdk::tool::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome};
 
 use super::{kitchen_read_scope, run_read};
 use crate::client::KitchenClient;

@@ -1,0 +1,22 @@
+[package]
+name = "aivyx-vertical-sdk"
+description = "The stable contract surface for Aivyx vertical packs. A vertical (e.g. the kitchen pack) depends ONLY on this crate — never on the engine internals directly — so packs survive core refactors. See docs/VERTICAL_PACKS.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+# The facade re-exports a CURATED subset of these engine crates. Verticals get
+# the re-exported items only; the full internal surface stays hidden. Keeping
+# the engine deps here (not in the packs) is the whole point — when core churns,
+# only this crate's re-export list has to track it, and the packs are untouched
+# as long as the listed items keep their shape.
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+aivyx-team = { path = "../aivyx-team" }
+aivyx-tool = { path = "../aivyx-tool" }

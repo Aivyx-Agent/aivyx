@@ -18,12 +18,12 @@ name = "aivyx-kitchen-toolkit"
 path = "src/main.rs"
 
 [dependencies]
-# Tool-process SDK — the multi-tool harness (Chapter F/G substrate pattern,
-# same as aivyx-toolkit / aivyx-gmail). The kitchen.* scope bases already live
-# in aivyx-capability's KNOWN_BASES, so this crate adds none.
-aivyx-tool = { path = "../../aivyx-tool" }
-aivyx-core = { path = "../../aivyx-core" }
-aivyx-capability = { path = "../../aivyx-capability" }
+# Tool-process building blocks (Tool trait, ToolContext, the multi-tool harness)
+# + scope types, all via the stable `aivyx-vertical-sdk` facade — the pack never
+# depends on the engine crates (aivyx-core / aivyx-tool / aivyx-capability)
+# directly. The kitchen.* scope bases already live in KNOWN_BASES, so this crate
+# adds none (Chapter F/G substrate pattern, same as aivyx-toolkit / aivyx-gmail).
+aivyx-vertical-sdk = { path = "../../aivyx-vertical-sdk" }
 
 # Async runtime — we ARE the child process; `io-util` for the harness frames,
 # `fs` for the config file.
@@ -47,6 +47,16 @@ tokio = { workspace = true, features = ["macros", "rt", "time", "io-util", "net"
 # Coherence test only — the BOH pack's kitchen.* tool names must match the names
 # this toolkit provides. aivyx-kitchen does not depend on this crate (no cycle).
 aivyx-kitchen = { path = "../aivyx-kitchen" }
+# The SDK boundary covers SHIPPING code: the lib + binary depend on
+# `aivyx-vertical-sdk` alone, so core refactors can't break a pack. A pack's own
+# e2e *test harness* is dev-only and may drive the engine directly (mock
+# ChannelContext / AuditHook + the tool-process bridge) — exactly as the engine
+# crates test each other. Re-exporting those deep internals (ChannelContext,
+# AuditTag, StreamEvent, ToolProcessBridge, ...) through the stable facade would
+# freeze them into the pack contract, which is what the facade exists to avoid.
+aivyx-core = { path = "../../aivyx-core" }
+aivyx-capability = { path = "../../aivyx-capability" }
+aivyx-tool = { path = "../../aivyx-tool" }
 
 # Excluded from `dist` releases — only the top-level `aivyx` binary is published
 # as a release artifact. This tool-process binary ships with the daemon / is

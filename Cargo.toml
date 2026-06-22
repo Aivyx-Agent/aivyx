@@ -32,8 +32,13 @@ members = [
     "crates/aivyx-team",
     "crates/aivyx-team-types",
     "crates/aivyx-ipc",
+    "crates/aivyx-vertical-sdk",
     "crates/verticals/aivyx-kitchen",
     "crates/verticals/aivyx-kitchen-toolkit",
+    # Commercial / private packs (git-ignored, see crates/verticals-private/).
+    # A glob so a dropped-in private pack auto-joins the workspace; Cargo
+    # ignores matches without a Cargo.toml, so an empty dir builds fine.
+    "crates/verticals-private/*",
     "crates/aivyx-cost",
     "crates/aivyx-web",
 ]
@@ -76,8 +81,11 @@ default-members = [
     "crates/aivyx-team",
     "crates/aivyx-team-types",
     "crates/aivyx-ipc",
+    "crates/aivyx-vertical-sdk",
     "crates/verticals/aivyx-kitchen",
     "crates/verticals/aivyx-kitchen-toolkit",
+    # Commercial / private packs (git-ignored, see crates/verticals-private/).
+    "crates/verticals-private/*",
     "crates/aivyx-cost",
 ]
 

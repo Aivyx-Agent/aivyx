@@ -10,8 +10,8 @@
 
 use serde_json::{json, Value};
 
-use aivyx_capability::Scope;
-use aivyx_core::{AivyxError, ToolContext, ToolId, ToolOutcome, Verification};
+use aivyx_vertical_sdk::capability::Scope;
+use aivyx_vertical_sdk::tool::{AivyxError, ToolContext, ToolId, ToolOutcome, Verification};
 
 use crate::client::KitchenClient;
 

@@ -10,8 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use aivyx_capability::Scope;
-use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome};
+use aivyx_vertical_sdk::capability::Scope;
+use aivyx_vertical_sdk::tool::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome};
 
 use super::{kitchen_read_scope, kitchen_write_scope, run_read, run_write};
 use crate::client::KitchenClient;
@@ -265,7 +265,7 @@ fn empty_object_schema() -> Value {
 }
 
 fn invalid(id: ToolId, detail: &str) -> ToolOutcome {
-    ToolOutcome::Failed(aivyx_core::AivyxError::Tool {
+    ToolOutcome::Failed(aivyx_vertical_sdk::tool::AivyxError::Tool {
         tool: id,
         detail: format!("kitchen.inventory.list: {detail}"),
     })

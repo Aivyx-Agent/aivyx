@@ -3,19 +3,34 @@
 How to specialize the *one* Aivyx agent to a domain **without forking
 the substrate**. A vertical pack is configuration + a tool bundle, not a
 codebase branch — so every pack inherits all future foundation work for
-free. This document defines the pack format and works through the first
-example: a **Kitchen / Back-of-House (BOH)** pack over the existing
-KitchenDB.
+free. This document defines the pack format, gives a **step-by-step build
+tutorial** ([§6](#6-build-your-own-pack--step-by-step)), and works through
+the **canonical example**: a **Kitchen / Back-of-House (BOH)** pack over the
+existing KitchenDB.
 
-> Status: in progress. The `aivyx-kitchen` pack crate is **live** and ships
-> the **BOH Nonagon team** — the customised `TeamConfig` (Aria + four
-> least-privileged specialists over the `kitchen.*` scopes) + the
-> overnight-close `MissionPlan`, as a Rust constructor and a committed TOML
-> asset (Chapter **J.6**; loaded by `aivyx team run --config <path>`). The
-> `kitchen.*` scope bases are registered. **Next** for the same crate: the
-> KitchenDB RPC client + the read/compute/write `aivyx_core::Tool` impls
-> (the domain tool surface §3.2), wired into the team's `base_tools` so the
-> specialists *act* on the DB, not just plan.
+> **The Kitchen pack is the reference example.** It is open
+> (`crates/verticals/aivyx-kitchen` + `aivyx-kitchen-toolkit`), complete, and
+> meant to be **read and copied** — it is the worked answer to "how do I
+> build a pack?" Paid packs live out-of-tree behind the same contract.
+
+> Status: **live and complete end-to-end.** The pack ships the **BOH Nonagon
+> team** (the customised `TeamConfig` — Aria + four least-privileged
+> specialists over the `kitchen.*` scopes — + the overnight-close
+> `MissionPlan`, as a Rust constructor and a committed TOML asset) **and** the
+> real domain tools: the `aivyx-kitchen-toolkit` tool-process is a PostgREST
+> RPC client to the operator's KitchenDB exposing eleven `kitchen.*` tools
+> across four scope bases (read / write / `order.send` confirm-first /
+> `haccp.log` append-only). It installs via `aivyx connect kitchen` and is
+> visible to `aivyx doctor`. Chapters **J.6 / Brigade / Lockup / Mise**.
+
+> **The boundary (new):** both kitchen crates now depend on **one** crate —
+> [`aivyx-vertical-sdk`](../crates/aivyx-vertical-sdk) — a thin, semver-stable
+> facade that re-exports *only* the pack-facing slice of the engine
+> (`TeamConfig`, `MissionPlan`, `TrustTier`, `Scope`, the `Tool` trait, the
+> tool-process harness). A pack's **shipping code never touches the engine
+> crates directly**, so core refactors can't break it. This is the seam that
+> makes a marketplace of packs maintainable, and the exact line a separate
+> verticals repo would later cut along.
 
 ---
 
@@ -38,7 +53,7 @@ A vertical pack is up to six things, each riding an existing primitive:
 | Component | Primitive | New code? |
 |---|---|---|
 | **Template** | `aivyx init --template <name>` (Phase 66) → seeds Profile + default Role | config only |
-| **Toolkit crate** | a bundled multi-tool process, same shape as `aivyx-toolkit`/`aivyx-gmail` (Chapter F/G), reusing `aivyx_tool::multi_harness` | new sibling crate |
+| **Toolkit crate** | a bundled multi-tool process, same shape as `aivyx-toolkit`/`aivyx-gmail` (Chapter F/G), built against `aivyx-vertical-sdk` (the `Tool` trait + `run_multi_tool_subprocess`) | new sibling crate |
 | **Scopes + gate policy** | capability scope bases (additive to `aivyx-capability` `KNOWN_BASES`) + trust ceiling + gates | additive bases |
 | **Team (Nonagon)** | a customised `aivyx_team::TeamConfig` — a lead + ≤9 least-privileged specialists over the pack's scopes — loaded by `aivyx team run --config <pack.toml>` (Chapter J) | config (TOML) |
 | **Skills bundle** | starter conversationally-taught `LearnedSkill`s | config only |
@@ -49,15 +64,28 @@ free engine, shaped into a domain expert crew. The kitchen pack's BOH Nonagon
 (Aria + stocktake / inventory / purchasing / HACCP) is the worked example —
 see [`NONAGON.md`](NONAGON.md) §9 and `crates/verticals/aivyx-kitchen`.
 
-The only Rust that changes outside the new crate is **additive scope
+The only Rust that changes outside the pack crates is **additive scope
 bases** in `aivyx-capability` (exactly how `web.search`, `gmail.*`,
-`task.*` were added) — never a substrate fork.
+`task.*` were added) — never a substrate fork. Everything else a pack needs
+comes through the `aivyx-vertical-sdk` facade.
 
 ### Where a pack lives
-For the spike, the toolkit crate is a workspace member (like
-`aivyx-toolkit`). The ecosystem question — packs as separate
-repos/registry artifacts vs. in-tree — is deferred; the crate boundary
-keeps either option open.
+A pack is two crates under `crates/verticals/` (a team-config crate + a
+toolkit tool-process crate), each depending on **`aivyx-vertical-sdk` alone**
+for its shipping code. The Kitchen pack stays **in-tree and open** as the
+reference example. **Paid packs live in `crates/verticals-private/`** — a
+git-ignored sibling directory whose contents never land in the public repo
+(only its `.gitignore` + `README.md` are tracked). A private pack dropped in
+there **auto-joins the workspace** via the `crates/verticals-private/*` member
+glob and builds against the same lockfile, behind the *same* SDK contract —
+nothing about a pack's code distinguishes "example" from "commercial" except
+where it sits and who can read it. (A separate repo stays possible later; see
+below.)
+
+Because the SDK is the only engine surface a pack compiles against, it is
+also the clean cut-seam if a separate verticals repo is ever wanted: such a
+repo would `git`-tag-depend on `aivyx-vertical-sdk` and nothing else from the
+core. That option stays open; it is not needed yet.
 
 ---
 
@@ -252,8 +280,181 @@ protocol), both audited.
   the local-first base).
 - **First integration targets** — which POS / supplier / inventory
   systems beyond KitchenDB (the moat is integrations, not the agent).
-- **Pack format as a first-class artifact** — once there are two packs,
-  formalize template + toolkit + skills + scopes as a bundle.
+- **Pack format as a first-class artifact** — the *code* boundary is now
+  formalized by `aivyx-vertical-sdk` (a pack compiles against one stable
+  crate). Still open: bundling template + toolkit + skills + scopes into a
+  single installable artifact, and the out-of-tree / separate-repo packaging
+  once a second pack exists.
 - **Brand** — the Kitchen OS Flutter UI uses an Aivyx-Studio-inspired
   coral/purple palette; the Aivyx TUI uses amber-on-near-black. Reconcile
   if the agent and the app are to feel like one product.
+
+---
+
+## 6. Build your own pack — step by step
+
+This is the tutorial. It mirrors the Kitchen pack exactly, so every step
+points at a real file you can open and copy. A pack is **two sibling crates**
+under `crates/verticals/` — a team-config crate (`aivyx-kitchen`) and a
+toolkit tool-process crate (`aivyx-kitchen-toolkit`) — plus a small, additive
+touch to one engine crate (the scope bases) and some operator config. You
+write Rust against **`aivyx-vertical-sdk` only**.
+
+### Step 0 — the dependency rule
+
+Both pack crates depend on the facade and nothing else from the engine:
+
+```toml
+# crates/verticals/<your-pack>/Cargo.toml
+[dependencies]
+aivyx-vertical-sdk = { path = "../../aivyx-vertical-sdk" }
+```
+
+Everything you need is re-exported under three modules — `capability`
+(`Scope`, `TrustTier`), `team` (`TeamConfig`, `TeamMember`, `MissionPlan`,
+`Step`, `attenuate_for_member`), and `tool` (`Tool`, `ToolContext`,
+`ToolOutcome`, `AivyxError`, `Verification`, `run_multi_tool_subprocess`) —
+or pull them all in with `use aivyx_vertical_sdk::prelude::*;`. **Do not add
+`aivyx-core` / `aivyx-team` / `aivyx-capability` / `aivyx-tool` as regular
+dependencies** — if you find you need something they expose, add it to the
+facade first (one reviewed place), don't reach around it.
+
+> **The one exception: tests.** A pack's e2e *test harness* drives the engine
+> directly (mock `ChannelContext`, the tool-process bridge) — those engine
+> crates are fine as **`[dev-dependencies]`**, exactly as the engine crates
+> test each other. See `aivyx-kitchen-toolkit/Cargo.toml`. The boundary is
+> about shipping code, not test scaffolding.
+
+### Step 1 — the team crate (the Nonagon)
+
+Reference: [`crates/verticals/aivyx-kitchen/src/lib.rs`](../crates/verticals/aivyx-kitchen/src/lib.rs).
+
+A team crate ships a `TeamConfig` (a lead + ≤9 least-privileged specialists)
+and the `MissionPlan`(s) they run. The pattern:
+
+```rust
+use aivyx_vertical_sdk::capability::TrustTier;
+use aivyx_vertical_sdk::team::{DialogueConfig, MissionPlan, Step, TeamConfig, TeamMember};
+
+fn member(name: &str, role: &str, soul: &str, tools: &[&str], scopes: &[&str]) -> TeamMember {
+    TeamMember {
+        name: name.to_string(),
+        role: role.to_string(),
+        soul: soul.to_string(),                                   // the member's voice/judgment
+        tool_allowlist: tools.iter().map(|s| s.to_string()).collect(),
+        capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        trust_ceiling: TrustTier::Trusted,
+    }
+}
+
+pub fn my_team() -> TeamConfig { /* lead + specialists; see kitchen_boh_team() */ }
+pub fn my_mission() -> MissionPlan { /* Step::delegate(...).after([...]); a DAG */ }
+```
+
+Two rules the engine enforces, so design for them:
+
+- **NT-02 least privilege** — every specialist's authority is *attenuated* to
+  a subset of the lead's. Give each member only the scopes its job needs.
+  Kitchen's `haccp` member holds *only* `kitchen.haccp.log` — it physically
+  cannot send a PO or read inventory, and a test proves it
+  (`nt02_haccp_cannot_exceed_aria_and_cannot_order`).
+- **Ship the same roster as a committed TOML asset** and round-trip-test it
+  against the constructor (`toml_asset_round_trips_with_the_constructor`), so
+  the loadable `aivyx team run --config <path>` artifact can't drift from the
+  code.
+
+### Step 2 — the toolkit crate (the real tools)
+
+Reference: [`crates/verticals/aivyx-kitchen-toolkit/`](../crates/verticals/aivyx-kitchen-toolkit/) — `src/tools/*.rs`, `src/lib.rs`, `src/main.rs`.
+
+This is a **tool-process**: a separate binary the daemon spawns (Chapter F/G
+substrate pattern, same as `aivyx-gmail`). Each domain action is an
+`impl Tool`; `required_scope` returns the `Scope` the call needs:
+
+```rust
+use aivyx_vertical_sdk::capability::Scope;
+use aivyx_vertical_sdk::tool::{Tool, ToolContext, ToolId, ToolOutcome};
+
+#[async_trait::async_trait]
+impl Tool for InventoryList {
+    fn id(&self) -> ToolId { /* ... */ }
+    fn name(&self) -> &str { "kitchen.inventory.list" }
+    fn description(&self) -> &str { "List current inventory items." }
+    fn input_schema(&self) -> &serde_json::Value { /* JSON Schema */ }
+    fn required_scope(&self, _input: &serde_json::Value) -> Scope {
+        Scope::parse("kitchen.read").expect("registered base")
+    }
+    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        // call the system of record (here: KitchenDB PostgREST), return a ToolOutcome
+    }
+}
+```
+
+Gathered into a set and served from `main.rs`:
+
+```rust
+// src/lib.rs — one place both the binary and the coherence test use
+pub fn all_tools(client: Arc<KitchenClient>) -> Vec<Arc<dyn Tool>> { /* ... */ }
+
+// src/main.rs
+run_multi_tool_subprocess(all_tools(client)).await
+```
+
+Gate policy lives in `required_scope` + the confirm-first flag:
+
+- A **read** tool returns a read scope (`kitchen.read`) — open within tier.
+- A **write** tool returns a write scope (`kitchen.write`) — gated.
+- A **consequential** tool (spends money, dispatches externally) gets its
+  *own* base **and** is confirm-first (`kitchen.order.send` — a human
+  approves every send, even inside the autonomous loop). Keep the reversible
+  half separate: Kitchen splits `kitchen.order.draft` (gated write, no
+  confirm) from `kitchen.order.send` (confirm-first) so the loop can draft
+  unattended and halt at the money step.
+- An **append-only audit** tool lands every call on the HMAC chain
+  (`kitchen.haccp.log`).
+
+### Step 3 — register the scope bases (the one engine touch)
+
+Add your `your.*` bases to `aivyx-capability`'s `KNOWN_BASES`, with the tier
+ceiling each sits below — the *only* edit outside the pack crates, and
+purely additive (the same move that added `web.search`, `gmail.*`). Unknown
+bases fail `Scope::parse`, so this is what makes your scopes real. Mirror it
+in `docs/TOOLS.md` (a drift-guard test checks the catalog against
+`KNOWN_BASES`).
+
+### Step 4 — wire it into the daemon + onboarding
+
+- **Workspace** — for an in-tree pack, add both crates to `members` +
+  `default-members` in the root `Cargo.toml`. For a **private** pack, drop it
+  in `crates/verticals-private/` instead — the `crates/verticals-private/*`
+  member glob picks it up automatically, no `Cargo.toml` edit (and it stays
+  git-ignored). Either way the toolkit binary wants
+  `[package.metadata.dist] dist = false` so only the top-level `aivyx` binary
+  ships as a release artifact.
+- **Tool process** — `[[tool_process]]` in `aivyx.toml` (`name`, `command`
+  → the built binary) so the daemon spawns it and its tools reach the team
+  via the `tool_list → TeamAssembly::base_tools` path.
+- **Team config** — point `[team] config_path` at your roster TOML (or ship
+  it as a template).
+- **Onboarding** — a `aivyx connect <pack>` branch that writes the pack's
+  config and probes reachability (the non-OAuth vertical pattern, Chapter
+  Mise: `aivyx connect kitchen` writes `[kitchen_db]`, plants the roster,
+  and probes KitchenDB), plus an `aivyx doctor` section.
+
+### Step 5 — test it
+
+Three test shapes, all in the Kitchen crates:
+
+1. **Team/mission validity** — `team.validate()`, the mission is a DAG,
+   every step targets a real member, NT-02 attenuation holds, the TOML asset
+   round-trips. (`aivyx-kitchen/src/lib.rs` tests.)
+2. **Coherence** — the team's referenced `your.*` tool *names* must match the
+   names the toolkit actually provides. (`tests/boh_coherence.rs`.)
+3. **Real-binary e2e** — drive the actual built tool-process over the harness
+   against a mock system-of-record, asserting a real tool call round-trips.
+   (`tests/harness_e2e.rs` — this is the test that legitimately uses the
+   engine crates as dev-dependencies.)
+
+That is a complete pack: a domain crew + real gated tools + additive scopes +
+daemon wiring + onboarding, all over the free engine, with the only stable
+surface you build against being `aivyx-vertical-sdk`.

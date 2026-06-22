@@ -12,7 +12,8 @@ readme.workspace = true
 
 [dependencies]
 # A vertical pack is config over the free engine: the kitchen team is a
-# customised TeamConfig + a MissionPlan, both aivyx-team types. TrustTier
-# comes from aivyx-capability. NO substrate fork — packs inherit the engine.
-aivyx-team = { path = "../../aivyx-team" }
-aivyx-capability = { path = "../../aivyx-capability" }
+# customised TeamConfig + a MissionPlan, plus the TrustTier-tiered scopes. ALL
+# of it comes through the stable `aivyx-vertical-sdk` facade — a pack never
+# depends on the engine crates (aivyx-team / aivyx-capability / ...) directly,
+# so core refactors can't break it. NO substrate fork — packs inherit the engine.
+aivyx-vertical-sdk = { path = "../../aivyx-vertical-sdk" }

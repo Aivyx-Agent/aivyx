@@ -17,9 +17,8 @@
 //! send a PO or read inventory. Purchasing holds `kitchen.order.send`, so the
 //! `po.send` confirm-first gate fires at the holder.
 
-use aivyx_capability::TrustTier;
-use aivyx_team::config::{DialogueConfig, TeamConfig, TeamMember};
-use aivyx_team::mission::{MissionPlan, Step};
+use aivyx_vertical_sdk::capability::TrustTier;
+use aivyx_vertical_sdk::team::{DialogueConfig, MissionPlan, Step, TeamConfig, TeamMember};
 
 /// The kitchen BOH team as committed TOML — the literal "pack supplies a
 /// `TeamConfig`" artifact. Round-trips with [`kitchen_boh_team`].
@@ -144,8 +143,8 @@ pub fn overnight_close_mission() -> MissionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aivyx_capability::Scope;
-    use aivyx_team::attenuate_for_member;
+    use aivyx_vertical_sdk::capability::Scope;
+    use aivyx_vertical_sdk::team::attenuate_for_member;
 
     fn scope(s: &str) -> Scope {
         Scope::parse(s).expect("known base")
