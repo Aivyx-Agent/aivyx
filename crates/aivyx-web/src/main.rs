@@ -158,6 +158,20 @@ struct SettingsState {
     restart_required: bool,
 }
 
+/// Teams screen state — Chapters Y (read) + Roster (RO.3, edit). The active
+/// roster (re-read from disk after a save) plus the last write outcome + the
+/// load-time restart flag. The editor seeds a local draft from `roster`.
+#[derive(Clone, Default, PartialEq)]
+struct TeamsState {
+    /// The daemon's active team config. `None` until the first load.
+    roster: Option<TeamConfig>,
+    /// Last save outcome: `(ok, message)`. `None` until the first save.
+    notice: Option<(bool, String)>,
+    /// True after a successful save — the team file is written but the running
+    /// daemon won't adopt it until it restarts (the team service is boot-built).
+    restart_required: bool,
+}
+
 /// Agents screen state — Chapter V. The operator-declared Profile half (V.3)
 /// plus the self-learned Persona-governance half (V.4): the folded effective
 /// persona, the pending proposals the operator gates, and the approved delta
@@ -314,7 +328,7 @@ fn App() -> Element {
     let lattice = use_signal(GraphKnowledgeState::default);
     let settings = use_signal(SettingsState::default);
     let agents = use_signal(AgentsState::default);
-    let roster = use_signal(|| None::<TeamConfig>);
+    let teams = use_signal(TeamsState::default);
     let documents = use_signal(DocumentsState::default);
     let voice = use_signal(VoiceState::default);
     let skills = use_signal(SkillsState::default);
@@ -327,7 +341,7 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, wiki, lattice, settings, agents, roster, documents,
+            rx, missions, dashboard, memory, wiki, lattice, settings, agents, teams, documents,
             voice, skills, mcp, connected, session, transcript, streaming, gate,
         )
     });
@@ -337,7 +351,7 @@ fn App() -> Element {
     use_context_provider(|| lattice);
     use_context_provider(|| settings);
     use_context_provider(|| agents);
-    use_context_provider(|| roster);
+    use_context_provider(|| teams);
     use_context_provider(|| documents);
     use_context_provider(|| voice);
     use_context_provider(|| skills);
@@ -3394,107 +3408,198 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Teams — the Nonagon roster (Chapter Y). Read-only; renders the daemon's
-// active TeamConfig (lead + specialists, role / trust / scopes / tools / soul).
+// Teams — the Nonagon roster (Chapters Y read + Roster RO.3 edit). Renders the
+// daemon's active TeamConfig as an editable form: team name/description, the
+// lead pick, and per-member role / trust / scopes / tools / soul, with
+// add/remove specialist (≤9) and Save → SetTeamRoster (server-validated; the
+// team is adopted on the next daemon restart). NT-02 is unchanged — a member
+// scope the lead lacks is flagged inert, never granted.
 // ---------------------------------------------------------------------------
 
 #[component]
 fn TeamsPanel() -> Element {
     let ws = use_context::<Sender>();
-    let roster = use_context::<Signal<Option<TeamConfig>>>();
+    let teams = use_context::<Signal<TeamsState>>();
     let missions = use_context::<Signal<Vec<TeamMissionView>>>();
 
+    // The edit draft, seeded once from the loaded roster.
+    let mut draft = use_signal(|| None::<TeamConfig>);
     use_future(move || async move {
         ws.send(get_team_roster_query());
     });
-
-    let team = match roster() {
-        Some(t) => t,
-        None => {
-            return rsx! {
-                div { class: "teams",
-                    div { class: "glass-card empty", p { class: "label-tech", "Loading team…" } }
-                }
+    use_effect(move || {
+        if let Some(r) = teams().roster {
+            if draft.peek().is_none() {
+                draft.set(Some(r));
             }
         }
+    });
+
+    let st = teams();
+    let Some(team) = draft() else {
+        return rsx! {
+            div { class: "teams",
+                div { class: "glass-card empty", p { class: "label-tech", "Loading team…" } }
+            }
+        };
     };
 
-    let specialists = team.members.iter().filter(|m| m.name != team.lead).count();
+    // The lead's declared scopes — for the NT-02 "inert" hint on specialists.
+    let lead_scopes: std::collections::HashSet<String> = team
+        .members
+        .iter()
+        .find(|m| m.name == team.lead)
+        .map(|m| m.capability_scopes.iter().cloned().collect())
+        .unwrap_or_default();
+    let specialist_count = team.members.iter().filter(|m| m.name != team.lead).count();
     let active = missions()
         .iter()
         .filter(|m| !matches!(m.phase, TeamMissionPhase::Done | TeamMissionPhase::Rejected))
         .count();
-    let lead = team.lead.clone();
+    let member_names: Vec<String> = team.members.iter().map(|m| m.name.clone()).collect();
+    let dirty = st.roster.as_ref() != Some(&team);
+    let can_add = specialist_count < 9;
 
     rsx! {
         div { class: "teams",
-            // Team header.
+            if st.restart_required {
+                div { class: "glass-card restart-banner",
+                    strong { "Saved — restart the daemon to run the new team." }
+                    p { class: "label-tech",
+                        "The team is assembled at startup. Run  "
+                        code { "aivyx daemon stop && aivyx daemon run" }
+                    }
+                }
+            }
+            if let Some((ok, msg)) = st.notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+
+            // Team identity.
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
-                    h3 { "{team.name}" }
+                    h3 { "Team" }
                     span { class: "chip", "{team.members.len()} members" }
+                    span { class: "chip", "{active} active" }
                 }
-                if !team.description.is_empty() {
-                    p { class: "label-tech", "{team.description}" }
+                div { class: "field-row",
+                    label { class: "label-tech", "Name" }
+                    input { class: "input", value: "{team.name}",
+                        oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.name = e.value(); } } }
                 }
-                div { class: "kv-grid",
-                    div { span { class: "label-tech", "Lead" } div { "{team.lead}" } }
-                    div { span { class: "label-tech", "Specialists" } div { "{specialists}" } }
-                    div { span { class: "label-tech", "Active missions" } div { "{active}" } }
+                div { class: "field-row",
+                    label { class: "label-tech", "Description" }
+                    input { class: "input", value: "{team.description}",
+                        oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.description = e.value(); } } }
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Lead" }
+                    select { class: "input", value: "{team.lead}",
+                        onchange: move |e| { if let Some(t) = draft.write().as_mut() { t.lead = e.value(); } },
+                        for n in member_names.clone() {
+                            option { value: "{n}", "{n}" }
+                        }
+                    }
                 }
             }
 
-            // Roster — one card per member, lead first.
+            // Per-member editors.
             div { class: "roster-grid",
-                for m in team.members.clone() {
-                    MemberCard { key: "{m.name}", is_lead: m.name == lead, m: m.clone() }
-                }
-            }
-        }
-    }
-}
-
-/// One team member — role + trust + scopes + tool count, expandable to the full
-/// tool allowlist + the member's soul (system prompt).
-#[component]
-fn MemberCard(m: TeamMember, is_lead: bool) -> Element {
-    let mut expanded = use_signal(|| false);
-    let scopes = if m.capability_scopes.is_empty() {
-        "—".to_string()
-    } else {
-        m.capability_scopes.join(", ")
-    };
-
-    rsx! {
-        div { class: if is_lead { "glass-card member-card lead" } else { "glass-card member-card" },
-            div { class: "panel-head",
-                h4 { "{m.name}" }
-                if is_lead {
-                    span { class: "chip amber", "lead" }
-                }
-                span { class: "chip {trust_class(m.trust_ceiling)}", "{trust_label(m.trust_ceiling)}" }
-            }
-            p { class: "member-role", "{m.role}" }
-            div { class: "member-meta",
-                span { class: "label-tech", "scopes: {scopes}" }
-                span { class: "label-tech", "tools: {m.tool_allowlist.len()}" }
-            }
-            button {
-                class: "btn btn-glass btn-xs",
-                onclick: move |_| expanded.toggle(),
-                {if expanded() { "Hide soul ▴" } else { "Show soul ▾" }}
-            }
-            if expanded() {
-                div { class: "member-detail",
-                    if !m.tool_allowlist.is_empty() {
-                        div { class: "tool-chips",
-                            for t in m.tool_allowlist.clone() {
-                                span { class: "chip", "{t}" }
+                {team.members.clone().into_iter().enumerate().map(|(i, m)| {
+                    let is_lead = m.name == team.lead;
+                    let scopes_text = m.capability_scopes.join("\n");
+                    let tools_text = m.tool_allowlist.join("\n");
+                    let widened: Vec<String> = if is_lead {
+                        Vec::new()
+                    } else {
+                        m.capability_scopes.iter().filter(|s| !lead_scopes.contains(*s)).cloned().collect()
+                    };
+                    let widened_text = widened.join(", ");
+                    rsx! {
+                        div { key: "{i}",
+                            class: if is_lead { "glass-card member-card lead" } else { "glass-card member-card" },
+                            div { class: "panel-head",
+                                if is_lead { span { class: "chip amber", "lead" } }
+                                span { class: "chip {trust_class(m.trust_ceiling)}", "{trust_label(m.trust_ceiling)}" }
+                                if !is_lead {
+                                    button { class: "btn btn-ghost-danger btn-xs",
+                                        onclick: move |_| { if let Some(t) = draft.write().as_mut() { t.members.remove(i); } },
+                                        "Remove" }
+                                }
+                            }
+                            div { class: "field-row",
+                                label { class: "label-tech", "Name" }
+                                input { class: "input", value: "{m.name}",
+                                    oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].name = e.value(); } } }
+                            }
+                            div { class: "field-row",
+                                label { class: "label-tech", "Role" }
+                                input { class: "input", value: "{m.role}",
+                                    oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].role = e.value(); } } }
+                            }
+                            div { class: "field-row",
+                                label { class: "label-tech", "Trust" }
+                                select { class: "input", value: "{trust_label(m.trust_ceiling)}",
+                                    onchange: move |e| {
+                                        if let Some(tt) = trust_from_label(&e.value()) {
+                                            if let Some(t) = draft.write().as_mut() { t.members[i].trust_ceiling = tt; }
+                                        }
+                                    },
+                                    for tt in [TrustTier::Untrusted, TrustTier::SemiTrusted, TrustTier::Trusted, TrustTier::Kernel] {
+                                        option { value: "{trust_label(tt)}", "{trust_label(tt)}" }
+                                    }
+                                }
+                            }
+                            div { class: "field-row",
+                                label { class: "label-tech", "Scopes" }
+                                textarea { class: "input", rows: "2", placeholder: "fs.read\nmemory.write",
+                                    value: "{scopes_text}",
+                                    oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].capability_scopes = parse_token_list(&e.value()); } } }
+                            }
+                            div { class: "field-row",
+                                label { class: "label-tech", "Tools" }
+                                textarea { class: "input", rows: "2", placeholder: "fs.read\nteam.message",
+                                    value: "{tools_text}",
+                                    oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].tool_allowlist = parse_token_list(&e.value()); } } }
+                            }
+                            div { class: "field-row",
+                                label { class: "label-tech", "Soul" }
+                                textarea { class: "input", rows: "3", value: "{m.soul}",
+                                    oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].soul = e.value(); } } }
+                            }
+                            if !widened_text.is_empty() {
+                                p { class: "label-tech sub",
+                                    "Lead lacks {widened_text} — inert until the lead holds them (attenuated at spawn)." }
                             }
                         }
                     }
-                    pre { class: "soul", "{m.soul}" }
+                })}
+            }
+
+            // Add specialist + Save / Discard.
+            div { class: "actions",
+                button { class: "btn btn-glass", disabled: !can_add,
+                    onclick: move |_| {
+                        if let Some(t) = draft.write().as_mut() {
+                            let n = t.members.len();
+                            t.members.push(TeamMember {
+                                name: format!("specialist-{n}"),
+                                role: "Specialist".to_string(),
+                                soul: String::new(),
+                                tool_allowlist: vec!["team.message".to_string()],
+                                capability_scopes: Vec::new(),
+                                trust_ceiling: TrustTier::SemiTrusted,
+                            });
+                        }
+                    },
+                    {if can_add { "Add specialist" } else { "Max 9 specialists" }}
                 }
+                button { class: "btn btn-primary", disabled: !dirty,
+                    onclick: move |_| { if let Some(t) = draft() { ws.send(set_team_roster_query(&t)); } },
+                    "Save team" }
+                button { class: "btn btn-glass", disabled: !dirty,
+                    onclick: move |_| { draft.set(teams().roster); },
+                    "Discard changes" }
             }
         }
     }
@@ -3504,6 +3609,37 @@ fn get_team_roster_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-teams".to_string(),
         payload: QueryPayload::GetTeamRoster,
+    }
+}
+
+/// Chapter Roster (RO.3) — persist the edited roster. The id is prefixed
+/// `mc-teams` so a server-side validation `QueryError` routes to the Teams
+/// banner.
+fn set_team_roster_query(roster: &TeamConfig) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-teams-set".to_string(),
+        payload: QueryPayload::SetTeamRoster { roster: roster.clone() },
+    }
+}
+
+/// Parse a scopes/tools textarea (newline-, comma-, or space-separated) into a
+/// trimmed, non-empty token list.
+fn parse_token_list(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == '\n' || c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Inverse of [`trust_label`] — parse a trust tier from the editor's `<select>`.
+fn trust_from_label(s: &str) -> Option<TrustTier> {
+    match s {
+        "untrusted" => Some(TrustTier::Untrusted),
+        "semi-trusted" => Some(TrustTier::SemiTrusted),
+        "trusted" => Some(TrustTier::Trusted),
+        "kernel" => Some(TrustTier::Kernel),
+        _ => None,
     }
 }
 
@@ -3927,7 +4063,7 @@ async fn ws_task(
     mut lattice: Signal<GraphKnowledgeState>,
     mut settings: Signal<SettingsState>,
     mut agents: Signal<AgentsState>,
-    mut roster: Signal<Option<TeamConfig>>,
+    mut teams: Signal<TeamsState>,
     mut documents: Signal<DocumentsState>,
     mut voice: Signal<VoiceState>,
     mut skills: Signal<SkillsState>,
@@ -3965,7 +4101,18 @@ async fn ws_task(
                     payload: QueryResponsePayload::GetTeamRoster { roster: cfg },
                     ..
                 } => {
-                    roster.set(Some(cfg));
+                    teams.write().roster = Some(cfg);
+                }
+                // Chapter Roster (RO.3) — a SetTeamRoster save was accepted: the
+                // daemon echoes the validated, re-read roster + restart flag.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::TeamRosterApplied { roster: cfg, restart_required },
+                    ..
+                } => {
+                    let mut t = teams.write();
+                    t.roster = Some(cfg);
+                    t.restart_required = restart_required;
+                    t.notice = Some((true, "Team saved to the team config file.".to_string()));
                 }
                 // Chapter Z — Documents browser: a directory listing arrived;
                 // the echoed `path` is authoritative. A *refresh* re-list (after
@@ -4271,6 +4418,15 @@ async fn ws_task(
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-voice") => {
                     voice.write().notice = Some((false, message));
+                }
+                // Chapter Roster (RO.3) — a team save/read failure (e.g. the
+                // server-side `TeamConfig::validate` rejected the roster). Ids
+                // are prefixed `mc-teams` so it lands on the Teams banner.
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-teams") => {
+                    teams.write().notice = Some((false, message));
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),
