@@ -359,8 +359,10 @@ fn load_document(path: &Path) -> Result<DocumentMut, ConfigWriteError> {
 }
 
 /// Write `contents` to `path` and pin it to `0600` (the file may carry secrets
-/// in other sections — same posture every config writer uses).
-fn write_toml_0600(path: &Path, contents: &str) -> Result<(), ConfigWriteError> {
+/// in other sections — same posture every config writer uses). Public so other
+/// native config writers that own a whole file (Chapter Roster's team-config
+/// writer) reuse the one permission-pinning path.
+pub fn write_toml_0600(path: &Path, contents: &str) -> Result<(), ConfigWriteError> {
     std::fs::write(path, contents).map_err(|e| ConfigWriteError::Io {
         reason: format!("failed to write {}: {e}", path.display()),
     })?;

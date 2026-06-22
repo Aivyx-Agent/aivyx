@@ -7371,6 +7371,23 @@ async fn run_async(
                 let p = PathBuf::from(DEFAULT_TOML_PATH);
                 p.exists().then_some(p)
             },
+            // Chapter Roster (RO.2) — the resolved team-config write target for
+            // the `SetTeamRoster` handler: the operator's `[team] config_path`
+            // (relative → joined to the `aivyx.toml` dir) or the conventional
+            // `team.toml` beside it. Gated on the config file existing — an
+            // env-only launch leaves it `None` and the handler refuses, exactly
+            // like the other Settings writes.
+            team_config_write_path: {
+                let toml = PathBuf::from(DEFAULT_TOML_PATH);
+                toml.exists().then(|| {
+                    let base = toml
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    team::team_write_target(config_team_config_path.as_deref(), &base)
+                })
+            },
             // Chapter X — the same provider + model the agent's turns use,
             // for the Studio's `DraftPersonaSeed` one-shot LLM draft.
             seed_draft_llm: Some(aivyx_channel::daemon_server::SeedDraftLlm {

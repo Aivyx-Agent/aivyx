@@ -492,6 +492,12 @@ pub struct DaemonConfig {
     /// path. Read-only config (the access level itself) is still load-time —
     /// a write here only updates the file; it takes effect on the next start.
     pub config_toml_path: Option<PathBuf>,
+    /// Chapter Roster (RO.2) — the resolved team-config write target: the
+    /// operator's `[team] config_path` (or the conventional `team.toml` beside
+    /// `aivyx.toml`), pre-resolved by the binary. `None` ⇒ env-only launch (no
+    /// config file); the `SetTeamRoster` handler then refuses, like the other
+    /// write handlers. Writes here are load-time — adopted on the next start.
+    pub team_config_write_path: Option<PathBuf>,
     /// Chapter X — the model used to **draft** a persona seed from the
     /// operator's description (the Studio's `DraftPersonaSeed` IPC). `None` ⇒ no
     /// model is available for drafting, and the handler returns a typed "no
@@ -619,6 +625,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         workspace_journaling_interval,
         pricing,
         config_toml_path,
+        team_config_write_path,
         seed_draft_llm,
         document_roots,
         wiki_sweep,
@@ -1455,6 +1462,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             team_missions: team_missions.clone(),
             gate_policy,
             config_toml_path: config_toml_path.clone(),
+            team_config_write_path: team_config_write_path.clone(),
             seed_draft_llm: seed_draft_llm.clone(),
             document_roots: document_roots.clone(),
         };
@@ -1635,6 +1643,9 @@ struct ConnectionContext {
     /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
     /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<PathBuf>,
+    /// Chapter Roster (RO.2) — the resolved team-config write target for the
+    /// `SetTeamRoster` handler. `None` ⇒ env-only launch; the handler refuses.
+    team_config_write_path: Option<PathBuf>,
     /// Chapter X — provider + model for the `DraftPersonaSeed` handler.
     seed_draft_llm: Option<SeedDraftLlm>,
     /// Chapter Z — the canonical roots the Documents browser may reach.
@@ -1684,6 +1695,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         team_missions,
         gate_policy,
         config_toml_path,
+        team_config_write_path,
         seed_draft_llm,
         document_roots,
     } = ctx;
@@ -2401,6 +2413,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 loop_config.as_ref(),
                                 team_missions.as_ref(),
                                 config_toml_path.as_deref(),
+                                team_config_write_path.as_deref(),
                                 &document_roots,
                             )
                             .await;
@@ -2925,6 +2938,7 @@ async fn run_single_connection_daemon(
         team_missions: None,
         gate_policy: GatePolicy::default(),
         config_toml_path: None,
+        team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
     })
@@ -3012,6 +3026,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         gate_policy: GatePolicy::default(),
         pricing: Default::default(),
         config_toml_path: None,
+        team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
         wiki_sweep: None,
@@ -3239,6 +3254,9 @@ async fn handle_query(
     // Chapter U — the loaded `aivyx.toml` path for the Settings write
     // handlers. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<&Path>,
+    // Chapter Roster (RO.2) — the resolved team-config write target for the
+    // `SetTeamRoster` handler. `None` ⇒ env-only launch; the handler refuses.
+    team_config_write_path: Option<&Path>,
     // Chapter Z — the canonical roots for the Documents browser handlers.
     document_roots: &DocumentRoots,
 ) -> QueryResponsePayload {
@@ -4603,6 +4621,29 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::SetTeamRoster { roster } => {
+            // Chapter Roster (RO.2) — persist the operator-authored team. The
+            // target is pre-resolved by the binary (`[team] config_path` or the
+            // conventional `team.toml`); an env-only launch has none → refuse.
+            let path = match team_config_write_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            // validate → to_toml → 0600. Validation runs first, so an invalid
+            // roster is rejected with the validator's message and never written.
+            match crate::team_config_write::write_team_config(path, &roster) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "team", &team_roster_summary(&roster));
+                    team_roster_applied(path)
+                }
+                Err(crate::team_config_write::TeamConfigWriteError::Invalid(message)) => {
+                    QueryResponsePayload::QueryError { code: "invalid_roster".into(), message }
+                }
+                Err(crate::team_config_write::TeamConfigWriteError::Write(message)) => {
+                    QueryResponsePayload::QueryError { code: "team_write_failed".into(), message }
+                }
+            }
+        }
     }
 }
 
@@ -4649,6 +4690,32 @@ fn settings_applied(toml_path: &Path, embeddings_available: bool) -> QueryRespon
             message: format!("settings written, but reloading them failed: {e}"),
         },
     }
+}
+
+/// Chapter Roster (RO.2) — re-read the written team file and return a
+/// `TeamRosterApplied` response. `restart_required` is always `true`: the team
+/// service is assembled at boot, so a write updates the file but not the
+/// running daemon (mirrors `settings_applied`).
+fn team_roster_applied(team_path: &Path) -> QueryResponsePayload {
+    match aivyx_team::TeamConfig::load(team_path) {
+        Ok(roster) => QueryResponsePayload::TeamRosterApplied { roster, restart_required: true },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("team roster written, but reloading it failed: {e}"),
+        },
+    }
+}
+
+/// Chapter Roster — a compact, forensic-friendly summary of a persisted roster
+/// for the `ConfigChanged` audit entry (the shape — team name / lead /
+/// specialist count — not the members' souls).
+fn team_roster_summary(roster: &aivyx_team::TeamConfig) -> String {
+    format!(
+        "team = {:?}, lead = {:?}, {} specialist(s)",
+        roster.name,
+        roster.lead,
+        roster.specialists().count(),
+    )
 }
 
 /// Chapter V — re-read the config from disk and return a `ProfileApplied`

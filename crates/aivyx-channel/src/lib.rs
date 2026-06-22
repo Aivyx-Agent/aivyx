@@ -50,6 +50,8 @@ pub mod conversation_window;
 /// (`TeamMissionRecord` over `KeyDomain::TeamMissions`), the checkpoint/resume
 /// state behind the live TUI Missions feed.
 pub mod team_mission;
+/// Chapter Roster (RO.2) — the team-config file writer (`SetTeamRoster`).
+pub mod team_config_write;
 /// Chapter L (L.4) — the daemon-side mission driver: `SharedMissionState`
 /// (registry over the store) plus `team_run` / `resolve_team_gate`, driving
 /// the engine's `run_until_pause` with checkpoint persistence.

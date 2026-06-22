@@ -517,6 +517,21 @@ pub enum QueryPayload {
         #[serde(default)]
         output_device: Option<String>,
     },
+    /// Chapter Roster — persist the operator-authored team. Writes the whole
+    /// `[team]`-rooted config file the daemon loads at startup (Chapter Roster
+    /// RO.1: `[team] config_path`, else the conventional `team.toml` beside
+    /// `aivyx.toml`). The daemon **validates** the roster server-side
+    /// (`TeamConfig::validate` — names, scopes parse to a known base,
+    /// lead-is-a-member, ≤9 specialists) **before** it touches disk; an invalid
+    /// roster is rejected with `QueryError` `invalid_roster` and nothing is
+    /// written. NT-02 is unchanged: declaring a member scope the lead lacks is
+    /// valid but inert (`attenuate_for_member` still floors specialists at
+    /// spawn). Takes effect on the **next daemon start** (the team service is
+    /// boot-assembled). Responds with [`QueryResponsePayload::TeamRosterApplied`]
+    /// (or `QueryError` — `no_config_file` for an env-only launch).
+    SetTeamRoster {
+        roster: aivyx_team_types::TeamConfig,
+    },
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1023,6 +1038,14 @@ pub enum QueryResponsePayload {
     /// (always `true`; `[voice]` is load-time).
     VoiceApplied {
         settings: VoiceSettingsSnapshot,
+        restart_required: bool,
+    },
+    /// Response to [`QueryPayload::SetTeamRoster`]. Chapter Roster — the
+    /// **validated, persisted** roster (re-read from disk so the Teams screen
+    /// re-renders from authoritative state) + `restart_required` (always `true`
+    /// today — the team service is boot-assembled, like the Settings writes).
+    TeamRosterApplied {
+        roster: aivyx_team_types::TeamConfig,
         restart_required: bool,
     },
 }
@@ -3318,6 +3341,50 @@ mod tests {
         let frame = encode_frame(&resp).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resp, "the full TeamConfig survives the frame");
+    }
+
+    #[test]
+    fn set_team_roster_round_trips_the_request_and_response() {
+        use aivyx_team_types::{DialogueConfig, TeamConfig, TeamMember, TrustTier};
+
+        let roster = TeamConfig {
+            name: "edited-team".into(),
+            description: "operator-authored".into(),
+            lead: "boss".into(),
+            members: vec![
+                TeamMember {
+                    name: "boss".into(),
+                    role: "Lead".into(),
+                    soul: "You lead.".into(),
+                    tool_allowlist: vec!["team.message".into()],
+                    capability_scopes: vec!["fs.read".into()],
+                    trust_ceiling: TrustTier::Trusted,
+                },
+                TeamMember {
+                    name: "helper".into(),
+                    role: "Helper".into(),
+                    soul: "You help.".into(),
+                    tool_allowlist: vec![],
+                    capability_scopes: vec![],
+                    trust_ceiling: TrustTier::SemiTrusted,
+                },
+            ],
+            dialogue: DialogueConfig::default(),
+        };
+        // The write request carries the whole roster.
+        let req = FrontendMessage::Query {
+            id: "mc-roster-set".into(),
+            payload: QueryPayload::SetTeamRoster { roster: roster.clone() },
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        // The response echoes the validated roster + restart_required.
+        let resp = QueryResponsePayload::TeamRosterApplied { roster, restart_required: true };
+        let frame = encode_frame(&resp).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resp);
     }
 
     #[test]

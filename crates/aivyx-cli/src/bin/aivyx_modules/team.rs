@@ -114,6 +114,19 @@ pub fn resolve_daemon_team_config(configured: Option<&Path>, base_dir: &Path) ->
     }
 }
 
+/// The team-config **write target** (Chapter Roster RO.2): the configured
+/// `[team] config_path` (a relative path joined to `base_dir`, the `aivyx.toml`
+/// directory), else the conventional `team.toml` beside `aivyx.toml`. Unlike
+/// [`resolve_daemon_team_config`] this always yields a path — the file may not
+/// exist yet, and the `SetTeamRoster` writer creates it.
+pub fn team_write_target(configured: Option<&Path>, base_dir: &Path) -> PathBuf {
+    match configured {
+        Some(p) if p.is_absolute() => p.to_path_buf(),
+        Some(p) => base_dir.join(p),
+        None => base_dir.join("team.toml"),
+    }
+}
+
 /// `aivyx team roster [--config <path>]` — print a team. Offline.
 pub fn run_roster(config: Option<&str>) -> Result<(), String> {
     print!("{}", render_roster(&load_team(config)?));
