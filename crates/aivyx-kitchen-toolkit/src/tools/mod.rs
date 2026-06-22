@@ -15,18 +15,50 @@ use aivyx_core::{AivyxError, ToolContext, ToolId, ToolOutcome, Verification};
 
 use crate::client::KitchenClient;
 
+mod batch;
 mod inventory;
 mod recipe;
 mod supplier;
 
-pub use inventory::{InventoryList, InventoryLowStock, InventoryValue};
+pub use batch::{BatchComplete, BatchStart};
+pub use inventory::{InventoryAdjust, InventoryList, InventoryLowStock, InventoryValue};
 pub use recipe::RecipeSearch;
 pub use supplier::SupplierList;
 
-/// The shared read scope for every BG.1 tool. `kitchen.read` is already in
+/// The shared read scope for the BG.1 read tools. `kitchen.read` is already in
 /// `aivyx-capability`'s `KNOWN_BASES`, so this always parses.
 pub(crate) fn kitchen_read_scope() -> Scope {
     Scope::parse("kitchen.read").expect("kitchen.read is in KNOWN_BASES")
+}
+
+/// The shared write scope for the BG.2 mutate tools (stock adjustment, batch
+/// lifecycle). `kitchen.write` is already in `KNOWN_BASES`.
+pub(crate) fn kitchen_write_scope() -> Scope {
+    Scope::parse("kitchen.write").expect("kitchen.write is in KNOWN_BASES")
+}
+
+/// Run a write RPC and build the tool outcome. The KitchenDB response (the
+/// affected row / status) is wrapped as `{ <result_key>: value }`. Marked
+/// [`Verification::Unverified`] — KitchenDB returned Ok, but the tool does not
+/// issue a separate confirming read.
+pub(crate) async fn run_write(
+    client: &KitchenClient,
+    tool_id: ToolId,
+    function: &str,
+    params: Value,
+    result_key: &str,
+    _ctx: &ToolContext<'_>,
+) -> ToolOutcome {
+    match client.call_rpc(function, params).await {
+        Ok(value) => ToolOutcome::Completed {
+            output: json!({ result_key: value }),
+            verified: Verification::Unverified,
+        },
+        Err(e) => ToolOutcome::Failed(AivyxError::Tool {
+            tool: tool_id,
+            detail: format!("kitchen: {e}"),
+        }),
+    }
 }
 
 /// Run a read RPC and build the tool outcome. A successful array response is

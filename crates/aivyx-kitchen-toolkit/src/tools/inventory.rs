@@ -11,14 +11,15 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use aivyx_capability::Scope;
-use aivyx_core::{Tool, ToolContext, ToolId, ToolOutcome};
+use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome};
 
-use super::{kitchen_read_scope, run_read};
+use super::{kitchen_read_scope, kitchen_write_scope, run_read, run_write};
 use crate::client::KitchenClient;
 
 const INVENTORY_LIST_FN: &str = "get_inventory";
 const LOW_STOCK_FN: &str = "get_low_stock_items";
 const INVENTORY_VALUE_FN: &str = "get_inventory_value";
+const INVENTORY_ADJUST_FN: &str = "adjust_inventory";
 
 /// `kitchen.inventory.list` — the current stock list, optionally filtered to a
 /// storage location.
@@ -147,6 +148,102 @@ impl Tool for InventoryValue {
     }
 }
 
+/// `kitchen.inventory.adjust` — change an item's on-hand count (a stock count
+/// correction, waste, or receipt). `kitchen.write`. KitchenDB applies the
+/// adjustment + records the movement; the tool does not compute stock math.
+pub struct InventoryAdjust {
+    id: ToolId,
+    schema: Value,
+    client: Arc<KitchenClient>,
+}
+
+impl InventoryAdjust {
+    pub fn new(client: Arc<KitchenClient>) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "sku": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The item's SKU / identifier in KitchenDB."
+                    },
+                    "delta": {
+                        "type": "number",
+                        "description": "Signed change to the on-hand count (negative for waste/usage, positive for a receipt/correction)."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional human reason recorded with the movement (e.g. \"spoilage\", \"stock-count correction\")."
+                    }
+                },
+                "required": ["sku", "delta"],
+                "additionalProperties": false
+            }),
+            client,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for InventoryAdjust {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "kitchen.inventory.adjust"
+    }
+    fn description(&self) -> &str {
+        "Adjust an inventory item's on-hand count in KitchenDB. Requires `sku` \
+         (string) and `delta` (signed number; negative for waste/usage); \
+         optional `reason` (string). KitchenDB applies the change and records \
+         the stock movement. Returns `{ adjustment: <KitchenDB row> }`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        kitchen_write_scope()
+    }
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        let params = match inventory_adjust_params(&input) {
+            Ok(p) => p,
+            Err(detail) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("kitchen.inventory.adjust: {detail}"),
+                });
+            }
+        };
+        run_write(&self.client, self.id, INVENTORY_ADJUST_FN, params, "adjustment", ctx).await
+    }
+}
+
+/// Map `kitchen.inventory.adjust` input → RPC params: `sku`→`p_sku` (trimmed,
+/// required), `delta`→`p_quantity_delta` (required number), `reason`→`p_reason`
+/// (optional, trimmed).
+fn inventory_adjust_params(input: &Value) -> Result<Value, String> {
+    let sku = input
+        .get("sku")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "`sku` is required (a non-empty string)".to_string())?;
+    let delta = input
+        .get("delta")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "`delta` is required (a signed number)".to_string())?;
+    let mut params = json!({ "p_sku": sku, "p_quantity_delta": delta });
+    if let Some(reason) = input.get("reason").and_then(|v| v.as_str()) {
+        let r = reason.trim();
+        if !r.is_empty() {
+            params["p_reason"] = json!(r);
+        }
+    }
+    Ok(params)
+}
+
 /// Map `kitchen.inventory.list` input → RPC params. An optional `location`
 /// becomes `p_location`; an empty/whitespace value is rejected (omit instead).
 fn inventory_list_params(input: &Value) -> Result<Value, String> {
@@ -206,5 +303,33 @@ mod tests {
             InventoryLowStock::new(c).required_scope(&json!({})).to_string(),
             "kitchen.read"
         );
+    }
+
+    #[test]
+    fn adjust_params_maps_required_fields_and_optional_reason() {
+        let p = inventory_adjust_params(&json!({"sku": " TOM-01 ", "delta": -3.5})).unwrap();
+        assert_eq!(p, json!({"p_sku": "TOM-01", "p_quantity_delta": -3.5}));
+        let p2 = inventory_adjust_params(
+            &json!({"sku": "X", "delta": 2, "reason": " spoilage "}),
+        )
+        .unwrap();
+        assert_eq!(p2["p_reason"], "spoilage");
+        assert_eq!(p2["p_quantity_delta"], 2.0);
+    }
+
+    #[test]
+    fn adjust_params_rejects_missing_sku_or_delta() {
+        assert!(inventory_adjust_params(&json!({"delta": 1})).is_err());
+        assert!(inventory_adjust_params(&json!({"sku": "X"})).is_err());
+        assert!(inventory_adjust_params(&json!({"sku": "  ", "delta": 1})).is_err());
+        assert!(inventory_adjust_params(&json!({"sku": "X", "delta": "lots"})).is_err());
+    }
+
+    #[test]
+    fn adjust_is_kitchen_write() {
+        let c = Arc::new(KitchenClient::new(reqwest::Client::new(), "http://x", "k", "o"));
+        let t = InventoryAdjust::new(c);
+        assert_eq!(t.name(), "kitchen.inventory.adjust");
+        assert_eq!(t.required_scope(&json!({})).to_string(), "kitchen.write");
     }
 }

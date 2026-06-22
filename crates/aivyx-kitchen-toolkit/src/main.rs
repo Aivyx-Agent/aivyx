@@ -16,7 +16,8 @@ use std::sync::Arc;
 use aivyx_core::Tool;
 use aivyx_kitchen_toolkit::config::{default_config_path, load_config};
 use aivyx_kitchen_toolkit::tools::{
-    InventoryList, InventoryLowStock, InventoryValue, RecipeSearch, SupplierList,
+    BatchComplete, BatchStart, InventoryAdjust, InventoryList, InventoryLowStock,
+    InventoryValue, RecipeSearch, SupplierList,
 };
 use aivyx_kitchen_toolkit::{run_multi_tool_subprocess, KitchenClient};
 
@@ -46,11 +47,16 @@ async fn main() -> ExitCode {
     ));
 
     let tools: Vec<Arc<dyn Tool>> = vec![
+        // BG.1 — kitchen.read.
         Arc::new(InventoryList::new(Arc::clone(&client))),
         Arc::new(InventoryLowStock::new(Arc::clone(&client))),
         Arc::new(InventoryValue::new(Arc::clone(&client))),
         Arc::new(RecipeSearch::new(Arc::clone(&client))),
         Arc::new(SupplierList::new(Arc::clone(&client))),
+        // BG.2 — kitchen.write.
+        Arc::new(InventoryAdjust::new(Arc::clone(&client))),
+        Arc::new(BatchStart::new(Arc::clone(&client))),
+        Arc::new(BatchComplete::new(Arc::clone(&client))),
     ];
 
     match run_multi_tool_subprocess(tools, "aivyx-kitchen-toolkit").await {
