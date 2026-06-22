@@ -2568,7 +2568,7 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
                     h3 { "Create your agent" }
-                    span { class: "chip sage", "step {step() + 1} of 3" }
+                    span { class: "chip sage", "step {step() + 1} of 4" }
                 }
                 p { class: "muted",
                     "Shape your assistant's identity, voice, and reach. You're the author of "
@@ -2582,7 +2582,8 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
                 div { class: "step-rail",
                     StepDot { n: 1, label: "Profile", active: step() == 0, done: step() > 0 }
                     StepDot { n: 2, label: "Persona", active: step() == 1, done: step() > 1 }
-                    StepDot { n: 3, label: "Access", active: step() == 2, done: false }
+                    StepDot { n: 3, label: "Team", active: step() == 2, done: step() > 2 }
+                    StepDot { n: 4, label: "Access", active: step() == 3, done: false }
                 }
             }
             match step() {
@@ -2596,6 +2597,7 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
                         }
                     }
                 },
+                2 => rsx! { OnboardingTeamStep { step, view } },
                 _ => rsx! { OnboardingAccessStep { step, view } },
             }
         }
@@ -2729,6 +2731,47 @@ fn OnboardingProfileStep(step: Signal<u8>) -> Element {
     }
 }
 
+/// Chapter Roster (RO.4) — onboarding "Team" step. Shows the active roster (the
+/// default Nonagon on a fresh install, fetched via `GetTeamRoster`) and routes
+/// to the full Teams editor (RO.3). Keeping the default is a no-op; pack presets
+/// are an `aivyx team init` CLI affordance (the team engine isn't wasm, so the
+/// browser can't construct a pack — it edits the loaded one). Read-only here.
+#[component]
+fn OnboardingTeamStep(step: Signal<u8>, view: Signal<View>) -> Element {
+    let ws = use_context::<Sender>();
+    let teams = use_context::<Signal<TeamsState>>();
+    use_effect(move || {
+        ws.send(get_team_roster_query());
+    });
+    let roster = teams().roster;
+
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head", h3 { "3 · Team — who works for you" } }
+            p { class: "muted",
+                "Your assistant leads a team of specialists. Keep the default Nonagon, or shape "
+                "the lead, specialists, and their reach in the Teams editor (you can always change it later)."
+            }
+            {match roster {
+                Some(t) => rsx! {
+                    div { class: "kv-grid",
+                        div { span { class: "label-tech", "Team" } div { "{t.name}" } }
+                        div { span { class: "label-tech", "Lead" } div { "{t.lead}" } }
+                        div { span { class: "label-tech", "Members" } div { "{t.members.len()}" } }
+                    }
+                    button { class: "btn btn-glass", onclick: move |_| view.set(View::Teams),
+                        "Customize team →" }
+                },
+                None => rsx! { p { class: "label-tech", "Loading team…" } },
+            }}
+            div { class: "wizard-nav",
+                button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(1); }, "Back" }
+                button { class: "btn", onclick: move |_| { let mut s = step; s.set(3); }, "Continue →" }
+            }
+        }
+    }
+}
+
 /// GE.3 step 3 — access level, via the existing `SetAccessLevel` (confirm-first
 /// on any expansion beyond the sandbox).
 #[component]
@@ -2740,7 +2783,7 @@ fn OnboardingAccessStep(step: Signal<u8>, view: Signal<View>) -> Element {
 
     rsx! {
         div { class: "glass-card settings-section",
-            div { class: "panel-head", h3 { "3 · Access — how far it reaches" } }
+            div { class: "panel-head", h3 { "4 · Access — how far it reaches" } }
             p { class: "muted", "Start narrow; you can widen later in Settings. Expanding beyond the sandbox is confirmed first." }
             select {
                 class: "input",
@@ -2754,7 +2797,7 @@ fn OnboardingAccessStep(step: Signal<u8>, view: Signal<View>) -> Element {
                 div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
             }
             div { class: "wizard-nav",
-                button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(1); }, "Back" }
+                button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(2); }, "Back" }
                 button {
                     class: "btn",
                     onclick: move |_| {

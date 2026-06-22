@@ -133,6 +133,49 @@ pub fn run_roster(config: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolve the source team for `aivyx team init`: the default Nonagon (no
+/// `--pack` or `--pack default`) or a pack loaded from a TOML path. Pure.
+fn init_source(pack: Option<&str>) -> Result<TeamConfig, String> {
+    match pack {
+        None | Some("default") => Ok(default_nonagon()),
+        Some(path) => {
+            TeamConfig::load(path).map_err(|e| format!("failed to load team pack from {path:?}: {e}"))
+        }
+    }
+}
+
+/// `aivyx team init [--pack <default|path.toml>] [--out <path>] [--force]` —
+/// write a starter team config file the daemon adopts at startup (Chapter
+/// Roster RO.1) and the Studio's Teams screen edits (RO.3). Offline; shares the
+/// RO.2 writer (`write_team_config`: validate → `to_toml` → `0600`). Refuses to
+/// overwrite an existing file without `--force`.
+pub fn run_init(pack: Option<&str>, out: Option<&str>, force: bool) -> Result<(), String> {
+    let roster = init_source(pack)?;
+    let out_path = PathBuf::from(out.unwrap_or("team.toml"));
+    if out_path.exists() && !force {
+        return Err(format!(
+            "{} already exists — pass --force to overwrite",
+            out_path.display()
+        ));
+    }
+    aivyx_channel::team_config_write::write_team_config(&out_path, &roster).map_err(|e| match e {
+        aivyx_channel::team_config_write::TeamConfigWriteError::Invalid(m) => {
+            format!("the team is invalid: {m}")
+        }
+        aivyx_channel::team_config_write::TeamConfigWriteError::Write(m) => {
+            format!("failed to write {}: {m}", out_path.display())
+        }
+    })?;
+    println!(
+        "Wrote team {:?} ({} members) to {}.\n\
+         The daemon adopts it on the next start; edit it in the file or the Studio's Teams screen.",
+        roster.name,
+        roster.members.len(),
+        out_path.display(),
+    );
+    Ok(())
+}
+
 /// `aivyx team run "<mission>"` — assemble the default team and run the lead
 /// over `mission`. Called from `run_async` with the live provider + the
 /// persistent `AuditHook`, so specialist sub-turns land on the HMAC chain.
@@ -364,6 +407,35 @@ mod tests {
         let dir = scratch("broken");
         let team = resolve_daemon_team_config(Some(Path::new("/no/such/team.toml")), &dir);
         assert_eq!(team.name, "default-nonagon");
+    }
+
+    // --- Chapter Roster (RO.4): `aivyx team init` -----------------------------
+
+    #[test]
+    fn init_source_defaults_to_nonagon_and_loads_a_pack_path() {
+        assert_eq!(init_source(None).unwrap().name, "default-nonagon");
+        assert_eq!(init_source(Some("default")).unwrap().name, "default-nonagon");
+        let dir = scratch("init-src");
+        let p = dir.join("pack.toml");
+        write_custom_team(&p);
+        assert_eq!(init_source(Some(p.to_str().unwrap())).unwrap().name, "custom-team");
+        assert!(init_source(Some("/no/such.toml")).is_err());
+    }
+
+    #[test]
+    fn run_init_writes_then_refuses_overwrite_without_force() {
+        let dir = scratch("init-write");
+        let out = dir.join("team.toml");
+        let out_s = out.to_str().unwrap();
+        run_init(None, Some(out_s), false).unwrap();
+        assert!(out.exists());
+        // The written file is the default Nonagon, loadable back.
+        assert_eq!(TeamConfig::load(&out).unwrap().name, "default-nonagon");
+        // A second write without --force is refused.
+        let err = run_init(None, Some(out_s), false).unwrap_err();
+        assert!(err.contains("already exists"), "err: {err}");
+        // With --force it overwrites cleanly.
+        run_init(None, Some(out_s), true).unwrap();
     }
 
     #[test]

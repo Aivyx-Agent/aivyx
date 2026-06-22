@@ -1774,7 +1774,8 @@ parent_role = "researcher"
 # When unset, the daemon also looks for a conventional `team.toml`
 # beside this file; if neither exists it uses the default Nonagon.
 # The Studio's Teams screen writes this file (Chapter Roster);
-# changes apply on the next daemon start.
+# changes apply on the next daemon start. Scaffold a starter file
+# with `aivyx team init [--pack <default|path.toml>] [--out team.toml]`.
 #
 # [team]
 # config_path = "team.toml"

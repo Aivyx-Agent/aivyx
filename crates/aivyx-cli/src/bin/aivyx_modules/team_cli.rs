@@ -82,7 +82,9 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
             resolve_gate(&socket_path, mission_id, step, false).await
         }
         // The offline / in-process verbs are dispatched elsewhere (`team.rs`).
-        TeamSubcommand::Roster { .. } | TeamSubcommand::Run { .. } => {
+        TeamSubcommand::Roster { .. }
+        | TeamSubcommand::Init { .. }
+        | TeamSubcommand::Run { .. } => {
             Err("internal: non-daemon team subcommand routed to the daemon path".to_string())
         }
     }

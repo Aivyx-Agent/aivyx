@@ -787,6 +787,12 @@ fn run() -> Result<(), String> {
         return team::run_roster(config.as_deref());
     }
 
+    // Chapter Roster (RO.4) — `aivyx team init`: write a starter team config
+    // file (default Nonagon or a pack). Offline, like `roster` (no daemon).
+    if let CliMode::Team(TeamSubcommand::Init { pack, out, force }) = &mode {
+        return team::run_init(pack.as_deref(), out.as_deref(), *force);
+    }
+
     // Chapter L (L.5b) — `aivyx team start|list|status|approve|reject`: the
     // daemon-run mission control surface. IPC-backed, same minimal-runtime
     // shape as `loop` / `tools` — no provider, no in-process assembly.
@@ -1694,6 +1700,15 @@ enum CliMode {
 enum TeamSubcommand {
     /// `aivyx team roster [--config <path>]` — render a team. Offline.
     Roster { config: Option<String> },
+    /// Chapter Roster (RO.4) — `aivyx team init [--pack <default|path.toml>]
+    /// [--out <path>] [--force]`: write a starter team config file (the default
+    /// Nonagon, or a pack loaded from a TOML path) the daemon adopts at startup
+    /// and the Studio's Teams screen edits. Offline; refuses to overwrite.
+    Init {
+        pack: Option<String>,
+        out: Option<String>,
+        force: bool,
+    },
     /// `aivyx team run "<mission>" [--config <path>]` — run the lead.
     Run {
         mission: String,
@@ -2737,6 +2752,40 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "roster" => TeamSubcommand::Roster {
                 config: parse_config(args.get(2..).unwrap_or(&[]), "roster")?,
             },
+            "init" => {
+                let tail = args.get(2..).unwrap_or(&[]);
+                let mut pack: Option<String> = None;
+                let mut out: Option<String> = None;
+                let mut force = false;
+                let mut idx = 0;
+                while idx < tail.len() {
+                    match tail[idx].as_str() {
+                        "--pack" => {
+                            pack = Some(tail.get(idx + 1).ok_or_else(|| {
+                                "`--pack` requires `default` or a path to a team TOML".to_string()
+                            })?.clone());
+                            idx += 2;
+                        }
+                        "--out" => {
+                            out = Some(tail.get(idx + 1).ok_or_else(|| {
+                                "`--out` requires a path".to_string()
+                            })?.clone());
+                            idx += 2;
+                        }
+                        "--force" => {
+                            force = true;
+                            idx += 1;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx team init`: `{other}` \
+                                 (expected --pack | --out | --force)"
+                            ));
+                        }
+                    }
+                }
+                TeamSubcommand::Init { pack, out, force }
+            }
             "run" => {
                 let mission = args.get(2).ok_or_else(|| {
                     "`aivyx team run` requires a \"<mission>\" argument".to_string()
@@ -2835,7 +2884,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "" => {
                 return Err(
-                    "`aivyx team` requires a subcommand: roster | run | start | \
+                    "`aivyx team` requires a subcommand: roster | init | run | start | \
                      list | status | approve | reject"
                         .to_string(),
                 );
@@ -2843,7 +2892,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unknown `aivyx team` subcommand `{other}` (expected: roster | \
-                     run | start | list | status | approve | reject)"
+                     init | run | start | list | status | approve | reject)"
                 ));
             }
         };
