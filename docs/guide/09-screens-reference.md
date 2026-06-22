@@ -5,17 +5,17 @@ page in this guide; this is the map.
 
 | Screen | What it's for |
 |---|---|
-| **Create** | The guided setup that gives your assistant its identity (see *Create your agent*). |
+| **Create** | The guided setup that gives your assistant its identity (see [Create your agent](03-create-your-agent.md)). |
 | **Command** | Your home dashboard — at-a-glance status, active missions, a live activity feed, and whether the assistant is busy. |
-| **Missions** | Hand off larger multi-step jobs and watch them run; approve gates (see *Chatting and running missions*). |
+| **Missions** | Hand off larger multi-step jobs and watch them run; approve gates (see [Chat & missions](04-chat-and-missions.md)). |
 | **Chat** | A direct conversation with your assistant. |
 | **Memory** | Browse and search everything your assistant has learned. |
 | **Wiki** | Your assistant's knowledge as readable per-topic pages. |
 | **Graph** | The same knowledge as a visual map of connected topics. |
-| **Settings** | Access level and spending budgets (see *Access and settings*). |
-| **Agents** | Edit the Profile and approve the character changes your assistant proposes (see *Skills and personality*). |
+| **Settings** | Access level and spending budgets (see [Access & settings](08-access-and-settings.md)). |
+| **Agents** | Edit the Profile and approve the character changes your assistant proposes (see [Skills & personality](06-skills-and-persona.md)). |
 | **Skills** | The library of things your assistant has learned to do. |
-| **Teams** | View and edit your team of specialists (see *Teams*). |
+| **Teams** | View and edit your team of specialists (see [Teams](07-teams.md)). |
 | **Documents** | A file browser over the folders your assistant can access. |
 | **MCP** | The status of any external tool servers you've connected. |
 | **Voice** | Set up talking to your assistant out loud. |

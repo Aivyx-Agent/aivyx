@@ -534,13 +534,37 @@ fn NavItemSoon(icon: Asset, label: &'static str) -> Element {
 /// content (bundled `docs/guide/*.md`), no daemon IPC. `selected` is the index
 /// into [`guide::PAGES`]; the HTML is memoized so switching an unrelated signal
 /// never re-parses the markdown.
+///
+/// Cross-page links inside the rendered markdown are real `.md` anchors (so they
+/// also work on GitHub). In-app they aren't Dioxus-managed elements — they live
+/// inside `dangerous_inner_html` — so we delegate: catch clicks on the content
+/// container, walk up to the clicked `<a>`, and if its `href` names a guide page
+/// ([`guide::index_for_href`]) switch to it instead of letting the browser
+/// navigate away. External links (`http(s)://`, …) don't match and behave
+/// normally.
 #[component]
 fn GuidePanel() -> Element {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::JsCast;
+
     let mut selected = use_signal(|| 0usize);
     let body_html = use_memo(move || {
         let idx = selected().min(guide::PAGES.len().saturating_sub(1));
         guide::render(guide::PAGES[idx].body)
     });
+
+    let on_content_click = move |evt: Event<MouseData>| {
+        let Some(web_evt) = evt.try_as_web_event() else { return };
+        let Some(target) = web_evt.target() else { return };
+        let Some(el) = target.dyn_ref::<web_sys::Element>() else { return };
+        // Nearest enclosing anchor (the click may land on text inside the <a>).
+        let Ok(Some(anchor)) = el.closest("a") else { return };
+        let Some(href) = anchor.get_attribute("href") else { return };
+        if let Some(idx) = guide::index_for_href(&href) {
+            evt.prevent_default();
+            selected.set(idx);
+        }
+    };
 
     rsx! {
         div { class: "guide",
@@ -557,6 +581,7 @@ fn GuidePanel() -> Element {
             }
             article {
                 class: "guide-content glass-card",
+                onclick: on_content_click,
                 dangerous_inner_html: body_html(),
             }
         }

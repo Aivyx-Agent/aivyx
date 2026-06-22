@@ -36,7 +36,7 @@ How a mission works:
 
 Missions are where Aivyx's **teams** come in — for a complex job, a lead
 assistant can delegate steps to a crew of specialists, each with only the access
-its job needs. See the [Teams](#) page for how that's set up.
+its job needs. See the [Teams](07-teams.md) page for how that's set up.
 
 ### Approval gates
 

@@ -63,4 +63,4 @@ aivyx doctor
 ```
 
 It checks your model, your config, and a live test reply, and tells you exactly
-what to fix. See [Troubleshooting](#) for the common cases.
+what to fix. See [Troubleshooting](10-troubleshooting.md) for the common cases.

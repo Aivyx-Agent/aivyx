@@ -22,9 +22,18 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 # `sink` brings SinkExt + StreamExt::split for the WebSocket halves.
 futures-util = { version = "0.3", features = ["sink"] }
 serde_json = { workspace = true }
-web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element"] }
+# `MouseEvent`/`Event`/`UiEvent`/`EventTarget` back the Guide screen's
+# click-delegation: the rendered markdown is injected as raw HTML, so its
+# cross-page `<a>` links aren't Dioxus-managed — the panel catches clicks on the
+# container, finds the target anchor (`Element::closest`/`get_attribute`), and
+# switches page in-app.
+web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element", "Event", "UiEvent", "MouseEvent", "EventTarget"] }
 # `Date::now()` for relative timestamps in the Command Center audit feed.
 js-sys = "0.3"
+# `JsCast` for casting the click target to an `Element` in the Guide screen's
+# link delegation. Already in the tree transitively; named directly for the
+# `dyn_ref` import.
+wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 # End-user guide (the in-app Guide screen): the docs/guide/*.md pages are
 # bundled with include_str! and rendered to HTML at runtime. Pure-Rust, no_std-
