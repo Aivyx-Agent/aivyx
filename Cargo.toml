@@ -41,6 +41,10 @@ members = [
     "crates/verticals-private/*",
     "crates/aivyx-cost",
     "crates/aivyx-web",
+    # Native desktop shell — links a system webview (WebKitGTK), so like
+    # aivyx-web it's kept OUT of default-members; build it explicitly with
+    # `cargo build -p aivyx-desktop`.
+    "crates/aivyx-desktop",
 ]
 
 # Chapter M — `aivyx-web` is a Dioxus app that only compiles for

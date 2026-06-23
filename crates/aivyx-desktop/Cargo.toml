@@ -1,0 +1,31 @@
+[package]
+name = "aivyx-desktop"
+description = "Native desktop shell for Aivyx — a system-webview window that hosts the local Studio (served by the daemon at 127.0.0.1:7843) plus daemon lifecycle, a system tray, and native notifications. A thin native chrome over the existing web UI, not a UI rewrite."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "aivyx-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# Windowing + event loop (the tauri-ecosystem winit fork; pairs with wry and the
+# tray-icon / global-hotkey crates which integrate with its event loop).
+tao = "0.35"
+# The system webview (WebKitGTK on Linux, WebView2 on Windows, WKWebView on
+# macOS). On Linux this needs the `webkit2gtk-4.1` runtime/dev package — the one
+# real native dependency of the desktop shell.
+wry = "0.55"
+
+# Excluded from `dist` for now — the desktop shell links a system webview, so it
+# can't be the musl-static release artifact and needs its own (gnu) target +
+# bundling story (a later phase). Setting dist=false keeps cargo-dist from
+# trying to build it on the existing musl/macOS release matrix and failing.
+[package.metadata.dist]
+dist = false
