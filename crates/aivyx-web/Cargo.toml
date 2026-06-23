@@ -27,7 +27,7 @@ serde_json = { workspace = true }
 # cross-page `<a>` links aren't Dioxus-managed — the panel catches clicks on the
 # container, finds the target anchor (`Element::closest`/`get_attribute`), and
 # switches page in-app.
-web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element", "Event", "UiEvent", "MouseEvent", "EventTarget"] }
+web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element", "Event", "UiEvent", "MouseEvent", "KeyboardEvent", "EventTarget"] }
 # `Date::now()` for relative timestamps in the Command Center audit feed.
 js-sys = "0.3"
 # `JsCast` for casting the click target to an `Element` in the Guide screen's

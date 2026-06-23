@@ -153,6 +153,27 @@ impl View {
     fn from_slug(s: &str) -> Option<View> {
         View::ALL.into_iter().find(|v| v.slug() == s)
     }
+
+    /// Human label for the command palette (matches the sidebar).
+    fn label(self) -> &'static str {
+        match self {
+            View::Command => "Command",
+            View::Missions => "Missions",
+            View::Chat => "Chat",
+            View::Memory => "Memory",
+            View::Wiki => "Wiki",
+            View::Lattice => "Graph",
+            View::Skills => "Skills",
+            View::Settings => "Settings",
+            View::Agents => "Agents",
+            View::Teams => "Teams",
+            View::Documents => "Documents",
+            View::Mcp => "MCP",
+            View::Voice => "Voice",
+            View::Guide => "Guide",
+            View::Onboarding => "Create",
+        }
+    }
 }
 
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
@@ -432,6 +453,32 @@ fn App() -> Element {
         }
         cb.forget();
     });
+
+    // Command palette (Ctrl/Cmd-K) — a global keydown listener toggles it.
+    let palette_open = use_signal(|| false);
+    use_hook(|| {
+        use wasm_bindgen::JsCast;
+        let mut palette_open = palette_open;
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(
+            move |e: web_sys::Event| {
+                let Some(ke) = e.dyn_ref::<web_sys::KeyboardEvent>() else {
+                    return;
+                };
+                if (ke.ctrl_key() || ke.meta_key()) && ke.key() == "k" {
+                    e.prevent_default();
+                    let now = *palette_open.peek();
+                    palette_open.set(!now);
+                } else if ke.key() == "Escape" && *palette_open.peek() {
+                    palette_open.set(false);
+                }
+            },
+        );
+        if let Some(w) = web_sys::window() {
+            let _ = w.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        }
+        cb.forget();
+    });
+
     let connected = use_signal(|| false);
     let light = use_signal(|| false);
     // Mobile drawer state: below the shell breakpoint the sidebar is off-canvas
@@ -568,6 +615,71 @@ fn App() -> Element {
                 }
             }
             StatusBar { connected: connected() }
+            if palette_open() {
+                CommandPalette { view, open: palette_open }
+            }
+        }
+    }
+}
+
+/// Ctrl/Cmd-K command palette — fuzzy-jump to any screen. Type to filter,
+/// arrows to move, Enter to go, Esc/backdrop to dismiss.
+#[component]
+fn CommandPalette(view: Signal<View>, open: Signal<bool>) -> Element {
+    let mut query = use_signal(String::new);
+    let mut selected = use_signal(|| 0usize);
+
+    // The filtered screen list (case-insensitive label contains).
+    let q = query().to_lowercase();
+    let results: Vec<View> = View::ALL
+        .into_iter()
+        .filter(|v| q.is_empty() || v.label().to_lowercase().contains(&q))
+        .collect();
+    let sel = selected().min(results.len().saturating_sub(1));
+    let kb = results.clone(); // snapshot moved into the keydown handler
+
+    rsx! {
+        div { class: "palette-backdrop", onclick: move |_| open.set(false),
+            div { class: "palette", onclick: move |e| e.stop_propagation(),
+                input {
+                    class: "palette-input",
+                    r#type: "text",
+                    autofocus: true,
+                    "aria-label": "Jump to a screen",
+                    placeholder: "Jump to a screen…",
+                    value: "{query}",
+                    oninput: move |e| { query.set(e.value()); selected.set(0); },
+                    onkeydown: move |e| {
+                        let n = kb.len();
+                        match e.key() {
+                            Key::ArrowDown => { e.prevent_default(); if n > 0 { selected.set((sel + 1) % n); } }
+                            Key::ArrowUp => { e.prevent_default(); if n > 0 { selected.set((sel + n - 1) % n); } }
+                            Key::Enter => {
+                                if let Some(v) = kb.get(sel).copied() { view.set(v); open.set(false); }
+                            }
+                            Key::Escape => open.set(false),
+                            _ => {}
+                        }
+                    },
+                }
+                div { class: "palette-list",
+                    if results.is_empty() {
+                        div { class: "palette-empty label-tech", "No matching screen" }
+                    } else {
+                        for (i, v) in results.iter().copied().enumerate() {
+                            button {
+                                key: "{v.slug()}",
+                                class: if i == sel { "palette-item active" } else { "palette-item" },
+                                onmouseenter: move |_| selected.set(i),
+                                onclick: move |_| { view.set(v); open.set(false); },
+                                span { class: "palette-item-label", "{v.label()}" }
+                                span { class: "palette-item-slug label-tech", "/#{v.slug()}" }
+                            }
+                        }
+                    }
+                }
+                div { class: "palette-hint label-tech", "↑↓ navigate · ↵ open · esc close" }
+            }
         }
     }
 }
