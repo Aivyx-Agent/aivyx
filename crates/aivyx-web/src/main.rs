@@ -108,6 +108,53 @@ enum View {
     Onboarding,
 }
 
+impl View {
+    /// Every view, in sidebar order — drives the command palette + slug lookup.
+    const ALL: [View; 15] = [
+        View::Command,
+        View::Chat,
+        View::Missions,
+        View::Memory,
+        View::Wiki,
+        View::Lattice,
+        View::Onboarding,
+        View::Agents,
+        View::Skills,
+        View::Teams,
+        View::Documents,
+        View::Mcp,
+        View::Voice,
+        View::Settings,
+        View::Guide,
+    ];
+
+    /// The URL-hash slug for this view (deep-linking: `…/#memory`).
+    fn slug(self) -> &'static str {
+        match self {
+            View::Command => "command",
+            View::Missions => "missions",
+            View::Chat => "chat",
+            View::Memory => "memory",
+            View::Wiki => "wiki",
+            View::Lattice => "graph",
+            View::Skills => "skills",
+            View::Settings => "settings",
+            View::Agents => "agents",
+            View::Teams => "teams",
+            View::Documents => "documents",
+            View::Mcp => "mcp",
+            View::Voice => "voice",
+            View::Guide => "guide",
+            View::Onboarding => "create",
+        }
+    }
+
+    /// Parse a slug back to a view (for reading the URL hash on load / back).
+    fn from_slug(s: &str) -> Option<View> {
+        View::ALL.into_iter().find(|v| v.slug() == s)
+    }
+}
+
 /// Memory browser state — read-only snapshots fanned in by `ws_task`.
 #[derive(Clone, Default, PartialEq)]
 struct MemoryState {
@@ -342,9 +389,49 @@ fn font_faces() -> String {
     )
 }
 
+/// The view named by the current URL hash (`…/#memory`), if it's a known slug.
+fn hash_view() -> Option<View> {
+    let h = web_sys::window()?.location().hash().ok()?;
+    View::from_slug(h.trim_start_matches('#'))
+}
+
+/// The view to start on: the URL hash if it names a real screen, else Command.
+/// (First-run onboarding still takes over via the no-profile redirect.)
+fn initial_view() -> View {
+    hash_view().unwrap_or(View::Command)
+}
+
 #[component]
 fn App() -> Element {
-    let view = use_signal(|| View::Command);
+    // Deep-linking: the active view is mirrored in the URL hash, so screens are
+    // bookmarkable/shareable and survive a reload, and back/forward navigate.
+    let view = use_signal(initial_view);
+    // view -> URL hash.
+    use_effect(move || {
+        let slug = view().slug();
+        if let Some(loc) = web_sys::window().map(|w| w.location()) {
+            if loc.hash().unwrap_or_default().trim_start_matches('#') != slug {
+                let _ = loc.set_hash(slug);
+            }
+        }
+    });
+    // URL hash -> view (back/forward, manual edits). Registered once.
+    use_hook(|| {
+        use wasm_bindgen::JsCast;
+        let mut view = view;
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            if let Some(v) = hash_view() {
+                if view.peek().slug() != v.slug() {
+                    view.set(v);
+                }
+            }
+        });
+        if let Some(w) = web_sys::window() {
+            let _ = w
+                .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref());
+        }
+        cb.forget();
+    });
     let connected = use_signal(|| false);
     let light = use_signal(|| false);
     // Mobile drawer state: below the shell breakpoint the sidebar is off-canvas
