@@ -5,6 +5,63 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-24
+
+The desktop & experience release. A native desktop app, a top-to-bottom Studio
+overhaul, end-user documentation, and the first ecosystem seam for vertical
+packs — all over the unchanged security core (no new P10 amendment, no new
+capability surface).
+
+### Added
+
+- **Native desktop app (`aivyx-desktop`).** A thin `tao` + `wry` shell that
+  hosts the Studio in a system webview (reusing the exact WASM UI, no port),
+  with daemon lifecycle (attach or spawn), a **system tray** (Open Studio ·
+  Restart daemon · Start at login · Quit) and hide-to-tray, **native
+  approval-gate notifications** (a background WS client watches for missions
+  awaiting approval), a **global hotkey** (`Ctrl+Shift+A`) to summon the window,
+  and launch-on-login. Packaged with `cargo-bundle` (a `.deb` on Linux, a
+  `.app`/`.dmg` on macOS) via a dedicated release workflow. Linux runtime deps:
+  `webkit2gtk-4.1`, `libayatana-appindicator`, `xdotool`/`libxdo`.
+- **`aivyx-vertical-sdk`** — a thin, semver-stable facade that re-exports only
+  the pack-facing slice of the engine, so vertical packs survive core refactors.
+  The Kitchen pack is re-pointed at it as the open reference example;
+  `crates/verticals-private/` (git-ignored, auto-joined via a workspace member
+  glob) is the home for commercial packs.
+- **End-user guide** — a task-oriented `docs/guide/` (welcome, getting started,
+  the Genesis wizard, per-feature pages, the desktop app, troubleshooting),
+  surfaced as a **Guide screen** in the Studio (markdown rendered in-app via
+  `pulldown-cmark`) with working cross-page links.
+- **Studio command palette** — `Ctrl/Cmd-K` to fuzzy-jump to any screen.
+- **Deep-linking** — the active screen is mirrored in the URL hash, so screens
+  are bookmarkable/shareable and survive a reload, and back/forward navigate.
+- **Contextual help** — a topbar "?" that opens the Guide to the page for the
+  current screen.
+
+### Changed
+
+- **Responsive Studio shell** — the sidebar collapses to a hamburger drawer
+  below tablet width, the nav is grouped into labeled sections, and the screen
+  grids stack on narrow viewports.
+- **Loading skeletons** across every data-driven screen (Command Center, Memory,
+  Skills, MCP, Teams, Documents) instead of flashing empty/zero states.
+- **UI polish** — a distinct icon per nav item, a single daemon-status indicator
+  (was duplicated), and a corrected version footer.
+- **Windows** is documented as supported via WSL2 or the Docker appliance (no
+  native binary yet — the daemon's IPC is Unix-socket-only).
+
+### Accessibility
+
+- Visible `:focus-visible` keyboard focus rings (there were none), a
+  skip-to-content link, `main`/`nav` landmarks, and `aria-label`s on
+  previously-unlabeled inputs and icon-only buttons.
+
+### Fixed
+
+- The CI quality gate is green again: install the desktop crate's GTK/WebKit
+  system deps for the `--workspace` build, and clear a `clippy::type_complexity`
+  lint in `aivyx-web`.
+
 ## [0.6.0] — 2026-06-21
 
 The toolbox release. Three chapters **widen what the agent can do** without
