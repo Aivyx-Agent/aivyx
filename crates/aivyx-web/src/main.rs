@@ -327,6 +327,9 @@ fn App() -> Element {
     let view = use_signal(|| View::Command);
     let connected = use_signal(|| false);
     let light = use_signal(|| false);
+    // Mobile drawer state: below the shell breakpoint the sidebar is off-canvas
+    // and this toggles it. Ignored on desktop (the sidebar is always in-grid).
+    let mut nav_open = use_signal(|| false);
     let missions = use_signal(Vec::<TeamMissionView>::new);
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
@@ -427,10 +430,12 @@ fn App() -> Element {
         document::Link { rel: "icon", href: FAVICON }
         document::Stylesheet { href: STITCH_CSS }
         style { {font_faces()} }
-        div { class: "app",
-            Sidebar { view }
+        div { class: if nav_open() { "app nav-open" } else { "app" },
+            Sidebar { view, nav_open }
+            // Mobile-only scrim behind the open drawer; tap to dismiss.
+            div { class: "nav-backdrop", onclick: move |_| nav_open.set(false) }
             div { class: "main",
-                Topbar { title, connected: connected(), light }
+                Topbar { title, connected: connected(), light, nav_open }
                 div { class: "view fade-in",
                     match view() {
                         View::Command => rsx! {
@@ -462,47 +467,67 @@ fn App() -> Element {
 // App shell — Sidebar / Topbar / StatusBar
 // ---------------------------------------------------------------------------
 
+/// The sidebar navigation, grouped into labeled sections. Data-driven so the
+/// IA is one table to read/reorder, and every item closes the mobile drawer on
+/// click. An empty group header (`""`) renders no label (the lone Command item).
 #[component]
-fn Sidebar(view: Signal<View>) -> Element {
+fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
+    let groups: Vec<(&str, Vec<(Asset, &str, View)>)> = vec![
+        ("", vec![(ICON_COMMAND, "Command", View::Command)]),
+        (
+            "Workspace",
+            vec![
+                (ICON_CHAT, "Chat", View::Chat),
+                (ICON_MISSIONS, "Missions", View::Missions),
+            ],
+        ),
+        (
+            "Knowledge",
+            vec![
+                (ICON_MEMORY, "Memory", View::Memory),
+                (ICON_MEMORY, "Wiki", View::Wiki),
+                (ICON_MEMORY, "Graph", View::Lattice),
+            ],
+        ),
+        (
+            "Agent",
+            vec![
+                (ICON_AGENTS, "Create", View::Onboarding),
+                (ICON_AGENTS, "Agents", View::Agents),
+                (ICON_AGENTS, "Skills", View::Skills),
+                (ICON_TEAMS, "Teams", View::Teams),
+            ],
+        ),
+        (
+            "System",
+            vec![
+                (ICON_DOCUMENTS, "Documents", View::Documents),
+                (ICON_SETTINGS, "MCP", View::Mcp),
+                (ICON_VOICE, "Voice", View::Voice),
+                (ICON_SETTINGS, "Settings", View::Settings),
+                (ICON_DOCUMENTS, "Guide", View::Guide),
+            ],
+        ),
+    ];
+
     rsx! {
         aside { class: "sidebar",
             div { class: "brand-lockup",
                 img { src: LOGOMARK, alt: "Aivyx" }
                 span { class: "wordmark", "AIVYX" }
             }
-            NavItem { icon: ICON_AGENTS, label: "Create", active: view() == View::Onboarding,
-                onclick: move |_| view.set(View::Onboarding) }
-            NavItem { icon: ICON_COMMAND, label: "Command", active: view() == View::Command,
-                onclick: move |_| view.set(View::Command) }
-            NavItem { icon: ICON_MISSIONS, label: "Missions", active: view() == View::Missions,
-                onclick: move |_| view.set(View::Missions) }
-            NavItem { icon: ICON_CHAT, label: "Chat", active: view() == View::Chat,
-                onclick: move |_| view.set(View::Chat) }
-            NavItem { icon: ICON_MEMORY, label: "Memory", active: view() == View::Memory,
-                onclick: move |_| view.set(View::Memory) }
-            NavItem { icon: ICON_MEMORY, label: "Wiki", active: view() == View::Wiki,
-                onclick: move |_| view.set(View::Wiki) }
-            NavItem { icon: ICON_MEMORY, label: "Graph", active: view() == View::Lattice,
-                onclick: move |_| view.set(View::Lattice) }
-            NavItem { icon: ICON_SETTINGS, label: "Settings", active: view() == View::Settings,
-                onclick: move |_| view.set(View::Settings) }
-            NavItem { icon: ICON_AGENTS, label: "Agents", active: view() == View::Agents,
-                onclick: move |_| view.set(View::Agents) }
-            NavItem { icon: ICON_AGENTS, label: "Skills", active: view() == View::Skills,
-                onclick: move |_| view.set(View::Skills) }
-            NavItem { icon: ICON_TEAMS, label: "Teams", active: view() == View::Teams,
-                onclick: move |_| view.set(View::Teams) }
-            NavItem { icon: ICON_DOCUMENTS, label: "Documents", active: view() == View::Documents,
-                onclick: move |_| view.set(View::Documents) }
-            NavItem { icon: ICON_SETTINGS, label: "MCP", active: view() == View::Mcp,
-                onclick: move |_| view.set(View::Mcp) }
-            NavItem { icon: ICON_VOICE, label: "Voice", active: view() == View::Voice,
-                onclick: move |_| view.set(View::Voice) }
-            NavItem { icon: ICON_DOCUMENTS, label: "Guide", active: view() == View::Guide,
-                onclick: move |_| view.set(View::Guide) }
-            div { class: "nav-section label-tech", "Roadmap" }
+            for (header, items) in groups {
+                if !header.is_empty() {
+                    div { class: "nav-section label-tech", "{header}" }
+                }
+                for (icon, label, v) in items {
+                    NavItem { icon, label, active: view() == v,
+                        onclick: move |_| { view.set(v); nav_open.set(false); } }
+                }
+            }
             div { style: "flex:1" }
-            a { class: "nav-item", href: "/classic", "▸ Classic UI ↗" }
+            a { class: "nav-item nav-classic", href: "/classic",
+                onclick: move |_| nav_open.set(false), "▸ Classic UI ↗" }
         }
     }
 }
@@ -512,20 +537,10 @@ fn NavItem(icon: Asset, label: &'static str, active: bool, onclick: EventHandler
     rsx! {
         button {
             class: if active { "nav-item active" } else { "nav-item" },
+            "aria-current": if active { "page" } else { "false" },
             onclick: move |e| onclick.call(e),
             span { class: "ico", style: "--ico: url({icon})" }
             "{label}"
-        }
-    }
-}
-
-#[component]
-fn NavItemSoon(icon: Asset, label: &'static str) -> Element {
-    rsx! {
-        div { class: "nav-item disabled",
-            span { class: "ico", style: "--ico: url({icon})" }
-            "{label}"
-            span { class: "soon", "soon" }
         }
     }
 }
@@ -589,9 +604,16 @@ fn GuidePanel() -> Element {
 }
 
 #[component]
-fn Topbar(title: &'static str, connected: bool, light: Signal<bool>) -> Element {
+fn Topbar(title: &'static str, connected: bool, light: Signal<bool>, nav_open: Signal<bool>) -> Element {
     rsx! {
         header { class: "topbar",
+            // Hamburger — CSS shows it only below the shell breakpoint.
+            button {
+                class: "icon-btn nav-toggle",
+                "aria-label": "Toggle navigation",
+                onclick: move |_| nav_open.toggle(),
+                span { class: "hamburger" }
+            }
             span { class: "title", "{title}" }
             div { class: "spacer" }
             div { class: if connected { "status-dot live" } else { "status-dot" },
@@ -616,8 +638,8 @@ fn StatusBar(connected: bool) -> Element {
                 span { class: "dot" }
                 if connected { "DAEMON · CONNECTED" } else { "DAEMON · OFFLINE" }
             }
-            div { class: "seg", "AGENT · NONAGON" }
-            div { class: "seg", "STITCH · v0.1.0" }
+            div { class: "seg seg-mid", "AGENT · NONAGON" }
+            div { class: "seg seg-ver", {format!("AIVYX · v{}", env!("CARGO_PKG_VERSION"))} }
         }
     }
 }

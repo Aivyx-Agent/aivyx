@@ -804,3 +804,55 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   .guide { grid-template-columns: 1fr; }
   .guide-nav { position: static; flex-direction: row; flex-wrap: wrap; }
 }
+
+/* ── Responsive shell: drawer sidebar + hamburger ─────────────────────────
+   Desktop keeps the fixed-grid sidebar. Below the breakpoint the sidebar
+   leaves the grid and becomes an off-canvas drawer toggled by the topbar
+   hamburger, with a tap-to-dismiss backdrop. */
+.nav-toggle { display: none; }          /* desktop: no hamburger */
+.nav-backdrop { display: none; }        /* desktop: no scrim */
+
+/* CSS-drawn hamburger glyph (no extra asset); inherits currentColor. */
+.hamburger { position: relative; display: block; width: 18px; height: 2px;
+  background: currentColor; border-radius: 2px; }
+.hamburger::before, .hamburger::after { content: ""; position: absolute; left: 0;
+  width: 18px; height: 2px; background: currentColor; border-radius: 2px; }
+.hamburger::before { top: -6px; }
+.hamburger::after  { top: 6px; }
+
+@media (max-width: 860px) {
+  /* Sidebar out of the grid → drawer; main spans the full width. */
+  .app { grid-template-columns: 1fr; grid-template-areas: "main" "status"; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
+    width: min(82vw, 280px); overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform 0.22s var(--ease-smooth);
+    box-shadow: var(--shadow-md);
+  }
+  .app.nav-open .sidebar { transform: translateX(0); }
+  .nav-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 30;
+    background: rgba(0,0,0,0.5); opacity: 0; pointer-events: none;
+    transition: opacity 0.22s var(--ease-smooth);
+  }
+  .app.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
+  .nav-toggle { display: inline-flex; }
+  /* Keep just the daemon segment in the footer on small screens. */
+  .statusbar .seg-mid, .statusbar .seg-ver { display: none; }
+}
+
+/* ── Responsive content grids (stack the fixed two-column layouts) ───────── */
+@media (max-width: 600px) {
+  .view { padding: 16px; }
+  .topbar { padding: 0 14px; gap: 10px; }
+  .field-row, .agents .field-row, .proposal-card .field-row {
+    grid-template-columns: 1fr; align-items: start; gap: 6px;
+  }
+  .kv-grid { grid-template-columns: 1fr; }
+  .stat-row { grid-template-columns: repeat(2, 1fr); }
+  .newbar, .mem-search, .composer { flex-wrap: wrap; }
+}
+@media (max-width: 440px) {
+  .stat-row { grid-template-columns: 1fr; }
+}
