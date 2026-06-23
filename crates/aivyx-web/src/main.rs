@@ -257,6 +257,10 @@ struct Dashboard {
     audit_total: u64,
     chain_ok: Option<bool>,
     assistant_name: Option<String>,
+    /// `false` until the first dashboard snapshot (the audit-entries response)
+    /// arrives. Distinguishes "not loaded yet" from "loaded and genuinely
+    /// empty" so the Command Center shows a skeleton instead of flashing zeros.
+    loaded: bool,
 }
 
 /// One rendered chat transcript line.
@@ -658,6 +662,11 @@ fn StatusBar(connected: bool) -> Element {
 
 #[component]
 fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected: bool) -> Element {
+    // Until the first dashboard snapshot arrives, show a skeleton instead of
+    // flashing placeholder zeros (which then pop to real values on load).
+    if !dashboard.loaded {
+        return rsx! { CommandSkeleton {} };
+    }
     let active = missions
         .iter()
         .filter(|m| {
@@ -699,6 +708,51 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
             }
             aside { class: "dash-rail",
                 AgentStatus { name: dashboard.assistant_name.clone(), connected, chain_ok: chain }
+            }
+        }
+    }
+}
+
+/// Loading skeleton for the Command Center — mirrors the real layout (4 stat
+/// cards + the two-panel main + rail) so swapping in live data causes no shift.
+#[component]
+fn CommandSkeleton() -> Element {
+    rsx! {
+        div { class: "stat-row",
+            for i in 0..4 {
+                div { key: "{i}", class: "glass-card stat-card",
+                    div { class: "stat-top",
+                        span { class: "skeleton sk-ico" }
+                        span { class: "skeleton sk-line sk-w40" }
+                    }
+                    span { class: "skeleton sk-value" }
+                }
+            }
+        }
+        div { class: "dash-grid",
+            div { class: "dash-main",
+                section { class: "panel",
+                    div { class: "panel-head", span { class: "skeleton sk-line sk-w30" } }
+                    div { class: "glass-card",
+                        span { class: "skeleton sk-line sk-w70" }
+                        span { class: "skeleton sk-line sk-w50" }
+                    }
+                }
+                section { class: "panel",
+                    div { class: "panel-head", span { class: "skeleton sk-line sk-w30" } }
+                    div { class: "glass-card",
+                        for i in 0..3 {
+                            span { key: "{i}", class: "skeleton sk-line sk-w60" }
+                        }
+                    }
+                }
+            }
+            aside { class: "dash-rail",
+                div { class: "glass-card",
+                    span { class: "skeleton sk-line sk-w50" }
+                    span { class: "skeleton sk-line sk-w80" }
+                    span { class: "skeleton sk-line sk-w70" }
+                }
             }
         }
     }
@@ -4316,6 +4370,8 @@ async fn ws_task(
                     let mut d = dashboard.write();
                     d.audit_entries = entries;
                     d.audit_total = total_len;
+                    // First dashboard snapshot in — switch off the skeleton.
+                    d.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::VerifyAuditChain { ok, .. },

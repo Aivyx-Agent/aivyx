@@ -850,3 +850,24 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 @media (max-width: 440px) {
   .stat-row { grid-template-columns: 1fr; }
 }
+
+/* ── Loading skeletons (Command Center first-paint) ───────────────────────
+   Shimmering placeholder blocks shown until the first dashboard snapshot
+   arrives. The global prefers-reduced-motion rule above freezes the shimmer
+   to a static block automatically. */
+.skeleton {
+  display: block;
+  background: linear-gradient(90deg,
+    var(--color-bg-elevated) 25%,
+    var(--color-bg-float) 37%,
+    var(--color-bg-elevated) 63%);
+  background-size: 400% 100%;
+  border-radius: 6px;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+@keyframes skeleton-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.sk-ico { width: 16px; height: 16px; border-radius: 4px; }
+.sk-line { height: 10px; margin: 9px 0; }
+.sk-value { height: 26px; width: 55%; margin-top: 10px; }
+.sk-w30 { width: 30%; } .sk-w40 { width: 40%; } .sk-w50 { width: 50%; }
+.sk-w60 { width: 60%; } .sk-w70 { width: 70%; } .sk-w80 { width: 80%; }
