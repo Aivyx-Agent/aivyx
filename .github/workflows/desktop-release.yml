@@ -1,0 +1,84 @@
+# Builds the native desktop app (`aivyx-desktop`) into installable bundles and
+# attaches them to the GitHub Release. This is SEPARATE from the cargo-dist CLI
+# release (`release.yml`): the desktop shell links a system webview, so it is
+# gnu-linked (not musl-static like the `aivyx` CLI) and packaged with
+# `cargo-bundle` (a `.deb` on Linux, a `.app`/`.dmg` on macOS).
+#
+# ⚠️ AUTHORED BUT NOT YET EXERCISED ON REAL RUNNERS. The Linux `.deb` step is
+# proven locally (cargo bundle produces a correct package with the right
+# Depends); the macOS path and the release upload have not been run. Verify the
+# first dispatch run (deps, bundle formats, asset paths) before relying on it.
+# Windows is intentionally absent — it rides on the future daemon port.
+name: desktop-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # attach assets to the release
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system deps (webview + tray + libxdo)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-bundle --locked
+      - name: Bundle (.deb)
+        working-directory: crates/aivyx-desktop
+        run: cargo bundle --release --format deb
+      - name: Attach to release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/deb/*.deb
+      - name: Upload artifact (manual dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aivyx-desktop-linux-deb
+          path: target/release/bundle/deb/*.deb
+
+  macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-13 # x86_64
+            target: x86_64-apple-darwin
+          - runner: macos-14 # aarch64 (Apple Silicon)
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo install cargo-bundle --locked
+      - name: Bundle (.app)
+        working-directory: crates/aivyx-desktop
+        run: cargo bundle --release --format osx
+      # A `.app` is a directory — zip it so it can be a single release asset.
+      - name: Zip the .app
+        run: |
+          cd target/release/bundle/osx
+          zip -r -y "aivyx-desktop-${{ matrix.target }}.zip" *.app
+      - name: Attach to release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/osx/*.zip
+      - name: Upload artifact (manual dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aivyx-desktop-${{ matrix.target }}
+          path: target/release/bundle/osx/*.zip

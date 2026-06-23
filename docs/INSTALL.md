@@ -96,6 +96,59 @@ profile rather than the local-first desktop one; see the
 [Docker section](#docker--the-server-appliance) for the framing and
 security posture.
 
+## Desktop app
+
+`aivyx-desktop` is a **native desktop app** — a system-tray assistant that hosts
+the Studio in its own window, manages the daemon, and fires OS notifications when
+a mission needs your approval. It's *native chrome over the same web Studio* (a
+system webview runs the exact same UI), not a separate interface.
+
+Features: a tray / menu-bar icon (Open Studio · Restart daemon · Start at login ·
+Quit), hide-to-tray on close, native approval-gate notifications, and a global
+hotkey (`Ctrl+Shift+A`) to summon the window.
+
+### Runtime dependencies (Linux)
+
+The shell links the system webview + tray libraries, so a Linux machine needs:
+
+| Dependency | Provides | Debian/Ubuntu | Arch |
+|---|---|---|---|
+| WebKitGTK | the webview | `libwebkit2gtk-4.1-0` | `webkit2gtk-4.1` |
+| Ayatana AppIndicator | the tray | `libayatana-appindicator3-1` | `libayatana-appindicator` |
+| libxdo | window activation | `libxdo3` | `xdotool` |
+
+macOS uses the system WKWebView (no extra deps). **Windows is not supported yet**
+— it rides on the future daemon port (the daemon's Unix-socket IPC).
+
+### Build + run from source
+
+```sh
+# Linux: install the build/runtime deps first (dev packages add the headers):
+#   Debian/Ubuntu: libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev
+#   Arch:          webkit2gtk-4.1 libayatana-appindicator xdotool
+cargo build -p aivyx-desktop --release
+./target/release/aivyx-desktop
+```
+
+On launch it attaches to a running daemon, or spawns one (`aivyx daemon run
+--web-ui`) — resolving the `aivyx` binary from `AIVYX_BIN` or `PATH`.
+
+### Packaging (installer)
+
+`cargo-bundle` produces a native package — a `.deb` on Linux, a `.app`/`.dmg` on
+macOS — with the icon, a `.desktop` launcher entry, and the declared runtime
+deps:
+
+```sh
+cargo install cargo-bundle
+cargo bundle --release            # from crates/aivyx-desktop/
+# -> target/release/bundle/deb/aivyx-desktop_<ver>_amd64.deb  (Linux)
+```
+
+The desktop app is **not** part of the musl-static CLI release (it links a system
+webview, so it's gnu-linked); it's packaged separately by
+[`.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml).
+
 ## Build from source
 
 An alternative to the shell installer — Cargo build from a clone

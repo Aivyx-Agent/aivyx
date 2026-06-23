@@ -44,9 +44,29 @@ notify-rust = "4"                            # dbus desktop notifications
 global-hotkey = "0.8"
 auto-launch = "0.6"
 
-# Excluded from `dist` for now — the desktop shell links a system webview, so it
-# can't be the musl-static release artifact and needs its own (gnu) target +
-# bundling story (a later phase). Setting dist=false keeps cargo-dist from
-# trying to build it on the existing musl/macOS release matrix and failing.
+# Excluded from `dist` — the desktop shell links a system webview, so it can't be
+# the musl-static release artifact the CLI uses. It's packaged separately
+# (cargo-bundle, gnu-linked) by `.github/workflows/desktop-release.yml`; dist=false
+# keeps cargo-dist from trying to build it on the musl/macOS CLI matrix.
 [package.metadata.dist]
 dist = false
+
+# Native packaging via `cargo-bundle` (`cargo bundle --release`): a `.deb` on
+# Linux and a `.app`/`.dmg` on macOS. The Linux `.deb` declares the shell's
+# system runtime deps so an install pulls them in (Debian/Ubuntu names; the
+# desktop CI runs on Ubuntu).
+[package.metadata.bundle]
+name = "Aivyx"
+identifier = "com.aivyx.desktop"
+icon = ["assets/icon-256.png"]
+category = "Utility"
+short_description = "Aivyx — your personal AI assistant, in a native window."
+long_description = """
+The native desktop app for Aivyx: a system-tray assistant that hosts the local
+Studio, manages the daemon, and notifies you when a mission needs your approval.
+"""
+deb_depends = [
+    "libwebkit2gtk-4.1-0",
+    "libayatana-appindicator3-1",
+    "libxdo3",
+]
