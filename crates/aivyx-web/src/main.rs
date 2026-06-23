@@ -119,6 +119,9 @@ struct MemoryState {
     graph_nodes: Vec<MemoryGraphNode>,
     /// MG — the weighted co-occurrence edges (empty ⇒ a topic cloud).
     graph_edges: Vec<PairScore>,
+    /// `false` until the first entries snapshot arrives — distinguishes "still
+    /// loading" from "genuinely no memories yet" so the panel shows a skeleton.
+    loaded: bool,
 }
 
 /// Chapter Codex — knowledge-wiki browser state. `pages` is the index
@@ -248,6 +251,10 @@ struct DocumentsState {
     file: Option<DocFile>,
     /// Last outcome `(ok, message)` (a denied path / read failure / DW write).
     notice: Option<(bool, String)>,
+    /// `false` until the first directory listing arrives (the `root` field is
+    /// set client-side immediately, so it can't signal load) — drives the
+    /// listing skeleton.
+    loaded: bool,
 }
 
 /// Command Center dashboard state — read-only snapshots fanned in by `ws_task`.
@@ -758,6 +765,40 @@ fn CommandSkeleton() -> Element {
     }
 }
 
+/// Generic loading skeleton — `rows` shimmer cards stacked vertically. For
+/// list-style screens (Memory entries, Documents files, Teams roster). Reuses
+/// the `.feed` layout so the swap to real rows causes no shift.
+#[component]
+fn SkeletonList(rows: usize) -> Element {
+    rsx! {
+        div { class: "feed",
+            for i in 0..rows {
+                div { key: "{i}", class: "glass-card",
+                    span { class: "skeleton sk-line sk-w40" }
+                    span { class: "skeleton sk-line sk-w80" }
+                }
+            }
+        }
+    }
+}
+
+/// Generic loading skeleton — `cards` shimmer cards in the auto-fill grid. For
+/// grid-style screens (Skills, MCP).
+#[component]
+fn SkeletonCards(cards: usize) -> Element {
+    rsx! {
+        div { class: "mcp-grid",
+            for i in 0..cards {
+                div { key: "{i}", class: "glass-card",
+                    span { class: "skeleton sk-line sk-w50" }
+                    span { class: "skeleton sk-line sk-w70" }
+                    span { class: "skeleton sk-line sk-w30" }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn StatCard(icon: Asset, label: &'static str, value: String, tone: Option<&'static str>) -> Element {
     rsx! {
@@ -1196,6 +1237,8 @@ fn MemoryPanel() -> Element {
                             },
                         }
                     }
+                } else if !m.loaded {
+                    SkeletonList { rows: 4 }
                 } else if m.entries.is_empty() {
                     div { class: "glass-card empty",
                         p { class: "label-tech", "No memory here yet — the agent writes memories as it learns what matters to you." }
@@ -1452,16 +1495,19 @@ fn SkillsPanel() -> Element {
                     }
                 }
             }
-            if s.loaded && s.skills.is_empty() {
+            if !s.loaded {
+                SkeletonCards { cards: 4 }
+            } else if s.skills.is_empty() {
                 div { class: "glass-card empty",
                     p { class: "label-tech",
                         "No skills yet. Teach one in chat (\"learn this skill…\"), or enable [skill_authoring] so the agent writes specialized skills from what it knows."
                     }
                 }
-            }
-            div { class: "skills-grid",
-                for sv in rows.iter() {
-                    { rsx! { SkillCard { view: sv.clone() } } }
+            } else {
+                div { class: "skills-grid",
+                    for sv in rows.iter() {
+                        { rsx! { SkillCard { view: sv.clone() } } }
+                    }
                 }
             }
         }
@@ -1567,9 +1613,7 @@ fn McpPanel() -> Element {
                 }
             }
             if !m.loaded {
-                div { class: "glass-card empty",
-                    p { class: "label-tech", "Loading MCP status…" }
-                }
+                SkeletonCards { cards: 3 }
             } else if m.servers.is_empty() {
                 div { class: "glass-card empty",
                     p { class: "label-tech",
@@ -3634,7 +3678,8 @@ fn TeamsPanel() -> Element {
     let Some(team) = draft() else {
         return rsx! {
             div { class: "teams",
-                div { class: "glass-card empty", p { class: "label-tech", "Loading team…" } }
+                div { class: "panel-head", h3 { "Team" } }
+                SkeletonList { rows: 4 }
             }
         };
     };
@@ -3967,6 +4012,8 @@ fn DocumentsPanel() -> Element {
             // File viewer/editor (when one is open) else the directory listing.
             if let Some(file) = d.file.clone() {
                 FileViewer { key: "{file.path}", file: file.clone(), root: root.clone() }
+            } else if !d.loaded {
+                SkeletonList { rows: 5 }
             } else {
                 div { class: "glass-card doc-listing",
                     if d.entries.is_empty() {
@@ -4321,6 +4368,7 @@ async fn ws_task(
                     d.entries = entries;
                     d.path = path;
                     d.file = None;
+                    d.loaded = true;
                     if !id.starts_with("mc-docs-refresh") {
                         d.notice = None;
                     }
@@ -4415,6 +4463,7 @@ async fn ws_task(
                     let mut m = memory.write();
                     m.entries = entries;
                     m.fell_back = false;
+                    m.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::SearchMemory { matches, fell_back_to_keyword },
@@ -4423,6 +4472,7 @@ async fn ws_task(
                     let mut m = memory.write();
                     m.entries = matches;
                     m.fell_back = fell_back_to_keyword;
+                    m.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListWikiPages { pages },
