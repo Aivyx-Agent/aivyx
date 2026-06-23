@@ -84,6 +84,12 @@ pub const PAGES: &[Page] = &[
         body: include_str!("../../../docs/guide/09-screens-reference.md"),
     },
     Page {
+        id: "desktop-app",
+        file: "11-desktop-app.md",
+        title: "Desktop app",
+        body: include_str!("../../../docs/guide/11-desktop-app.md"),
+    },
+    Page {
         id: "troubleshooting",
         file: "10-troubleshooting.md",
         title: "Troubleshooting",

@@ -54,6 +54,10 @@ Visit **http://127.0.0.1:7843** in your browser. The first time, you'll land on
 the **Create your agent** screen if you haven't set up an identity yet;
 otherwise you arrive at the **Command Center** dashboard.
 
+> **Prefer a real app?** The [desktop app](11-desktop-app.md) puts the Studio in
+> its own window and your assistant in the system tray — with approval
+> notifications and a summon hotkey — instead of a browser tab.
+
 ## Health check
 
 If anything seems off — an empty first reply, a model that won't connect — run:

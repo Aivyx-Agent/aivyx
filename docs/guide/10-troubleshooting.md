@@ -44,6 +44,12 @@ Two likely reasons, both intentional: it hit an **approval gate** (a step that
 needs your sign-off — approve it to continue), or it reached a **budget** limit
 (raise the budget on Settings, or let it resume in the next billing window).
 
+**The [desktop app](11-desktop-app.md) won't open (on Linux).**
+It needs a few system packages (a webview and the tray libraries). If it fails
+to start, install them for your distribution — the
+[installation guide](https://github.com/Aivyx-Agent/aivyx/blob/main/docs/INSTALL.md#desktop-app)
+lists the exact package names.
+
 ## Where to look next
 
 - **The audit log** records every action the assistant took — the ground truth
