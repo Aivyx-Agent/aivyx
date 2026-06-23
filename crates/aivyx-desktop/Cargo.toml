@@ -22,6 +22,11 @@ tao = "0.35"
 # macOS). On Linux this needs the `webkit2gtk-4.1` runtime/dev package — the one
 # real native dependency of the desktop shell.
 wry = "0.55"
+# System tray / menu-bar icon + its menu (re-exports `muda` as `tray_icon::menu`).
+# On Linux the tray uses GTK + an appindicator at runtime.
+tray-icon = "0.21"
+# Decode the embedded tray PNG to RGBA for `tray_icon::Icon`.
+png = "0.17"
 
 # Excluded from `dist` for now — the desktop shell links a system webview, so it
 # can't be the musl-static release artifact and needs its own (gnu) target +
