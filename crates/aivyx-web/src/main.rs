@@ -64,6 +64,15 @@ const ICON_DOCUMENTS: Asset = asset!("/assets/icons/documents.svg");
 const ICON_VOICE: Asset = asset!("/assets/icons/voice.svg");
 const ICON_SETTINGS: Asset = asset!("/assets/icons/settings.svg");
 const ICON_THEME: Asset = asset!("/assets/icons/theme-toggle.svg");
+// Distinct per-screen nav icons (UI polish): every sidebar item gets its own
+// glyph instead of sharing one. `plugins`/`candle-flame` are pre-existing brand
+// spares; `wiki`/`graph`/`skills`/`guide` were authored to match the set.
+const ICON_WIKI: Asset = asset!("/assets/icons/wiki.svg");
+const ICON_GRAPH: Asset = asset!("/assets/icons/graph.svg");
+const ICON_SKILLS: Asset = asset!("/assets/icons/skills.svg");
+const ICON_GUIDE: Asset = asset!("/assets/icons/guide.svg");
+const ICON_PLUGINS: Asset = asset!("/assets/icons/plugins.svg");
+const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -435,7 +444,7 @@ fn App() -> Element {
             // Mobile-only scrim behind the open drawer; tap to dismiss.
             div { class: "nav-backdrop", onclick: move |_| nav_open.set(false) }
             div { class: "main",
-                Topbar { title, connected: connected(), light, nav_open }
+                Topbar { title, light, nav_open }
                 div { class: "view fade-in",
                     match view() {
                         View::Command => rsx! {
@@ -485,16 +494,16 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             "Knowledge",
             vec![
                 (ICON_MEMORY, "Memory", View::Memory),
-                (ICON_MEMORY, "Wiki", View::Wiki),
-                (ICON_MEMORY, "Graph", View::Lattice),
+                (ICON_WIKI, "Wiki", View::Wiki),
+                (ICON_GRAPH, "Graph", View::Lattice),
             ],
         ),
         (
             "Agent",
             vec![
-                (ICON_AGENTS, "Create", View::Onboarding),
+                (ICON_CREATE, "Create", View::Onboarding),
                 (ICON_AGENTS, "Agents", View::Agents),
-                (ICON_AGENTS, "Skills", View::Skills),
+                (ICON_SKILLS, "Skills", View::Skills),
                 (ICON_TEAMS, "Teams", View::Teams),
             ],
         ),
@@ -502,10 +511,10 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             "System",
             vec![
                 (ICON_DOCUMENTS, "Documents", View::Documents),
-                (ICON_SETTINGS, "MCP", View::Mcp),
+                (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_VOICE, "Voice", View::Voice),
                 (ICON_SETTINGS, "Settings", View::Settings),
-                (ICON_DOCUMENTS, "Guide", View::Guide),
+                (ICON_GUIDE, "Guide", View::Guide),
             ],
         ),
     ];
@@ -604,7 +613,7 @@ fn GuidePanel() -> Element {
 }
 
 #[component]
-fn Topbar(title: &'static str, connected: bool, light: Signal<bool>, nav_open: Signal<bool>) -> Element {
+fn Topbar(title: &'static str, light: Signal<bool>, nav_open: Signal<bool>) -> Element {
     rsx! {
         header { class: "topbar",
             // Hamburger — CSS shows it only below the shell breakpoint.
@@ -616,13 +625,12 @@ fn Topbar(title: &'static str, connected: bool, light: Signal<bool>, nav_open: S
             }
             span { class: "title", "{title}" }
             div { class: "spacer" }
-            div { class: if connected { "status-dot live" } else { "status-dot" },
-                span { class: "beacon" }
-                if connected { "daemon online" } else { "connecting…" }
-            }
+            // Daemon connection status lives in the status bar (footer) as the
+            // single source — the topbar no longer duplicates it.
             button {
                 class: "icon-btn",
                 title: "Toggle theme",
+                "aria-label": "Toggle light/dark theme",
                 onclick: move |_| light.toggle(),
                 span { class: "ico", style: "--ico: url({ICON_THEME})" }
             }
