@@ -12,6 +12,8 @@ agent's request path; your API key talks directly to the LLM
 provider, your data stays on your hardware, your audit chain is
 verifiable offline.
 
+![The Aivyx Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
+
 ## Status (v0.6.0 — source-available, BUSL-1.1, 2026-06-21)
 
 | | |
