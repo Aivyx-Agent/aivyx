@@ -484,6 +484,8 @@ fn App() -> Element {
     // Mobile drawer state: below the shell breakpoint the sidebar is off-canvas
     // and this toggles it. Ignored on desktop (the sidebar is always in-grid).
     let mut nav_open = use_signal(|| false);
+    // The Guide's current page — App-owned so the topbar "?" can deep-link it.
+    let guide_page = use_signal(|| 0usize);
     let missions = use_signal(Vec::<TeamMissionView>::new);
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
@@ -591,7 +593,7 @@ fn App() -> Element {
             // Mobile-only scrim behind the open drawer; tap to dismiss.
             div { class: "nav-backdrop", onclick: move |_| nav_open.set(false) }
             div { class: "main",
-                Topbar { title, light, nav_open }
+                Topbar { title, light, nav_open, view, guide_page }
                 main { class: "view fade-in", id: "main-content", tabindex: "-1",
                     match view() {
                         View::Command => rsx! {
@@ -609,7 +611,7 @@ fn App() -> Element {
                         View::Documents => rsx! { DocumentsPanel {} },
                         View::Mcp => rsx! { McpPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
-                        View::Guide => rsx! { GuidePanel {} },
+                        View::Guide => rsx! { GuidePanel { page: guide_page } },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
                     }
                 }
@@ -781,11 +783,13 @@ fn NavItem(icon: Asset, label: &'static str, active: bool, onclick: EventHandler
 /// navigate away. External links (`http(s)://`, …) don't match and behave
 /// normally.
 #[component]
-fn GuidePanel() -> Element {
+fn GuidePanel(page: Signal<usize>) -> Element {
     use dioxus::web::WebEventExt;
     use wasm_bindgen::JsCast;
 
-    let mut selected = use_signal(|| 0usize);
+    // The current page is shared (App-owned) so the topbar "?" help button can
+    // open the Guide directly to the page relevant to the screen you were on.
+    let mut selected = page;
     let body_html = use_memo(move || {
         let idx = selected().min(guide::PAGES.len().saturating_sub(1));
         guide::render(guide::PAGES[idx].body)
@@ -827,7 +831,13 @@ fn GuidePanel() -> Element {
 }
 
 #[component]
-fn Topbar(title: &'static str, light: Signal<bool>, nav_open: Signal<bool>) -> Element {
+fn Topbar(
+    title: &'static str,
+    light: Signal<bool>,
+    nav_open: Signal<bool>,
+    mut view: Signal<View>,
+    mut guide_page: Signal<usize>,
+) -> Element {
     rsx! {
         header { class: "topbar",
             // Hamburger — CSS shows it only below the shell breakpoint.
@@ -841,6 +851,17 @@ fn Topbar(title: &'static str, light: Signal<bool>, nav_open: Signal<bool>) -> E
             div { class: "spacer" }
             // Daemon connection status lives in the status bar (footer) as the
             // single source — the topbar no longer duplicates it.
+            // Contextual help: open the Guide to the page for the current screen.
+            button {
+                class: "icon-btn",
+                title: "Help for this screen",
+                "aria-label": "Open the guide for this screen",
+                onclick: move |_| {
+                    guide_page.set(guide_page_for(view()));
+                    view.set(View::Guide);
+                },
+                span { class: "ico", style: "--ico: url({ICON_GUIDE})" }
+            }
             button {
                 class: "icon-btn",
                 title: "Toggle theme",
@@ -850,6 +871,23 @@ fn Topbar(title: &'static str, light: Signal<bool>, nav_open: Signal<bool>) -> E
             }
         }
     }
+}
+
+/// Map a screen to the most relevant end-user guide page (index into
+/// [`guide::PAGES`]) for the topbar "?" help button.
+fn guide_page_for(v: View) -> usize {
+    let id = match v {
+        View::Chat | View::Missions => "chat-and-missions",
+        View::Memory | View::Wiki | View::Lattice => "memory",
+        View::Skills | View::Agents => "skills-and-persona",
+        View::Teams => "teams",
+        View::Settings => "access-and-settings",
+        View::Onboarding => "create-your-agent",
+        View::Guide => "welcome",
+        // Command / Documents / Mcp / Voice → the screens overview.
+        _ => "screens",
+    };
+    guide::PAGES.iter().position(|p| p.id == id).unwrap_or(0)
 }
 
 #[component]
