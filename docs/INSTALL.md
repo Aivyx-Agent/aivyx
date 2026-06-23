@@ -103,6 +103,8 @@ the Studio in its own window, manages the daemon, and fires OS notifications whe
 a mission needs your approval. It's *native chrome over the same web Studio* (a
 system webview runs the exact same UI), not a separate interface.
 
+![The Aivyx desktop app — the Studio running in a native window, daemon connected](images/desktop-app.png)
+
 Features: a tray / menu-bar icon (Open Studio · Restart daemon · Start at login ·
 Quit), hide-to-tray on close, native approval-gate notifications, and a global
 hotkey (`Ctrl+Shift+A`) to summon the window.
