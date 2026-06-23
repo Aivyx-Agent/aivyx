@@ -25,15 +25,20 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 use wry::WebViewBuilder;
 
+mod gate_watch;
+
 /// Where the daemon serves the Studio (HTTP + the `/ws` WebSocket bridge).
 const STUDIO_URL: &str = "http://127.0.0.1:7843/";
 const STUDIO_ADDR: &str = "127.0.0.1:7843";
 
-/// Events we route into the single tao event loop from the tray's global
-/// channels, so everything is handled in one place.
-enum UserEvent {
+/// Events we route into the single tao event loop — from the tray's global
+/// channels and from the background gate watcher — so everything is handled in
+/// one place.
+pub(crate) enum UserEvent {
     Menu(MenuEvent),
     Tray(TrayIconEvent),
+    /// Raise + focus the window (a tray click, or a notification's "Open").
+    ShowWindow,
 }
 
 /// The `aivyx` binary to drive the daemon: `AIVYX_BIN` if set, else `aivyx` on
@@ -116,9 +121,25 @@ fn main() -> wry::Result<()> {
     MenuEvent::set_event_handler(Some(move |e| {
         let _ = menu_proxy.send_event(UserEvent::Menu(e));
     }));
+    let tray_proxy = proxy.clone();
     TrayIconEvent::set_event_handler(Some(move |e| {
-        let _ = proxy.send_event(UserEvent::Tray(e));
+        let _ = tray_proxy.send_event(UserEvent::Tray(e));
     }));
+
+    // Background approval-gate watcher: its own thread + tokio runtime, polling
+    // the daemon for missions awaiting approval and firing OS notifications.
+    {
+        let watcher_proxy = proxy.clone();
+        std::thread::spawn(move || {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(gate_watch::run(watcher_proxy)),
+                Err(e) => eprintln!("aivyx-desktop: gate watcher runtime failed: {e}"),
+            }
+        });
+    }
 
     let window = WindowBuilder::new()
         .with_title("Aivyx Studio")
@@ -178,8 +199,9 @@ fn main() -> wry::Result<()> {
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            // Left-click on the tray icon shows/focuses the window.
-            Event::UserEvent(UserEvent::Tray(TrayIconEvent::Click { .. })) => {
+            // A tray left-click or a notification's "Open" raises the window.
+            Event::UserEvent(UserEvent::Tray(TrayIconEvent::Click { .. }))
+            | Event::UserEvent(UserEvent::ShowWindow) => {
                 window.set_visible(true);
                 window.set_focus();
             }

@@ -28,6 +28,16 @@ tray-icon = "0.21"
 # Decode the embedded tray PNG to RGBA for `tray_icon::Icon`.
 png = "0.17"
 
+# Native approval-gate notifications: a background WebSocket client polls the
+# daemon for missions awaiting approval (the same TeamMissionList the Studio
+# polls) and fires an OS notification on each new gate.
+aivyx-ipc = { path = "../aivyx-ipc" }        # the shared wire protocol (native-clean)
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = "0.29"
+futures-util = { workspace = true }
+serde_json = { workspace = true }
+notify-rust = "4"                            # dbus desktop notifications
+
 # Excluded from `dist` for now — the desktop shell links a system webview, so it
 # can't be the musl-static release artifact and needs its own (gnu) target +
 # bundling story (a later phase). Setting dist=false keeps cargo-dist from
