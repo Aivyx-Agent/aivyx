@@ -451,12 +451,14 @@ fn App() -> Element {
         document::Stylesheet { href: STITCH_CSS }
         style { {font_faces()} }
         div { class: if nav_open() { "app nav-open" } else { "app" },
+            // Keyboard a11y: first focusable element jumps past the nav.
+            a { class: "skip-link", href: "#main-content", "Skip to content" }
             Sidebar { view, nav_open }
             // Mobile-only scrim behind the open drawer; tap to dismiss.
             div { class: "nav-backdrop", onclick: move |_| nav_open.set(false) }
             div { class: "main",
                 Topbar { title, light, nav_open }
-                div { class: "view fade-in",
+                main { class: "view fade-in", id: "main-content", tabindex: "-1",
                     match view() {
                         View::Command => rsx! {
                             CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected() }
@@ -536,13 +538,15 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 img { src: LOGOMARK, alt: "Aivyx" }
                 span { class: "wordmark", "AIVYX" }
             }
-            for (header, items) in groups {
-                if !header.is_empty() {
-                    div { class: "nav-section label-tech", "{header}" }
-                }
-                for (icon, label, v) in items {
-                    NavItem { icon, label, active: view() == v,
-                        onclick: move |_| { view.set(v); nav_open.set(false); } }
+            nav { "aria-label": "Primary",
+                for (header, items) in groups {
+                    if !header.is_empty() {
+                        div { class: "nav-section label-tech", "{header}" }
+                    }
+                    for (icon, label, v) in items {
+                        NavItem { icon, label, active: view() == v,
+                            onclick: move |_| { view.set(v); nav_open.set(false); } }
+                    }
                 }
             }
             div { style: "flex:1" }
@@ -948,6 +952,7 @@ fn NewMissionBar() -> Element {
         div { class: "newbar",
             input {
                 class: "input",
+                "aria-label": "New mission goal",
                 placeholder: "new mission goal — e.g. \"audit the deps for CVEs\"",
                 value: "{goal}",
                 oninput: move |e| goal.set(e.value()),
@@ -1052,6 +1057,7 @@ fn ChatPanel() -> Element {
                 div { class: "composer",
                     input {
                         class: "input",
+                        "aria-label": "Message",
                         placeholder: if ready { "message…" } else { "connecting…" },
                         disabled: !ready,
                         value: "{input}",
@@ -1176,6 +1182,7 @@ fn MemoryPanel() -> Element {
                 div { class: "mem-search",
                     input {
                         class: "input",
+                        "aria-label": "Search memory",
                         placeholder: "search memory…",
                         value: "{query}",
                         oninput: move |e| query.set(e.value()),
@@ -4067,14 +4074,14 @@ fn DocumentsPanel() -> Element {
                                                 {
                                                     let nm = e.name.clone();
                                                     rsx! {
-                                                        button { class: "btn btn-glass btn-xs", title: "Rename",
+                                                        button { class: "btn btn-glass btn-xs", title: "Rename", "aria-label": "Rename",
                                                             onclick: move |_| { rename_to.set(nm.clone()); rename_of.set(Some(nm.clone())); }, "✎" }
                                                     }
                                                 }
                                                 {
                                                     let tgt4 = target.clone();
                                                     rsx! {
-                                                        button { class: "btn btn-glass btn-xs danger", title: "Delete",
+                                                        button { class: "btn btn-glass btn-xs danger", title: "Delete", "aria-label": "Delete",
                                                             onclick: move |_| delete_of.set(Some(tgt4.clone())), "🗑" }
                                                     }
                                                 }

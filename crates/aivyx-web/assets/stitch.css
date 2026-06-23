@@ -871,3 +871,30 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .sk-value { height: 26px; width: 55%; margin-top: 10px; }
 .sk-w30 { width: 30%; } .sk-w40 { width: 40%; } .sk-w50 { width: 50%; }
 .sk-w60 { width: 60%; } .sk-w70 { width: 70%; } .sk-w80 { width: 80%; }
+
+/* ── Accessibility: visible keyboard focus + skip link ────────────────────
+   No focus indicator existed (and inputs did `outline:none`), so keyboard
+   users couldn't see focus. `:focus-visible` shows a ring for keyboard nav
+   only — mouse clicks keep the clean look. The outline follows each element's
+   own border-radius automatically. */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+/* Inputs keep `outline:none` for mouse focus (the bg change is the cue) but
+   get a visible ring on keyboard focus. */
+.input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* Skip link — first tab stop; off-screen until focused, then pinned. */
+.skip-link {
+  position: fixed; top: 8px; left: 8px; z-index: 100;
+  padding: 8px 14px; border-radius: 8px;
+  background: var(--color-primary); color: var(--color-text-inverse);
+  font-weight: 600; text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform 0.15s var(--ease-smooth);
+}
+.skip-link:focus { transform: translateY(0); }
