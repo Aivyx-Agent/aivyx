@@ -42,11 +42,19 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
       - name: Install system dependencies
-        # aivyx-voice -> alsa-sys needs the ALSA dev library (alsa.pc)
-        # for pkg-config; the bare runner doesn't ship it.
+        # aivyx-voice -> alsa-sys needs the ALSA dev library (alsa.pc) for
+        # pkg-config. aivyx-desktop (tao / wry / tray-icon) needs the GTK3 +
+        # WebKitGTK + appindicator + libxdo dev libs so the `--workspace`
+        # clippy/test below can build it. (aivyx-web is wasm-only and handled
+        # by the dedicated wasm step.)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev
+          sudo apt-get install -y \
+            libasound2-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test --workspace

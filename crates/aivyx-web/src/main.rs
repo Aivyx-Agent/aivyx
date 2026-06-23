@@ -690,12 +690,17 @@ fn CommandPalette(view: Signal<View>, open: Signal<bool>) -> Element {
 // App shell — Sidebar / Topbar / StatusBar
 // ---------------------------------------------------------------------------
 
+/// One sidebar nav entry: its icon, label, and the view it opens.
+type NavEntry = (Asset, &'static str, View);
+/// A labeled sidebar group (`""` header ⇒ no label) and its entries.
+type NavGroup = (&'static str, Vec<NavEntry>);
+
 /// The sidebar navigation, grouped into labeled sections. Data-driven so the
 /// IA is one table to read/reorder, and every item closes the mobile drawer on
 /// click. An empty group header (`""`) renders no label (the lone Command item).
 #[component]
 fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
-    let groups: Vec<(&str, Vec<(Asset, &str, View)>)> = vec![
+    let groups: Vec<NavGroup> = vec![
         ("", vec![(ICON_COMMAND, "Command", View::Command)]),
         (
             "Workspace",
