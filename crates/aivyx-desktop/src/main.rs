@@ -17,11 +17,14 @@ use std::net::TcpStream;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
+use auto_launch::AutoLaunchBuilder;
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::{Window, WindowBuilder};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 use wry::WebViewBuilder;
 
@@ -39,6 +42,19 @@ pub(crate) enum UserEvent {
     Tray(TrayIconEvent),
     /// Raise + focus the window (a tray click, or a notification's "Open").
     ShowWindow,
+    /// The global hotkey fired — toggle the window's visibility.
+    ToggleWindow,
+}
+
+/// Build the launch-on-login controller for this executable. `None` if the
+/// platform autostart entry can't be constructed.
+fn auto_launch() -> Option<auto_launch::AutoLaunch> {
+    let exe = std::env::current_exe().ok()?;
+    AutoLaunchBuilder::new()
+        .set_app_name("Aivyx")
+        .set_app_path(&exe.to_string_lossy())
+        .build()
+        .ok()
 }
 
 /// The `aivyx` binary to drive the daemon: `AIVYX_BIN` if set, else `aivyx` on
@@ -126,6 +142,33 @@ fn main() -> wry::Result<()> {
         let _ = tray_proxy.send_event(UserEvent::Tray(e));
     }));
 
+    // Global hotkey (Ctrl+Shift+A) to summon the window. Best-effort: a
+    // Wayland-only session can't grab globally, so a failure is logged and the
+    // rest of the app runs normally. The manager must outlive the loop — kept
+    // in `_hotkey_manager` (the diverging `run()` below never drops locals).
+    let hotkey_proxy = proxy.clone();
+    GlobalHotKeyEvent::set_event_handler(Some(move |e: GlobalHotKeyEvent| {
+        if e.state == HotKeyState::Pressed {
+            let _ = hotkey_proxy.send_event(UserEvent::ToggleWindow);
+        }
+    }));
+    let _hotkey_manager = match GlobalHotKeyManager::new() {
+        Ok(mgr) => {
+            let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyA);
+            if let Err(e) = mgr.register(hotkey) {
+                eprintln!("aivyx-desktop: could not register the global hotkey: {e}");
+            }
+            Some(mgr)
+        }
+        Err(e) => {
+            eprintln!("aivyx-desktop: global hotkeys unavailable (Wayland-only?): {e}");
+            None
+        }
+    };
+
+    // Launch-on-login controller (None if the platform entry can't be built).
+    let autostart = auto_launch();
+
     // Background approval-gate watcher: its own thread + tokio runtime, polling
     // the daemon for missions awaiting approval and firing OS notifications.
     {
@@ -155,11 +198,19 @@ fn main() -> wry::Result<()> {
     let menu = Menu::new();
     let open_item = MenuItem::new("Open Studio", true, None);
     let restart_item = MenuItem::new("Restart daemon", true, None);
+    // Reflects the current autostart state; toggling enables/disables it.
+    let autostart_checked = autostart
+        .as_ref()
+        .and_then(|a| a.is_enabled().ok())
+        .unwrap_or(false);
+    let autostart_item =
+        CheckMenuItem::new("Start at login", autostart.is_some(), autostart_checked, None);
     let quit_item = MenuItem::new("Quit Aivyx", true, None);
     menu.append_items(&[
         &open_item,
         &PredefinedMenuItem::separator(),
         &restart_item,
+        &autostart_item,
         &PredefinedMenuItem::separator(),
         &quit_item,
     ])
@@ -173,7 +224,17 @@ fn main() -> wry::Result<()> {
 
     let open_id = open_item.id().clone();
     let restart_id = restart_item.id().clone();
+    let autostart_id = autostart_item.id().clone();
     let quit_id = quit_item.id().clone();
+
+    // Track visibility ourselves so the hotkey can toggle reliably across
+    // platforms (avoids the platform-specific `Window::is_visible`).
+    let mut visible = true;
+    let show = |window: &Window, visible: &mut bool| {
+        window.set_visible(true);
+        window.set_focus();
+        *visible = true;
+    };
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -185,15 +246,26 @@ fn main() -> wry::Result<()> {
                 ..
             } => {
                 window.set_visible(false);
+                visible = false;
             }
             Event::UserEvent(UserEvent::Menu(e)) => {
                 if e.id == open_id {
-                    window.set_visible(true);
-                    window.set_focus();
+                    show(&window, &mut visible);
                 } else if e.id == restart_id {
                     stop_owned_daemon(&mut daemon_child);
                     daemon_child = ensure_daemon();
                     let _ = webview.load_url(STUDIO_URL);
+                } else if e.id == autostart_id {
+                    // The CheckMenuItem flipped its own checkmark; sync the
+                    // platform autostart entry to the new state.
+                    if let Some(a) = autostart.as_ref() {
+                        let want_on = autostart_item.is_checked();
+                        let res = if want_on { a.enable() } else { a.disable() };
+                        if let Err(e) = res {
+                            eprintln!("aivyx-desktop: could not update launch-on-login: {e}");
+                            autostart_item.set_checked(!want_on); // revert the UI
+                        }
+                    }
                 } else if e.id == quit_id {
                     stop_owned_daemon(&mut daemon_child);
                     *control_flow = ControlFlow::Exit;
@@ -202,8 +274,16 @@ fn main() -> wry::Result<()> {
             // A tray left-click or a notification's "Open" raises the window.
             Event::UserEvent(UserEvent::Tray(TrayIconEvent::Click { .. }))
             | Event::UserEvent(UserEvent::ShowWindow) => {
-                window.set_visible(true);
-                window.set_focus();
+                show(&window, &mut visible);
+            }
+            // The global hotkey toggles the window.
+            Event::UserEvent(UserEvent::ToggleWindow) => {
+                if visible {
+                    window.set_visible(false);
+                    visible = false;
+                } else {
+                    show(&window, &mut visible);
+                }
             }
             _ => {}
         }

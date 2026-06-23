@@ -38,6 +38,12 @@ futures-util = { workspace = true }
 serde_json = { workspace = true }
 notify-rust = "4"                            # dbus desktop notifications
 
+# Global hotkey to summon the window + launch-on-login. global-hotkey uses X11
+# on Linux (best-effort — a Wayland-only session can't grab globally); the
+# autostart entry is a `~/.config/autostart/*.desktop` file on Linux.
+global-hotkey = "0.8"
+auto-launch = "0.6"
+
 # Excluded from `dist` for now — the desktop shell links a system webview, so it
 # can't be the musl-static release artifact and needs its own (gnu) target +
 # bundling story (a later phase). Setting dist=false keeps cargo-dist from
