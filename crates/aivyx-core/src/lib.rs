@@ -40,7 +40,9 @@ pub mod skill_proposer;
 pub mod textual_tool_call;
 pub mod tools;
 
-pub use agent::{BudgetGate, ConcreteAgent, RateGate, TurnBudgetGuard, MAX_STEPS_PER_TURN};
+pub use agent::{
+    BudgetGate, ConcreteAgent, CycleConfig, RateGate, TurnBudgetGuard, MAX_STEPS_PER_TURN,
+};
 pub use gate_policy::GatePolicy;
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};
 pub use planner::{

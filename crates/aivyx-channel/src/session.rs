@@ -178,6 +178,10 @@ pub struct SessionConfig {
     /// override (from `[agent] turn_timeout_secs`). `None` keeps the
     /// built-in 120s default. Lifted into the `AgentStackSpec`.
     pub turn_timeout: Option<std::time::Duration>,
+    /// Small-cycle breaker config (from `[agent] cycle_detection`). `None`
+    /// (the default) leaves the loop byte-identical. Lifted into the
+    /// `AgentStackSpec`.
+    pub cycle_config: Option<aivyx_core::CycleConfig>,
 }
 
 /// Phase 137 — agent-stack construction inputs.
@@ -223,6 +227,10 @@ pub struct AgentStackSpec {
     /// override. `None` (the default) keeps the built-in 120s. Set from
     /// `[agent] turn_timeout_secs` for slow local backends.
     pub turn_timeout: Option<std::time::Duration>,
+    /// Small-cycle breaker config. `None` (the default) leaves the loop
+    /// byte-identical; `Some` arms the repeating-cycle detector. Set from
+    /// `[agent] cycle_detection`.
+    pub cycle_config: Option<aivyx_core::CycleConfig>,
 }
 
 impl AgentStackSpec {
@@ -250,6 +258,7 @@ impl AgentStackSpec {
             budget_gate: None,
             rate_gate: None,
             turn_timeout: c.turn_timeout,
+            cycle_config: c.cycle_config.clone(),
         }
     }
 }
@@ -294,6 +303,7 @@ pub fn build_agent_stack(
         budget_gate,
         rate_gate,
         turn_timeout,
+        cycle_config,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -351,6 +361,10 @@ pub fn build_agent_stack(
         Some(d) => agent.with_turn_timeout(d),
         None => agent,
     };
+
+    // Arm the small-cycle breaker when the operator enabled it
+    // (`[agent] cycle_detection`); `None` leaves the loop byte-identical.
+    let agent = agent.with_cycle_detection(cycle_config);
 
     Arc::new(agent)
 }

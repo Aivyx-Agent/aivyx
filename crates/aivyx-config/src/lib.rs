@@ -917,6 +917,10 @@ pub struct AivyxConfig {
     /// default. Raised for slow local backends; the binary passes it to
     /// `ConcreteAgent::with_turn_timeout`.
     pub turn_timeout_secs: Option<u64>,
+    /// `[agent] cycle_detection` — arm the loop's small-cycle breaker
+    /// (`A,B,A,B,…`). `None`/`Some(false)` → off (byte-identical loop). The
+    /// binary maps `Some(true)` to `ConcreteAgent::with_cycle_detection`.
+    pub cycle_detection: Option<bool>,
     /// Phase 135 — `[voice]` operator-configured options
     /// for the voice channel adapter. Empty when the
     /// operator doesn't run `--channel voice`.
@@ -4062,6 +4066,12 @@ struct RawAgent {
     /// backends where a legitimate turn exceeds two minutes.
     #[serde(default)]
     turn_timeout_secs: Option<u64>,
+    /// Small-cycle breaker switch. `true` arms the loop's repeating-cycle
+    /// detector (catches `A,B,A,B,…` that the consecutive-identical breaker
+    /// misses) with the built-in defaults. Unset / `false` → off (the loop is
+    /// byte-identical). See `ConcreteAgent::with_cycle_detection`.
+    #[serde(default)]
+    cycle_detection: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6686,6 +6696,7 @@ impl AivyxConfig {
             ollama_options,
             mistralrs_options,
             turn_timeout_secs: toml.agent.turn_timeout_secs,
+            cycle_detection: toml.agent.cycle_detection,
             voice_options,
             ollama_prompt_strategies,
             pricing,

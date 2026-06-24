@@ -4431,6 +4431,9 @@ async fn run_async(
         // Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override,
         // passed to the SessionConfig below (slow local backends).
         turn_timeout_secs,
+        // `[agent] cycle_detection` — arm the small-cycle breaker; mapped to
+        // an `Option<CycleConfig>` at each agent-construction site below.
+        cycle_detection,
         // Phase 135 — [voice] section. Bound here so the
         // ChannelKind::Voice dispatch arm reads the operator's
         // ASR + TTS paths.
@@ -7811,6 +7814,10 @@ async fn run_async(
                 // Chapter Bridle (BR.4) — operator override for the
                 // per-turn wall-clock deadline (slow local backends).
                 turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
+                // `[agent] cycle_detection` → the small-cycle breaker config.
+                cycle_config: cycle_detection
+                    .unwrap_or(false)
+                    .then(aivyx_core::CycleConfig::default_enabled),
             };
 
             let stdin = io::stdin();
@@ -8273,6 +8280,15 @@ async fn run_async(
                     rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(
                         config_rate_limit.clone(),
                     ),
+                    // Same per-turn knobs as the Local path: the wall-clock
+                    // deadline and the small-cycle breaker. (Both were absent
+                    // here — this literal predated `turn_timeout` — so the
+                    // `channel-voice-full` build now matches the struct again.)
+                    turn_timeout: turn_timeout_secs
+                        .map(std::time::Duration::from_secs),
+                    cycle_config: cycle_detection
+                        .unwrap_or(false)
+                        .then(aivyx_core::CycleConfig::default_enabled),
                 };
                 let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),

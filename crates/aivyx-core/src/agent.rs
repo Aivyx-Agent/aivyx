@@ -203,6 +203,14 @@ pub struct ConcreteAgent {
     /// ones" intent is preserved — and BR.2's breaker now catches the
     /// most common stuck case independent of this deadline.
     turn_timeout: Duration,
+    /// Small-cycle breaker config — the companion to `repeat_call_limit`.
+    /// Where [`note_repeat`] catches a *consecutive-identical* run (`A,A,A`),
+    /// this catches a *repeating short cycle* (`A,B,A,B,…`) that the
+    /// consecutive counter resets on. `None` (the default) preserves the
+    /// pre-existing behavior byte-for-byte: only `repeat_call_limit` +
+    /// `MAX_STEPS_PER_TURN` + the wall-clock deadline bound a turn. See
+    /// [`CycleConfig`] and [`ConcreteAgent::with_cycle_detection`].
+    cycle_config: Option<CycleConfig>,
 }
 
 impl ConcreteAgent {
@@ -225,6 +233,7 @@ impl ConcreteAgent {
             rate_gate: None,
             repeat_call_limit: DEFAULT_REPEAT_CALL_LIMIT,
             turn_timeout: TURN_TIMEOUT,
+            cycle_config: None,
         }
     }
 
@@ -242,6 +251,15 @@ impl ConcreteAgent {
     /// builder-style, mirroring the other optional knobs.
     pub fn with_turn_timeout(mut self, timeout: Duration) -> Self {
         self.turn_timeout = timeout;
+        self
+    }
+
+    /// Enable the small-cycle breaker (default-off). Catches a repeating short
+    /// cycle of tool calls (`A,B,A,B,…`) that the consecutive-identical breaker
+    /// misses. `None` is the default and leaves the turn loop byte-identical;
+    /// `Some(cfg)` arms it. Builder-style, mirroring the other optional knobs.
+    pub fn with_cycle_detection(mut self, config: Option<CycleConfig>) -> Self {
+        self.cycle_config = config;
         self
     }
 
@@ -413,6 +431,13 @@ impl Agent for ConcreteAgent {
         let mut last_call_sig: Option<u64> = None;
         let mut repeat_count: usize = 0;
 
+        // Small-cycle breaker state — a bounded ring of recent call signatures.
+        // `None` (the default) makes the per-step check below a no-op, so the
+        // loop is byte-identical to pre-cycle-detection behavior. Covers the
+        // periods (≥2) the consecutive `repeat_count` above resets on.
+        let mut cycle_state: Option<CycleState> =
+            self.cycle_config.clone().map(CycleState::new);
+
         loop {
             if let Some(out) = classify_cancellation(&cancellation, &deadline_fired) {
                 loop_outcome = out;
@@ -464,6 +489,16 @@ impl Agent for ConcreteAgent {
                         loop_outcome = LoopOutcome::Looping {
                             final_message: looping_message(repeat_limit),
                             repeat_limit,
+                        };
+                        break;
+                    }
+                    // Small-cycle breaker (period ≥ 2). No-op when disabled.
+                    if let Some(cs) = cycle_state.as_mut()
+                        && let Some(period) = cs.note(sig)
+                    {
+                        loop_outcome = LoopOutcome::Looping {
+                            final_message: cycle_message(period, cs.cfg.min_repeats),
+                            repeat_limit: cs.cfg.min_repeats,
                         };
                         break;
                     }
@@ -530,6 +565,17 @@ impl Agent for ConcreteAgent {
                         loop_outcome = LoopOutcome::Looping {
                             final_message: looping_message(repeat_limit),
                             repeat_limit,
+                        };
+                        break;
+                    }
+                    // Small-cycle breaker also covers an alternating run of
+                    // distinct *batches*. No-op when disabled.
+                    if let Some(cs) = cycle_state.as_mut()
+                        && let Some(period) = cs.note(sig)
+                    {
+                        loop_outcome = LoopOutcome::Looping {
+                            final_message: cycle_message(period, cs.cfg.min_repeats),
+                            repeat_limit: cs.cfg.min_repeats,
                         };
                         break;
                     }
@@ -738,6 +784,116 @@ fn looping_message(repeat_limit: usize) -> String {
     format!(
         "I stopped because I repeated the same action {repeat_limit} times \
          without making progress. Please rephrase or give me more detail."
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Small-cycle breaker — the companion to the consecutive-identical breaker.
+//
+// `note_repeat` above catches `A,A,A`: a *consecutive* identical run. It is
+// blind to a repeating *cycle* of distinct calls (`A,B,A,B,…`), because any
+// distinct call resets its counter — so an alternating loop runs until
+// `MAX_STEPS_PER_TURN` (32) or the wall-clock deadline. This breaker closes
+// that gap with a bounded ring of recent call signatures, tripping when the
+// tail is `min_repeats` back-to-back copies of a block of period 2..=max_period.
+// Default-off (the agent's `cycle_config` is `None`) so existing turns are
+// byte-identical.
+// ---------------------------------------------------------------------------
+
+/// Configuration for the small-cycle breaker. See [`ConcreteAgent::
+/// with_cycle_detection`]. Both fields are clamped to a sane floor of 2 at
+/// construction, so a misconfigured value can never fire on a single pass or
+/// degenerate the ring.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CycleConfig {
+    /// Largest cycle period to look for (≥ 2; period 1 is `repeat_call_limit`'s
+    /// job). `max_period = 3` catches `A,B,A,B,…` and `A,B,C,A,B,C,…`.
+    pub max_period: usize,
+    /// How many back-to-back repetitions of a cycle trip the breaker (≥ 2).
+    pub min_repeats: usize,
+}
+
+impl CycleConfig {
+    /// The built-in configuration used when an operator enables the breaker via
+    /// `[agent] cycle_detection = true` without tuning: catches cycles up to
+    /// period 3 once they repeat 3× in a row (so `A,B` trips after 6 calls and
+    /// `A,B,C` after 9 — both well inside the 32-step cap, and conservative
+    /// enough not to fire on a couple of legitimate paginated repeats).
+    pub fn default_enabled() -> Self {
+        Self {
+            max_period: 3,
+            min_repeats: 3,
+        }
+    }
+}
+
+/// Runtime state for the small-cycle breaker: a bounded ring of the most recent
+/// call signatures, sized to exactly the longest window any period can need
+/// (`max_period * min_repeats`).
+struct CycleState {
+    cfg: CycleConfig,
+    recent: std::collections::VecDeque<u64>,
+}
+
+impl CycleState {
+    fn new(cfg: CycleConfig) -> Self {
+        // Clamp to the documented floor so the detector is always well-formed.
+        let cfg = CycleConfig {
+            max_period: cfg.max_period.max(2),
+            min_repeats: cfg.min_repeats.max(2),
+        };
+        let cap = cfg.max_period * cfg.min_repeats;
+        Self {
+            cfg,
+            recent: std::collections::VecDeque::with_capacity(cap),
+        }
+    }
+
+    /// Record one step's signature; return the cycle period if the tail now
+    /// shows `min_repeats` consecutive copies of a `2..=max_period` block. The
+    /// smallest period wins (so `A,B,A,B` reports 2, never 4).
+    fn note(&mut self, sig: u64) -> Option<usize> {
+        let cap = self.cfg.max_period * self.cfg.min_repeats;
+        if self.recent.len() == cap {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(sig);
+        (2..=self.cfg.max_period).find(|&period| is_cycle(&self.recent, period, self.cfg.min_repeats))
+    }
+}
+
+/// True when the last `period * repeats` signatures of `recent` are `repeats`
+/// back-to-back copies of one `period`-length block *and* that block holds at
+/// least two distinct signatures. The distinctness guard rejects an
+/// all-identical block (that is period-1 — the consecutive breaker's job — and
+/// counting it here would double-fire).
+fn is_cycle(recent: &std::collections::VecDeque<u64>, period: usize, repeats: usize) -> bool {
+    let needed = period * repeats;
+    let len = recent.len();
+    if len < needed {
+        return false;
+    }
+    let start = len - needed;
+    // Every element past the first block must match its counterpart in the
+    // block (index modulo the period).
+    for i in period..needed {
+        if recent[start + i] != recent[start + (i % period)] {
+            return false;
+        }
+    }
+    // Block must not be a single repeated signature (that is period-1).
+    let first = recent[start];
+    (1..period).any(|i| recent[start + i] != first)
+}
+
+/// The synthesized assistant message for a turn stopped by the small-cycle
+/// breaker — distinct from [`looping_message`] so the operator can tell a
+/// repeating cycle apart from a stuck-on-one-call loop.
+fn cycle_message(period: usize, repeats: usize) -> String {
+    format!(
+        "I stopped because I kept repeating the same cycle of {period} actions \
+         {repeats} times without making progress. Please rephrase or give me \
+         more detail."
     )
 }
 
@@ -2459,6 +2615,183 @@ mod tests {
             matches!(outcome, TurnOutcome::MaxStepsExceeded { .. }),
             "breaker off → identical calls reach the max-steps guard, got {outcome:?}"
         );
+    }
+
+    // ---- small-cycle breaker (the companion to the consecutive breaker) ----
+
+    /// The small-cycle breaker catches an *alternating* loop `A,B,A,B,…` that
+    /// the consecutive-identical breaker resets on (and `note_repeat`'s test
+    /// `distinct_call_resets_the_repeat_run` proves it misses). Armed with
+    /// period 2 / 3 repeats, the 6th call (closing the 3rd `A,B` cycle) trips
+    /// before dispatch.
+    #[tokio::test]
+    async fn alternating_cycle_trips_the_small_cycle_breaker() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+        let mk = |topic: &str| NextStep::ToolCall {
+            tool_id,
+            input: json!({ "topic": topic }),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+        let plan = vec![
+            mk("a"),
+            mk("b"),
+            mk("a"),
+            mk("b"),
+            mk("a"),
+            mk("b"),
+            NextStep::FinalMessage("done".into()),
+        ];
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit.clone(),
+            plan,
+        )
+        .with_cycle_detection(Some(CycleConfig {
+            max_period: 2,
+            min_repeats: 3,
+        }));
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent
+            .turn(Message::text(channel.session, "abab"), &channel)
+            .await;
+
+        match outcome {
+            TurnOutcome::Looping {
+                tool_calls_made,
+                repeat_limit,
+                final_message,
+                ..
+            } => {
+                assert_eq!(tool_calls_made, 5, "5 ran; the 6th tripped pre-dispatch");
+                assert_eq!(repeat_limit, 3, "carries the cycle's min_repeats");
+                assert!(
+                    final_message.contains("cycle"),
+                    "cycle-specific message, got: {final_message}"
+                );
+            }
+            other => panic!("expected Looping, got {other:?}"),
+        }
+
+        let tool_calls = audit
+            .snapshot()
+            .into_iter()
+            .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
+            .count();
+        assert_eq!(tool_calls, 5, "only the dispatched calls reach the chain");
+    }
+
+    /// Default-off proof: the SAME alternating plan, with no cycle detection
+    /// (the default), runs to completion byte-identically — all six calls run,
+    /// then the final message.
+    #[tokio::test]
+    async fn alternating_cycle_inert_when_detection_disabled() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("memory.read", "memory.read"));
+        let tool_id = tool.id();
+        let mk = |topic: &str| NextStep::ToolCall {
+            tool_id,
+            input: json!({ "topic": topic }),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        };
+        let plan = vec![
+            mk("a"),
+            mk("b"),
+            mk("a"),
+            mk("b"),
+            mk("a"),
+            mk("b"),
+            NextStep::FinalMessage("done".into()),
+        ];
+        // No `with_cycle_detection` — the default (`None`).
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit.clone(),
+            plan,
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent
+            .turn(Message::text(channel.session, "abab"), &channel)
+            .await;
+
+        match outcome {
+            TurnOutcome::Completed {
+                final_message,
+                tool_calls_made,
+                ..
+            } => {
+                assert_eq!(final_message, "done");
+                assert_eq!(tool_calls_made, 6, "all six alternating calls ran");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    // Pure mechanism tests for the ring-buffer cycle detector.
+
+    #[test]
+    fn cycle_state_detects_period_2() {
+        let mut cs = CycleState::new(CycleConfig {
+            max_period: 2,
+            min_repeats: 3,
+        });
+        assert_eq!(cs.note(1), None);
+        assert_eq!(cs.note(2), None);
+        assert_eq!(cs.note(1), None);
+        assert_eq!(cs.note(2), None);
+        assert_eq!(cs.note(1), None);
+        assert_eq!(cs.note(2), Some(2), "6th call closes the 3rd A,B cycle");
+    }
+
+    #[test]
+    fn cycle_state_detects_period_3() {
+        let mut cs = CycleState::new(CycleConfig {
+            max_period: 3,
+            min_repeats: 2,
+        });
+        for s in [1, 2, 3, 1, 2] {
+            assert_eq!(cs.note(s), None);
+        }
+        assert_eq!(cs.note(3), Some(3), "A,B,C,A,B,C is a period-3 cycle");
+    }
+
+    #[test]
+    fn cycle_state_ignores_non_cycles() {
+        let mut cs = CycleState::new(CycleConfig {
+            max_period: 3,
+            min_repeats: 2,
+        });
+        for s in 1..=10 {
+            assert_eq!(cs.note(s), None, "a strictly-increasing stream never cycles");
+        }
+    }
+
+    #[test]
+    fn cycle_state_does_not_fire_on_all_identical() {
+        // All-identical is period-1 — the consecutive breaker's job. The
+        // distinctness guard keeps the cycle breaker from double-firing on it.
+        let mut cs = CycleState::new(CycleConfig {
+            max_period: 2,
+            min_repeats: 2,
+        });
+        for _ in 0..8 {
+            assert_eq!(cs.note(7), None);
+        }
+    }
+
+    #[test]
+    fn cycle_config_clamps_to_floor() {
+        let cs = CycleState::new(CycleConfig {
+            max_period: 0,
+            min_repeats: 1,
+        });
+        assert_eq!(cs.cfg.max_period, 2);
+        assert_eq!(cs.cfg.min_repeats, 2);
     }
 
     // ---- Phase 10 task 2: JSON-schema validation at the turn loop ----

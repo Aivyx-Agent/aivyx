@@ -334,6 +334,7 @@ fn base_session_config(harness: &MemoryHarness, storage: Arc<dyn Storage>) -> Se
         system_prompt_refiner: None,
         prompt_refresher: None,
         turn_timeout: None,
+        cycle_config: None,
     }
 }
 

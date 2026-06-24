@@ -5,6 +5,24 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Small-cycle breaker (`[agent] cycle_detection`).** A loop-safety companion
+  to the consecutive-identical breaker (Chapter Bridle): it catches a repeating
+  *cycle* of tool calls (`A,B,A,B,…`) that the consecutive counter resets on —
+  the one runaway shape that previously ran until the 32-step cap or the 120s
+  deadline. A bounded ring of recent call signatures trips when the tail is
+  `min_repeats` back-to-back copies of a `2..=max_period` block, reusing the
+  existing `Looping` outcome (no new audit surface). **Default-off** (the turn
+  loop stays byte-identical); operators arm it with `[agent] cycle_detection =
+  true`.
+
+### Fixed
+
+- The `channel-voice-full` feature build: the voice `AgentStackSpec` literal had
+  drifted from the struct (it predated `turn_timeout`), so it failed to compile
+  under that feature. Restored, with the new cycle-detection knob wired in.
+
 ## [0.7.0] — 2026-06-24
 
 The desktop & experience release. A native desktop app, a top-to-bottom Studio
