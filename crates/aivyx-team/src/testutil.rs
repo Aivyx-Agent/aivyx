@@ -11,7 +11,10 @@ use aivyx_core::{
     CancellationToken, ChannelContext, ChannelError, ChannelPlatform, NullAuditHook, SessionId,
     StreamEvent, TurnOutcome,
 };
-use aivyx_llm::{LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent};
+use aivyx_llm::{
+    LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, NameResolution,
+    ToolCallEnd,
+};
 use async_trait::async_trait;
 
 use crate::config::{DialogueConfig, TeamConfig, TeamMember};
@@ -42,6 +45,23 @@ fn one_shot(text: &str) -> FakeStep {
     }
 }
 
+/// One step that emits a single tool call to `name` with empty input.
+fn tool_step(name: &str, call_id: &str) -> FakeStep {
+    FakeStep {
+        events: vec![],
+        terminal: LlmStepEnd::ToolCalls {
+            calls: vec![ToolCallEnd {
+                call_id: call_id.to_string(),
+                tool_name: name.to_string(),
+                input: serde_json::json!({}),
+                name_resolution: NameResolution::Known,
+            }],
+            text_so_far: String::new(),
+            usage: aivyx_llm::LlmUsage::default(),
+        },
+    }
+}
+
 impl FakeProvider {
     /// A provider that completes one turn with `text` as the final message.
     pub fn says(text: &str) -> Arc<Self> {
@@ -57,6 +77,21 @@ impl FakeProvider {
         Arc::new(FakeProvider {
             script: Mutex::new(VecDeque::new()),
             repeat: Some(text.to_string()),
+        })
+    }
+
+    /// A provider that emits one single-tool call per turn, taking `names` in
+    /// order then exhausting. Drives a scripted tool-call loop — e.g.
+    /// `["a","b","a","b","a","b"]` to exercise the small-cycle breaker.
+    pub fn tool_loop(names: &[&str]) -> Arc<Self> {
+        let steps: VecDeque<FakeStep> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| tool_step(n, &format!("c{i}")))
+            .collect();
+        Arc::new(FakeProvider {
+            script: Mutex::new(steps),
+            repeat: None,
         })
     }
 }

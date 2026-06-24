@@ -308,4 +308,84 @@ mod tests {
             .expect("build should reject the unknown scope");
         assert!(matches!(err, TeamError::Scope(s) if s == "not.a.base"));
     }
+
+    // --- the autonomous cycle-breaker floor (end-to-end) -------------------
+
+    /// An *executing* fake tool — the `FakeTool` above panics in `execute`
+    /// because the construction tests never run a turn. This one completes so a
+    /// real turn can dispatch it.
+    struct ExecTool(ToolId, &'static str);
+    #[async_trait]
+    impl Tool for ExecTool {
+        fn id(&self) -> ToolId {
+            self.0
+        }
+        fn name(&self) -> &str {
+            self.1
+        }
+        fn description(&self) -> &str {
+            "exec"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            use std::sync::OnceLock;
+            static S: OnceLock<serde_json::Value> = OnceLock::new();
+            S.get_or_init(|| serde_json::json!({ "type": "object" }))
+        }
+        fn required_scope(&self, _: &serde_json::Value) -> Scope {
+            Scope::parse("fs.read").unwrap()
+        }
+        async fn execute(&self, _: serde_json::Value, _: &ToolContext<'_>) -> ToolOutcome {
+            ToolOutcome::Completed {
+                output: serde_json::json!({ "ok": true }),
+                verified: aivyx_core::Verification::NotApplicable,
+            }
+        }
+    }
+
+    /// End-to-end proof of the team safety floor: a specialist built through the
+    /// real `SpecialistFactory` — with NO `[agent] cycle_detection` configured
+    /// anywhere — stops an alternating `a,b,a,b,…` tool loop with
+    /// `TurnOutcome::Looping`. That only happens if `TurnSafety::autonomous`
+    /// armed the small-cycle breaker as a built-in floor (the consecutive
+    /// breaker resets on the alternation, and the 32-step cap is never reached).
+    #[tokio::test]
+    async fn specialist_trips_the_autonomous_cycle_floor() {
+        use crate::testutil::{FakeLeadChannel, FakeProvider};
+        use aivyx_core::{Agent, ChannelContext, Message, TurnOutcome};
+
+        let base: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(ExecTool(ToolId::new(), "a")),
+            Arc::new(ExecTool(ToolId::new(), "b")),
+        ];
+        // Period-2 cycle × 3 repeats trips at the 6th call (the default floor);
+        // a couple of extra scripted steps are harmless (never reached).
+        let provider = FakeProvider::tool_loop(&["a", "b", "a", "b", "a", "b", "a", "b"]);
+        let factory =
+            SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), base);
+        let lead_caps = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let specialist = factory
+            .build(&member("spec", &["fs.read"], &["a", "b"]), &lead_caps)
+            .expect("specialist builds");
+
+        let channel = FakeLeadChannel::at(TrustTier::Trusted);
+        let outcome = specialist
+            .turn(Message::text(channel.session_id(), "go"), &channel)
+            .await;
+
+        match outcome {
+            // Period-2 × 3-repeats trips on the 6th call, before it dispatches —
+            // so exactly 5 ran. This pins it to the small-cycle floor: the
+            // consecutive breaker can't fire on an alternation, and the 32-step
+            // cap is nowhere near.
+            TurnOutcome::Looping {
+                tool_calls_made, ..
+            } => {
+                assert_eq!(tool_calls_made, 5, "tripped at the 6th (cycle) call");
+            }
+            other => panic!(
+                "the autonomous cycle floor must stop an alternating loop even \
+                 with no [agent] config; got {other:?}"
+            ),
+        }
+    }
 }
