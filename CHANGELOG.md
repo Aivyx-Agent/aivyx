@@ -16,6 +16,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
   existing `Looping` outcome (no new audit surface). **Default-off** (the turn
   loop stays byte-identical); operators arm it with `[agent] cycle_detection =
   true`.
+- **Nonagon team agents get the cycle breaker as a built-in safety floor.** The
+  lead and every specialist run autonomously inside a mission — no human watches
+  each turn to `/cancel` a runaway — so they always get the small-cycle breaker
+  (like `MAX_STEPS_PER_TURN` is always on), independent of the interactive
+  `[agent] cycle_detection` knob.
 
 ### Fixed
 
