@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use aivyx_capability::CapabilitySet;
 use aivyx_core::{
-    AgentId, AuditHook, ConcreteAgent, CycleConfig, LlmPlanner, LlmPlannerConfig, Tool,
-    ToolRegistry,
+    AgentId, AuditHook, ConcreteAgent, LlmPlanner, LlmPlannerConfig, Tool, ToolRegistry,
+    TurnSafety,
 };
 use aivyx_llm::LlmProvider;
 
@@ -86,7 +86,7 @@ impl SpecialistFactory {
         let max_tokens = self.max_tokens;
         let soul = member.soul.clone();
 
-        Ok(ConcreteAgent::new(
+        let agent = ConcreteAgent::new(
             AgentId::new(),
             caps,
             registry,
@@ -101,15 +101,13 @@ impl SpecialistFactory {
                     cfg,
                 ))
             },
-        )
-        // Team specialists run autonomously inside a mission — there is no human
-        // watching each turn to `/cancel` a runaway. So the small-cycle breaker
-        // is a built-in safety floor here (always on, like `MAX_STEPS_PER_TURN`),
-        // independent of the interactive `[agent] cycle_detection` knob. The
-        // consecutive-identical breaker (on by default) and the 120s per-turn
-        // deadline (ConcreteAgent default) already apply; this closes the
-        // alternating-cycle shape they miss.
-        .with_cycle_detection(Some(CycleConfig::default_enabled())))
+        );
+        // Team specialists run autonomously inside a mission — no human watches
+        // each turn to `/cancel` a runaway — so they take the autonomous safety
+        // posture: the small-cycle breaker as a built-in floor (always on, like
+        // `MAX_STEPS_PER_TURN`), independent of the interactive `[agent]
+        // cycle_detection` knob.
+        Ok(TurnSafety::autonomous().apply(agent))
     }
 
     /// The tool set a specialist receives: its allowlisted base tools, plus —

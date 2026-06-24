@@ -155,6 +155,9 @@ where
     )
     .with_tool_allowlist(config.tool_allowlist)
     .with_memory_topic_prefix(config.memory_topic_prefix);
+    // Route through the shared per-turn-safety choke point (built-in defaults;
+    // no `[agent]` config to inherit on this standalone path).
+    let agent = aivyx_core::TurnSafety::default().apply(agent);
 
     let mut turns_run: usize = 0;
     let mut pending: VecDeque<IncomingMessage> = VecDeque::new();

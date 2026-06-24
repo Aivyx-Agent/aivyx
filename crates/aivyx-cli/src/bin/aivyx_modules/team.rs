@@ -17,8 +17,8 @@ use std::sync::Arc;
 use aivyx_capability::TrustTier;
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
-    ConcreteAgent, CycleConfig, LlmPlanner, LlmPlannerConfig, Message, SessionId, StreamEvent,
-    Tool, ToolRegistry, TurnOutcome,
+    ConcreteAgent, LlmPlanner, LlmPlannerConfig, Message, SessionId, StreamEvent, Tool,
+    ToolRegistry, TurnOutcome, TurnSafety,
 };
 use aivyx_llm::LlmProvider;
 use aivyx_team::{default_nonagon, TeamAssembly, TeamConfig};
@@ -236,12 +236,12 @@ pub async fn run_mission(
                 cfg,
             ))
         },
-    )
+    );
     // The lead orchestrates the mission autonomously (delegating to specialists
-    // via team.delegate), so it gets the same built-in small-cycle safety floor
-    // as the specialists (see SpecialistFactory::build) — independent of the
-    // interactive `[agent] cycle_detection` knob.
-    .with_cycle_detection(Some(CycleConfig::default_enabled()));
+    // via team.delegate), so it takes the same autonomous safety posture as the
+    // specialists (see SpecialistFactory::build): the small-cycle breaker as a
+    // built-in floor, independent of the interactive `[agent] cycle_detection`.
+    let agent = TurnSafety::autonomous().apply(agent);
 
     let channel = MissionChannel::new();
     let msg = Message::text(channel.session_id(), mission);

@@ -174,14 +174,11 @@ pub struct SessionConfig {
     /// session-build time" — backwards-compatible with pre-Phase-60
     /// callers.
     pub prompt_refresher: Option<Arc<dyn Fn() -> String + Send + Sync>>,
-    /// Chapter Bridle (BR.4) — optional per-turn wall-clock deadline
-    /// override (from `[agent] turn_timeout_secs`). `None` keeps the
-    /// built-in 120s default. Lifted into the `AgentStackSpec`.
-    pub turn_timeout: Option<std::time::Duration>,
-    /// Small-cycle breaker config (from `[agent] cycle_detection`). `None`
-    /// (the default) leaves the loop byte-identical. Lifted into the
-    /// `AgentStackSpec`.
-    pub cycle_config: Option<aivyx_core::CycleConfig>,
+    /// Per-turn safety knobs (deadline + small-cycle breaker), built once from
+    /// the operator's `[agent]` config. `TurnSafety::default()` keeps the loop
+    /// byte-identical. Lifted into the `AgentStackSpec` and applied in
+    /// `build_agent_stack`.
+    pub turn_safety: aivyx_core::TurnSafety,
 }
 
 /// Phase 137 — agent-stack construction inputs.
@@ -223,14 +220,10 @@ pub struct AgentStackSpec {
     /// attached to the built agent. `None` (the default) leaves tool calls
     /// unthrottled. The daemon builds this from `[rate_limit]` at startup.
     pub rate_gate: Option<Arc<dyn aivyx_core::RateGate>>,
-    /// Chapter Bridle (BR.4) — optional per-turn wall-clock deadline
-    /// override. `None` (the default) keeps the built-in 120s. Set from
-    /// `[agent] turn_timeout_secs` for slow local backends.
-    pub turn_timeout: Option<std::time::Duration>,
-    /// Small-cycle breaker config. `None` (the default) leaves the loop
-    /// byte-identical; `Some` arms the repeating-cycle detector. Set from
-    /// `[agent] cycle_detection`.
-    pub cycle_config: Option<aivyx_core::CycleConfig>,
+    /// Per-turn safety knobs (deadline + small-cycle breaker), applied to the
+    /// built agent via `TurnSafety::apply`. `TurnSafety::default()` leaves the
+    /// loop byte-identical.
+    pub turn_safety: aivyx_core::TurnSafety,
 }
 
 impl AgentStackSpec {
@@ -257,8 +250,7 @@ impl AgentStackSpec {
             // the shared gate at their own build sites.
             budget_gate: None,
             rate_gate: None,
-            turn_timeout: c.turn_timeout,
-            cycle_config: c.cycle_config.clone(),
+            turn_safety: c.turn_safety.clone(),
         }
     }
 }
@@ -302,8 +294,7 @@ pub fn build_agent_stack(
         prompt_refresher,
         budget_gate,
         rate_gate,
-        turn_timeout,
-        cycle_config,
+        turn_safety,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -355,16 +346,9 @@ pub fn build_agent_stack(
     .with_budget_gate(budget_gate)
     .with_rate_gate(rate_gate);
 
-    // Chapter Bridle (BR.4) — apply the operator's per-turn deadline
-    // override when set; otherwise the agent keeps the 120s default.
-    let agent = match turn_timeout {
-        Some(d) => agent.with_turn_timeout(d),
-        None => agent,
-    };
-
-    // Arm the small-cycle breaker when the operator enabled it
-    // (`[agent] cycle_detection`); `None` leaves the loop byte-identical.
-    let agent = agent.with_cycle_detection(cycle_config);
+    // Apply the per-turn safety knobs (deadline + small-cycle breaker) through
+    // the one shared choke point, so this path can't drift from the others.
+    let agent = turn_safety.apply(agent);
 
     Arc::new(agent)
 }

@@ -6800,8 +6800,7 @@ async fn run_async(
 
         // The role-switch child runs inside the same interactive session as its
         // parent, so it inherits the operator's per-turn knobs (matching the
-        // daemon/REPL agent): the wall-clock deadline and, when enabled, the
-        // small-cycle breaker. (Autonomous team agents differ — they force the
+        // daemon/REPL agent). (Autonomous team agents differ — they force the
         // breaker on as a floor; see SpecialistFactory::build.)
         let child_agent = ConcreteAgent::new(
             AgentId::new(),
@@ -6811,16 +6810,9 @@ async fn run_async(
             child_planner_factory,
         )
         .with_tool_allowlist(child_tool_allowlist)
-        .with_memory_topic_prefix(child_memory_topic_prefix)
-        .with_cycle_detection(
-            cycle_detection
-                .unwrap_or(false)
-                .then(aivyx_core::CycleConfig::default_enabled),
-        );
-        let child_agent = match turn_timeout_secs.map(std::time::Duration::from_secs) {
-            Some(d) => child_agent.with_turn_timeout(d),
-            None => child_agent,
-        };
+        .with_memory_topic_prefix(child_memory_topic_prefix);
+        let child_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
+            .apply(child_agent);
 
         Ok(Box::new(child_agent) as Box<dyn Agent>)
     });
@@ -7198,16 +7190,9 @@ async fn run_async(
         .with_tool_allowlist(daemon_tool_allowlist)
         .with_memory_topic_prefix(memory_topic_prefix)
         .with_budget_gate(daemon_budget_gate)
-        .with_rate_gate(daemon_rate_gate)
-        .with_cycle_detection(
-            cycle_detection
-                .unwrap_or(false)
-                .then(aivyx_core::CycleConfig::default_enabled),
-        );
-        let daemon_agent = match turn_timeout_secs.map(std::time::Duration::from_secs) {
-            Some(d) => daemon_agent.with_turn_timeout(d),
-            None => daemon_agent,
-        };
+        .with_rate_gate(daemon_rate_gate);
+        let daemon_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
+            .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
         let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
@@ -7840,12 +7825,12 @@ async fn run_async(
                 // `system_prompt_refiner` constructed above.
                 system_prompt_refiner: system_prompt_refiner.clone(),
                 // Chapter Bridle (BR.4) — operator override for the
-                // per-turn wall-clock deadline (slow local backends).
-                turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
-                // `[agent] cycle_detection` → the small-cycle breaker config.
-                cycle_config: cycle_detection
-                    .unwrap_or(false)
-                    .then(aivyx_core::CycleConfig::default_enabled),
+                // Per-turn safety knobs from `[agent]` (deadline + cycle
+                // breaker), applied uniformly in `build_agent_stack`.
+                turn_safety: aivyx_core::TurnSafety::interactive(
+                    turn_timeout_secs,
+                    cycle_detection,
+                ),
             };
 
             let stdin = io::stdin();
@@ -8308,15 +8293,12 @@ async fn run_async(
                     rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(
                         config_rate_limit.clone(),
                     ),
-                    // Same per-turn knobs as the Local path: the wall-clock
-                    // deadline and the small-cycle breaker. (Both were absent
-                    // here — this literal predated `turn_timeout` — so the
-                    // `channel-voice-full` build now matches the struct again.)
-                    turn_timeout: turn_timeout_secs
-                        .map(std::time::Duration::from_secs),
-                    cycle_config: cycle_detection
-                        .unwrap_or(false)
-                        .then(aivyx_core::CycleConfig::default_enabled),
+                    // Same per-turn safety knobs as the Local path (deadline +
+                    // cycle breaker), applied uniformly in `build_agent_stack`.
+                    turn_safety: aivyx_core::TurnSafety::interactive(
+                        turn_timeout_secs,
+                        cycle_detection,
+                    ),
                 };
                 let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),

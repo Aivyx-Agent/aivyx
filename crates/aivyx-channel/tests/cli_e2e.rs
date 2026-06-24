@@ -252,8 +252,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         context_provider: None,
         system_prompt_refiner: None,
         prompt_refresher: None,
-        turn_timeout: None,
-        cycle_config: None,
+        turn_safety: Default::default(),
     };
 
     // -- Drive the session.

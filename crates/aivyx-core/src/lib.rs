@@ -41,7 +41,8 @@ pub mod textual_tool_call;
 pub mod tools;
 
 pub use agent::{
-    BudgetGate, ConcreteAgent, CycleConfig, RateGate, TurnBudgetGuard, MAX_STEPS_PER_TURN,
+    BudgetGate, ConcreteAgent, CycleConfig, RateGate, TurnBudgetGuard, TurnSafety,
+    MAX_STEPS_PER_TURN,
 };
 pub use gate_policy::GatePolicy;
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};

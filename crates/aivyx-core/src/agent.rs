@@ -827,6 +827,56 @@ impl CycleConfig {
     }
 }
 
+/// The per-turn safety knobs — the wall-clock deadline ([`ConcreteAgent::
+/// with_turn_timeout`]) and the small-cycle breaker ([`ConcreteAgent::
+/// with_cycle_detection`]) — bundled so every agent-construction site applies
+/// them through ONE call ([`Self::apply`]) instead of re-deriving the builder
+/// chain by hand. That ad-hoc duplication is exactly what previously left the
+/// daemon, the role-switch child, and the team agents unprotected; routing all
+/// sites through `apply` keeps the wiring from drifting again.
+#[derive(Clone, Debug, Default)]
+pub struct TurnSafety {
+    turn_timeout: Option<Duration>,
+    cycle_config: Option<CycleConfig>,
+}
+
+impl TurnSafety {
+    /// Interactive posture: inherit the operator's `[agent]` settings
+    /// (`turn_timeout_secs`, `cycle_detection`). Both unset → the built-in
+    /// defaults (120s deadline, no cycle breaker) — i.e. byte-identical to a
+    /// bare `ConcreteAgent`. Used by the REPL, voice, daemon, and the
+    /// role-switch child (all run under a watching operator).
+    pub fn interactive(turn_timeout_secs: Option<u64>, cycle_detection: Option<bool>) -> Self {
+        Self {
+            turn_timeout: turn_timeout_secs.map(Duration::from_secs),
+            cycle_config: cycle_detection
+                .unwrap_or(false)
+                .then(CycleConfig::default_enabled),
+        }
+    }
+
+    /// Autonomous posture (team / mission agents): the small-cycle breaker is a
+    /// built-in floor (always on) because no human watches each turn to cancel a
+    /// runaway. The per-turn deadline keeps the built-in 120s default.
+    pub fn autonomous() -> Self {
+        Self {
+            turn_timeout: None,
+            cycle_config: Some(CycleConfig::default_enabled()),
+        }
+    }
+
+    /// Apply the knobs to a freshly constructed agent — the single choke point.
+    /// Every `ConcreteAgent::new(...)` site ends with
+    /// `TurnSafety::<posture>(...).apply(agent)`.
+    pub fn apply(&self, agent: ConcreteAgent) -> ConcreteAgent {
+        let agent = agent.with_cycle_detection(self.cycle_config.clone());
+        match self.turn_timeout {
+            Some(d) => agent.with_turn_timeout(d),
+            None => agent,
+        }
+    }
+}
+
 /// Runtime state for the small-cycle breaker: a bounded ring of the most recent
 /// call signatures, sized to exactly the longest window any period can need
 /// (`max_period * min_repeats`).
@@ -2792,6 +2842,33 @@ mod tests {
         });
         assert_eq!(cs.cfg.max_period, 2);
         assert_eq!(cs.cfg.min_repeats, 2);
+    }
+
+    // ---- TurnSafety: the shared per-turn-knob choke point ----
+
+    #[test]
+    fn turn_safety_interactive_maps_config() {
+        // Unset → built-in defaults (no override, no breaker) = bare agent.
+        let off = TurnSafety::interactive(None, None);
+        assert_eq!(off.turn_timeout, None);
+        assert_eq!(off.cycle_config, None);
+        // default() agrees — the no-op posture used by paths without config.
+        assert_eq!(TurnSafety::default().turn_timeout, None);
+        assert_eq!(TurnSafety::default().cycle_config, None);
+        // Set → mapped to Duration + the enabled CycleConfig.
+        let on = TurnSafety::interactive(Some(300), Some(true));
+        assert_eq!(on.turn_timeout, Some(Duration::from_secs(300)));
+        assert_eq!(on.cycle_config, Some(CycleConfig::default_enabled()));
+        // cycle_detection = Some(false) is off, like None.
+        assert_eq!(TurnSafety::interactive(None, Some(false)).cycle_config, None);
+    }
+
+    #[test]
+    fn turn_safety_autonomous_forces_the_breaker_floor() {
+        let a = TurnSafety::autonomous();
+        // Cycle breaker always on (the floor); deadline keeps the 120s default.
+        assert_eq!(a.cycle_config, Some(CycleConfig::default_enabled()));
+        assert_eq!(a.turn_timeout, None);
     }
 
     // ---- Phase 10 task 2: JSON-schema validation at the turn loop ----

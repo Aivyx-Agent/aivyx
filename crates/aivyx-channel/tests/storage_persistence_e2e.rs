@@ -270,8 +270,7 @@ async fn run_one_turn(storage: Arc<dyn Storage>, audit_key_byte: u8, user_line: 
         context_provider: None,
         system_prompt_refiner: None,
         prompt_refresher: None,
-        turn_timeout: None,
-        cycle_config: None,
+        turn_safety: Default::default(),
     };
 
     let report = run_session(provider, audit, config, channel, reader)

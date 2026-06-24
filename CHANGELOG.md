@@ -5,6 +5,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **One `TurnSafety` choke point for the per-turn knobs.** The deadline + cycle
+  breaker were applied ad-hoc at ~7 `ConcreteAgent::new` sites — which is exactly
+  why three of them drifted and shipped unprotected. Now every agent-construction
+  path ends with `TurnSafety::<posture>(…).apply(agent)`: `interactive` inherits
+  the operator's `[agent]` config (REPL, voice, daemon, role-switch child),
+  `autonomous` forces the breaker floor (team lead + specialists), and the
+  standalone remote-channel builders route through `default()`. `SessionConfig` /
+  `AgentStackSpec` now carry a single `turn_safety` field instead of two. No
+  behaviour change — the wiring just can't drift across sites again.
+
 ### Added
 
 - **Small-cycle breaker (`[agent] cycle_detection`).** A loop-safety companion

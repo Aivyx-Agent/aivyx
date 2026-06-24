@@ -429,6 +429,11 @@ where
     )
     .with_tool_allowlist(config.tool_allowlist)
     .with_memory_topic_prefix(config.memory_topic_prefix);
+    // Route through the shared per-turn-safety choke point. This standalone path
+    // carries no `[agent]` config to inherit, so it stays at the built-in
+    // defaults (`default()`); a future config thread switches this to
+    // `TurnSafety::interactive(...)` in one place.
+    let agent = aivyx_core::TurnSafety::default().apply(agent);
 
     // ---- Long-poll loop ----------------------------------------------
     //
@@ -793,6 +798,11 @@ where
     )
     .with_tool_allowlist(config.tool_allowlist)
     .with_memory_topic_prefix(config.memory_topic_prefix);
+    // Route through the shared per-turn-safety choke point. This standalone path
+    // carries no `[agent]` config to inherit, so it stays at the built-in
+    // defaults (`default()`); a future config thread switches this to
+    // `TurnSafety::interactive(...)` in one place.
+    let agent = aivyx_core::TurnSafety::default().apply(agent);
 
     let mut turns_run: usize = 0;
     let mut pending: VecDeque<IncomingMessage> = VecDeque::new();
