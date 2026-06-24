@@ -161,6 +161,18 @@ pub fn write_budget_section(path: &Path, budget: &BudgetConfig) -> Result<(), Co
     write_toml_0600(path, &doc.to_string())
 }
 
+/// Rewrite `[agent] cycle_detection` — the small-cycle breaker switch
+/// ([`crate::AivyxConfig::cycle_detection`]). Writes the explicit boolean so the
+/// operator sees the current state in the file; preserves every other section
+/// and comments (the surgical-splice posture). Takes effect on the next daemon
+/// start. There is nothing to validate (a plain bool), so this only fails on I/O
+/// or a malformed existing file.
+pub fn write_agent_cycle_detection(path: &Path, enabled: bool) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    doc["agent"]["cycle_detection"] = value(enabled);
+    write_toml_0600(path, &doc.to_string())
+}
+
 /// The six operator-declared `[profile]` fields, in the carrier the daemon's
 /// `SetProfile` handler fills from IPC. Mirrors the loader's `RawProfile`
 /// shape (Chapter V §9.1): all fields optional, with **clear-on-`None`**
@@ -488,6 +500,21 @@ mod tests {
         assert!(out.contains("per_day_usd = 20.0"), "{out}");
         assert!(out.contains("on_exceeded = \"deny\""), "{out}");
         assert!(out.contains("alert_at = 0.8"), "{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn cycle_detection_writes_the_agent_flag_and_preserves_siblings() {
+        let path = temp_toml("cycle");
+        std::fs::write(&path, "[agent]\nprovider = \"ollama\"\n").unwrap();
+        write_agent_cycle_detection(&path, true).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("cycle_detection = true"), "{out}");
+        assert!(out.contains("provider = \"ollama\""), "sibling key preserved: {out}");
+        // Toggling off writes the explicit `false`.
+        write_agent_cycle_detection(&path, false).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("cycle_detection = false"), "{out}");
         std::fs::remove_file(&path).ok();
     }
 

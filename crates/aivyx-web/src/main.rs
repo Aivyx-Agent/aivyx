@@ -2274,6 +2274,7 @@ fn SettingsPanel() -> Element {
 
     let needs_root = level() == "workspace" || level() == "custom";
     let expanded = level() != "sandbox";
+    let cycle_on = snap.cycle_detection;
 
     rsx! {
         div { class: "settings",
@@ -2389,6 +2390,30 @@ fn SettingsPanel() -> Element {
                 }
             }
 
+            // ── Agent loop safety (editable) ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head", h3 { "Agent" } }
+                p { class: "label-tech",
+                    "Loop protection. Stops the agent if it falls into a repeating cycle \
+                     of the same actions (e.g. A→B→A→B) instead of making progress."
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Cycle breaker" }
+                    div { class: "toggle-line",
+                        span { class: "chip", {if cycle_on { "on" } else { "off" }} }
+                        button {
+                            class: "btn btn-glass",
+                            onclick: move |_| ws.send(set_cycle_detection_query(!cycle_on)),
+                            {if cycle_on { "Disable" } else { "Enable" }}
+                        }
+                    }
+                }
+                p { class: "label-tech sub",
+                    "Off by default for the interactive agent; autonomous team agents always \
+                     have it on. Takes effect on the next restart."
+                }
+            }
+
             // ── Provider / model (read-only — change via `aivyx init`) ──
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Model" } span { class: "chip", "read-only" } }
@@ -2455,6 +2480,13 @@ fn set_budget_query(
     FrontendMessage::Query {
         id: "mc-settings-budget".to_string(),
         payload: QueryPayload::SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at },
+    }
+}
+
+fn set_cycle_detection_query(enabled: bool) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-cycle".to_string(),
+        payload: QueryPayload::SetCycleDetection { enabled },
     }
 }
 

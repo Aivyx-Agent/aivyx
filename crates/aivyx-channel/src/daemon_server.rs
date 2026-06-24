@@ -4542,6 +4542,23 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::SetCycleDetection { enabled } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::write_agent_cycle_detection(path, enabled) {
+                Ok(()) => {
+                    audit_config_change(
+                        audit_log,
+                        "agent",
+                        &format!("cycle_detection = {enabled}"),
+                    );
+                    settings_applied(path, embedding_provider.is_some())
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::SetProfile {
             assistant_name,
             operator_profile,
@@ -4881,6 +4898,7 @@ fn settings_snapshot(
             alert_at: b.alert_at,
         },
         embeddings_available,
+        cycle_detection: cfg.cycle_detection.unwrap_or(false),
     }
 }
 

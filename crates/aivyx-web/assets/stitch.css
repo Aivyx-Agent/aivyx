@@ -496,6 +496,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .field-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }
 .field-row label { color: var(--color-text-secondary); }
 .field-row .input { width: 100%; }
+.toggle-line { display: flex; align-items: center; gap: 12px; }
 select.input { appearance: none; cursor: pointer; }
 .settings-section .actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 2px; }
 .kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }

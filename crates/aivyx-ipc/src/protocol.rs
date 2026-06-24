@@ -454,6 +454,10 @@ pub enum QueryPayload {
         #[serde(default)]
         alert_at: Option<f64>,
     },
+    /// Rewrite `[agent] cycle_detection` — arm/disarm the interactive agent's
+    /// small-cycle breaker. Takes effect on the next daemon start. Responds with
+    /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError`).
+    SetCycleDetection { enabled: bool },
     /// Chapter V — rewrite the `[profile]` section of `aivyx.toml` (the
     /// operator-declared identity layer, PRODUCT.md P13). Every field carries
     /// **clear-on-`None`** semantics matching `aivyx_config::ProfileWrite`: an
@@ -1099,6 +1103,10 @@ pub struct SettingsSnapshot {
     /// Whether an embedding provider is configured (drives the Memory
     /// semantic-search availability the operator sees elsewhere).
     pub embeddings_available: bool,
+    /// `[agent] cycle_detection` — whether the small-cycle breaker is armed for
+    /// the interactive agent (`false` ⇒ off, the default). Autonomous team
+    /// agents always have it on regardless; this knob is the interactive toggle.
+    pub cycle_detection: bool,
 }
 
 /// Chapter U — wire mirror of the `[budget]` caps (a plain-field copy of
@@ -3443,6 +3451,7 @@ mod tests {
                 alert_at: Some(0.8),
             },
             embeddings_available: false,
+            cycle_detection: true,
         }
     }
 
@@ -3468,6 +3477,7 @@ mod tests {
                 on_exceeded: Some("alert".into()),
                 alert_at: Some(0.9),
             },
+            QueryPayload::SetCycleDetection { enabled: true },
         ];
         for payload in reqs {
             let msg = FrontendMessage::Query {

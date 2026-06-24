@@ -27,7 +27,9 @@ All notable changes to Aivyx are recorded here. This project adheres to
   `min_repeats` back-to-back copies of a `2..=max_period` block, reusing the
   existing `Looping` outcome (no new audit surface). **Default-off** (the turn
   loop stays byte-identical); operators arm it with `[agent] cycle_detection =
-  true`.
+  true` — or toggle it from the **Studio Settings screen** (a new "Agent" section
+  with a Cycle-breaker toggle, over a `SetCycleDetection` IPC that rewrites the
+  `[agent]` section; `GetSettings` now reports the current state).
 - **Nonagon team agents get the cycle breaker as a built-in safety floor.** The
   lead and every specialist run autonomously inside a mission — no human watches
   each turn to `/cancel` a runaway — so they always get the small-cycle breaker
