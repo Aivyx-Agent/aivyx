@@ -7168,19 +7168,33 @@ async fn run_async(
             Some(service)
         };
 
-        let agent: Arc<dyn Agent> = Arc::new(
-            ConcreteAgent::new(
-                AgentId::new(),
-                capabilities,
-                tools,
-                audit,
-                planner_factory,
-            )
-            .with_tool_allowlist(daemon_tool_allowlist)
-            .with_memory_topic_prefix(memory_topic_prefix)
-            .with_budget_gate(daemon_budget_gate)
-            .with_rate_gate(daemon_rate_gate),
+        // The daemon serves the Studio + persistent chat, so it gets the same
+        // per-turn `[agent]` knobs as the REPL/voice paths: the wall-clock
+        // deadline (`turn_timeout_secs`) and the small-cycle breaker
+        // (`cycle_detection`). These were previously applied only in
+        // `build_agent_stack` (REPL/voice), so the daemon always ran the 120s
+        // default and no cycle breaker — closed here.
+        let daemon_agent = ConcreteAgent::new(
+            AgentId::new(),
+            capabilities,
+            tools,
+            audit,
+            planner_factory,
+        )
+        .with_tool_allowlist(daemon_tool_allowlist)
+        .with_memory_topic_prefix(memory_topic_prefix)
+        .with_budget_gate(daemon_budget_gate)
+        .with_rate_gate(daemon_rate_gate)
+        .with_cycle_detection(
+            cycle_detection
+                .unwrap_or(false)
+                .then(aivyx_core::CycleConfig::default_enabled),
         );
+        let daemon_agent = match turn_timeout_secs.map(std::time::Duration::from_secs) {
+            Some(d) => daemon_agent.with_turn_timeout(d),
+            None => daemon_agent,
+        };
+        let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
         let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
             match frontend_type {
