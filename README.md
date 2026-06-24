@@ -14,13 +14,13 @@ verifiable offline.
 
 ![The Aivyx Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
 
-## Status (v0.6.0 — source-available, BUSL-1.1, 2026-06-21)
+## Status (v0.7.0 — source-available, BUSL-1.1, 2026-06-24)
 
 | | |
 |---|---|
 | Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), Repertoire (a Studio Skills library showing every skill + its effectiveness), Stencil + Bridle + Emboss (reliable local tool-calling via grammar-constrained decoding on both local engines), Abacus (a pure-compute utilities pack — calc / unit + timezone convert / date math), Sheaf (structured-data readers — CSV / XLSX / PDF over `fs.read`), and Conduit (operator-added MCP servers that work — `env` / `headers` / `aivyx mcp status`) — and 15 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — cargo-dist + GitHub Actions build Linux x86_64/aarch64 (musl) + macOS x86_64/aarch64 on each version tag; latest release is **`v0.6.0`** (the toolbox release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) |
+| Release pipeline | **Active** — on each version tag, cargo-dist builds the CLI (Linux x86_64/aarch64 musl + macOS x86_64/aarch64) and a separate workflow builds the **desktop app** (`.deb` + macOS `.app`); both attach to the GitHub Release. Latest is **`v0.7.0`** (the desktop & experience release) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) or the [desktop app](docs/INSTALL.md#desktop-app) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Wiki (knowledge pages) · Graph (typed knowledge graph) · Skills (the skill library) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 33 |
 | Rust tests | 4,921 passing |
@@ -47,6 +47,12 @@ Studio in a container) — a different, deliberately-scoped profile
 from the local-first install. See
 [`docs/INSTALL.md`](docs/INSTALL.md#docker--the-server-appliance)
 and [`docs/DOCKER.md`](docs/DOCKER.md).
+
+**Want a native app instead of the CLI?** v0.7.0 ships **`aivyx-desktop`** —
+the Studio in a native window with a system tray, approval notifications, and a
+summon hotkey. Grab the `.deb` (Linux) or `.app` (macOS) from the
+[latest release](https://github.com/Aivyx-Agent/aivyx/releases/latest), or see
+[`docs/INSTALL.md`](docs/INSTALL.md#desktop-app).
 
 **On Windows?** There's no native Windows binary yet (the daemon's
 Unix-socket IPC + `0600` secret-at-rest model are Unix-specific).
@@ -181,7 +187,7 @@ recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
 
 ### What's next
 
-The latest arc (v0.6.0, the toolbox release) **widened what the agent can do**:
+The v0.6.0 arc (the toolbox release) **widened what the agent can do**:
 a pure-compute utilities pack (Chapter Abacus), structured-data readers over
 `fs.read` (Chapter Sheaf), and the wiring that turns the whole MCP server
 ecosystem into an operator-config story — secrets, headers, and `aivyx mcp
@@ -203,12 +209,16 @@ real need.
 ## Release pipeline status
 
 The release pipeline is **active** on the public repo. The latest
-release is `v0.6.0` (the toolbox release):
+release is `v0.7.0` (the desktop & experience release):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
-  for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
+  the CLI for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
   `v*.*.*` tag push, then publishes a GitHub Release with the
   binaries, checksums, and the one-line shell installer.
+- `.github/workflows/desktop-release.yml` builds the **desktop app**
+  bundles (a `.deb` on Linux, a `.app` on macOS) and uploads them to that
+  same release — it waits for cargo-dist to create the release first, so
+  the two never race on creation.
 - `.github/workflows/ci.yml` runs `cargo clippy --workspace --all-targets
   -- -D warnings` and `cargo test --workspace` on every push to
   main and every PR.
