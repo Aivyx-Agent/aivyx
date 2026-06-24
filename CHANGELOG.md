@@ -24,11 +24,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
-- **`[agent]` per-turn knobs now reach the daemon agent** (the Studio + persistent
-  chat path). `turn_timeout_secs` and the new `cycle_detection` were applied only
-  on the REPL/voice paths (`build_agent_stack`); the daemon built its agent with a
-  raw `ConcreteAgent::new` that skipped them, so it always ran the 120s default
-  and no cycle breaker — a latent gap on the primary path, now closed.
+- **`[agent]` per-turn knobs now reach the daemon agent and the role-switch
+  child** (the Studio + persistent chat path, and role sub-sessions).
+  `turn_timeout_secs` and the new `cycle_detection` were applied only on the
+  REPL/voice paths (`build_agent_stack`); the daemon agent and the `role.switch`
+  child factory built raw `ConcreteAgent`s that skipped them, so they always ran
+  the 120s default and no cycle breaker — a latent gap on the primary path, now
+  closed (the child inherits the operator's config, like its parent).
 - The `channel-voice-full` feature build: the voice `AgentStackSpec` literal had
   drifted from the struct (it predated `turn_timeout`), so it failed to compile
   under that feature. Restored, with the new cycle-detection knob wired in.

@@ -6798,6 +6798,11 @@ async fn run_async(
             )) as Box<dyn aivyx_core::TurnPlanner>
         };
 
+        // The role-switch child runs inside the same interactive session as its
+        // parent, so it inherits the operator's per-turn knobs (matching the
+        // daemon/REPL agent): the wall-clock deadline and, when enabled, the
+        // small-cycle breaker. (Autonomous team agents differ — they force the
+        // breaker on as a floor; see SpecialistFactory::build.)
         let child_agent = ConcreteAgent::new(
             AgentId::new(),
             child_capabilities,
@@ -6806,7 +6811,16 @@ async fn run_async(
             child_planner_factory,
         )
         .with_tool_allowlist(child_tool_allowlist)
-        .with_memory_topic_prefix(child_memory_topic_prefix);
+        .with_memory_topic_prefix(child_memory_topic_prefix)
+        .with_cycle_detection(
+            cycle_detection
+                .unwrap_or(false)
+                .then(aivyx_core::CycleConfig::default_enabled),
+        );
+        let child_agent = match turn_timeout_secs.map(std::time::Duration::from_secs) {
+            Some(d) => child_agent.with_turn_timeout(d),
+            None => child_agent,
+        };
 
         Ok(Box::new(child_agent) as Box<dyn Agent>)
     });
