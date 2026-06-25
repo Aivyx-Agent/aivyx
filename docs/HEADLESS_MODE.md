@@ -141,7 +141,22 @@ enum GatePolicy {
 
 ~6 phases, smaller than L/M — it's a policy + a handful of interception points, not a new subsystem.
 
-**Status: H.0–H.6 complete.** H.6 added a dedicated `AuditEvent::HeadlessRefusal { run_id, surface, reason }` (with a `HeadlessSurfaceSummary` of `AgentTurn` / `TeamMission { step }` / `Trigger { trigger_kind }`) emitted at all three refusal points — the single-agent turn (`daemon_server`) and trigger (`trigger.rs`) append it directly to the `PersistentAuditLog`; the team driver, which holds only an `Arc<dyn AuditHook>`, emits an `AuditTag::HeadlessRefusal` that the bridge maps onto the `TeamMission` surface. Each refusal also logs a one-line operator-readable summary to stderr. The event is queryable via `aivyx audit export --event-type HeadlessRefusal`. Remaining (deferred, not blocking): the `aivyx --headless "<task>"` CLI one-shot, team.run-from-loop per-call headless threading, and policy reporting in `status`.
+**Status: H.0–H.6 complete.** H.6 added a dedicated `AuditEvent::HeadlessRefusal { run_id, surface, reason }` (with a `HeadlessSurfaceSummary` of `AgentTurn` / `TeamMission { step }` / `Trigger { trigger_kind }`) emitted at all three refusal points — the single-agent turn (`daemon_server`) and trigger (`trigger.rs`) append it directly to the `PersistentAuditLog`; the team driver, which holds only an `Arc<dyn AuditHook>`, emits an `AuditTag::HeadlessRefusal` that the bridge maps onto the `TeamMission` surface. Each refusal also logs a one-line operator-readable summary to stderr. The event is queryable via `aivyx audit export --event-type HeadlessRefusal`.
+
+**Follow-on (a) shipped — the `aivyx --headless "<task>"` CLI one-shot.** It
+connects to a **running daemon** (no in-process fallback — headless relies on
+the daemon's gate interception), submits one turn via `submit_input_headless`
+(the per-run `headless: true` IPC field from H.5), streams the output through
+the shared `render_for_cli`, and maps the turn's terminal outcome onto a
+**process exit code** so cron/batch/autonomous callers can branch: `0`
+completed, `3` refused-at-a-gate (the distinct headless-refusal code), `1` any
+other non-completion. No daemon running → a clear "start `aivyx daemon run`
+first" error. No new base/P10/tool/dep; byte-identical when the flag is absent.
+
+Remaining (deferred, not blocking): team.run-from-loop per-call headless
+threading (needs the policy in `ToolContext` — an `aivyx-core` change), and an
+*aggregate* "headless run summary" roll-up across a multi-turn run (the exit
+code is the per-run summary today, not a cross-turn roll-up).
 
 ---
 

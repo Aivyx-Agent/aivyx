@@ -19,6 +19,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **`aivyx --headless "<task>"` — one-shot unattended runs from the CLI.** The
+  headless execution mode (Chapter H) was reachable over IPC and from the
+  operator-absent drivers, but never from the command line. This wires the
+  missing entry: it connects to a **running daemon**, submits one turn that
+  *refuses* (records the reason on the audit chain) at any approval gate rather
+  than parking for an operator, streams the output, and maps the turn's outcome
+  onto a **process exit code** for cron / batch / autonomous callers — `0`
+  completed, `3` refused-at-a-gate, `1` any other non-completion. No daemon
+  running yields a clear "start `aivyx daemon run` first" error (there is no
+  in-process fallback — headless relies on the daemon's gate interception). No
+  new tool/base/dep; the interactive paths are byte-identical when the flag is
+  absent.
 - **Small-cycle breaker (`[agent] cycle_detection`).** A loop-safety companion
   to the consecutive-identical breaker (Chapter Bridle): it catches a repeating
   *cycle* of tool calls (`A,B,A,B,…`) that the consecutive counter resets on —
