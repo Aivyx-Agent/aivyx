@@ -285,8 +285,8 @@ human hand.
 
 | Phase | Deliverable |
 |---|---|
-| **RN.0** | This design contract (`docs/AUTONOMY.md`), committed. |
-| **RN.1** | `AutonomyLevel` + `AutonomyPosture` types (aivyx-config/core); pure `level → posture` expansion; `assisted`-is-today byte-identical test. No wiring yet. |
+| **RN.0** ✅ | This design contract (`docs/AUTONOMY.md`), committed. |
+| **RN.1** ✅ | `AutonomyLevel` + `AutonomyPosture`/`GatePosture`/`GrowthAdoption` types (`aivyx-config::autonomy`); pure `level → posture` `expand()`; `assisted`-is-today byte-identical test (`AutonomyPosture::todays_default`). No wiring yet. |
 | **RN.2** | `[autonomy]` config section + per-domain overrides + resolution order; expansion fills *unset* knobs only (explicit-wins); `ConfigChanged` shows the expansion. |
 | **RN.3** | Bounded `AutoApprove` `GatePolicy` (§5.1) + the `[autonomy.auto_approve]` allowlist; irreversible exclusion is a type-level structural property. |
 | **RN.4** | The expert escape hatch (§6): flag + typed acknowledgment + `UnsafeAutonomyEnabled` audit event + boot banner + `doctor`/Studio surfacing. |

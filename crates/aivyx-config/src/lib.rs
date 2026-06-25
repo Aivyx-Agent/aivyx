@@ -105,6 +105,12 @@ pub use config_write::{
     VoiceWrite,
 };
 
+// Chapter Reins (RN.1) — the autonomy dial. Pure composition layer
+// (`AutonomyLevel -> AutonomyPosture`); TOML parsing + daemon wiring land in
+// RN.2+. `Assisted` is the default and expands to today's behavior.
+pub mod autonomy;
+pub use autonomy::{AutonomyLevel, AutonomyPosture, GatePosture, GrowthAdoption};
+
 // --------------------------------------------------------------------
 // FieldSource & Sourced<T>
 // --------------------------------------------------------------------
