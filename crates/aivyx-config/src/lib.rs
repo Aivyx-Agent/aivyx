@@ -109,7 +109,9 @@ pub use config_write::{
 // (`AutonomyLevel -> AutonomyPosture`); TOML parsing + daemon wiring land in
 // RN.2+. `Assisted` is the default and expands to today's behavior.
 pub mod autonomy;
-pub use autonomy::{AutonomyLevel, AutonomyPosture, GatePosture, GrowthAdoption};
+pub use autonomy::{
+    resolve_posture, AutonomyLevel, AutonomyOverride, AutonomyPosture, GatePosture, GrowthAdoption,
+};
 
 // --------------------------------------------------------------------
 // FieldSource & Sourced<T>
@@ -693,6 +695,17 @@ pub struct AivyxConfig {
     /// gate for an operator confirmation (N.5). Defaults on for any level
     /// other than `sandbox`; `[access] confirm_destructive` overrides.
     pub confirm_destructive: Sourced<bool>,
+    /// Chapter Reins (RN.2) — the autonomy dial. Default [`AutonomyLevel::Assisted`]
+    /// (absent `[autonomy]` ⇒ today's behavior). Read via [`AivyxConfig::effective_autonomy`];
+    /// the daemon consumes the resolved posture in RN.3+.
+    pub autonomy_level: Sourced<AutonomyLevel>,
+    /// Chapter Reins (RN.2) — per-domain `[[autonomy.override]]` exceptions to
+    /// `autonomy_level`. Most-specific match wins in [`AivyxConfig::effective_autonomy`].
+    pub autonomy_overrides: Vec<AutonomyOverride>,
+    /// Chapter Reins (RN.2) — `[autonomy.auto_approve] scopes`: the
+    /// reversible-action allowlist bounded `AutoApprove` consults (RN.3). Never
+    /// widens irreversible/confirm-first auto-approval.
+    pub autonomy_auto_approve: Vec<String>,
     /// Chapter O — whether the agent's personal workspace subsystem is on
     /// (`workspace.*` tools, provisioning, journaling). Default true; absent
     /// `[workspace]` ⇒ enabled. `enabled = false` ⇒ no workspace at all.
@@ -3405,6 +3418,10 @@ struct RawToml {
     /// `[access]` section. Chapter N — operator-selectable access level.
     #[serde(default)]
     access: RawAccess,
+    /// `[autonomy]` section. Chapter Reins — the autonomy dial + per-domain
+    /// overrides + the auto-approve allowlist.
+    #[serde(default)]
+    autonomy: RawAutonomy,
     /// `[workspace]` section. Chapter O — the agent's own workspace.
     #[serde(default)]
     workspace: RawWorkspace,
@@ -4099,6 +4116,40 @@ struct RawAccess {
     root: Option<PathBuf>,
     #[serde(default)]
     confirm_destructive: Option<bool>,
+}
+
+/// `[autonomy]` section. Chapter Reins — the autonomy dial. `level` is the one
+/// word the end user owns; `[[autonomy.override]]` carries per-domain
+/// exceptions; `[autonomy.auto_approve] scopes` is the reversible-action
+/// allowlist bounded `AutoApprove` consults (RN.3). Absent section ⇒
+/// `level = assisted` ⇒ today's behavior.
+#[derive(Debug, Default, Deserialize)]
+struct RawAutonomy {
+    #[serde(default)]
+    level: Option<AutonomyLevel>,
+    #[serde(default, rename = "override")]
+    overrides: Vec<RawAutonomyOverride>,
+    #[serde(default)]
+    auto_approve: RawAutoApprove,
+}
+
+/// One `[[autonomy.override]]` entry: a domain label + the level that applies
+/// to calls in that domain.
+#[derive(Debug, Default, Deserialize)]
+struct RawAutonomyOverride {
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    level: Option<AutonomyLevel>,
+}
+
+/// `[autonomy.auto_approve]` — the reversible-scope allowlist. Never widens
+/// irreversible/confirm-first auto-approval (that exclusion is structural, in
+/// the `GatePolicy` type, not expressible here).
+#[derive(Debug, Default, Deserialize)]
+struct RawAutoApprove {
+    #[serde(default)]
+    scopes: Vec<String>,
 }
 
 /// `[workspace]` section. Chapter O — the agent's own always-available
@@ -5015,6 +5066,15 @@ const ENV_EMBEDDING_API_KEY: &str = "AIVYX_EMBEDDING_API_KEY";
 // --------------------------------------------------------------------
 
 impl AivyxConfig {
+    /// Chapter Reins (RN.2) — the effective [`AutonomyPosture`] for a call in
+    /// `domain`: the most specific `[[autonomy.override]]` wins, else the
+    /// global `autonomy_level`, then expand. `domain = None` ⇒ the global
+    /// posture. The single read API the daemon wiring (RN.3+) consults; absent
+    /// `[autonomy]` ⇒ `Assisted` ⇒ [`AutonomyPosture::todays_default`].
+    pub fn effective_autonomy(&self, domain: Option<&str>) -> AutonomyPosture {
+        resolve_posture(self.autonomy_level.value, &self.autonomy_overrides, domain)
+    }
+
     /// Phase 1 of the two-phase load: env vars + TOML file.
     ///
     /// Precedence per field: env > TOML > default (or `None` for
@@ -5168,6 +5228,42 @@ impl AivyxConfig {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(access_level.value.is_expanded(), FieldSource::Default),
         };
+
+        // --- autonomy dial (Chapter Reins, RN.2) --------------------
+        // Parse + expose only: the resolved posture is read via
+        // `effective_autonomy`; the daemon applies it in RN.3+. Absent
+        // `[autonomy]` ⇒ Assisted ⇒ `effective_autonomy` returns
+        // `todays_default`, so nothing changes.
+        let autonomy_level = match toml.autonomy.level {
+            Some(level) => Sourced::new(level, FieldSource::Toml),
+            None => Sourced::new(AutonomyLevel::default(), FieldSource::Default),
+        };
+        let autonomy_overrides = toml
+            .autonomy
+            .overrides
+            .iter()
+            .map(|raw| {
+                let domain = raw
+                    .domain
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                    .ok_or(ConfigError::Invalid {
+                        field: "autonomy.override.domain",
+                        reason: "each `[[autonomy.override]]` requires a non-empty `domain`"
+                            .to_string(),
+                    })?
+                    .to_string();
+                let level = raw.level.ok_or(ConfigError::Invalid {
+                    field: "autonomy.override.level",
+                    reason: format!(
+                        "the `[[autonomy.override]]` for domain `{domain}` requires a `level`"
+                    ),
+                })?;
+                Ok(AutonomyOverride { domain, level })
+            })
+            .collect::<Result<Vec<_>, ConfigError>>()?;
+        let autonomy_auto_approve = toml.autonomy.auto_approve.scopes.clone();
 
         // --- workspace (Chapter O) ----------------------------------
         // The agent's own always-available workspace, independent of
@@ -6664,6 +6760,9 @@ impl AivyxConfig {
             fs_root,
             access_level,
             confirm_destructive,
+            autonomy_level,
+            autonomy_overrides,
+            autonomy_auto_approve,
             workspace_enabled,
             workspace_path,
             workspace_journaling_enabled,

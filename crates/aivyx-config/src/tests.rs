@@ -32,10 +32,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use secrecy::ExposeSecret;
 
 use crate::{
-    AccessLevel, AivyxConfig, ConfigError, FieldSource, LoadOptions, McpTransportKind,
-    NotifyTargetKind, NotifyWhen, ProviderKind, Role, TlsMode, ToolAllowlist,
-    DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL, DEFAULT_ROLE_NAME,
-    DEFAULT_SYSTEM_PROMPT,
+    AccessLevel, AivyxConfig, AutonomyLevel, AutonomyPosture, ConfigError, FieldSource,
+    LoadOptions, McpTransportKind, NotifyTargetKind, NotifyWhen, ProviderKind, Role, TlsMode,
+    ToolAllowlist, DEFAULT_ASSISTANT_NAME, DEFAULT_MEMORY_MAX_PER_TOPIC, DEFAULT_MODEL,
+    DEFAULT_ROLE_NAME, DEFAULT_SYSTEM_PROMPT,
 };
 
 // ------------------------------------------------------------------
@@ -7191,6 +7191,23 @@ fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
     AivyxConfig::load_from_env_and_toml(&opts).expect("load")
 }
 
+/// Like [`load_with_toml`] but returns the `Result` so error-path tests can
+/// assert the typed `ConfigError` instead of panicking on load.
+fn load_with_toml_result(body: &str, tag: &str) -> Result<AivyxConfig, ConfigError> {
+    let tmp = TempDir::new(tag);
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, body).unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    AivyxConfig::load_from_env_and_toml(&opts)
+}
+
 /// No `[proactive]` section → `proactive: None` (off; the
 /// assistant never reaches out unprompted, pre-Phase-80).
 #[test]
@@ -10402,6 +10419,104 @@ fn access_confirm_destructive_explicit_override() {
     assert_eq!(cfg.access_level.value, AccessLevel::Home);
     assert!(!cfg.confirm_destructive.value, "explicit override wins");
     assert_eq!(cfg.confirm_destructive.source, FieldSource::Toml);
+    drop(env);
+}
+
+// --- Chapter Reins (RN.2) — the `[autonomy]` section -----------------
+
+/// No `[autonomy]` section ⇒ `assisted` ⇒ today's behavior: the effective
+/// posture is `todays_default`. The byte-for-byte backwards-compat guarantee
+/// at the config layer.
+#[test]
+fn autonomy_absent_section_defaults_to_assisted() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+        .expect("load");
+    assert_eq!(cfg.autonomy_level.value, AutonomyLevel::Assisted);
+    assert_eq!(cfg.autonomy_level.source, FieldSource::Default);
+    assert!(cfg.autonomy_overrides.is_empty());
+    assert!(cfg.autonomy_auto_approve.is_empty());
+    assert_eq!(
+        cfg.effective_autonomy(None),
+        AutonomyPosture::todays_default(),
+        "absent [autonomy] must resolve to today's posture",
+    );
+    drop(env);
+}
+
+/// `level = "autonomous"` parses and sources from TOML.
+#[test]
+fn autonomy_explicit_level_parses() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[autonomy]\nlevel = \"autonomous\"\n", "auto-level");
+    assert_eq!(cfg.autonomy_level.value, AutonomyLevel::Autonomous);
+    assert_eq!(cfg.autonomy_level.source, FieldSource::Toml);
+    assert_eq!(
+        cfg.effective_autonomy(None),
+        AutonomyLevel::Autonomous.expand()
+    );
+    drop(env);
+}
+
+/// Per-domain `[[autonomy.override]]` resolves most-specific-then-global, and
+/// the `[autonomy.auto_approve]` allowlist parses.
+#[test]
+fn autonomy_per_domain_overrides_resolve() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[autonomy]\nlevel = \"supervised\"\n\
+         \n[[autonomy.override]]\ndomain = \"email\"\nlevel = \"manual\"\n\
+         \n[[autonomy.override]]\ndomain = \"shell\"\nlevel = \"autonomous\"\n\
+         \n[autonomy.auto_approve]\nscopes = [\"fs.write\", \"net.fetch\"]\n",
+        "auto-overrides",
+    );
+    assert_eq!(cfg.autonomy_level.value, AutonomyLevel::Supervised);
+    // email → manual, shell → autonomous, anything else → the global supervised.
+    assert_eq!(
+        cfg.effective_autonomy(Some("email")),
+        AutonomyLevel::Manual.expand()
+    );
+    assert_eq!(
+        cfg.effective_autonomy(Some("shell")),
+        AutonomyLevel::Autonomous.expand()
+    );
+    assert_eq!(
+        cfg.effective_autonomy(Some("git")),
+        AutonomyLevel::Supervised.expand()
+    );
+    assert_eq!(cfg.autonomy_auto_approve, vec!["fs.write", "net.fetch"]);
+    drop(env);
+}
+
+/// An `[[autonomy.override]]` with no `domain` is a typed `Invalid` error —
+/// invalid config never silently loads.
+#[test]
+fn autonomy_override_without_domain_is_typed_error() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result(
+        "\n[autonomy]\nlevel = \"supervised\"\n\
+         \n[[autonomy.override]]\nlevel = \"manual\"\n",
+        "auto-bad-override",
+    )
+    .expect_err("missing override domain must error");
+    assert!(
+        matches!(err, ConfigError::Invalid { field, .. } if field == "autonomy.override.domain"),
+        "expected an Invalid error on autonomy.override.domain, got {err:?}",
+    );
+    drop(env);
+}
+
+/// An unknown `level` token is rejected at parse time (serde), not silently
+/// defaulted.
+#[test]
+fn autonomy_unknown_level_is_rejected() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result("\n[autonomy]\nlevel = \"yolo\"\n", "auto-bad-level")
+        .expect_err("unknown level must error");
+    assert!(
+        matches!(err, ConfigError::TomlParse { .. }),
+        "expected a TOML parse error for the unknown level, got {err:?}",
+    );
     drop(env);
 }
 

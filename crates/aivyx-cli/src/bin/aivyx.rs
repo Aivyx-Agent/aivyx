@@ -4288,6 +4288,14 @@ async fn run_async(
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
         confirm_destructive,
+        // Chapter Reins (RN.2) — the autonomy dial is parsed + exposed in
+        // `aivyx-config` (read via `effective_autonomy`); the daemon consumes
+        // the resolved posture (gate policy, loop arming, growth) in RN.3+.
+        // Bound-and-ignored here so the exhaustive destructure still forces a
+        // conscious decision when a config field lands.
+        autonomy_level: _autonomy_level,
+        autonomy_overrides: _autonomy_overrides,
+        autonomy_auto_approve: _autonomy_auto_approve,
         // Chapter O — the agent's personal workspace. Provisioned + its
         // tools registered below; the journaling fields are consumed by the
         // proactive-journaling task (O.5).

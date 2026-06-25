@@ -132,6 +132,34 @@ impl std::fmt::Display for AutonomyLevel {
     }
 }
 
+/// A per-domain exception to the global level — `[[autonomy.override]]`. The
+/// `domain` is a capability-domain label (e.g. `"shell"`, `"email"`); a call
+/// whose scope maps to that domain uses `level` instead of the global one.
+/// "Autonomous at coding, manual on money" is the real-world ask a flat dial
+/// can't express. (Mapping a tool's scope → domain is the consumer's job in
+/// RN.3; this layer just carries the keyed exceptions.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyOverride {
+    pub domain: String,
+    pub level: AutonomyLevel,
+}
+
+/// Resolve the effective posture for a call in `domain`: the most specific
+/// matching `[[autonomy.override]]` wins, else the global level — then expand.
+/// Pure so the resolution order is testable without a loaded config. `domain =
+/// None` (a call with no domain, or a global query) always uses the global
+/// level.
+pub fn resolve_posture(
+    global: AutonomyLevel,
+    overrides: &[AutonomyOverride],
+    domain: Option<&str>,
+) -> AutonomyPosture {
+    let level = domain
+        .and_then(|d| overrides.iter().find(|o| o.domain == d).map(|o| o.level))
+        .unwrap_or(global);
+    level.expand()
+}
+
 /// What a run does at an approval point. Config-native so it stays out of the
 /// `aivyx-core` dependency; the wiring layer maps it onto the runtime
 /// `aivyx_core::GatePolicy` (`ConfirmAll`/`ConfirmIrreversible`/`BatchIrreversible`
@@ -268,6 +296,41 @@ mod tests {
         ] {
             assert!(level.is_expanded(), "{level} must count as expanded");
         }
+    }
+
+    #[test]
+    fn override_resolution_is_most_specific_then_global() {
+        let overrides = vec![
+            AutonomyOverride {
+                domain: "email".into(),
+                level: AutonomyLevel::Manual,
+            },
+            AutonomyOverride {
+                domain: "shell".into(),
+                level: AutonomyLevel::Autonomous,
+            },
+        ];
+        let global = AutonomyLevel::Supervised;
+
+        // A domain with an override uses it.
+        assert_eq!(
+            resolve_posture(global, &overrides, Some("email")),
+            AutonomyLevel::Manual.expand()
+        );
+        assert_eq!(
+            resolve_posture(global, &overrides, Some("shell")),
+            AutonomyLevel::Autonomous.expand()
+        );
+        // A domain without one falls back to the global level.
+        assert_eq!(
+            resolve_posture(global, &overrides, Some("fs")),
+            AutonomyLevel::Supervised.expand()
+        );
+        // No domain ⇒ global.
+        assert_eq!(
+            resolve_posture(global, &overrides, None),
+            AutonomyLevel::Supervised.expand()
+        );
     }
 
     /// The expansion table is the design contract (`docs/AUTONOMY.md` §4) —
