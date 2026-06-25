@@ -96,6 +96,19 @@ edited freely when a new adapter or subsystem teaches us something new.
   (substrate / infrastructure / tool-process / MCP) + the name→scope mapping.
   Drift-guarded against `KNOWN_BASES`; the agent enumerates its own tools at
   runtime via `tools.list`. ✅ shipped.
+- [`SECURITY_POSTURE.md`](SECURITY_POSTURE.md) — **what an autonomous agent can
+  and cannot do**: the four-layer containment model (access level →
+  `confirm_destructive` → loop caps → Kernel-tier no-self-escalation) over the
+  HMAC audit chain, the attended/unattended split, the threat model (secret
+  read at `full`, the `confirm_destructive` linchpin), and recommended
+  per-profile configurations. The page to read before granting real reach.
+- [`AUTONOMY.md`](AUTONOMY.md) — **one dial the end user controls** (Chapter
+  Reins, *design contract — not yet built*): a single `[autonomy] level`
+  (`manual`→`unleashed`) that composes the scattered autonomy knobs into named
+  tiers + per-domain overrides, the three ceiling-raising safety primitives
+  (bounded AutoApprove / checkpoint-rollback / capability-request), the
+  acknowledgment-gated expert escape hatch, and self-improvement graduation —
+  all over the `SECURITY_POSTURE.md` containment model.
 
 ## Archive
 
