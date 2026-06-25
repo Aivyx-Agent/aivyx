@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **Bumped `quinn-proto` 0.11.14 → 0.11.15** (RUSTSEC-2026-0185 / the GitHub
+  Dependabot alert): a remote memory-exhaustion via unbounded out-of-order QUIC
+  stream reassembly. A transitive dependency (via `reqwest`'s HTTP/3 path); a
+  lockfile-only patch bump, no API change. `cargo audit` is clean again (only the
+  pre-existing unmaintained/unsound transitive notices remain).
+
 ### Changed
 
 - **One `TurnSafety` choke point for the per-turn knobs.** The deadline + cycle
