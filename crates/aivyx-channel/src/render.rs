@@ -346,6 +346,7 @@ mod tests {
         let escalated = render_final(&TurnOutcome::Escalated {
             reason: "needs kernel".into(),
             pending_tool: ToolId::new(),
+            scope: None,
             tool_calls_made: 0,
         });
         let timed_out = render_final(&TurnOutcome::TimedOut {

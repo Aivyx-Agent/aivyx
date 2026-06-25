@@ -482,6 +482,14 @@ pub enum ToolOutcome {
     },
     RequiresEscalation {
         reason: String,
+        /// Chapter Reins (RN.3) — the capability scope the escalated action
+        /// needs. Stamped by the turn loop from the authoritative
+        /// `required_scope` check (a tool's own value is ignored), so the
+        /// daemon's gate point can classify the escalation — reversible vs
+        /// irreversible (see [`aivyx_capability::is_irreversible_base`]), on the
+        /// auto-approve allowlist or not. `None` when produced outside the turn
+        /// loop (e.g. a tool-process child before the parent stamps it).
+        scope: Option<Scope>,
     },
     Failed(AivyxError),
 }
@@ -519,6 +527,12 @@ pub enum TurnOutcome {
     Escalated {
         reason: String,
         pending_tool: ToolId,
+        /// Chapter Reins (RN.3) — the escalated action's capability scope (see
+        /// [`ToolOutcome::RequiresEscalation`]'s `scope`). Carried so an
+        /// unattended gate policy can classify the escalation (reversible vs
+        /// irreversible / allowlisted) instead of blanket-rejecting. `None`
+        /// when the scope is unknown.
+        scope: Option<Scope>,
         tool_calls_made: usize,
     },
     TimedOut {

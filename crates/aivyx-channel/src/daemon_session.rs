@@ -212,6 +212,9 @@ fn outcome_str_to_turn_outcome(s: &str) -> aivyx_core::TurnOutcome {
         aivyx_core::TurnOutcome::Escalated {
             reason: reason.to_string(),
             pending_tool: aivyx_core::ToolId::new(),
+            // RN.3 — reconstructed from the wire outcome string; the scope is
+            // not transported in this legacy path.
+            scope: None,
             tool_calls_made: 0,
         }
     } else {

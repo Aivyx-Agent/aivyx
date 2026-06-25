@@ -1086,7 +1086,7 @@ fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
             });
             (envelope.to_string(), true)
         }
-        ToolOutcome::RequiresEscalation { reason } => {
+        ToolOutcome::RequiresEscalation { reason, .. } => {
             let envelope = json!({
                 "error": "requires_escalation",
                 "message": reason,

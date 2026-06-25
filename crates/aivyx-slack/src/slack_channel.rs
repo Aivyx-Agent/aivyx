@@ -477,6 +477,7 @@ mod channel_tests {
         c.finalize(&TurnOutcome::Escalated {
             reason: "needs operator approval".to_string(),
             pending_tool: aivyx_core::ToolId::new(),
+            scope: None,
             tool_calls_made: 0,
         })
         .await

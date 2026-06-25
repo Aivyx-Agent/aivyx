@@ -863,6 +863,7 @@ mod tests {
         let outcome = TurnOutcome::Escalated {
             reason: "destructive shell command refused".into(),
             pending_tool: ToolId::new(),
+            scope: None,
             tool_calls_made: 1,
         };
         let body = render_notify_body(&outcome);

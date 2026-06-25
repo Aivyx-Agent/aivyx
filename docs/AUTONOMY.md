@@ -169,6 +169,13 @@ unattended — and still *cannot* delete, overwrite-destructively, or send money
 without a human. (The §6 hatch is the only thing that lifts the irreversible
 exclusion, and only on an isolated host.)
 
+> **Status (RN.3a, shipped):** the *primitive* this rests on is in place — an
+> escalation now carries its capability `scope`, and `is_irreversible_base`
+> classifies the dangerous bases — so the "iff on-allowlist **and** not
+> irreversible" decision has the two facts it needs. The *behavior* (actually
+> auto-approving and proceeding) is RN.3b: it needs turn-resume machinery, so it
+> is its own phase rather than rushed into the security path.
+
 ### 5.2 Checkpoint / rollback (reversibility as a lever)
 
 The cheapest way to raise the autonomy ceiling is to make more actions
@@ -288,15 +295,17 @@ human hand.
 | **RN.0** ✅ | This design contract (`docs/AUTONOMY.md`), committed. |
 | **RN.1** ✅ | `AutonomyLevel` + `AutonomyPosture`/`GatePosture`/`GrowthAdoption` types (`aivyx-config::autonomy`); pure `level → posture` `expand()`; `assisted`-is-today byte-identical test (`AutonomyPosture::todays_default`). No wiring yet. |
 | **RN.2** ✅ | `[autonomy]` config section + per-domain `[[autonomy.override]]` + `[autonomy.auto_approve]` parse into `AivyxConfig`; `effective_autonomy(domain)` resolution (most-specific override → global → expand); typed validation (missing override domain, unknown level). **Parse + resolve + expose only** — nothing consumes the posture yet, so behavior is unchanged (absent `[autonomy]` ⇒ `Assisted` ⇒ `todays_default`). The *application* of the expansion onto the runtime knobs (the "fills unset knobs / explicit-wins" wiring + `ConfigChanged`) moves to the phases that own each knob — gate policy in RN.3, growth in RN.5 — because `confirm_destructive` is access-derived and `gate_policy` lives in `DaemonConfig`, not `aivyx-config`. |
-| **RN.3** | Bounded `AutoApprove` `GatePolicy` (§5.1) + the `[autonomy.auto_approve]` allowlist; irreversible exclusion is a type-level structural property. Wires the resolved posture's gate dimension onto `DaemonConfig.gate_policy`, filling only the unset knob (explicit `gate_policy`/headless wins). |
+| **RN.3a** ✅ | **The escalation primitive** — `ToolOutcome::RequiresEscalation` / `TurnOutcome::Escalated` now carry the offending capability `scope` (stamped by the turn loop from the authoritative `required_scope`), and `aivyx_capability::is_irreversible_base` classifies the irreversible/outbound/governance bases. Safe groundwork, **no behavior change** (the scope rides along unconsumed); the exact context bounded `AutoApprove` needs to decide reversible-vs-irreversible / on-allowlist. Uncovered during RN.3: the escalation carried only a `reason` string, so AutoApprove had nothing to match on — this builds that. |
+| **RN.3b** *(deferred)* | Bounded `AutoApprove` `GatePolicy` (§5.1) **behavior** + the `[autonomy.auto_approve]` allowlist; irreversible exclusion as a type-level structural property; wire the posture's gate dimension onto `DaemonConfig.gate_policy`. **Needs turn-resume machinery** (proceeding past a single-agent escalation re-runs the turn — the exact thing Chapter H deferred as the risky case), so it is its own carefully-designed phase, reusing the interactive `ResolveGate`-approved re-drive with a per-gate approval bound. RN.3a is its prerequisite and is now in place. |
 | **RN.4** | The expert escape hatch (§6): flag + typed acknowledgment + `UnsafeAutonomyEnabled` audit event + boot banner + `doctor`/Studio surfacing. |
 | **RN.5** | Self-improvement graduation (§7): effectiveness-gated adoption + self-authored goals + learned-auto-approval proposal. Opt-in per tier. |
 | **RN.6** | Surfaces: `aivyx autonomy [show|set <level>]` CLI + a Studio Settings "Autonomy" section (level picker + per-domain overrides + the hatch behind a confirm). |
 | **RN.7** | Checkpoint/rollback (§5.2) + capability-request channel (§5.3) — *may split out* if RN.0–RN.6 is already a full chapter. |
 
 Smaller than it looks: RN.1–RN.2 are a composition layer over existing knobs
-(the `[memory] profile` / `[access] level` pattern); RN.3 extends an existing
-enum; the genuinely new surface is RN.5/RN.7.
+(the `[memory] profile` / `[access] level` pattern); RN.3a enriches an existing
+enum; the genuinely new (and riskiest) surface is RN.3b (turn-resume
+auto-approve) and RN.5/RN.7.
 
 ---
 

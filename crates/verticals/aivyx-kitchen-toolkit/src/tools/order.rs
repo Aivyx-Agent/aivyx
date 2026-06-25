@@ -204,7 +204,12 @@ impl Tool for OrderSend {
                 tool: self.id,
                 detail: format!("kitchen.order.send: {detail}"),
             }),
-            Ok(OrderDecision::Escalate(reason)) => ToolOutcome::RequiresEscalation { reason },
+            // RN.3 — the parent turn loop stamps the authoritative scope
+            // (`kitchen.order.send`) when this crosses the tool-process bridge;
+            // the child need not provide it.
+            Ok(OrderDecision::Escalate(reason)) => {
+                ToolOutcome::RequiresEscalation { reason, scope: None }
+            }
             Ok(OrderDecision::Send(params)) => {
                 run_write(&self.client, self.id, SEND_PO_FN, params, "order", ctx).await
             }

@@ -456,6 +456,48 @@ const KNOWN_BASES: &[&str] = &[
     "team.run",
 ];
 
+/// The capability bases whose actions are **irreversible, outbound, or
+/// authority-changing** — deletion, arbitrary process execution, outbound
+/// network/money, history rewrites, and self-governance. Chapter Reins (RN.3).
+///
+/// This is the **structural backstop** for the bounded `AutoApprove` posture
+/// (`docs/AUTONOMY.md` §5.1): an unattended run may auto-approve a *reversible*
+/// escalation that is on the operator's allowlist, but a scope whose base is in
+/// this set must **never** auto-proceed — regardless of any allowlist. The list
+/// is consulted alongside the allowlist, not instead of it; the allowlist is
+/// already deny-by-default (an unlisted base never auto-approves), so this set
+/// is the second, non-bypassable gate on the dangerous bases specifically.
+///
+/// Deliberately conservative, and deliberately **not** including ordinary
+/// `fs.write`: writes within `fs_root` are an agent's bread-and-butter and the
+/// checkpoint/rollback primitive (RN.5.2) is their intended safety net —
+/// treating every write as irreversible would make `autonomous` useless. The
+/// line is delete / exec / outbound / history / governance, not "any write".
+const IRREVERSIBLE_BASES: &[&str] = &[
+    "fs.delete",          // deletion
+    "shell.exec",         // arbitrary command execution
+    "shell.spawn",        // long-running process spawn
+    "net.post",           // outbound HTTP (data / money)
+    "git.write",          // rewrites version history
+    "kitchen.order.send", // money leaves the building
+    // Self-governance — already Kernel-tier (unreachable from an agent turn),
+    // listed for defense-in-depth so no future wiring can auto-approve them.
+    "config.write",
+    "role.update",
+    "role.switch",
+    "tool.allowlist",
+];
+
+/// Whether a capability `base` names an irreversible / outbound /
+/// authority-changing action that bounded `AutoApprove` must never auto-proceed
+/// (Chapter Reins RN.3). Pure over the base string; callers pass
+/// [`Scope::base`]. Unknown bases return `false` — they are gated by the
+/// allowlist's deny-by-default instead, so an unclassified base still never
+/// auto-approves.
+pub fn is_irreversible_base(base: &str) -> bool {
+    IRREVERSIBLE_BASES.contains(&base)
+}
+
 // ---------------------------------------------------------------------------
 // Scope
 // ---------------------------------------------------------------------------
@@ -1143,6 +1185,34 @@ mod tests {
 
     fn s(x: &str) -> Scope {
         Scope::parse(x).expect("test scope must parse")
+    }
+
+    #[test]
+    fn irreversible_bases_classify_correctly() {
+        // The dangerous bases are flagged.
+        for base in ["fs.delete", "shell.exec", "net.post", "git.write", "kitchen.order.send"] {
+            assert!(is_irreversible_base(base), "{base} must be irreversible");
+        }
+        // Ordinary reversible work is not — these are the ones AutoApprove may
+        // approve when allowlisted (writes lean on checkpoint/rollback).
+        for base in ["fs.read", "fs.write", "net.fetch", "memory.write", "data.csv"] {
+            assert!(!is_irreversible_base(base), "{base} must be reversible-class");
+        }
+        // Unknown bases are not classified irreversible — the allowlist's
+        // deny-by-default is what stops them auto-approving.
+        assert!(!is_irreversible_base("totally.unknown"));
+    }
+
+    /// Drift guard: every irreversible base must be a real `KNOWN_BASES` entry,
+    /// so a typo here is caught rather than silently never matching a scope.
+    #[test]
+    fn every_irreversible_base_is_a_known_base() {
+        for base in IRREVERSIBLE_BASES {
+            assert!(
+                KNOWN_BASES.contains(base),
+                "irreversible base `{base}` is not in KNOWN_BASES (typo?)"
+            );
+        }
     }
 
     // ---- Chapter Atlas (AT.1) — tool-catalog drift guard ----

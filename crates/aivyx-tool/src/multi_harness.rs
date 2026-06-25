@@ -354,7 +354,7 @@ fn outcome_to_wire(call_id: String, outcome: ToolOutcome) -> ToolToDaemon {
                  the parent enforces rate limits before InvokeTool)"
             ),
         },
-        ToolOutcome::RequiresEscalation { reason } => ToolToDaemon::ToolError {
+        ToolOutcome::RequiresEscalation { reason, .. } => ToolToDaemon::ToolError {
             call_id,
             code: "requires_escalation".into(),
             message: reason,

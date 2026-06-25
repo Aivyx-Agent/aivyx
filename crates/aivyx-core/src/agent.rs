@@ -523,11 +523,13 @@ impl Agent for ConcreteAgent {
                     // gate-creation handler (daemon_server.rs) picks up
                     // the TurnOutcome::Escalated and creates an approval
                     // gate on the active mission.
-                    if let ToolOutcome::RequiresEscalation { reason } = &outcome {
+                    if let ToolOutcome::RequiresEscalation { reason, scope } = &outcome {
+                        let escalated_scope = scope.clone();
                         planner.observe_tool_outcome(tool_id, &outcome).await;
                         loop_outcome = LoopOutcome::Escalated {
                             reason: reason.clone(),
                             pending_tool: tool_id,
+                            scope: escalated_scope,
                         };
                         break;
                     }
@@ -592,7 +594,7 @@ impl Agent for ConcreteAgent {
                     let results = join_all(futures).await;
 
                     tool_calls_made += results.len();
-                    let mut escalated: Option<(String, ToolId)> = None;
+                    let mut escalated: Option<(String, ToolId, Option<Scope>)> = None;
 
                     for (observation, outcome) in results {
                         let obs_tool_id = observation.tool_id;
@@ -607,17 +609,18 @@ impl Agent for ConcreteAgent {
                         // also the natural reading order for the
                         // operator inspecting the audit chain.
                         if escalated.is_none()
-                            && let ToolOutcome::RequiresEscalation { reason } = &outcome
+                            && let ToolOutcome::RequiresEscalation { reason, scope } = &outcome
                         {
-                            escalated = Some((reason.clone(), obs_tool_id));
+                            escalated = Some((reason.clone(), obs_tool_id, scope.clone()));
                         }
                         planner.observe_tool_outcome(obs_tool_id, &outcome).await;
                     }
 
-                    if let Some((reason, pending_tool)) = escalated {
+                    if let Some((reason, pending_tool, scope)) = escalated {
                         loop_outcome = LoopOutcome::Escalated {
                             reason,
                             pending_tool,
+                            scope,
                         };
                         break;
                     }
@@ -661,9 +664,11 @@ impl Agent for ConcreteAgent {
             LoopOutcome::Escalated {
                 reason,
                 pending_tool,
+                scope,
             } => TurnOutcome::Escalated {
                 reason,
                 pending_tool,
+                scope,
                 tool_calls_made,
             },
         };
@@ -732,6 +737,9 @@ enum LoopOutcome {
     Escalated {
         reason: String,
         pending_tool: ToolId,
+        /// Chapter Reins (RN.3) — the escalated action's scope, carried from the
+        /// stamped `ToolOutcome::RequiresEscalation` onto `TurnOutcome::Escalated`.
+        scope: Option<Scope>,
     },
 }
 
@@ -1235,8 +1243,17 @@ impl ConcreteAgent {
             .await;
 
         let step_start = Instant::now();
-        let outcome = tool.execute(input, &ctx).await;
+        let mut outcome = tool.execute(input, &ctx).await;
         let step_duration = step_start.elapsed();
+
+        // Chapter Reins (RN.3) — stamp an escalation with the authoritative
+        // capability scope the gate just checked (`needed`), so the daemon's
+        // gate point can classify it. The tool's own `scope` (if it set one) is
+        // overwritten: `needed` is the scope actually enforced. `needed` is
+        // moved into the audit event below, so clone here.
+        if let ToolOutcome::RequiresEscalation { scope, .. } = &mut outcome {
+            *scope = Some(needed.clone());
+        }
 
         let summary = ToolOutcomeSummary::from(&outcome);
 
@@ -4698,6 +4715,9 @@ mod tests {
         async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
             ToolOutcome::RequiresEscalation {
                 reason: "approval required".to_string(),
+                // RN.3 — the turn loop stamps the authoritative scope; a tool
+                // need not provide it.
+                scope: None,
             }
         }
     }
@@ -4734,11 +4754,21 @@ mod tests {
             TurnOutcome::Escalated {
                 reason,
                 pending_tool,
+                scope,
                 tool_calls_made,
             } => {
                 assert_eq!(reason, "approval required");
                 assert_eq!(pending_tool, tool_id);
                 assert_eq!(tool_calls_made, 1);
+                // RN.3 — the turn loop stamps the escalation with the
+                // authoritative scope (the tool's `required_scope`), so an
+                // unattended gate policy can classify it. The tool was built
+                // with `memory.read`.
+                assert_eq!(
+                    scope.as_ref().map(|s| s.base()),
+                    Some("memory.read"),
+                    "the escalation must carry the stamped capability scope"
+                );
             }
             other => panic!("expected Escalated, got {other:?}"),
         }

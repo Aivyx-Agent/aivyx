@@ -1657,6 +1657,7 @@ impl Agent for FakeEscalatingAgent {
             TurnOutcome::Escalated {
                 reason: "requires approval".into(),
                 pending_tool: aivyx_core::ToolId::new(),
+                scope: None,
                 tool_calls_made: 1,
             }
         } else {
