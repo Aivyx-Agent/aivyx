@@ -106,4 +106,35 @@ ignore = [
     # it, deferred to the Channel Activation Milestone (Telegram can't be
     # live-verified outside it). Not vulnerable.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained, not vulnerable; transitive under frankenstein (aivyx-telegram); revisit at the frankenstein 0.50 bump" },
+
+    # ── aivyx-desktop GTK3 webview stack ──────────────────────────────
+    # The native desktop app (crates/aivyx-desktop) is a thin wry + tao
+    # webview over the served Studio. On Linux that pulls webkit2gtk → the
+    # gtk-rs GTK3 bindings, which upstream froze ("no longer maintained")
+    # at glib 0.18: there is no glib >= 0.20 path while the webview is
+    # GTK3-based, and the latest tao 0.35 / wry 0.55 still are (gtk 0.18.2
+    # pins glib ^0.18). All transitive and desktop-build-only — the
+    # daemon / core / CLI never link them — and none is a vulnerability.
+    # Revisit when the webview ecosystem moves to GTK4. The glib entry is
+    # the GitHub Dependabot alert #6 (GHSA-wrw7-89jp-8q8g); same disposition.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; transitive via glib-macros/gtk3-macros (aivyx-desktop GTK3); not vulnerable" },
+    { id = "RUSTSEC-2024-0411", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0412", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0413", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0414", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0415", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0416", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0417", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0418", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0419", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    { id = "RUSTSEC-2024-0420", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+    # NOTE: glib RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g, GitHub Dependabot
+    # alert #6) — a `glib::VariantStrIter` Iterator/DoubleEndedIterator
+    # *unsoundness*, same aivyx-desktop GTK3 root cause (glib 0.18, patched
+    # only in 0.20 which is unreachable via GTK3; not exercised by the thin
+    # webview shell). Not listed as an `ignore` entry because this config
+    # checks `unmaintained`, not `unsound`, so cargo-deny does not flag it
+    # (an entry would be a perpetual "unused ignore"). Recorded here as the
+    # accepted disposition; mirror it by dismissing Dependabot #6 as
+    # "tolerable risk".
 ]

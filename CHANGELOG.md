@@ -7,11 +7,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Security
 
-- **Bumped `quinn-proto` 0.11.14 → 0.11.15** (RUSTSEC-2026-0185 / the GitHub
-  Dependabot alert): a remote memory-exhaustion via unbounded out-of-order QUIC
-  stream reassembly. A transitive dependency (via `reqwest`'s HTTP/3 path); a
-  lockfile-only patch bump, no API change. `cargo audit` is clean again (only the
-  pre-existing unmaintained/unsound transitive notices remain).
+- **Bumped `quinn-proto` 0.11.14 → 0.11.15** (RUSTSEC-2026-0185): a remote
+  memory-exhaustion via unbounded out-of-order QUIC stream reassembly. A
+  transitive dependency (via `reqwest`'s HTTP/3 path); a lockfile-only patch
+  bump, no API change. `cargo audit` no longer reports any vulnerability.
+- **Documented the `aivyx-desktop` GTK3 advisory cluster in `deny.toml`.** The
+  native desktop app's webview (tao/wry/webkit2gtk → the frozen gtk-rs GTK3
+  bindings, pinned at glib 0.18) pulls 11 `unmaintained` advisories
+  (RUSTSEC-2024-0370 + 0411–0420) plus the glib `VariantStrIter` unsoundness
+  (RUSTSEC-2024-0429 = GitHub Dependabot alert #6). All are transitive,
+  desktop-build-only (the daemon/core/CLI never link them), unfixable until the
+  webview ecosystem moves off GTK3, and not exploitable in the thin shell. The
+  unmaintained ones are now ignored with documented rationale (restoring
+  `cargo deny` to green); the glib unsoundness is recorded as the accepted
+  disposition for the Dependabot alert (dismiss as "tolerable risk").
 
 ### Changed
 
