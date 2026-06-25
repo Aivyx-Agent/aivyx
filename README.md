@@ -105,7 +105,7 @@ Then open `http://127.0.0.1:7843/` in a browser — that's the
 **Studio**, the local-first web GUI. It opens on the **Command
 Center** dashboard; use the **Chat** tab to talk to the agent,
 **Memory** to browse what it's learned, **Documents** to read and
-edit files in scope, and **Settings** to adjust access + budgets.
+edit files in scope, and **Settings** to adjust access, autonomy, and budgets.
 The HMAC audit log (with offline **Verify chain**) lives in the
 legacy inspection panes at `/classic`.
 
@@ -143,6 +143,11 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 - **Operator-chosen reach.** *You* pick how far the agent reaches —
   **sandbox** / **workspace** / **home** / **full** — as an audited setting
   (`aivyx access`); irreversible filesystem ops are confirm-first.
+- **Operator-chosen autonomy.** *You* pick how autonomous the agent is —
+  **manual** / **assisted** / **supervised** / **autonomous** / **unleashed** —
+  one dial (`aivyx autonomy`, or the Studio) that composes the safety knobs and
+  arms the autonomous loop. Autonomy is a choice you make, never one the agent
+  grows into: it cannot widen its own reach or rewrite its own identity.
 - **A self-learning identity.** A user-defined **Profile** plus a
   reflection-written **Persona/Soul**, seedable at first launch (by hand or
   *"describe it and the model drafts it"*) and governed through approve / edit

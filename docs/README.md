@@ -103,12 +103,13 @@ edited freely when a new adapter or subsystem teaches us something new.
   read at `full`, the `confirm_destructive` linchpin), and recommended
   per-profile configurations. The page to read before granting real reach.
 - [`AUTONOMY.md`](AUTONOMY.md) — **one dial the end user controls** (Chapter
-  Reins, *design contract — not yet built*): a single `[autonomy] level`
+  Reins, ✅ shipped — see the doc's closeout): a single `[autonomy] level`
   (`manual`→`unleashed`) that composes the scattered autonomy knobs into named
-  tiers + per-domain overrides, the three ceiling-raising safety primitives
-  (bounded AutoApprove / checkpoint-rollback / capability-request), the
-  acknowledgment-gated expert escape hatch, and self-improvement graduation —
-  all over the `SECURITY_POSTURE.md` containment model.
+  tiers + per-domain overrides, operable from `aivyx autonomy` and the Studio,
+  arming the autonomous loop. The two "loosening" levers (bounded AutoApprove,
+  skill auto-adoption) were deliberately **not** built — one approves nothing
+  today, the other violates PRODUCT.md P8 — which is the `SECURITY_POSTURE.md`
+  containment model working as designed.
 
 ## Archive
 

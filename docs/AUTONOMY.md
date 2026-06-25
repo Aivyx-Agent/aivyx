@@ -1,7 +1,48 @@
 # Agent Autonomy — one dial the end user controls (Chapter Reins)
 
-> **Status:** design contract. This is the spec Chapter Reins scaffolds from
-> (mirrors `docs/ACCESS_LEVELS.md` / `docs/HEADLESS_MODE.md`).
+> **Status:** SHIPPED (closeout below). This started as a design contract; the
+> sections after §0 are the original spec, retained for rationale. What
+> actually shipped — and the two levers that were deliberately *not* built — is
+> recorded in the closeout immediately below.
+
+## Chapter status — closeout
+
+**The dial exists, composes, resolves, and is operable. Both of its
+"more-autonomy" loosening levers turned out to be blocked — one by reality, one
+by a load-bearing contract — which is the security model working as designed:
+the agent cannot gain reach, or rewrite itself, without the operator.**
+
+| Phase | What shipped |
+|---|---|
+| RN.0–RN.2 | The contract; `AutonomyLevel`/`AutonomyPosture` types + pure `expand()`; the `[autonomy]` config section (level + per-domain `[[autonomy.override]]` + `[autonomy.auto_approve]`) with `effective_autonomy(domain)` resolution. Default `assisted` = today, byte-for-byte. |
+| RN.3a | The **escalation primitive** — escalations carry their capability `scope`; `is_irreversible_base` classifies the dangerous bases. Groundwork, no behavior change. |
+| RN.5 | **Loop-arming** — `supervised`/`autonomous`/`unleashed` arm the autonomous loop (additive; arms availability only, a run still needs `aivyx loop start`). The dial's first runtime effect. |
+| RN.6a / RN.6b | The **surfaces** — `aivyx autonomy show/set` (CLI) and the Studio Settings "Autonomy" section (over `SetAutonomyLevel`, server-side confirm-first). |
+
+**Deliberately not built (and why):**
+
+- **RN.3b — bounded `AutoApprove`** (auto-approve reversible escalations
+  unattended): would approve **nothing** today. The only real escalation
+  producer is `kitchen.order.send` (irreversible → excluded); `confirm_destructive`
+  fs ops return hard `Failed` refusals, not gates. It also needs turn-resume
+  machinery Chapter H deferred. Build it the day a *reversible* escalation
+  exists. RN.4 (the expert escape hatch) depends on it, so it is parked too.
+- **Skill auto-adoption** (the original §7 "growth graduation"): **forbidden by
+  PRODUCT.md P8/P14** — skills are `PersonaDeltaCategory::LearnedSkill` deltas,
+  and the contract locks *"no operator-bypassed Persona modification."*
+  Auto-adopting a skill is exactly that. It would require a deliberate contract
+  amendment. The P8-permissible pieces (effectiveness-based *prioritization* of
+  still-approved proposals; self-authored *goals* as loop backlog) remain
+  available as future, smaller work.
+
+**Net:** the dial is a coherent composition front end over primitives already
+enforced — it *tightens* and *arms the loop*, and structurally **cannot loosen**
+the operator's approval over reach or identity. See [`SECURITY_POSTURE.md`](SECURITY_POSTURE.md).
+
+---
+
+> **Original design-contract preamble** (mirrors `docs/ACCESS_LEVELS.md` /
+> `docs/HEADLESS_MODE.md`).
 >
 > Today, *how autonomous the agent is* is the emergent product of five
 > independent knobs — `[access] level`, `confirm_destructive`, the headless

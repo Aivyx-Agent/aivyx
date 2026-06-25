@@ -96,7 +96,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 | **Graph** | typed knowledge-graph view: entity nodes + directed, predicate-labeled relation edges (force-laid-out) over read-only IPC; distinct from the Memory co-occurrence graph | ✅ Live (Ch. Lattice) |
 | **Skills** | the skill library: every skill (operator-taught / agent-authored / agent-refined) with its WH.2 effectiveness, provenance, `domain`, version, lineage + the procedure on demand; pending proposals link to Agents; read-only `GetSkills` IPC | ✅ Live (Ch. Repertoire) |
 | **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z + DW) |
-| **Settings** | the first config **write** surface: access level (confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U) |
+| **Settings** | the first config **write** surface: access level + autonomy level (both confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U, + Reins) |
 | **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
 
 The reference mockups for the locked look: `aivyx-brand/assets/stitch/`
@@ -211,6 +211,7 @@ while holding every safety invariant Aivyx already guarantees.
 | Section | v1 | Why |
 |---|---|---|
 | **Access level + root** | ✅ Editable, **confirm-first** on expansion | The flagship; security-sensitive (Ch. N). Mirrors `aivyx access set`. |
+| **Autonomy level** | ✅ Editable, **confirm-first** on `autonomous`/`unleashed` | The autonomy dial (Ch. Reins). Level picker; mirrors `aivyx autonomy set`. Per-domain overrides + allowlist stay CLI/hand-edit. |
 | **Budgets** (`per_run_usd`, `per_day_usd`, `on_exceeded`, `alert_at`) | ✅ Editable | Low-risk numeric caps (Ch. K). |
 | **Provider / model / num_ctx** | 👁 **Read-only** + "change via `aivyx init`" | Editing risks a daemon that won't start (bad model) and touches API keys in the encrypted store/env — out of v1. |
 | **Profile** | ❌ A future Agents/Persona screen | Already served read-only by `GetProfile`; editing is its own surface. |
@@ -218,11 +219,15 @@ while holding every safety invariant Aivyx already guarantees.
 ### 8.3 New IPC (request/response — fits the existing query pattern)
 
 - **`GetSettings`** → `SettingsSnapshot { access_level, fs_root,
-  confirm_destructive, provider, model, num_ctx, budget{…}, embeddings_available }`
-  — populates the form (none of this is queryable today).
+  confirm_destructive, provider, model, num_ctx, budget{…}, embeddings_available,
+  cycle_detection, autonomy_level }` — populates the form (none of this is
+  queryable today).
 - **`SetAccessLevel { level, root, confirm }`** — the daemon enforces
   `is_expanded() ⇒ confirm == true` **server-side** (the confirm-first gate is not
   just a UI nicety), applies the same root rules as the CLI.
+- **`SetAutonomyLevel { level, confirm }`** (Ch. Reins) — same shape; the daemon
+  enforces `autonomous`/`unleashed` ⇒ `confirm == true` **server-side**, writes
+  only `[autonomy] level` (overrides + allowlist preserved).
 - **`SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at }`**.
 - Both writes: rewrite the toml section via the §8.1(3) helper → append a new
   **`ConfigChanged`** audit event → respond with the fresh snapshot +
