@@ -243,6 +243,20 @@ the required reading it links to.
 
 ## 7. Self-improvement graduation (growth under the dial)
 
+> **Contract finding (RN.5):** the headline idea below — **effectiveness-gated
+> skill *auto-adoption*** — **is not buildable without amending PRODUCT.md.**
+> Skills are `PersonaDeltaCategory::LearnedSkill` entries on the Persona chain,
+> and P8/P14 lock *"no operator-bypassed Persona modification… silent
+> agent-driven Persona evolution is structurally impossible"* — the most
+> differentiating commitment after P8. Auto-adopting a skill **is** an
+> operator-bypassed Persona modification. So this section is **not pursued** as
+> written; it would require a deliberate, considered P8 amendment. The
+> contract-permissible pieces (effectiveness-based *prioritization* of proposals
+> that are still operator-approved; self-authored *goals* as loop backlog, which
+> are P2/G5 execution, not Persona) remain available as future, smaller work.
+> RN.5 was instead repurposed to **loop-arming** (the dial's real, permissible
+> runtime effect). The sketch below is retained as the original intent.
+
 Today *all* self-improvement is propose-only — the safe floor. The dial lets
 the end user graduate it without ever touching the identity line:
 
@@ -298,7 +312,7 @@ human hand.
 | **RN.3a** ✅ | **The escalation primitive** — `ToolOutcome::RequiresEscalation` / `TurnOutcome::Escalated` now carry the offending capability `scope` (stamped by the turn loop from the authoritative `required_scope`), and `aivyx_capability::is_irreversible_base` classifies the irreversible/outbound/governance bases. Safe groundwork, **no behavior change** (the scope rides along unconsumed); the exact context bounded `AutoApprove` needs to decide reversible-vs-irreversible / on-allowlist. Uncovered during RN.3: the escalation carried only a `reason` string, so AutoApprove had nothing to match on — this builds that. |
 | **RN.3b** *(deferred)* | Bounded `AutoApprove` `GatePolicy` (§5.1) **behavior** + the `[autonomy.auto_approve]` allowlist; irreversible exclusion as a type-level structural property; wire the posture's gate dimension onto `DaemonConfig.gate_policy`. **Needs turn-resume machinery** (proceeding past a single-agent escalation re-runs the turn — the exact thing Chapter H deferred as the risky case), so it is its own carefully-designed phase, reusing the interactive `ResolveGate`-approved re-drive with a per-gate approval bound. RN.3a is its prerequisite and is now in place. |
 | **RN.4** | The expert escape hatch (§6): flag + typed acknowledgment + `UnsafeAutonomyEnabled` audit event + boot banner + `doctor`/Studio surfacing. |
-| **RN.5** | Self-improvement graduation (§7): effectiveness-gated adoption + self-authored goals + learned-auto-approval proposal. Opt-in per tier. |
+| **RN.5** ✅ *(repurposed → loop-arming)* | The dial's first real **runtime effect**: `supervised`/`autonomous`/`unleashed` arm the autonomous loop (`AutonomyPosture::arms_loop` — additive, never disarms an explicit `[loop] enabled`; `assisted` adds nothing ⇒ byte-identical). Arming only makes the loop *available* (a run still needs `aivyx loop start`); it takes effect only when a `[loop]` section exists (where the caps live), warning otherwise. **The original "self-improvement graduation" (effectiveness-gated skill auto-adoption) was dropped: it violates PRODUCT.md P8/P14 (no operator-bypassed Persona modification — skills are Persona deltas).** See §7. |
 | **RN.6a** ✅ | CLI surface: `aivyx autonomy show` (renders the resolved level + the posture it expands to + per-domain overrides + the auto-approve allowlist) and `aivyx autonomy set <level> [--yes]` (rewrites `[autonomy] level` via the shared `write_autonomy_section`; `autonomous`/`unleashed` confirm first). Live-verified end-to-end. `set` is honest that the dial's runtime effects are wired incrementally. Pulled ahead of the gate work (RN.3b) because it has real value now and zero risk. |
 | **RN.6b** *(deferred)* | Studio Settings "Autonomy" section (level picker + per-domain overrides + the hatch behind a confirm) over a `SetAutonomyLevel` IPC. Can't be live-served in-sandbox; lands with the next web pass. |
 | **RN.7** | Checkpoint/rollback (§5.2) + capability-request channel (§5.3) — *may split out* if RN.0–RN.6 is already a full chapter. |

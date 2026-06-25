@@ -29,10 +29,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
   expands to; `aivyx autonomy set <level>` rewrites the section
   (`autonomous`/`unleashed` confirm first). The default `assisted` expands to
   today's behavior byte-for-byte, so an absent `[autonomy]` section changes
-  nothing. The dial's **runtime effects are being wired incrementally** (the
-  config surface + the escalation-scope/irreversibility primitive land first;
-  gate, loop-arming, and growth application follow in their phases — see
-  `docs/AUTONOMY.md`). No new capability base; a composition front end to
+  nothing. Its **first runtime effect**: a `supervised`/`autonomous`/`unleashed`
+  level **arms the autonomous loop** even without an explicit `[loop] enabled`
+  (additive — it never disarms an explicitly-enabled loop). Arming only makes the
+  loop *available* (a run still needs `aivyx loop start`) and takes effect only
+  when a `[loop]` section exists (which carries the iteration/budget caps). The
+  remaining dimensions (gate policy, growth) are wired incrementally — see
+  `docs/AUTONOMY.md`. No new capability base; a composition front end to
   primitives already enforced.
 - **`aivyx --headless "<task>"` — one-shot unattended runs from the CLI.** The
   headless execution mode (Chapter H) was reachable over IPC and from the

@@ -4386,13 +4386,13 @@ async fn run_async(
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
         confirm_destructive,
-        // Chapter Reins (RN.2) — the autonomy dial is parsed + exposed in
-        // `aivyx-config` (read via `effective_autonomy`); the daemon consumes
-        // the resolved posture (gate policy, loop arming, growth) in RN.3+.
-        // Bound-and-ignored here so the exhaustive destructure still forces a
-        // conscious decision when a config field lands.
-        autonomy_level: _autonomy_level,
-        autonomy_overrides: _autonomy_overrides,
+        // Chapter Reins — the autonomy dial. RN.5 consumes the resolved
+        // posture's loop-arming dimension below (the level can arm the
+        // capped loop without an explicit `[loop] enabled`). The gate
+        // (`auto_approve`) and growth dimensions are consumed in their own
+        // phases; `auto_approve` is bound-and-ignored until then.
+        autonomy_level,
+        autonomy_overrides,
         autonomy_auto_approve: _autonomy_auto_approve,
         // Chapter O — the agent's personal workspace. Provisioned + its
         // tools registered below; the journaling fields are consumed by the
@@ -4733,10 +4733,41 @@ async fn run_async(
     // `[loop]` section is armed. `Some` → the daemon spawns the
     // loop driver + the `loop start/stop/status` IPC handlers
     // operate on this handle; `None` → loop runs cannot start.
+    //
+    // Chapter Reins (RN.5) — the autonomy dial can ALSO arm the loop: a
+    // `supervised`/`autonomous`/`unleashed` level makes the capped loop
+    // *available* even without an explicit `[loop] enabled` (the composition is
+    // additive — it never disarms an explicitly-enabled loop, and `assisted`
+    // adds nothing, so this is byte-identical to today when `[autonomy]` is
+    // absent). Arming only makes the loop available; a run still needs an
+    // explicit `aivyx loop start`. It takes effect only when a `[loop]` section
+    // exists, since that is where the iteration/budget caps live — without one,
+    // the level's intent is reported but no uncapped loop is conjured.
+    let autonomy_posture = aivyx_config::resolve_posture(
+        autonomy_level.value,
+        &autonomy_overrides,
+        None,
+    );
     let loop_state: Option<aivyx_channel::loop_driver::SharedLoopState> =
         match &config_loop {
-            Some(c) if c.enabled => {
+            Some(c) if autonomy_posture.arms_loop(c.enabled) => {
+                if !c.enabled {
+                    eprintln!(
+                        "aivyx: autonomy level `{}` armed the loop (over `[loop]`'s \
+                         caps); start a run with `aivyx loop start`.",
+                        autonomy_level.value,
+                    );
+                }
                 Some(aivyx_channel::loop_driver::SharedLoopState::new())
+            }
+            None if autonomy_posture.loop_enabled => {
+                eprintln!(
+                    "aivyx: autonomy level `{}` would arm the loop, but there is no \
+                     `[loop]` section — add one (it carries the iteration/budget caps) \
+                     to enable autonomous runs.",
+                    autonomy_level.value,
+                );
+                None
             }
             _ => None,
         };

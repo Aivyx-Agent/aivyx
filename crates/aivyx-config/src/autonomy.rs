@@ -216,6 +216,19 @@ pub struct AutonomyPosture {
 }
 
 impl AutonomyPosture {
+    /// Whether the autonomous loop should be armed, given whether the operator
+    /// *explicitly* enabled it via `[loop] enabled` (Chapter Reins RN.5). The
+    /// composition is **additive**: the loop arms if `[loop] enabled` is set
+    /// **or** the autonomy level grants it — the level never *disarms* an
+    /// explicitly-enabled loop. At `assisted` (the default), `loop_enabled` is
+    /// false, so this returns `explicit_loop_enabled` unchanged — today's
+    /// behavior, byte-for-byte. (Arming only *makes the loop available*; a run
+    /// still requires an explicit `aivyx loop start`. And it only takes effect
+    /// when a `[loop]` section exists, since that is where the caps live.)
+    pub fn arms_loop(&self, explicit_loop_enabled: bool) -> bool {
+        explicit_loop_enabled || self.loop_enabled
+    }
+
     /// Today's shipped defaults, spelled out independently of [`AutonomyLevel`]
     /// so the byte-identical test compares two *separately authored* values
     /// rather than a tautology. If the daemon's real defaults ever change, this
@@ -296,6 +309,24 @@ mod tests {
         ] {
             assert!(level.is_expanded(), "{level} must count as expanded");
         }
+    }
+
+    #[test]
+    fn arms_loop_is_additive_and_assisted_is_byte_identical() {
+        // assisted (default): never adds arming — pure passthrough of [loop].
+        let assisted = AutonomyLevel::Assisted.expand();
+        assert!(!assisted.arms_loop(false), "assisted + [loop] off ⇒ off (today)");
+        assert!(assisted.arms_loop(true), "assisted + [loop] on ⇒ on (today)");
+
+        // autonomous: arms the loop even when [loop] enabled is unset.
+        let autonomous = AutonomyLevel::Autonomous.expand();
+        assert!(autonomous.arms_loop(false), "autonomous arms an unset loop");
+        assert!(autonomous.arms_loop(true), "explicit on stays on");
+
+        // manual never disarms an explicitly-enabled loop (additive only).
+        let manual = AutonomyLevel::Manual.expand();
+        assert!(manual.arms_loop(true), "manual must not disarm [loop] enabled=true");
+        assert!(!manual.arms_loop(false));
     }
 
     #[test]
