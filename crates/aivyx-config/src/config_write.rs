@@ -437,6 +437,28 @@ mod tests {
     }
 
     #[test]
+    fn autonomy_writes_level_and_preserves_overrides() {
+        let path = temp_toml("autonomy");
+        // A pre-existing override + an unrelated section must both survive a
+        // level rewrite (only `[autonomy] level` is touched).
+        std::fs::write(
+            &path,
+            "[access]\nlevel = \"home\"\n\n[autonomy]\nlevel = \"assisted\"\n\
+             \n[[autonomy.override]]\ndomain = \"email\"\nlevel = \"manual\"\n",
+        )
+        .unwrap();
+        write_autonomy_section(&path, AutonomyLevel::Autonomous).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("level = \"autonomous\""), "{out}");
+        assert!(out.contains("[access]"), "other sections preserved: {out}");
+        assert!(
+            out.contains("[[autonomy.override]]") && out.contains("email"),
+            "overrides must survive a level rewrite: {out}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn access_sandbox_clears_confirm() {
         let path = temp_toml("sandbox");
         write_access_section(&path, AccessLevel::Sandbox, None).unwrap();

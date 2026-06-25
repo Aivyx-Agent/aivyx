@@ -36,7 +36,9 @@ All notable changes to Aivyx are recorded here. This project adheres to
   when a `[loop]` section exists (which carries the iteration/budget caps). The
   remaining dimensions (gate policy, growth) are wired incrementally — see
   `docs/AUTONOMY.md`. No new capability base; a composition front end to
-  primitives already enforced.
+  primitives already enforced. Settable from the **Studio Settings** screen too
+  (an "Autonomy" section with a level picker over a new `SetAutonomyLevel` IPC,
+  server-side confirm-first on the autonomy-granting levels).
 - **`aivyx --headless "<task>"` — one-shot unattended runs from the CLI.** The
   headless execution mode (Chapter H) was reachable over IPC and from the
   operator-absent drivers, but never from the command line. This wires the

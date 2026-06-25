@@ -4559,6 +4559,52 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::SetAutonomyLevel { level, confirm } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let lvl = match aivyx_config::AutonomyLevel::from_wire(&level) {
+                Some(l) => l,
+                None => {
+                    return QueryResponsePayload::QueryError {
+                        code: "invalid_level".into(),
+                        message: format!(
+                            "unknown autonomy level `{level}` (manual | assisted | \
+                             supervised | autonomous | unleashed)"
+                        ),
+                    }
+                }
+            };
+            // Confirm-first gate — enforced SERVER-SIDE, not just in the UI. The
+            // autonomy-granting levels (`autonomous` / `unleashed`) let the agent
+            // act unattended, so they require an explicit confirm.
+            let grants_autonomy = matches!(
+                lvl,
+                aivyx_config::AutonomyLevel::Autonomous | aivyx_config::AutonomyLevel::Unleashed
+            );
+            if grants_autonomy && !confirm {
+                return QueryResponsePayload::QueryError {
+                    code: "confirm_required".into(),
+                    message: format!(
+                        "autonomy level `{}` lets the agent act unattended; \
+                         resend with confirm = true",
+                        lvl.as_str()
+                    ),
+                };
+            }
+            match aivyx_config::write_autonomy_section(path, lvl) {
+                Ok(()) => {
+                    audit_config_change(
+                        audit_log,
+                        "autonomy",
+                        &format!("level = {}", lvl.as_str()),
+                    );
+                    settings_applied(path, embedding_provider.is_some())
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::SetProfile {
             assistant_name,
             operator_profile,
@@ -4899,6 +4945,7 @@ fn settings_snapshot(
         },
         embeddings_available,
         cycle_detection: cfg.cycle_detection.unwrap_or(false),
+        autonomy_level: cfg.autonomy_level.value.as_str().to_string(),
     }
 }
 

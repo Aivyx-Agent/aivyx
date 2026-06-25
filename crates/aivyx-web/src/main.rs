@@ -2226,6 +2226,9 @@ fn SettingsPanel() -> Element {
     let mut on_exceeded = use_signal(|| "deny".to_string());
     let mut alert_at = use_signal(String::new);
     let mut confirm_open = use_signal(|| false);
+    // Chapter Reins — the autonomy dial (level picker + confirm-on-autonomy).
+    let mut auto_level = use_signal(String::new);
+    let mut auto_confirm_open = use_signal(|| false);
     // The snapshot the form was last seeded from — so a write *error* (snapshot
     // unchanged) doesn't wipe the operator's in-progress edits.
     let mut last_seed = use_signal(|| None::<SettingsSnapshot>);
@@ -2253,6 +2256,7 @@ fn SettingsPanel() -> Element {
                 per_day.set(s.budget.per_day_usd.map(|v| v.to_string()).unwrap_or_default());
                 on_exceeded.set(s.budget.on_exceeded.clone());
                 alert_at.set(s.budget.alert_at.map(|v| v.to_string()).unwrap_or_default());
+                auto_level.set(s.autonomy_level.clone());
             }
             last_seed.set(snap);
         }
@@ -2275,6 +2279,8 @@ fn SettingsPanel() -> Element {
     let needs_root = level() == "workspace" || level() == "custom";
     let expanded = level() != "sandbox";
     let cycle_on = snap.cycle_detection;
+    // Chapter Reins — the autonomy-granting levels confirm first (server-side too).
+    let auto_grants = auto_level() == "autonomous" || auto_level() == "unleashed";
 
     rsx! {
         div { class: "settings",
@@ -2338,6 +2344,50 @@ fn SettingsPanel() -> Element {
                             }
                         },
                         "Apply access level"
+                    }
+                }
+            }
+
+            // ── Autonomy (editable, confirm-first on autonomy-granting levels) ──
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "Autonomy" }
+                    span { class: "chip", "{snap.autonomy_level}" }
+                }
+                p { class: "label-tech",
+                    "How autonomous the agent is. One dial that composes the safety \
+                     knobs; supervised and above arm the autonomous loop. Granting \
+                     unattended autonomy is confirmed first."
+                }
+                div { class: "field-row",
+                    label { class: "label-tech", "Level" }
+                    select {
+                        class: "input",
+                        value: "{auto_level}",
+                        onchange: move |e| auto_level.set(e.value()),
+                        option { value: "manual", "manual — confirm everything" }
+                        option { value: "assisted", "assisted — reversible free, irreversible confirmed (default)" }
+                        option { value: "supervised", "supervised — armed loop, a human nearby" }
+                        option { value: "autonomous", "autonomous — pursues goals unattended (capped)" }
+                        option { value: "unleashed", "unleashed — isolated host, eyes-open" }
+                    }
+                }
+                p { class: "label-tech sub",
+                    "Per-domain overrides and the auto-approve allowlist are edited in "
+                    code { "aivyx.toml" }
+                    " for now. Takes effect on the next restart."
+                }
+                div { class: "actions",
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| {
+                            if auto_grants {
+                                auto_confirm_open.set(true);
+                            } else {
+                                ws.send(set_autonomy_query(auto_level(), false));
+                            }
+                        },
+                        "Apply autonomy level"
                     }
                 }
             }
@@ -2454,6 +2504,27 @@ fn SettingsPanel() -> Element {
                 }
             }
         }
+
+        // Confirm-first modal for the autonomy-granting levels (Chapter Reins).
+        if auto_confirm_open() {
+            div { class: "modal-scrim",
+                div { class: "glass-card modal",
+                    h3 { "Set autonomy to '{auto_level()}'?" }
+                    p { "{autonomy_confirm_blurb(&auto_level())}" }
+                    div { class: "actions",
+                        button { class: "btn btn-glass", onclick: move |_| auto_confirm_open.set(false), "Cancel" }
+                        button {
+                            class: "btn btn-primary",
+                            onclick: move |_| {
+                                ws.send(set_autonomy_query(auto_level(), true));
+                                auto_confirm_open.set(false);
+                            },
+                            "Set autonomy"
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2487,6 +2558,29 @@ fn set_cycle_detection_query(enabled: bool) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-settings-cycle".to_string(),
         payload: QueryPayload::SetCycleDetection { enabled },
+    }
+}
+
+fn set_autonomy_query(level: String, confirm: bool) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-autonomy".to_string(),
+        payload: QueryPayload::SetAutonomyLevel { level, confirm },
+    }
+}
+
+/// One-line risk blurb for the autonomy confirm modal (Chapter Reins).
+fn autonomy_confirm_blurb(level: &str) -> &'static str {
+    match level {
+        "autonomous" => {
+            "The agent will pursue goals unattended within its caps. Irreversible \
+             actions are still refused without a human."
+        }
+        "unleashed" => {
+            "Runs an armed, self-directing agent with confirm-first OFF. Intended \
+             only for a dedicated, isolated host where the agent's blast radius is \
+             the host."
+        }
+        _ => "This grants the agent unattended autonomy.",
     }
 }
 

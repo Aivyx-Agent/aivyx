@@ -458,6 +458,18 @@ pub enum QueryPayload {
     /// small-cycle breaker. Takes effect on the next daemon start. Responds with
     /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError`).
     SetCycleDetection { enabled: bool },
+    /// Chapter Reins — rewrite `[autonomy] level`. `level` is one of `manual |
+    /// assisted | supervised | autonomous | unleashed`. `confirm` MUST be `true`
+    /// for the autonomy-granting levels (`autonomous` / `unleashed`) — the
+    /// confirm-first gate, enforced **server-side**, not just in the UI. Only
+    /// the `level` is rewritten (per-domain overrides + the allowlist are
+    /// preserved). Takes effect on the next daemon start. Responds with
+    /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError`).
+    SetAutonomyLevel {
+        level: String,
+        #[serde(default)]
+        confirm: bool,
+    },
     /// Chapter V — rewrite the `[profile]` section of `aivyx.toml` (the
     /// operator-declared identity layer, PRODUCT.md P13). Every field carries
     /// **clear-on-`None`** semantics matching `aivyx_config::ProfileWrite`: an
@@ -1107,6 +1119,9 @@ pub struct SettingsSnapshot {
     /// the interactive agent (`false` ⇒ off, the default). Autonomous team
     /// agents always have it on regardless; this knob is the interactive toggle.
     pub cycle_detection: bool,
+    /// Chapter Reins — `[autonomy] level` (`manual | assisted | supervised |
+    /// autonomous | unleashed`; matches the dial). `assisted` is the default.
+    pub autonomy_level: String,
 }
 
 /// Chapter U — wire mirror of the `[budget]` caps (a plain-field copy of
@@ -3452,6 +3467,7 @@ mod tests {
             },
             embeddings_available: false,
             cycle_detection: true,
+            autonomy_level: "supervised".into(),
         }
     }
 
@@ -3478,6 +3494,10 @@ mod tests {
                 alert_at: Some(0.9),
             },
             QueryPayload::SetCycleDetection { enabled: true },
+            QueryPayload::SetAutonomyLevel {
+                level: "autonomous".into(),
+                confirm: true,
+            },
         ];
         for payload in reqs {
             let msg = FrontendMessage::Query {
