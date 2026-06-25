@@ -100,9 +100,9 @@ use aivyx_storage::{KeyDomain, Storage};
 // daemon's Settings IPC handlers).
 pub mod config_write;
 pub use config_write::{
-    write_access_section, write_agent_cycle_detection, write_budget_section,
-    write_profile_section, write_toml_0600, write_voice_section, ConfigWriteError, ProfileWrite,
-    VoiceWrite,
+    write_access_section, write_agent_cycle_detection, write_autonomy_section,
+    write_budget_section, write_profile_section, write_toml_0600, write_voice_section,
+    ConfigWriteError, ProfileWrite, VoiceWrite,
 };
 
 // Chapter Reins (RN.1) — the autonomy dial. Pure composition layer

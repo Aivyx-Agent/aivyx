@@ -98,6 +98,8 @@
 
 #[path = "aivyx_modules/access.rs"]
 mod access;
+#[path = "aivyx_modules/autonomy.rs"]
+mod autonomy;
 #[path = "aivyx_modules/workspace.rs"]
 mod workspace;
 #[path = "aivyx_modules/doctor.rs"]
@@ -581,6 +583,16 @@ fn run() -> Result<(), String> {
             AccessSubcommand::Show => access::run_access_show(),
             AccessSubcommand::Set { level, root, yes } => {
                 access::run_access_set(level, root, yes)
+            }
+        };
+    }
+
+    // ---- Chapter Reins: autonomy-dial Settings command -----------------
+    if let CliMode::Autonomy(sub) = mode {
+        return match sub {
+            AutonomySubcommand::Show => autonomy::run_autonomy_show(),
+            AutonomySubcommand::Set { level, yes } => {
+                autonomy::run_autonomy_set(level, yes)
             }
         };
     }
@@ -1663,6 +1675,10 @@ enum CliMode {
     /// reach + posture; `set <level>` rewrites the `[access]` section of
     /// `aivyx.toml`. Synchronous file ops — no daemon, no passphrase.
     Access(AccessSubcommand),
+    /// `aivyx autonomy <subcommand>`: the autonomy-dial Settings command
+    /// (Chapter Reins). `show` renders the resolved level + posture; `set
+    /// <level>` rewrites `[autonomy] level`. Synchronous file ops, load-time.
+    Autonomy(AutonomySubcommand),
     /// `aivyx workspace <subcommand>`: Chapter O — operator visibility into
     /// the agent's personal workspace. `ls [path]` / `cat <path>` / `path`.
     /// Read-only file ops — no daemon, no passphrase.
@@ -2021,6 +2037,20 @@ enum AccessSubcommand {
     Set {
         level: aivyx_config::AccessLevel,
         root: Option<String>,
+        yes: bool,
+    },
+}
+
+/// Subcommands for `aivyx autonomy` (Chapter Reins RN.6).
+#[derive(Debug, PartialEq)]
+enum AutonomySubcommand {
+    /// `aivyx autonomy show` — print the resolved level, the posture it
+    /// expands to, and any per-domain overrides + auto-approve allowlist.
+    Show,
+    /// `aivyx autonomy set <level> [--yes]` — rewrite `[autonomy] level`. The
+    /// autonomy-granting levels (`autonomous`/`unleashed`) confirm unless `--yes`.
+    Set {
+        level: aivyx_config::AutonomyLevel,
         yes: bool,
     },
 }
@@ -3686,6 +3716,74 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Access(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter Reins — `aivyx autonomy <show|set>`.
+    if !args.is_empty() && args[0] == "autonomy" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx autonomy` requires a subcommand. Supported: show, \
+             set <level> [--yes]"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "show" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx autonomy show` takes no arguments. Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                AutonomySubcommand::Show
+            }
+            "set" => {
+                let mut level: Option<aivyx_config::AutonomyLevel> = None;
+                let mut yes = false;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--yes" | "-y" => yes = true,
+                        other if other.starts_with('-') => {
+                            return Err(format!(
+                                "unrecognized flag for `aivyx autonomy set`: `{other}`. \
+                                 Supported: --yes"
+                            ));
+                        }
+                        other if level.is_none() => {
+                            level = Some(autonomy::parse_level(other)?);
+                        }
+                        other => {
+                            return Err(format!(
+                                "`aivyx autonomy set` takes one level. Extra: `{other}`"
+                            ));
+                        }
+                    }
+                    i += 1;
+                }
+                let level = level.ok_or_else(|| {
+                    "`aivyx autonomy set` needs a level. \
+                     Usage: `aivyx autonomy set \
+                     <manual|assisted|supervised|autonomous|unleashed> [--yes]`"
+                        .to_string()
+                })?;
+                AutonomySubcommand::Set { level, yes }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized autonomy subcommand: `{other}`. \
+                     Supported: autonomy show, autonomy set <level>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Autonomy(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,

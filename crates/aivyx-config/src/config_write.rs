@@ -34,7 +34,7 @@ use std::path::Path;
 use aivyx_cost::{BudgetAction, BudgetConfig};
 use toml_edit::{value, DocumentMut};
 
-use crate::AccessLevel;
+use crate::{AccessLevel, AutonomyLevel};
 
 /// Failure modes for a section-scoped `aivyx.toml` rewrite. Carries enough
 /// structure that the daemon can map a write failure to a typed IPC error;
@@ -120,6 +120,22 @@ pub fn write_access_section(
     }
     doc["access"]["confirm_destructive"] = value(level.is_expanded());
 
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Rewrite the `[autonomy] level` key of the TOML file at `path`, preserving
+/// every other section, the operator's comments, and any existing
+/// `[[autonomy.override]]` / `[autonomy.auto_approve]` sub-tables (Chapter Reins
+/// RN.6). Only the `level` is rewritten — per-domain overrides and the
+/// allowlist are edited elsewhere, so this never clobbers them.
+///
+/// Mirrors [`write_access_section`]: the *policy* of whether the operator may
+/// pick an autonomy-granting level (the stdin confirm / the IPC `confirm` flag)
+/// stays with the caller; this performs the structural `0600` write so the CLI
+/// and a future `SetAutonomyLevel` IPC handler agree byte-for-byte.
+pub fn write_autonomy_section(path: &Path, level: AutonomyLevel) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    doc["autonomy"]["level"] = value(level.as_str());
     write_toml_0600(path, &doc.to_string())
 }
 

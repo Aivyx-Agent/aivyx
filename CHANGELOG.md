@@ -19,6 +19,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **`aivyx autonomy` — one dial for how autonomous your agent is (Chapter Reins).**
+  A new `[autonomy] level` (`manual` → `assisted` *(default)* → `supervised` →
+  `autonomous` → `unleashed`) composes the scattered autonomy knobs (access,
+  confirm-first, gate policy, loop arming, self-improvement adoption) into named
+  tiers, with per-domain `[[autonomy.override]]` exceptions ("autonomous at
+  shell, manual on email") and an `[autonomy.auto_approve]` reversible-scope
+  allowlist. `aivyx autonomy show` renders the resolved level and the posture it
+  expands to; `aivyx autonomy set <level>` rewrites the section
+  (`autonomous`/`unleashed` confirm first). The default `assisted` expands to
+  today's behavior byte-for-byte, so an absent `[autonomy]` section changes
+  nothing. The dial's **runtime effects are being wired incrementally** (the
+  config surface + the escalation-scope/irreversibility primitive land first;
+  gate, loop-arming, and growth application follow in their phases — see
+  `docs/AUTONOMY.md`). No new capability base; a composition front end to
+  primitives already enforced.
 - **`aivyx --headless "<task>"` — one-shot unattended runs from the CLI.** The
   headless execution mode (Chapter H) was reachable over IPC and from the
   operator-absent drivers, but never from the command line. This wires the
