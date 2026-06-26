@@ -117,6 +117,12 @@ edited freely when a new adapter or subsystem teaches us something new.
   skill auto-adoption) were deliberately **not** built — one approves nothing
   today, the other violates PRODUCT.md P8 — which is the `SECURITY_POSTURE.md`
   containment model working as designed.
+- [`FEDERATION.md`](FEDERATION.md) — **agent identity & cross-boundary trust**
+  (the keystone, `VISION.md` §2): the one primitive to get right early —
+  Ed25519 operator-owned identity, per-peer `TrustPolicy` with NT-02 attenuation
+  generalized across operators, the procedures-travel-data-never privacy line,
+  one delegation protocol for local (Nonagon) and remote (Nexus) — designed now,
+  built last. Unlocks both multi-node (Factory) and the agent network (Nexus).
 - [`LOCAL_HOSTING.md`](LOCAL_HOSTING.md) — **running Aivyx on a capable GPU box**
   (e.g. a 24GB RTX 3090): VRAM-tiered model + `num_ctx` choices, the
   Ollama-vs-embedded-CUDA tradeoff, tool-calling reliability on local models, and

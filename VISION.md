@@ -69,7 +69,8 @@ my operator — and I trust no peer by default; peers earn scoped, attenuated,
 revocable trust, and any content from them (a shared skill, a request) is
 sandboxed and provenance-tracked."* Trust and identity are the one thing that
 **cannot be safely retrofitted**, so their *shape* is a design constraint from
-now, even if the network itself is built last.
+now, even if the network itself is built last. That shape is specified in
+[`docs/FEDERATION.md`](docs/FEDERATION.md) — the keystone design.
 
 ## 3. The privacy line that makes it possible
 
