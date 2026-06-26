@@ -117,6 +117,11 @@ edited freely when a new adapter or subsystem teaches us something new.
   skill auto-adoption) were deliberately **not** built — one approves nothing
   today, the other violates PRODUCT.md P8 — which is the `SECURITY_POSTURE.md`
   containment model working as designed.
+- [`LOCAL_HOSTING.md`](LOCAL_HOSTING.md) — **running Aivyx on a capable GPU box**
+  (e.g. a 24GB RTX 3090): VRAM-tiered model + `num_ctx` choices, the
+  Ollama-vs-embedded-CUDA tradeoff, tool-calling reliability on local models, and
+  a dedicated-host setup recipe. The capable-hardware counterpart to
+  `LOCAL_FIRST_RUN.md`'s modest on-ramp.
 
 ## Archive
 

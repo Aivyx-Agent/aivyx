@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions, ProviderKind};
 use aivyx_llm::ollama::{
-    OllamaConfig, OllamaOptions, OllamaProvider, DEFAULT_OLLAMA_BASE_URL, RECOMMENDED_LOCAL_MODEL,
+    OllamaConfig, OllamaOptions, OllamaProvider, AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL,
+    RECOMMENDED_LOCAL_MODEL,
 };
 use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolDescriptor};
 
@@ -88,6 +89,15 @@ async fn check_ollama(cfg: &AivyxConfig) -> bool {
     match test_generation(&base_url, &model).await {
         Ok(text) if !text.trim().is_empty() => {
             pass(&format!("test reply OK: \"{}\"", truncate(&text, 60)));
+            // Capable-hardware tip — surface the context posture so an operator
+            // on a big GPU (e.g. a 24GB card) isn't silently under-using it.
+            match cfg.ollama_options.num_ctx {
+                Some(n) => println!("  context: num_ctx = {n} (explicit)"),
+                None => println!(
+                    "  context: num_ctx = auto (≤{AUTO_NUM_CTX_CAP}) — on a capable GPU, \
+                     size the model up and raise `[ollama] num_ctx`: see docs/LOCAL_HOSTING.md"
+                ),
+            }
             true
         }
         Ok(_) => {
