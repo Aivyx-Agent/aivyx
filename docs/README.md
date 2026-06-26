@@ -3,9 +3,16 @@
 This directory holds the **living reference docs**, the **roadmaps**,
 and **amendments**. The frozen **phase journals** and point-in-time
 reviews now live under [`archive/`](archive/) — see [Archive](#archive)
-below. The docs here are deliberately separate from the two contract
+below. The docs here are deliberately separate from the contract
 documents in the repo root:
 
+- **`VISION.md`** is the **north star** — the mission (*Build It Right
+  First*), what Aivyx is, the architecture's destination (local Nonagon
+  teams generalizing into a network of agents), the order of growth, and
+  the guiding test every chapter is held against. It sits *above* the two
+  contracts: they say *how* the assistant works, it says *what* the
+  ecosystem is and *in what order* it grows. The commercial strategy that
+  rides on it is kept privately, outside this public repo.
 - **`DESIGN.md`** is the **technical contract** — the locked
   architectural decisions ("how the agent works") that every phase
   must respect. It is edited rarely, and only through the amendment
