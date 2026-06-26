@@ -87,6 +87,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **Daemon no longer panics when a runaway turn ends in `MaxStepsExceeded` /
+  `Looping` with failure-learning on.** A `match` building the failure summary
+  for the skill auto-proposer handled `Failed`/`Cancelled`/`TimedOut`/`Escalated`
+  but fell through to `_ => unreachable!()` for the two outcomes a *local model*
+  is most likely to produce when it runs away (the step cap or the cycle
+  breaker) — so with `[skills.auto_propose] from_failed_turns = true`, exactly
+  that scenario killed the daemon mid-mission. The match is now **exhaustive**
+  (no `_` arm), so the compiler forces every present and future `TurnOutcome` to
+  be handled here — a single turn can never panic a 24/7 daemon. Surfaced by the
+  Pass A panic-resistance audit, which otherwise found the untrusted-input parse
+  boundaries (LLM responses, tool-call JSON, tool inputs, IPC frames, config,
+  channel ingestion) already defensive.
 - **`[agent]` per-turn knobs now reach the daemon agent and the role-switch
   child** (the Studio + persistent chat path, and role sub-sessions).
   `turn_timeout_secs` and the new `cycle_detection` were applied only on the

@@ -2085,9 +2085,33 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 // path; the new Profile/Role
                                                 // signals default to zero.
                                                 let signals = sap::TurnSignals::default();
+                                                // Exhaustive on purpose — no
+                                                // `_` arm. `MaxStepsExceeded` /
+                                                // `Looping` reach here too (a
+                                                // local model that runs away
+                                                // and trips the step cap or the
+                                                // cycle breaker), and the prior
+                                                // `_ => unreachable!()` panicked
+                                                // the daemon on exactly that. An
+                                                // exhaustive match makes the
+                                                // compiler force every future
+                                                // outcome to be handled here, so
+                                                // a single turn can never kill a
+                                                // 24/7 daemon.
                                                 let summary = match other {
                                                     TurnOutcome::Failed(e) =>
                                                         format!("planner/agent error: {e}"),
+                                                    TurnOutcome::MaxStepsExceeded {
+                                                        max_steps, ..
+                                                    } => format!(
+                                                        "planner exceeded {max_steps} steps"
+                                                    ),
+                                                    TurnOutcome::Looping {
+                                                        repeat_limit, ..
+                                                    } => format!(
+                                                        "stopped after {repeat_limit} \
+                                                         repeated tool calls"
+                                                    ),
                                                     TurnOutcome::Cancelled { .. } =>
                                                         "operator cancelled mid-turn".into(),
                                                     TurnOutcome::TimedOut {
@@ -2101,7 +2125,13 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                     } => format!(
                                                         "agent escalated: {reason}"
                                                     ),
-                                                    _ => unreachable!(),
+                                                    // Peeled off by the outer
+                                                    // match; a benign string
+                                                    // rather than a panic keeps
+                                                    // the daemon alive if the
+                                                    // invariant ever shifts.
+                                                    TurnOutcome::Completed { .. } =>
+                                                        "turn completed".into(),
                                                 };
                                                 Some((
                                                     signals,
