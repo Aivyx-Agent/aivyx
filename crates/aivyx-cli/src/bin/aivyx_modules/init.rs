@@ -1846,7 +1846,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         }
     }
 
-    // 7. Success message.
+    // 7. Success message + next steps. This is the moment that shapes the
+    // operator's first five minutes — so it surfaces the Studio (the web GUI a
+    // new user won't otherwise discover), `doctor`, and, for the local path, the
+    // capable-hardware guide.
     eprintln!("\nWrote {CONFIG_FILE}");
     if cfg.provider != Provider::Ollama {
         eprintln!(
@@ -1854,9 +1857,22 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
              Permissions set to 0600 (owner-only)."
         );
     }
-    eprintln!("You will be prompted for a passphrase on first launch.");
-    eprintln!("Alternatively, set the AIVYX_PASSPHRASE environment variable.");
-    eprintln!("\nRun `aivyx` to start the agent. Happy building!");
+    eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PASSPHRASE).");
+    let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
+    eprintln!("\nNext steps:");
+    eprintln!("  aivyx                      — chat with your agent in the terminal");
+    eprintln!(
+        "  aivyx daemon run --web-ui  — run the daemon + open the Studio at \
+         http://127.0.0.1:{web_ui_port}"
+    );
+    eprintln!("  aivyx doctor               — re-check your setup any time");
+    if cfg.provider == Provider::Ollama {
+        eprintln!(
+            "\nOn a capable GPU (e.g. a 24GB card) you can run a bigger model with more \
+             context — see docs/LOCAL_HOSTING.md."
+        );
+    }
+    eprintln!("\nHappy building!");
     Ok(())
 }
 

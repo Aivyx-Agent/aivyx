@@ -24,6 +24,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Changed
 
+- **`aivyx init` ends on real next steps.** The completion message now surfaces
+  the three things a new operator actually needs — `aivyx` (terminal chat),
+  `aivyx daemon run --web-ui` to open the **Studio** at `http://127.0.0.1:7843`
+  (the web GUI a first-run user wouldn't otherwise discover), and `aivyx doctor`
+  to re-check — plus, on the local path, a pointer to `docs/LOCAL_HOSTING.md` for
+  sizing the model/context to a capable GPU. The Studio port comes from the
+  canonical `DEFAULT_WEB_UI_PORT` so it can't drift.
 - **One `TurnSafety` choke point for the per-turn knobs.** The deadline + cycle
   breaker were applied ad-hoc at ~7 `ConcreteAgent::new` sites — which is exactly
   why three of them drifted and shipped unprotected. Now every agent-construction
