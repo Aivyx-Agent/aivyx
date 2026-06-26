@@ -69,23 +69,36 @@ bases** in `aivyx-capability` (exactly how `web.search`, `gmail.*`,
 `task.*` were added) — never a substrate fork. Everything else a pack needs
 comes through the `aivyx-vertical-sdk` facade.
 
-### Where a pack lives
-A pack is two crates under `crates/verticals/` (a team-config crate + a
-toolkit tool-process crate), each depending on **`aivyx-vertical-sdk` alone**
-for its shipping code. The Kitchen pack stays **in-tree and open** as the
-reference example. **Paid packs live in `crates/verticals-private/`** — a
-git-ignored sibling directory whose contents never land in the public repo
-(only its `.gitignore` + `README.md` are tracked). A private pack dropped in
-there **auto-joins the workspace** via the `crates/verticals-private/*` member
-glob and builds against the same lockfile, behind the *same* SDK contract —
-nothing about a pack's code distinguishes "example" from "commercial" except
-where it sits and who can read it. (A separate repo stays possible later; see
-below.)
+### Where a pack lives (settled topology, 2026-06-26)
 
-Because the SDK is the only engine surface a pack compiles against, it is
-also the clean cut-seam if a separate verticals repo is ever wanted: such a
-repo would `git`-tag-depend on `aivyx-vertical-sdk` and nothing else from the
-core. That option stays open; it is not needed yet.
+A pack is two crates (a team-config crate + a toolkit tool-process crate), each
+depending on **`aivyx-vertical-sdk` alone** for its shipping code. *Where* those
+crates sit is now decided by **visibility**, because the core repo is public:
+
+- **The open example (Kitchen) stays in the core repo**, in-tree at
+  `crates/verticals/` — it is public on purpose, the worked answer to "how do I
+  build a pack?", meant to be read and copied.
+- **Paid packs live in a separate, private repo — `aivyx-verticals`** (a sibling
+  of `aivyx` under `~/Projects/Rust/`; see the ecosystem topology). Private code
+  never sits in a public repo behind only a `.gitignore` — the separate repo *is*
+  the boundary. `aivyx-verticals` is a workspace of paid packs; create it when the
+  **first paid pack exists** (until then, the in-tree `crates/verticals-private/`
+  is just a scaffold — a `README` + `.gitignore`, no code).
+
+**Building a private pack against the core** (the one real wrinkle — core crates
+are `publish = false`):
+
+- **Local dev:** path-dep `aivyx-vertical-sdk` at `../aivyx/crates/aivyx-vertical-sdk`
+  (works because the repos are siblings).
+- **CI / portability:** `git`-tag-dep the SDK (`publish = false` does *not* block
+  git deps).
+
+Because the SDK is the **only** engine surface a pack compiles against, it is the
+clean cut-seam between repos: a paid pack pins `aivyx-vertical-sdk` (semver-stable)
+and nothing else from the core, so engine refactors can't break it and the public/
+private split costs nothing structurally. *(The in-tree `crates/verticals-private/*`
+glob remains available as an optional local-dev convenience — drop a private pack
+there to build it inside the core workspace — but the separate repo is the home.)*
 
 ---
 
@@ -458,3 +471,69 @@ Three test shapes, all in the Kitchen crates:
 That is a complete pack: a domain crew + real gated tools + additive scopes +
 daemon wiring + onboarding, all over the free engine, with the only stable
 surface you build against being `aivyx-vertical-sdk`.
+
+---
+
+## 7. Pack anatomy — the canonical skeleton
+
+The reference layout, generalized from the Kitchen pack. Every pack is **two
+crates**: a **pack crate** (the crew + the plan — pure config) and a **toolkit
+crate** (the real, gated domain tools — a tool-process binary). Copy this tree
+and rename `<domain>`:
+
+```
+aivyx-<domain>/                     # the PACK crate — the Nonagon crew + missions
+  Cargo.toml                        # deps: aivyx-vertical-sdk ONLY (shipping code)
+  src/lib.rs                        # <domain>_team() -> TeamConfig
+                                    #   + <flagship>_mission() -> MissionPlan
+                                    #   + tests: team.validate(), DAG, NT-02, TOML round-trip
+  assets/
+    <domain>.toml                   # the committed TeamConfig as TOML (the loadable roster)
+
+aivyx-<domain>-toolkit/             # the TOOLKIT crate — the real domain tools (a binary)
+  Cargo.toml                        # deps: aivyx-vertical-sdk; integration client deps
+                                    #   (reqwest/sqlx/…); engine crates only as dev-deps
+  src/
+    main.rs                         # the tool-process entrypoint: run_multi_tool_subprocess(tools)
+    lib.rs                          # assembles the tool list; re-exports for tests
+    config.rs                       # the integration config (endpoint, creds via env/token file)
+    client.rs                       # the system-of-record client (RPC/SQL/HTTP)
+    tools/
+      mod.rs                        # collects the <domain>.* Tool impls into the list
+      <area>.rs                     # one file per tool group — each a `Tool` impl with a
+                                    #   pure required_scope(input) + execute(); gated by base
+  tests/
+    <domain>_coherence.rs           # the team's referenced tool NAMES match what the toolkit provides
+    harness_e2e.rs                  # drives the REAL built binary over the harness vs a mock SoR
+```
+
+**The contract every pack honours (the framework, in one place):**
+
+| Must provide | Where | Rule |
+|---|---|---|
+| A **`TeamConfig`** — a lead + ≤8 least-privileged specialists | pack `src/lib.rs` + `assets/<domain>.toml` | each member's scopes ⊆ the lead's (**NT-02**); ≤9 agents total |
+| At least one **`MissionPlan`** (a DAG) | pack `src/lib.rs` | validates: acyclic, every step targets a real member, no dead steps |
+| The **domain tools** as `Tool` impls | toolkit `src/tools/*.rs` | each has a **pure `required_scope(input)`**; side-effects gated by a base; money/outbound = **confirm-first**; append-only logs never updated/deleted |
+| **Scope bases** the tools need | one engine touch — `KNOWN_BASES` in `aivyx-capability` | additive; the only edit a pack makes to the core. Group bases (`<domain>.read/write/...`) keep the surface small |
+| An **integration boundary** | toolkit `config.rs` + `client.rs` | the system-of-record (a DB, an API); creds via env / per-tool-process token file, never hard-coded |
+| **Install + reachability** | `aivyx connect <domain>` + an `aivyx doctor` section | writes the pack's config, plants the roster (no-clobber), probes the SoR = the "connected" signal |
+| **Three test shapes** | as above | team/mission validity · name-coherence · real-binary e2e vs a mock SoR |
+
+**What a pack must NOT do** (the invariants that keep it maintainable + safe):
+
+- **Never depend on engine crates in shipping code** — only `aivyx-vertical-sdk`
+  (engine crates allowed *only* as `tests/` dev-deps for the real-binary e2e).
+- **Never fork or patch the substrate** — a pack is configuration + tools; it
+  inherits every future core hardening for free.
+- **Never widen trust** — a pack adds scope *bases* and *gated tools*; it can't
+  raise a tier ceiling, bypass a gate, or grant itself authority. The capability
+  model is the core's, applied.
+- **Never put domain logic in the core** — `aivyx-core` / `aivyx-capability` /
+  the daemon stay domain-neutral; the domain lives only in the pack.
+
+**Sizing a pack** (rough): a pack crate is ~one `lib.rs` (a `TeamConfig` + one or
+two `MissionPlan`s) + a TOML asset; a toolkit is ~one tool file per tool group +
+a client + a config. Kitchen is ~11 tools across 4 bases — a comfortable
+reference size. A pack that needs new *I/O reach* the engine doesn't have is a
+sign it wants a new core capability first (raise it as a core chapter), not a
+pack workaround.
