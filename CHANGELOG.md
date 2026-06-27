@@ -5,9 +5,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-06-28
+
 ### Added
 
-- **Chapter Circuit — agentic-loop hardening (CI.0–CI.5).** A deliberate
+- **Chapter Circuit — agentic-loop hardening (CI.0–CI.6).** A deliberate
   audit + hardening pass over the autonomous loop, prompted by the v0.7.4
   scope-floor bug.
   - **CI.0** — the loop's `team.run` delegation tool is now granted to the
