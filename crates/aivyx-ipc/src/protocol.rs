@@ -1017,6 +1017,14 @@ pub enum QueryResponsePayload {
         /// `#[serde(default)]` so pre-K.4.2 frames decode.
         #[serde(default)]
         max_run_usd: Option<f64>,
+        /// Chapter Circuit (CI.5) — the cross-iteration stall-breaker
+        /// threshold (`[loop] max_idle_iterations`; `0` = disabled).
+        /// The live consecutive-idle count rides
+        /// `state.consecutive_idle`; this carries the configured
+        /// threshold so `aivyx loop status` can show "idle / threshold".
+        /// `#[serde(default)]` so pre-Circuit frames decode.
+        #[serde(default)]
+        max_idle_iterations: u32,
     },
     /// Phase 175 — response to [`QueryPayload::LoopLog`]. Recent
     /// progress notes, most-recent-first.

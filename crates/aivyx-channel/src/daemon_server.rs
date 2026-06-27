@@ -3642,6 +3642,9 @@ async fn handle_query(
                 max_run_tokens: loop_config
                     .and_then(|c| c.max_run_tokens),
                 max_run_usd: loop_config.and_then(|c| c.max_run_usd),
+                max_idle_iterations: loop_config
+                    .map(|c| c.max_idle_iterations)
+                    .unwrap_or(0),
             }
         }
         QueryPayload::LoopLog { limit } => {

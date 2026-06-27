@@ -74,6 +74,7 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
                 max_run_secs,
                 max_run_tokens,
                 max_run_usd,
+                max_idle_iterations,
             ) = loop_status(&socket_path)
                 .await
                 .map_err(|e| format!("loop status failed: {e}"))?;
@@ -87,6 +88,7 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
                     max_run_secs,
                     max_run_tokens,
                     max_run_usd,
+                    max_idle_iterations,
                 )
             );
             Ok(())
@@ -193,6 +195,7 @@ fn render_status(
     max_run_secs: Option<u64>,
     max_run_tokens: Option<u64>,
     max_run_usd: Option<f64>,
+    max_idle_iterations: u32,
 ) -> String {
     let mut out = String::from("Loop status:\n");
     if !armed {
@@ -205,6 +208,15 @@ fn render_status(
             "  driver: RUNNING — iteration {} of max {}\n",
             state.iteration, state.max_iterations,
         ));
+        // Chapter Circuit (CI.5) — surface the live stall streak so a
+        // run spinning without progress is visible before it trips.
+        if max_idle_iterations > 0 && state.consecutive_idle > 0 {
+            out.push_str(&format!(
+                "  ⚠ no progress for {} of {} iteration(s) before the \
+                 stall breaker stops the run\n",
+                state.consecutive_idle, max_idle_iterations,
+            ));
+        }
     } else {
         out.push_str("  driver: idle (armed)\n");
         if let Some(reason) = &state.last_stop_reason {
@@ -247,6 +259,17 @@ fn render_status(
             match max_run_usd {
                 Some(d) => format!("${d:.2} / run"),
                 None => "none".to_string(),
+            },
+        ));
+        // Chapter Circuit (CI.5) — the cross-iteration stall breaker.
+        out.push_str(&format!(
+            "  stall breaker: {}\n",
+            if max_idle_iterations == 0 {
+                "off".to_string()
+            } else {
+                format!(
+                    "stop after {max_idle_iterations} idle iteration(s)"
+                )
             },
         ));
         // Phase 177 — live spend, once a run has had an iteration.
@@ -333,7 +356,7 @@ mod tests {
     #[test]
     fn status_not_armed() {
         let out =
-            render_status(&LoopRunState::default(), 3, false, false, None, None, None);
+            render_status(&LoopRunState::default(), 3, false, false, None, None, None, 0);
         assert!(out.contains("not armed"));
         assert!(out.contains("3 pending"));
         // Safety config is only shown when armed.
@@ -350,9 +373,10 @@ mod tests {
             last_stop_reason: None,
             tokens_used: 12_345,
             spent_cents: 250,
+            consecutive_idle: 2,
         };
         let out =
-            render_status(&state, 7, true, true, Some(3600), Some(500000), Some(5.0));
+            render_status(&state, 7, true, true, Some(3600), Some(500000), Some(5.0), 3);
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
         assert!(out.contains("7 pending"));
         assert!(out.contains("gate verification: on"));
@@ -362,6 +386,9 @@ mod tests {
         // Chapter K (K.4.2) — the dollar cap and live priced spend.
         assert!(out.contains("dollar cap: $5.00 / run"));
         assert!(out.contains("spend used: $2.50 / $5.00"));
+        // Chapter Circuit (CI.5) — the stall-breaker config + live idle streak.
+        assert!(out.contains("stall breaker: stop after 3 idle iteration(s)"));
+        assert!(out.contains("no progress for 2 of 3 iteration(s)"));
     }
 
     #[test]
@@ -374,13 +401,16 @@ mod tests {
             last_stop_reason: Some("backlog complete".into()),
             tokens_used: 98_000,
             spent_cents: 0,
+            consecutive_idle: 0,
         };
-        let out = render_status(&state, 0, true, false, None, None, None);
+        let out = render_status(&state, 0, true, false, None, None, None, 0);
         assert!(out.contains("idle (armed)"));
         assert!(out.contains("ended after 12 iteration(s): backlog complete"));
         assert!(out.contains("gate verification: off"));
         assert!(out.contains("wall-clock cap: none"));
         assert!(out.contains("dollar cap: none"));
+        // CI.5 — stall breaker disabled (0) renders "off".
+        assert!(out.contains("stall breaker: off"));
         // Last run's spend shown, no cap suffix.
         assert!(out.contains("tokens used: 98000\n"));
     }

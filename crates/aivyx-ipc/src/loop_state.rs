@@ -35,4 +35,11 @@ pub struct LoopRunState {
     /// until the first iteration; reset on each `request_start`.
     #[serde(default)]
     pub spent_cents: u64,
+    /// Chapter Circuit (CI.5) — how many *consecutive* iterations have
+    /// made no progress (the live count behind the CI.1 stall breaker).
+    /// Surfaced by `aivyx loop status` so a stalling run is legible
+    /// before it trips. `0` when progressing; reset on each
+    /// `request_start`.
+    #[serde(default)]
+    pub consecutive_idle: u32,
 }

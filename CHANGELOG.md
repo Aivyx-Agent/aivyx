@@ -7,7 +7,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
-- **Chapter Circuit — agentic-loop hardening (CI.0–CI.4).** A deliberate
+- **Chapter Circuit — agentic-loop hardening (CI.0–CI.5).** A deliberate
   audit + hardening pass over the autonomous loop, prompted by the v0.7.4
   scope-floor bug.
   - **CI.0** — the loop's `team.run` delegation tool is now granted to the
@@ -45,6 +45,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
     exit. Documented that loop run-state is in-memory only (a daemon restart
     mid-run does not auto-resume; stories persist, the operator re-issues
     `loop start`); opt-in auto-resume is a tracked follow-up.
+  - **CI.5** — observability. `aivyx loop status` now shows the stall-breaker
+    configuration (`stall breaker: stop after N idle iteration(s)` / `off`)
+    alongside the other run caps, and a live warning while a run is spinning
+    (`no progress for N of M iteration(s) before the stall breaker stops the
+    run`) — so a stalling run is legible without reading `journalctl`. The
+    stall threshold + live idle count ride the `LoopStatus` IPC / run-state.
 
 ## [0.7.4] — 2026-06-28
 

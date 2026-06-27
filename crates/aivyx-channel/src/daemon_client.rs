@@ -759,7 +759,7 @@ pub async fn loop_stop(
 
 /// Read the loop run state + remaining backlog. Returns
 /// `(state, remaining, armed, gate_enabled, max_run_secs,
-/// max_run_tokens)`.
+/// max_run_tokens, max_run_usd, max_idle_iterations)`.
 #[allow(clippy::type_complexity)]
 pub async fn loop_status(
     socket_path: &Path,
@@ -772,6 +772,7 @@ pub async fn loop_status(
         Option<u64>,
         Option<u64>,
         Option<f64>,
+        u32,
     ),
     DaemonError,
 > {
@@ -787,6 +788,7 @@ pub async fn loop_status(
             max_run_secs,
             max_run_tokens,
             max_run_usd,
+            max_idle_iterations,
         } => Ok((
             state,
             remaining,
@@ -795,6 +797,7 @@ pub async fn loop_status(
             max_run_secs,
             max_run_tokens,
             max_run_usd,
+            max_idle_iterations,
         )),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))

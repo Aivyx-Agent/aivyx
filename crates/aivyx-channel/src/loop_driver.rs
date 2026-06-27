@@ -475,6 +475,7 @@ impl SharedLoopState {
             s.last_stop_reason = None;
             s.tokens_used = 0;
             s.spent_cents = 0;
+            s.consecutive_idle = 0;
         }
         self.notify.notify_one();
         true
@@ -524,6 +525,13 @@ impl SharedLoopState {
     fn record_cost(&self, usd: f64) {
         let mut s = self.state.write().expect("loop state lock");
         s.spent_cents = (usd * 100.0).round() as u64;
+    }
+
+    /// Chapter Circuit (CI.5) — record the live consecutive-idle count
+    /// (the CI.1 stall-breaker streak) for the `aivyx loop status` surface.
+    fn record_idle(&self, consecutive_idle: u32) {
+        let mut s = self.state.write().expect("loop state lock");
+        s.consecutive_idle = consecutive_idle;
     }
 
     fn finish_run(&self, reason: &str) {
@@ -775,7 +783,10 @@ pub async fn run_loop_driver(
             let note_after = recent_progress_note(memory.as_ref()).await;
             let made_progress = remaining_after < remaining
                 || (note_after.is_some() && note_after != note_before);
-            if stall.record(made_progress) {
+            let should_stop = stall.record(made_progress);
+            // CI.5 — surface the live idle streak for `aivyx loop status`.
+            shared.record_idle(stall.consecutive_idle);
+            if should_stop {
                 let reason = format!(
                     "no progress for {max_idle_iterations} consecutive \
                      iteration(s) (stall breaker)"
