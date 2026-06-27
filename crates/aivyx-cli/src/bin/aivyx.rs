@@ -6948,9 +6948,19 @@ async fn run_async(
         // mission; `team.run` was designed for exactly this (the loop iteration)
         // but, like `loop.*`, was never added to the floor — so the delegation
         // branch was dead for the default role. Grant it when the loop is armed,
-        // the same gate. (CI.3 will revisit whether this should additionally
-        // gate on the `[autonomy]` posture — arming the loop already implies a
-        // supervised+/explicit-`[loop]` opt-in, which is the gate today.)
+        // the same gate.
+        //
+        // CI.3 governance decision: keep this gated on loop-armed only — do NOT
+        // additionally posture-gate it on `[autonomy]` level. Posture-gating
+        // would re-create the prompt↔scope mismatch CI.0/CI.2 just closed (the
+        // prompt offers a tool the role can't call). The accepted limitation: a
+        // delegated team mission runs in the background, bounded per-call by
+        // `max_tokens` but with NO aggregate budget cap, and its spend is not
+        // counted against the loop's run-window caps. Brakes: the mission
+        // inherits the daemon's Interactive gate posture (destructive steps
+        // pause for human approval) and the loop delegates ≤1 mission per story
+        // ("delegate sparingly"). A per-mission budget is a tracked follow-up
+        // (see docs/COST_GOVERNANCE.md "bound team missions").
         //
         // NOTE — `git.write` is intentionally NOT granted here. Forge made
         // committing operator-opt-in per-repo (declare `git.write:<repo>` in a

@@ -109,6 +109,22 @@ impl BudgetEnforcer {
   that TOCTOU — the one piece of archive machinery the new concurrency
   genuinely needs.
 
+> **Known limitation — loop-delegated team missions are unbounded (Chapter
+> Circuit, CI.3).** When an autonomous-loop iteration delegates a story with
+> `team.run`, the team mission runs **in the background, tracked separately**:
+> its sub-turns are bounded per-call by `max_tokens` (a generation cap, not a
+> budget) but there is **no aggregate per-mission token/$ cap**, and the
+> mission's spend is **not** counted against the spawning loop's run-window
+> caps (`max_run_tokens` / `max_run_usd`). The brakes that *do* apply: the
+> mission inherits the daemon's **Interactive** gate posture, so any
+> confirm-first / destructive step **pauses for human approval**; the loop
+> delegates **at most one mission per story** and is told to "delegate
+> sparingly." The decision (CI.3) was to keep `team.run` available whenever the
+> loop is armed and accept this, rather than posture-gate it (which would
+> reintroduce a prompt↔scope mismatch). Closing the gap — a real per-mission
+> aggregate budget + counting delegated spend toward the loop's caps — is the
+> "bound team missions" item in K.4 below, now tracked as a Circuit follow-up.
+
 ## 5. Phase plan
 
 *Test bands priced by dense components, not family label (the recurring

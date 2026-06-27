@@ -19,6 +19,21 @@
 //! cron command), not an agent tool, so it is deliberately not
 //! capability-gated. An operator who points `gate_command` at
 //! something destructive owns that.
+//!
+//! ## Scope note (Chapter Circuit, CI.3)
+//!
+//! This gate is a **tree-level regression guard, not a per-story
+//! completion verifier**. A green gate means "the iteration did
+//! not break the build/tests," not "the story was actually done":
+//! the driver still trusts the agent's self-reported
+//! `loop.complete` for *what* was accomplished. With no
+//! `gate_command` configured (the default), there is no driver-side
+//! verification at all — completion rests entirely on the agent's
+//! attestation, backstopped by the CI.1 stall breaker and the
+//! prompt's "drafting, not done, is not progress." A genuine
+//! per-story acceptance check (an LLM judge against the story's
+//! definition-of-done) is a deferred enhancement, not part of this
+//! gate's contract.
 
 use std::path::PathBuf;
 use std::time::Duration;

@@ -7,7 +7,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
-- **Chapter Circuit — agentic-loop hardening (CI.0–CI.2).** A deliberate
+- **Chapter Circuit — agentic-loop hardening (CI.0–CI.3).** A deliberate
   audit + hardening pass over the autonomous loop, prompted by the v0.7.4
   scope-floor bug.
   - **CI.0** — the loop's `team.run` delegation tool is now granted to the
@@ -32,6 +32,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
     re-read for research/writing, read-back for a file), and the persistence
     step routes the result to its proper home (a commit for code *only if
     committing is available*, memory for notes, the requested path for a file).
+  - **CI.3** — audit of gate verification and `team.run` delegation governance
+    (documentation, no behavior change). Clarified that the loop gate is a
+    tree-level regression guard, not a per-story completion verifier; and
+    decided to keep `team.run` available whenever the loop is armed (rather than
+    posture-gate it) while documenting that loop-delegated team missions are not
+    yet bounded by an aggregate budget — both captured as tracked follow-ups.
 
 ## [0.7.4] — 2026-06-28
 
