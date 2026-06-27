@@ -706,6 +706,69 @@ fn toml_string_array(items: &[String]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Default starter routines (cron-scheduled). Read-only / observational
+// prompts that run unattended; each is self-contained and explicitly forbids
+// destructive actions. Verified live on real hardware before shipping.
+// ---------------------------------------------------------------------------
+
+const ROUTINE_ENVIRONMENT_REVIEW: &str = "Perform your daily environment review, strictly read-only — never modify, delete, move, or run destructive commands, and stay within your access scope. Check memory under the topic 'environment-baseline'. If no baseline exists, survey your accessible environment concisely — your workspace and key directories, the tools available to you, and a brief system summary — and save it to memory under 'environment-baseline'. If a baseline exists, compare the current state to it, journal a short note of anything new or notable to your workspace, and update the baseline. Be concise.";
+const ROUTINE_NIGHTLY_REFLECTION: &str = "Nightly reflection. Review what you learned today from recent memory. Consolidate the important facts into your knowledge base, tidy stale or duplicate memories, and note any skills or operator preferences worth refining. Journal a brief reflection to your workspace. Keep it short.";
+const ROUTINE_HEALTH_CHECK: &str = "Run a quick self-health check: confirm your model is responding and that a trivial tool call works. If everything is healthy reply with a short OK. Only raise an alert if something is actually wrong.";
+const ROUTINE_WEEKLY_DIGEST: &str = "Weekly digest. Summarize what you have learned and worked on over the past week from your memory and journal, and list any pending persona or skill proposals awaiting the operator's review. Keep it a concise, friendly briefing.";
+const ROUTINE_TREND_SCAN: &str = "Run a trend-scan across the operator's interest areas (see your profile and primary use cases). Search the web for recent, reputable sources, cross-reference the key points, separate solid facts from speculation, save the distilled findings to memory under a clear topic, and journal a short digest leading with whatever is genuinely new or notable.";
+
+/// Render the default starter routines as `[[schedule]]` blocks.
+///
+/// Gating (operator decisions, 2026-06): the four core routines are ENABLED on
+/// a local (Ollama) provider and written present-but-DISABLED on a cloud
+/// provider — discoverable, a one-line flip to turn on, and cost-aware since
+/// cloud schedules spend tokens. The opt-in `trend-scan` additionally requires
+/// web search (its tool comes from the bundled web-search MCP server, which is
+/// only configured when the operator enabled web search).
+fn render_default_schedules(cfg: &InitConfig) -> String {
+    let local = matches!(cfg.provider, Provider::Ollama);
+    let core_enabled = local;
+    let trend_enabled = local && cfg.enable_web_search;
+    let b = |on: bool| if on { "true" } else { "false" };
+
+    let mut out = String::new();
+    out.push_str(
+        "\n# --------------------------------------------------------------------------\n\
+         # Default starter routines (cron = \"sec min hour dom mon dow\", local time).\n\
+         # Read-only / observational, scoped to the access level. Enabled on a local\n\
+         # provider; written disabled on a cloud provider (they spend tokens) — flip\n\
+         # `enabled = true` to turn one on.\n\
+         # --------------------------------------------------------------------------\n",
+    );
+
+    let mut emit = |name: &str, cron: &str, prompt: &str, enabled: bool, notify: &str| {
+        out.push_str(&format!(
+            "\n[[schedule]]\n\
+             name = \"{}\"\n\
+             cron = \"{}\"\n\
+             role = \"default\"\n\
+             prompt = \"{}\"\n\
+             enabled = {}\n\
+             wrap_mission = true\n\
+             notify_when = \"{}\"\n",
+            name,
+            cron,
+            escape_toml_string(prompt),
+            b(enabled),
+            notify,
+        ));
+    };
+
+    emit("environment-review", "0 0 7 * * *", ROUTINE_ENVIRONMENT_REVIEW, core_enabled, "on_completed_non_empty");
+    emit("nightly-reflection", "0 0 2 * * *", ROUTINE_NIGHTLY_REFLECTION, core_enabled, "on_completed_non_empty");
+    emit("health-check", "0 0 */6 * * *", ROUTINE_HEALTH_CHECK, core_enabled, "on_failed");
+    emit("weekly-digest", "0 0 8 * * 1", ROUTINE_WEEKLY_DIGEST, core_enabled, "on_completed_non_empty");
+    emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_non_empty");
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Phase 181 — the guided first-launch identity builder.
 // ---------------------------------------------------------------------------
 
@@ -1828,10 +1891,13 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // answers into the template document so the role declarations,
     // MCP servers, commented sections, and structure all survive.
     // Otherwise use the existing minimal `render_toml` synthesis.
-    let toml = match (template_defaults.template_doc, &template_defaults.template_name) {
+    let mut toml = match (template_defaults.template_doc, &template_defaults.template_name) {
         (Some(doc), Some(name)) => render_with_template(&cfg, name, doc),
         _ => render_toml(&cfg),
     };
+    // Default starter routines (cron-scheduled). Appended to both the plain and
+    // template render paths so every new agent gets them.
+    toml.push_str(&render_default_schedules(&cfg));
     write_config(config_path, &toml)?;
 
     // 6b. Chapter P — for the local path, confirm the setup actually works
@@ -1858,6 +1924,27 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         );
     }
     eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PASSPHRASE).");
+    // Be transparent about the unattended routines we just wrote — surprise
+    // autonomous activity erodes trust.
+    if cfg.provider == Provider::Ollama {
+        eprintln!(
+            "\nSet up background routines (in {CONFIG_FILE} under [[schedule]]): a daily \
+             environment review, nightly reflection, a health check, and a weekly digest \
+             run automatically{}. Edit or disable any of them there.",
+            if cfg.enable_web_search {
+                ", plus a daily web trend-scan of your interests"
+            } else {
+                ""
+            }
+        );
+    } else {
+        eprintln!(
+            "\nWrote background routines (in {CONFIG_FILE} under [[schedule]]) — disabled by \
+             default for cloud providers since each run spends tokens. Flip `enabled = true` \
+             on any you want (a daily environment review, nightly reflection, health check, \
+             weekly digest, trend-scan)."
+        );
+    }
     let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
     eprintln!("\nNext steps:");
     eprintln!("  aivyx                      — chat with your agent in the terminal");
@@ -2394,6 +2481,64 @@ mod tests {
         assert!(!toml.contains("[profile]"));
         // No [persona_seed] section unless the operator seeded one.
         assert!(!toml.contains("[persona_seed]"));
+    }
+
+    #[test]
+    fn default_schedules_gating_by_provider_and_web_search() {
+        use toml_edit::DocumentMut;
+
+        let enabled_of = |toml: &str, name: &str| -> bool {
+            let doc: DocumentMut = toml.parse().expect("schedules render valid TOML");
+            let arr = doc["schedule"]
+                .as_array_of_tables()
+                .expect("[[schedule]] array");
+            let t = arr
+                .iter()
+                .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+                .unwrap_or_else(|| panic!("schedule {name} present"));
+            t.get("enabled").and_then(|v| v.as_bool()).expect("enabled bool")
+        };
+        let count = |toml: &str| -> usize {
+            let doc: DocumentMut = toml.parse().unwrap();
+            doc["schedule"].as_array_of_tables().unwrap().len()
+        };
+
+        // Ollama + web search: all five written; core + trend-scan enabled.
+        let cfg =
+            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let toml = render_default_schedules(&cfg);
+        assert_eq!(count(&toml), 5);
+        assert!(enabled_of(&toml, "environment-review"));
+        assert!(enabled_of(&toml, "health-check"));
+        assert!(enabled_of(&toml, "trend-scan"));
+
+        // Ollama, no web search: core enabled, opt-in trend-scan disabled.
+        let cfg =
+            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", false);
+        let toml = render_default_schedules(&cfg);
+        assert!(enabled_of(&toml, "environment-review"));
+        assert!(!enabled_of(&toml, "trend-scan"), "trend-scan needs web search");
+
+        // Cloud: all five written, every one disabled (discoverable, cost-aware).
+        let cfg = init_config_no_profile(
+            Provider::Anthropic,
+            "claude",
+            Some("k"),
+            "s",
+            "/r",
+            true,
+        );
+        let toml = render_default_schedules(&cfg);
+        assert_eq!(count(&toml), 5);
+        for name in [
+            "environment-review",
+            "nightly-reflection",
+            "health-check",
+            "weekly-digest",
+            "trend-scan",
+        ] {
+            assert!(!enabled_of(&toml, name), "cloud routine {name} must be disabled");
+        }
     }
 
     #[test]
