@@ -2812,12 +2812,32 @@ pub struct LoopConfig {
     /// volume, dollars bound cost (local models are free, so they
     /// never advance this cap).
     pub max_run_usd: Option<f64>,
+    /// Chapter Circuit (CI.1) — cross-iteration stall breaker. A
+    /// run stops once this many *consecutive* iterations make no
+    /// progress — neither completing/delegating a story (the
+    /// backlog shrinks) nor recording a fresh progress note. This
+    /// catches a loop spinning on an unrecoverable error (e.g. a
+    /// tool denied on every iteration: the v0.7.4 `loop.next`
+    /// scope bug burned all 25 iterations / 631k tokens re-failing
+    /// identically) instead of letting it exhaust the
+    /// iteration/token caps. Distinct from Bridle's *within-turn*
+    /// repeat breaker — this is *across* fresh-context iterations.
+    /// `0` disables it (caps become the only stop). Default
+    /// [`DEFAULT_LOOP_MAX_IDLE_ITERATIONS`].
+    pub max_idle_iterations: u32,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
 /// autonomous loop that writes code and commits should not run
 /// away; the operator raises it deliberately.
 pub const DEFAULT_LOOP_MAX_ITERATIONS: u32 = 25;
+/// Chapter Circuit (CI.1) — default cross-iteration stall breaker
+/// threshold. Three consecutive no-progress iterations is enough
+/// slack for a transient hiccup or a single conservative "stop
+/// and let the next iteration retry," while still catching a true
+/// stall long before the iteration/token caps. Mirrors Bridle's
+/// repeat-call default of 3.
+pub const DEFAULT_LOOP_MAX_IDLE_ITERATIONS: u32 = 3;
 /// Default story priority for `aivyx loop add` without
 /// `--priority`. A mid-range value so operators can insert both
 /// higher- and lower-priority stories around it.
@@ -4793,6 +4813,9 @@ struct RawLoop {
     // Chapter K — per-run dollar-budget cap.
     #[serde(default)]
     max_run_usd: Option<f64>,
+    // Chapter Circuit (CI.1) — cross-iteration stall breaker.
+    #[serde(default)]
+    max_idle_iterations: Option<u32>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -8578,7 +8601,8 @@ fn build_loop_config(
         || raw.max_run_secs.is_some()
         || raw.progress_inject_count.is_some()
         || raw.max_run_tokens.is_some()
-        || raw.max_run_usd.is_some();
+        || raw.max_run_usd.is_some()
+        || raw.max_idle_iterations.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -8607,6 +8631,9 @@ fn build_loop_config(
         .unwrap_or(DEFAULT_LOOP_PROGRESS_INJECT_COUNT);
     let max_run_tokens = raw.max_run_tokens.filter(|n| *n > 0);
     let max_run_usd = raw.max_run_usd.filter(|n| *n > 0.0);
+    let max_idle_iterations = raw
+        .max_idle_iterations
+        .unwrap_or(DEFAULT_LOOP_MAX_IDLE_ITERATIONS);
 
     if enabled {
         if max_iterations == 0 {
@@ -8641,6 +8668,7 @@ fn build_loop_config(
         progress_inject_count,
         max_run_tokens,
         max_run_usd,
+        max_idle_iterations,
     }))
 }
 

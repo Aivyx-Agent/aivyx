@@ -5,6 +5,26 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Chapter Circuit — agentic-loop hardening (CI.0–CI.1).** A deliberate
+  audit + hardening pass over the autonomous loop, prompted by the v0.7.4
+  scope-floor bug.
+  - **CI.0** — the loop's `team.run` delegation tool is now granted to the
+    default role when the loop is armed (it was registered and offered in the
+    iteration prompt but, like `loop.*` before v0.7.4, never floor-granted, so
+    the "delegate to a team" branch was dead). `git.write` stays operator-opt-in
+    by design. Adds a prompt↔floor drift guard so the two can't silently
+    diverge again.
+  - **CI.1** — a **cross-iteration stall breaker**. The loop driver now stops a
+    run after `[loop] max_idle_iterations` consecutive iterations make no
+    progress — neither completing/delegating a story nor recording a fresh
+    progress note. This catches a loop spinning on an unrecoverable error (the
+    v0.7.4 bug burned all 25 iterations / 631k tokens re-failing identically)
+    instead of letting it exhaust the iteration/token caps. Default 3; set `0`
+    to disable. Distinct from Bridle's within-turn repeat breaker — this is
+    across fresh-context iterations.
+
 ## [0.7.4] — 2026-06-28
 
 ### Fixed

@@ -836,6 +836,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             // spend, so a `[pricing.<model>]` custom rate advances the cap
             // instead of the under-counting built-in default.
             let ld_pricing = pricing.clone();
+            // Chapter Circuit (CI.1) — the cross-iteration stall breaker
+            // threshold (0 = disabled). No `[loop]` config → 0 (no driver
+            // is spawned in that case anyway).
+            let ld_max_idle = loop_config
+                .as_ref()
+                .map(|c| c.max_idle_iterations)
+                .unwrap_or(0);
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -849,6 +856,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_max_run_tokens,
                     ld_max_run_usd,
                     ld_pricing,
+                    ld_max_idle,
                     ld_shutdown,
                 )
                 .await;

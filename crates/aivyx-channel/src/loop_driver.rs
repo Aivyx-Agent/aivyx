@@ -145,6 +145,60 @@ pub async fn read_progress_notes(
     }
 }
 
+/// Chapter Circuit (CI.1) — read the single most-recent progress
+/// note, used as a cheap "did this iteration record a learning?"
+/// probe for the stall breaker. `count = 1`; `None`/error → `None`
+/// (treated as no note, never breaks the run).
+async fn recent_progress_note(
+    memory: Option<&Arc<dyn aivyx_memory::Memory>>,
+) -> Option<String> {
+    read_progress_notes(memory, 1).await.into_iter().next()
+}
+
+/// Chapter Circuit (CI.1) — the cross-iteration stall breaker.
+///
+/// The driver fires a fresh-context iteration and — unlike Bridle's
+/// *within-turn* repeat-call breaker — cannot see the turn's tool
+/// calls. It judges progress by observable state instead: an
+/// iteration "made progress" iff it completed/delegated a story
+/// (the backlog shrank) **or** recorded a fresh progress note. N
+/// consecutive iterations with neither is a stall — the loop is
+/// spinning on something it can't get past (the v0.7.4 bug, where
+/// every iteration was denied at `loop.next`, recorded nothing, and
+/// the backlog never moved, is the canonical case). Stopping then
+/// saves the rest of the iteration/token budget the run would
+/// otherwise burn re-failing identically.
+///
+/// `max_idle == 0` disables the breaker (the caps become the only
+/// stop). Pure + tiny so the counting logic is unit-tested without
+/// a driver harness.
+#[derive(Debug)]
+struct StallTracker {
+    max_idle: u32,
+    consecutive_idle: u32,
+}
+
+impl StallTracker {
+    fn new(max_idle: u32) -> Self {
+        Self { max_idle, consecutive_idle: 0 }
+    }
+
+    /// Record one iteration's progress. Returns `true` when the run
+    /// should stop (the consecutive-idle count reached `max_idle`).
+    fn record(&mut self, made_progress: bool) -> bool {
+        if self.max_idle == 0 {
+            return false;
+        }
+        if made_progress {
+            self.consecutive_idle = 0;
+            false
+        } else {
+            self.consecutive_idle += 1;
+            self.consecutive_idle >= self.max_idle
+        }
+    }
+}
+
 /// Phase 176 — sum `input_tokens + output_tokens` over every
 /// `TurnEnded` event in a slice of audit entries. Pure so the
 /// budget accounting is unit-testable without a daemon. The
@@ -483,6 +537,7 @@ pub async fn run_loop_driver(
     max_run_tokens: Option<u64>,
     max_run_usd: Option<f64>,
     pricing: aivyx_cost::Pricing,
+    max_idle_iterations: u32,
     shutdown: CancellationToken,
 ) {
     // Chapter K — the dollar cap prices LlmCost events with the rate table the
@@ -503,12 +558,18 @@ pub async fn run_loop_driver(
         // A run is active — drive iterations.
         eprintln!(
             "aivyx loop: run started (max_iterations={}, gate={}, \
-             max_run_secs={:?}, max_run_tokens={:?}, max_run_usd={:?})",
+             max_run_secs={:?}, max_run_tokens={:?}, max_run_usd={:?}, \
+             stall_breaker={})",
             shared.max_iterations(),
             if gate.is_some() { "on" } else { "off" },
             max_run_secs,
             max_run_tokens,
             max_run_usd,
+            if max_idle_iterations == 0 {
+                "off".to_string()
+            } else {
+                format!("{max_idle_iterations} idle")
+            },
         );
 
         // Phase 176 — snapshot the audit chain length so the
@@ -529,6 +590,11 @@ pub async fn run_loop_driver(
                 continue;
             }
         }
+
+        // Chapter Circuit (CI.1) — the per-run stall breaker. Reset
+        // each run so a fresh `loop start` always gets a full budget
+        // of idle slack.
+        let mut stall = StallTracker::new(max_idle_iterations);
 
         loop {
             if shutdown.is_cancelled() {
@@ -593,6 +659,11 @@ pub async fn run_loop_driver(
                 if remaining == 1 { "y" } else { "ies" },
                 notes.len(),
             );
+            // Chapter Circuit (CI.1) — snapshot the progress signal
+            // BEFORE the iteration so we can tell afterwards whether
+            // it advanced: the backlog count and the latest note.
+            let note_before = recent_progress_note(memory.as_ref()).await;
+
             // Fire a fresh-context loop turn. `wrap_mission =
             // false`: the loop's own backlog is the work tracker,
             // not a per-iteration mission. No notify target.
@@ -621,6 +692,29 @@ pub async fn run_loop_driver(
                     eprintln!("aivyx loop: run ended — {reason}");
                     break;
                 }
+            }
+
+            // Chapter Circuit (CI.1) — stall breaker. The iteration
+            // "made progress" iff a story completed/delegated (the
+            // backlog shrank) or a fresh progress note was recorded.
+            // N consecutive idle iterations stops the run before it
+            // burns the rest of its iteration/token budget spinning
+            // on something it can't get past.
+            let remaining_after = backlog.remaining_count();
+            let note_after = recent_progress_note(memory.as_ref()).await;
+            let made_progress = remaining_after < remaining
+                || (note_after.is_some() && note_after != note_before);
+            if stall.record(made_progress) {
+                let reason = format!(
+                    "no progress for {max_idle_iterations} consecutive \
+                     iteration(s) (stall breaker)"
+                );
+                shared.finish_run(&reason);
+                eprintln!(
+                    "aivyx loop: run ended — {reason} (after {} iteration(s))",
+                    shared.iteration(),
+                );
+                break;
             }
         }
     }
@@ -1026,6 +1120,34 @@ mod tests {
         // The quality-gate + commit steps reference `shell` and `git`.
         assert!(p.contains("`shell`"), "lost the shell quality-gate step");
         assert!(p.contains("`git`"), "lost the git commit step");
+    }
+
+    #[test]
+    fn stall_tracker_disabled_never_stops() {
+        let mut s = StallTracker::new(0);
+        for _ in 0..100 {
+            assert!(!s.record(false), "max_idle=0 must never stop the run");
+        }
+    }
+
+    #[test]
+    fn stall_tracker_stops_after_consecutive_idle_threshold() {
+        let mut s = StallTracker::new(3);
+        assert!(!s.record(false), "1 idle < 3");
+        assert!(!s.record(false), "2 idle < 3");
+        assert!(s.record(false), "3 consecutive idle reaches the threshold");
+    }
+
+    #[test]
+    fn stall_tracker_progress_resets_the_counter() {
+        let mut s = StallTracker::new(3);
+        assert!(!s.record(false)); // idle 1
+        assert!(!s.record(false)); // idle 2
+        assert!(!s.record(true), "progress clears the streak");
+        // Back to zero — it takes a fresh 3 to trip.
+        assert!(!s.record(false)); // idle 1
+        assert!(!s.record(false)); // idle 2
+        assert!(s.record(false), "idle 3 after the reset trips");
     }
 
     #[tokio::test]

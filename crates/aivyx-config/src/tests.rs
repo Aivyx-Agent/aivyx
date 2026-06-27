@@ -8804,6 +8804,47 @@ fn loop_progress_inject_count_parse_and_default() {
     drop(env);
 }
 
+/// Chapter Circuit (CI.1) — max_idle_iterations (the stall breaker)
+/// parses, defaults to the constant, and `0` disables it. Also
+/// arms a bare `[loop]` section on its own (so an operator can set
+/// only the stall threshold).
+#[test]
+fn loop_max_idle_iterations_parse_and_default() {
+    let env = EnvScope::new();
+    // Explicit value wins.
+    let cfg = load_with_toml(
+        "\n[loop]\nenabled = true\nmax_idle_iterations = 5\n",
+        "loop-idle",
+    );
+    assert_eq!(
+        cfg.loop_config.expect("present").max_idle_iterations,
+        5
+    );
+    // Absent → default.
+    let cfg2 =
+        load_with_toml("\n[loop]\nenabled = true\n", "loop-idle-def");
+    assert_eq!(
+        cfg2.loop_config.expect("present").max_idle_iterations,
+        crate::DEFAULT_LOOP_MAX_IDLE_ITERATIONS
+    );
+    // 0 disables the breaker — valid on an armed section.
+    let cfg3 = load_with_toml(
+        "\n[loop]\nenabled = true\nmax_idle_iterations = 0\n",
+        "loop-idle-off",
+    );
+    assert_eq!(
+        cfg3.loop_config.expect("present").max_idle_iterations,
+        0
+    );
+    // The key on its own arms the section (any_set).
+    let cfg4 =
+        load_with_toml("\n[loop]\nmax_idle_iterations = 2\n", "loop-idle-arms");
+    let lc = cfg4.loop_config.expect("section present via max_idle_iterations");
+    assert_eq!(lc.max_idle_iterations, 2);
+    assert!(!lc.enabled, "enabled still defaults to false");
+    drop(env);
+}
+
 /// Phase 176 — max_run_tokens parses; absent → None; `0`
 /// collapses to None (disabled), like max_run_secs.
 #[test]
