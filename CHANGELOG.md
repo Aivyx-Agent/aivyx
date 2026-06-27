@@ -5,6 +5,40 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-06-27
+
+### Changed
+
+- **The default system prompt is now an operating charter (Chapter Keel).** The
+  out-of-box base layer was a single line ("a terse and thoughtful assistant
+  running in a local terminal"). It is now a compact (~270-token) operating
+  charter that states, in prose the model actually reads, what the dynamic
+  Profile/Persona/Tools/Skills layers don't: how the agent works (terse and
+  honest, tool-first, uses its memory and workspace, doesn't loop), its safety
+  posture (confirm-first on irreversible/outbound actions, never widens its own
+  authority/reach/autonomy, everything is recorded — mirroring
+  `docs/SECURITY_POSTURE.md`, previously stated only in code), and turn
+  discipline. It remains a compiled-in default, fully overridable via
+  `[agent] system_prompt`, a per-`[[role]]` `system_prompt`, or
+  `AIVYX_SYSTEM_PROMPT` — existing installs inherit it live and pick up future
+  refinements on upgrade. No new config is planted into `aivyx.toml`.
+- **The Studio's Command Center reflects a live, working agent.** The home
+  dashboard now surfaces an agent-vitals rail (model · provider · context ·
+  autonomy · access, with a pulsing "live" dot when the daemon is online) and a
+  Routines panel showing each scheduled background routine's cadence, enabled
+  state, and last/next fire — the clearest "the agent is working on its own"
+  signal. Backed by a new read-only `GetSchedules` IPC; no new capability.
+
+### Fixed
+
+- **Eliminated a parallel-test flake in `aivyx-config`.** Two config-load tests
+  read the ambient environment without holding the test suite's env-guard,
+  occasionally racing parallel env-mutating tests (intermittent failures under
+  default test threads; green at `--test-threads=1`). Both now hold the guard,
+  and the invariant is enforced via a thread-local check so any future unguarded
+  config-load fails deterministically with an actionable message instead of
+  flaking.
+
 ## [0.7.1] — 2026-06-27
 
 ### Security
