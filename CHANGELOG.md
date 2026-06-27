@@ -51,6 +51,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
     (`no progress for N of M iteration(s) before the stall breaker stops the
     run`) — so a stalling run is legible without reading `journalctl`. The
     stall threshold + live idle count ride the `LoopStatus` IPC / run-state.
+  - **CI.6** — live-verified the chapter end-to-end on the dogfood rig: research
+    stories complete through the task-agnostic path with no git noise (CI.2); an
+    unrecoverable story trips the stall breaker after 3 idle iterations instead
+    of burning the 25-iteration cap, and stays pending rather than being
+    false-completed (CI.1); `loop status` shows the stall-breaker config + stop
+    reason (CI.5). (The `team.run` grant is present and never scope-denied;
+    delegation dispatch wasn't observed because the small local model
+    consistently self-implements even when told to delegate.)
 
 ## [0.7.4] — 2026-06-28
 
