@@ -1001,8 +1001,13 @@ mod git_tests {
     // ---- Integration: a real tmpdir git repo ----
 
     /// `git init` a fresh repo under a unique tmp dir with a committable
-    /// identity, returning its path. Skips (returns None) if `git` isn't
-    /// on PATH so the suite stays green on a git-less CI image.
+    /// identity, returning its path. Returns `None` (the test then skips) if
+    /// `git` isn't on PATH **or** if any setup step can't succeed — e.g. a
+    /// sandboxed/locked-down CI runner where `git init` can't write its config.
+    /// A flaky environment must skip the integration coverage, never fail the
+    /// suite (and so never block a release): the v0.7.1 release runner hit
+    /// exactly this when an `assert!(git init …)` tripped on an env quirk
+    /// unrelated to the code under test.
     fn init_temp_repo() -> Option<PathBuf> {
         use std::process::Command;
         if Command::new("git").arg("--version").output().is_err() {
@@ -1016,15 +1021,25 @@ mod git_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let run = |args: &[&str]| {
-            Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap()
+        std::fs::create_dir_all(&dir).ok()?;
+        // Skip (not fail) if any git invocation can't be spawned or returns
+        // non-zero — mirrors the git-absent skip above.
+        let run = |args: &[&str]| -> Option<()> {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .ok()?
+                .status
+                .success();
+            ok.then_some(())
         };
-        assert!(run(&["init"]).status.success());
-        assert!(run(&["config", "user.email", "test@aivyx.local"]).status.success());
-        assert!(run(&["config", "user.name", "Aivyx Test"]).status.success());
+        run(&["init"])?;
+        run(&["config", "user.email", "test@aivyx.local"])?;
+        run(&["config", "user.name", "Aivyx Test"])?;
         // canonicalize so it matches the allow-set form.
-        Some(std::fs::canonicalize(&dir).unwrap())
+        std::fs::canonicalize(&dir).ok()
     }
 
     fn ctx_less_outcome_detail(outcome: &ToolOutcome) -> String {
