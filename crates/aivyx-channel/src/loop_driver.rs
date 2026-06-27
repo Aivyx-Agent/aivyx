@@ -53,36 +53,47 @@ use crate::trigger::{TriggerDispatch, TriggerSource};
 pub const LOOP_SYSTEM_PROMPT: &str = "\
 You are one iteration of an autonomous task loop. A fresh context \
 runs this same instruction each iteration; durable state lives in \
-git, the backlog, and your memory — not in this conversation.
+the backlog, your memory, your workspace, and — for code work — \
+the project's git history, not in this conversation. Stories may \
+be code OR everyday work (research, writing, organizing); fit your \
+approach to the story in front of you.
 
 Do exactly this, then stop:
 1. Call `loop.next` to get the highest-priority pending story. If \
    it reports the backlog is empty, stop immediately and report \
    that the backlog is complete — do not invent work.
-2. Implement ONLY that one story. Keep the change small and \
-   focused; do not start the next story. If the story is genuinely \
-   large or spans several specialists (research + code + review, \
-   say), you MAY instead delegate it to a durable agent team with \
-   `team.run` (pass the story as the goal). The team mission runs \
-   in the background and is tracked separately; if you delegate, \
-   skip the gate/commit steps below and go straight to step 5 \
-   (mark the story complete — it is now the team's). Delegate \
-   sparingly: most stories you should just implement yourself.
-3. Run the project's quality gates with `shell` (build + tests / \
-   typecheck). If they do not pass, fix the issue or stop — do \
-   NOT mark the story done on red.
-4. Once the gates pass, commit the change with `git` (a focused \
-   commit message naming the story).
-5. Only after a green commit, call `loop.complete` with the \
-   story's id.
+2. Do ONLY that one story. Keep the work small and focused; do \
+   not start the next story. If the story is genuinely large or \
+   spans several specialists (research + code + review, say), you \
+   MAY instead delegate it to a durable agent team with `team.run` \
+   (pass the story as the goal). The team mission runs in the \
+   background and is tracked separately; if you delegate, skip the \
+   verification steps below and go straight to step 5 (mark the \
+   story complete — it is now the team's). Delegate sparingly: \
+   most stories you should just do yourself.
+3. Verify your work before claiming it is done — choose the check \
+   that fits the task. For a code change in a project, run its \
+   quality gates with `shell` (build + tests / typecheck) and do \
+   NOT proceed on red. For research or writing, re-read what you \
+   produced and confirm it actually answers the story. For a file \
+   or note, read it back. If the check fails, fix it or stop; \
+   never mark a story done on a failed check.
+4. Persist the result so it outlives this context. A code change \
+   belongs in a commit (`git`, a focused message naming the story \
+   — once the gates are green, and only if committing is available \
+   to you). Research and notes belong in your memory; a requested \
+   document or file belongs at the path the story asked for. \
+   Drafting, not done, is not progress.
+5. Only after the work is verified and persisted, call \
+   `loop.complete` with the story's id.
 6. Record what the next iteration should know by calling \
    `loop.note` with one short line (a gotcha, a convention, a \
-   path). These notes are surfaced back to you under \
+   path, a decision). These notes are surfaced back to you under \
    \"Progress so far\" at the top of every future iteration, so \
    future-you can avoid re-learning what you just learned.
 
 Be conservative: it is always correct to stop without completing \
-a story if you are unsure or the gates are red. The loop will \
+a story if you are unsure or a check failed. The loop will \
 re-run and the next fresh context can try again.";
 
 /// Phase 175 — render the progress-log block prepended to the
@@ -1042,6 +1053,39 @@ mod tests {
         assert!(LOOP_SYSTEM_PROMPT.contains("commit"));
         assert!(LOOP_SYSTEM_PROMPT.contains("empty"));
         assert!(LOOP_SYSTEM_PROMPT.contains("Progress so far"));
+    }
+
+    /// Chapter Circuit (CI.2) — the iteration prompt must not assume a
+    /// software-dev backlog. The build/tests/commit flow it once hardcoded
+    /// stranded everyday-PA stories (research, writing): the model had to
+    /// improvise past "run the quality gates" and "commit with git" for work
+    /// that has no project and no granted `git.write`. The verification (step 3)
+    /// and persistence (step 4) steps must offer a non-code path, and the
+    /// commit must be conditional on committing being available.
+    #[test]
+    fn iteration_prompt_is_task_agnostic() {
+        let p = LOOP_SYSTEM_PROMPT;
+        // Both kinds of work are named.
+        assert!(p.contains("research"), "lost the non-code work path");
+        assert!(
+            p.contains("code change"),
+            "lost the code work path framing",
+        );
+        // Verification offers a non-gate check, and persistence offers a
+        // non-commit home (memory / a requested file).
+        assert!(
+            p.contains("re-read what you produced"),
+            "verification step no longer covers non-code work",
+        );
+        assert!(
+            p.contains("belong in your memory"),
+            "persistence step no longer covers non-code work",
+        );
+        // The commit step is conditional, not mandatory.
+        assert!(
+            p.contains("only if committing is available"),
+            "the git commit step must be conditional, not unconditional",
+        );
     }
 
     // ---- Phase 175 — progress-log rendering -------------------

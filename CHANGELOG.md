@@ -7,7 +7,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
-- **Chapter Circuit — agentic-loop hardening (CI.0–CI.1).** A deliberate
+- **Chapter Circuit — agentic-loop hardening (CI.0–CI.2).** A deliberate
   audit + hardening pass over the autonomous loop, prompted by the v0.7.4
   scope-floor bug.
   - **CI.0** — the loop's `team.run` delegation tool is now granted to the
@@ -24,6 +24,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
     instead of letting it exhaust the iteration/token caps. Default 3; set `0`
     to disable. Distinct from Bridle's within-turn repeat breaker — this is
     across fresh-context iterations.
+  - **CI.2** — the iteration prompt is now **task-agnostic**. It previously
+    hardcoded a software-dev flow (run the build/tests, commit with `git`),
+    which stranded everyday-PA stories — the model had to improvise past
+    instructions for work that has no project and no granted `git.write`. The
+    verification step now offers a fitting check per task type (gates for code,
+    re-read for research/writing, read-back for a file), and the persistence
+    step routes the result to its proper home (a commit for code *only if
+    committing is available*, memory for notes, the requested path for a file).
 
 ## [0.7.4] — 2026-06-28
 
