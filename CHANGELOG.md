@@ -5,6 +5,43 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-06-27
+
+### Added
+
+- **Default starter skills (Chapter Outfit).** A brand-new agent now ships with a
+  curated starter repertoire — `summarize-document`, `research-and-summarize`,
+  `draft-reply`, `daily-briefing`, `capture-note` — so it can do real work on
+  turn one instead of arriving with none. Each is a lightweight
+  `{name, trigger, procedure}` recipe whose steps compose the agent's own tools
+  and pillars (the structured-data readers, web search/extract, memory,
+  workspace, persona). Compiled-in and default-on, planted onto a fresh agent's
+  persona chain at first boot; an already-running agent is never retro-injected.
+  Opt out with `[skills] starter = false`.
+- **Operator-initiated skill teaching (Chapter Tutor).** New
+  `aivyx skills teach | update | forget` commands let the operator author a skill
+  directly onto a **grown** agent's persona chain — the channel that was missing
+  (genesis seeding is empty-chain-only, and the agent's own `skills.teach` tool is
+  gated behind a scope an autonomous agent shouldn't hold). Operator authoring
+  routes over the local daemon socket (same authority as `aivyx persona revert`)
+  and is cleanly separated from agent self-teaching, so it needs no agent scope.
+  Signed, audited on the persona chain, and reversible via `aivyx persona revert`.
+
+### Changed
+
+- **Semantic memory works out of the box (Chapter Engram).** `aivyx init` now
+  configures an embedding provider — pulling `nomic-embed-text` on the local
+  Ollama path, or using OpenAI embeddings on the cloud path — and turns on the
+  full memory profile (`[memory] profile = "smart"`). Previously the whole
+  graph-augmented memory stack was dormant on a fresh install: the daemon only
+  builds the auto-recall pipeline when `[embedding]` is configured, and `init`
+  never wrote one, so a new agent did no semantic recall at all regardless of the
+  memory profile. (Existing installs are unchanged on upgrade — the new defaults
+  are written only into new configs, so the token-spending extraction sweeps are
+  never a surprise.) `aivyx doctor` gained a Memory section reporting the
+  embedding provider, the active profile, and — on the local path — whether the
+  embedding model is actually downloaded.
+
 ## [0.7.2] — 2026-06-27
 
 ### Changed
