@@ -469,6 +469,63 @@ fn defaults_win_when_no_source_supplies_value() {
     drop(env);
 }
 
+/// Chapter Keel — the default system prompt is the operating *charter*,
+/// not the old one-line stub. This is a drift guard: it asserts the four
+/// invariant pillars (identity, work habits, safety posture, turn
+/// discipline) survive future edits to the constant, by keyword presence
+/// rather than exact text so the prose can still be reworded freely. It
+/// also pins the compactness ceiling so the charter cannot quietly grow
+/// large enough to starve a small local model's context.
+#[test]
+fn default_charter_carries_its_invariant_pillars() {
+    let charter = DEFAULT_SYSTEM_PROMPT.to_lowercase();
+    let has = |needle: &str| {
+        assert!(
+            charter.contains(needle),
+            "charter missing invariant keyword {needle:?}"
+        );
+    };
+
+    // Identity + local framing.
+    has("aivyx");
+    has("locally");
+
+    // Work habits: terse/honest, tool-first, memory, respond-don't-loop.
+    has("terse");
+    has("tools");
+    has("memory");
+    has("workspace");
+    assert!(
+        charter.contains("loop") || charter.contains("repeat a tool call"),
+        "charter should discourage looping / repeated tool calls"
+    );
+
+    // Safety posture, stated in prose (mirrors docs/SECURITY_POSTURE.md):
+    // confirm-first on irreversible/outbound, no self-escalation, audited.
+    has("confirm");
+    assert!(
+        charter.contains("irreversible") || charter.contains("destructive"),
+        "charter should name the irreversible/destructive boundary"
+    );
+    assert!(
+        charter.contains("widen") && charter.contains("authority"),
+        "charter must state the agent cannot widen its own authority"
+    );
+    assert!(
+        charter.contains("recorded") || charter.contains("tamper-evident"),
+        "charter should state actions are recorded"
+    );
+
+    // Compactness ceiling: keep the always-on base layer small. ~270
+    // tokens ≈ well under 1800 chars; the bound is generous so wording
+    // tweaks don't trip it, but a doubling in size would.
+    assert!(
+        DEFAULT_SYSTEM_PROMPT.len() < 1800,
+        "charter grew to {} bytes — keep the always-on base layer compact",
+        DEFAULT_SYSTEM_PROMPT.len()
+    );
+}
+
 #[test]
 fn xdg_data_home_wins_over_home_for_storage_default() {
     let env = EnvScope::new();

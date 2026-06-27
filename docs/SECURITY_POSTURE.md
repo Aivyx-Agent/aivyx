@@ -180,6 +180,15 @@ own queryable event (`HeadlessRefusal`). There is no off-the-record path:
 "removes the human, never removes the audit" is a structural invariant. A
 later forensic walk sees exactly what was done, attempted, and declined.
 
+> **The agent is also *told* this.** Enforcement above is structural — it
+> holds regardless of what the model believes. But the default operating
+> charter (Chapter Keel, the out-of-box `[agent] system_prompt`) states the
+> posture in prose the model actually reads: confirm-first on
+> irreversible/outbound actions, no widening its own authority/reach/autonomy,
+> and "everything you do is recorded." A cooperative model is less likely to
+> *attempt* what these layers would refuse — defense in depth, not a
+> replacement for it.
+
 ---
 
 ## 7. Threat model — where "open-ended" genuinely bites

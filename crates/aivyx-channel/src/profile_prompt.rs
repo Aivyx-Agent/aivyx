@@ -664,7 +664,9 @@ pub fn apply_ollama_prompt_strategy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aivyx_config::{FieldSource, Sourced, DEFAULT_ASSISTANT_NAME};
+    use aivyx_config::{
+        FieldSource, Sourced, DEFAULT_ASSISTANT_NAME, DEFAULT_SYSTEM_PROMPT,
+    };
 
     fn default_profile() -> Profile {
         Profile::default()
@@ -696,6 +698,38 @@ mod tests {
         let profile = default_profile();
         let assembled = assemble_session_prompt(&profile, None, "default", "");
         assert_eq!(assembled, "");
+    }
+
+    /// Chapter Keel — the operating charter is the base layer, so it
+    /// must reach the model intact through both `assemble_session_prompt`
+    /// paths: verbatim for a fresh agent (no Profile/Persona/Skills), and
+    /// as the trailing `## Active role` block once any layer is active.
+    /// The earlier tests prove this with arbitrary role strings; this one
+    /// pins it for the *real* charter constant end to end.
+    #[test]
+    fn default_charter_reaches_the_model_through_both_paths() {
+        // Fresh agent: charter flows verbatim, no wrapper.
+        let fresh = assemble_session_prompt(
+            &default_profile(),
+            None,
+            "default",
+            DEFAULT_SYSTEM_PROMPT,
+        );
+        assert_eq!(fresh, DEFAULT_SYSTEM_PROMPT);
+
+        // Operator-declared Profile active: charter is the last block,
+        // verbatim, under the active-role label.
+        let composed = assemble_session_prompt(
+            &operator_declared_profile(),
+            None,
+            "default",
+            DEFAULT_SYSTEM_PROMPT,
+        );
+        assert!(composed.starts_with("## About this assistant\n\n"));
+        assert!(composed.contains("\n\n## Active role: default\n\n"));
+        assert!(composed.ends_with(DEFAULT_SYSTEM_PROMPT));
+        // The charter's safety prose survives the composition unmangled.
+        assert!(composed.contains("cannot and will not widen"));
     }
 
     #[test]
