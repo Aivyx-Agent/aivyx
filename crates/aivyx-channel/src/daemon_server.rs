@@ -729,6 +729,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // is set authoritatively from config at startup.
     trigger_dispatch = trigger_dispatch.with_target_policies(target_policies);
 
+    // Keep a clone of the schedule store for the read-only `GetSchedules`
+    // query (the Command Center routines panel); the original is moved into
+    // the scheduler task below.
+    let query_schedule_store = schedule_store.clone();
     // Spawn the scheduler loop if a schedule store is provided.
     let _scheduler_handle = schedule_store.map(|store| {
         let sched_dispatch = trigger_dispatch.clone();
@@ -1397,6 +1401,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     };
 
     let mission_store = mission_store.map(Arc::new);
+    let query_schedule_store = query_schedule_store.map(Arc::new);
     let pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>> =
         Arc::new(std::sync::Mutex::new(recovery_notice));
     let mut handles = Vec::new();
@@ -1423,6 +1428,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             channel_factory: Arc::clone(&channel_factory),
             shutdown: shutdown.clone(),
             mission_store: mission_store.clone(),
+            schedule_store: query_schedule_store.clone(),
             pending_recovery: Arc::clone(&pending_recovery),
             daemon_state: Arc::clone(&daemon_state),
             audit_log: audit_log.clone(),
@@ -1494,6 +1500,8 @@ struct ConnectionContext {
     channel_factory: ChannelFactory,
     shutdown: CancellationToken,
     mission_store: Option<Arc<DomainHandle>>,
+    /// Read-only clone of the schedule store for the `GetSchedules` query.
+    schedule_store: Option<Arc<DomainHandle>>,
     pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>>,
     daemon_state: Arc<std::sync::Mutex<DaemonState>>,
     audit_log: Option<Arc<PersistentAuditLog>>,
@@ -1659,6 +1667,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         channel_factory,
         shutdown,
         mission_store,
+        schedule_store,
         pending_recovery,
         daemon_state,
         audit_log,
@@ -2412,6 +2421,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 payload,
                                 &daemon_state,
                                 mission_store.as_deref(),
+                                schedule_store.as_deref(),
                                 audit_log.as_deref(),
                                 &profile,
                                 persona_log.as_deref(),
@@ -2930,6 +2940,7 @@ async fn run_single_connection_daemon(
         channel_factory,
         shutdown,
         mission_store: None,
+        schedule_store: None,
         pending_recovery: no_recovery,
         daemon_state: empty_state,
         audit_log: None,
@@ -3221,6 +3232,7 @@ async fn handle_query(
     payload: QueryPayload,
     daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
     mission_store: Option<&DomainHandle>,
+    schedule_store: Option<&DomainHandle>,
     audit_log: Option<&PersistentAuditLog>,
     profile: &aivyx_config::Profile,
     persona_log: Option<&crate::persona::PersistentPersonaLog>,
@@ -3713,6 +3725,36 @@ async fn handle_query(
                 .map(|s| (s.captured_unix, s.servers))
                 .unwrap_or((0, Vec::new()));
             QueryResponsePayload::GetMcpStatus { captured_unix, servers }
+        }
+        QueryPayload::GetSchedules => {
+            // Command Center — the agent's scheduled background routines.
+            // Read-only: list the schedule store, map each record to a wasm-clean
+            // view with its next fire computed. Absent store / read error → empty
+            // list (the dashboard shows "no routines"), never an error.
+            let schedules = match schedule_store {
+                Some(store) => match crate::schedule::list_schedules(store).await {
+                    Ok(records) => records
+                        .iter()
+                        .map(|r| aivyx_ipc::protocol::ScheduleView {
+                            name: r
+                                .schedule_id
+                                .strip_prefix("cfg-")
+                                .unwrap_or(&r.schedule_id)
+                                .to_string(),
+                            cron: r.cron_expr.clone(),
+                            role: r.role_name.clone(),
+                            enabled: r.enabled,
+                            last_fired_unix_ms: r.last_fired_at,
+                            next_fire_unix_ms: r
+                                .next_fire_time()
+                                .map(|dt| dt.timestamp_millis() as u64),
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
+                None => Vec::new(),
+            };
+            QueryResponsePayload::Schedules { schedules }
         }
         QueryPayload::ListDir { root, path } => {
             // Chapter Z — read-only directory listing, scoped + escape-guarded.

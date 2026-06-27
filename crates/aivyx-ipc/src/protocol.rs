@@ -261,6 +261,10 @@ pub enum QueryPayload {
     /// snapshot. Read-only. Responds with
     /// [`QueryResponsePayload::GetMcpStatus`].
     GetMcpStatus,
+    /// Command Center — list the agent's scheduled background routines for the
+    /// dashboard (name, cadence, enabled, last/next fire). Read-only. Responds
+    /// with [`QueryResponsePayload::Schedules`].
+    GetSchedules,
     /// Phase 78 — read-only learning-observability query.
     /// `window_secs = None` → the handler's default lookback.
     /// `#[serde(default)]` so older clients/frames decode.
@@ -619,6 +623,28 @@ impl McpServerStatusView {
     }
 }
 
+/// Command Center — one scheduled background routine for the dashboard.
+/// Wasm-clean (the Studio renders it directly). The agent's `[[schedule]]`
+/// entries (e.g. the default starter routines) become these views: the cron
+/// cadence plus when each last fired and next fires, so the dashboard shows a
+/// live agent working on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleView {
+    /// Display name (the schedule id with any `cfg-` config prefix stripped).
+    pub name: String,
+    /// The raw 6-field (seconds-first) cron expression, e.g. `0 0 7 * * *`.
+    pub cron: String,
+    /// Role the routine runs as.
+    pub role: String,
+    pub enabled: bool,
+    /// Last actual fire (unix ms); `None` if it has never fired.
+    #[serde(default)]
+    pub last_fired_unix_ms: Option<u64>,
+    /// Next scheduled fire (unix ms); `None` if the cron yields no future time.
+    #[serde(default)]
+    pub next_fire_unix_ms: Option<u64>,
+}
+
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
 /// [`DaemonMessage::QueryResponse`] with the same correlation `id`
 /// the query was sent with.
@@ -764,6 +790,11 @@ pub enum QueryResponsePayload {
     GetMcpStatus {
         captured_unix: u64,
         servers: Vec<McpServerStatusView>,
+    },
+    /// Command Center — response to [`QueryPayload::GetSchedules`]: the agent's
+    /// scheduled background routines for the dashboard.
+    Schedules {
+        schedules: Vec<ScheduleView>,
     },
     /// Phase 74 — response to [`QueryPayload::GetMemoryTopicEntries`].
     /// Newest-first paginated entries for one topic.

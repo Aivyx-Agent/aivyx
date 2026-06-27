@@ -21,8 +21,8 @@ use aivyx_ipc::protocol::{
     McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, SeedSkillWire, SettingsSnapshot, SkillView, StreamEventPayload,
-    VoiceSettingsSnapshot,
+    QueryResponsePayload, ScheduleView, SeedSkillWire, SettingsSnapshot, SkillView,
+    StreamEventPayload, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
@@ -332,6 +332,12 @@ struct Dashboard {
     audit_total: u64,
     chain_ok: Option<bool>,
     assistant_name: Option<String>,
+    /// The running agent's vitals (model / provider / context / autonomy /
+    /// access) from `GetSettings` — drives the agent-vitals rail.
+    settings: Option<SettingsSnapshot>,
+    /// The agent's scheduled background routines (`GetSchedules`) — drives the
+    /// Routines panel + stat card, the "live agent working on its own" signal.
+    schedules: Vec<ScheduleView>,
     /// `false` until the first dashboard snapshot (the audit-entries response)
     /// arrives. Distinguishes "not loaded yet" from "loaded and genuinely
     /// empty" so the Command Center shows a skeleton instead of flashing zeros.
@@ -560,6 +566,16 @@ fn App() -> Element {
         ws.send(FrontendMessage::Query {
             id: "mc-verify".to_string(),
             payload: QueryPayload::VerifyAuditChain,
+        });
+        // Agent vitals (model / provider / context / autonomy / access) +
+        // the scheduled background routines — the "live, working agent" panels.
+        ws.send(FrontendMessage::Query {
+            id: "mc-settings".to_string(),
+            payload: QueryPayload::GetSettings,
+        });
+        ws.send(FrontendMessage::Query {
+            id: "mc-schedules".to_string(),
+            payload: QueryPayload::GetSchedules,
         });
     });
 
@@ -927,12 +943,16 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
         })
         .count();
     let chain = dashboard.chain_ok;
+    let routines = dashboard.schedules.clone();
+    let routines_total = routines.len();
+    let routines_on = routines.iter().filter(|r| r.enabled).count();
     rsx! {
-        div { class: "stat-row",
+        div { class: "stat-row stat-row-5",
             StatCard { icon: ICON_MISSIONS, label: "Missions", value: "{missions.len()}", tone: None }
-            StatCard { icon: ICON_COMMAND, label: "Audit Events", value: "{dashboard.audit_total}", tone: None }
             StatCard { icon: ICON_AGENTS, label: "Active", value: "{active}", tone: None }
-            StatCard { icon: ICON_MEMORY, label: "Chain", value: chain_label(chain).to_string(), tone: chain_tone(chain) }
+            StatCard { icon: ICON_COMMAND, label: "Routines", value: "{routines_on}/{routines_total}", tone: None }
+            StatCard { icon: ICON_MEMORY, label: "Audit Events", value: "{dashboard.audit_total}", tone: None }
+            StatCard { icon: ICON_SETTINGS, label: "Chain", value: chain_label(chain).to_string(), tone: chain_tone(chain) }
         }
         div { class: "dash-grid",
             div { class: "dash-main",
@@ -953,6 +973,21 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
                 }
                 section { class: "panel",
                     div { class: "panel-head",
+                        h3 { "Routines" }
+                        span { class: "label-tech", "{routines_on} of {routines_total} active" }
+                    }
+                    if routines.is_empty() {
+                        div { class: "glass-card empty", p { class: "label-tech", "No background routines configured." } }
+                    } else {
+                        div { class: "feed",
+                            for r in routines.iter() {
+                                RoutineRow { routine: r.clone() }
+                            }
+                        }
+                    }
+                }
+                section { class: "panel",
+                    div { class: "panel-head",
                         h3 { "Audit Trail" }
                         span { class: "label-tech", "newest {AUDIT_FEED_N}" }
                     }
@@ -960,7 +995,7 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
                 }
             }
             aside { class: "dash-rail",
-                AgentStatus { name: dashboard.assistant_name.clone(), connected, chain_ok: chain }
+                AgentStatus { name: dashboard.assistant_name.clone(), connected, chain_ok: chain, settings: dashboard.settings.clone() }
             }
         }
     }
@@ -1076,6 +1111,35 @@ fn DashMissionRow(mission: TeamMissionView) -> Element {
 }
 
 #[component]
+fn RoutineRow(routine: ScheduleView) -> Element {
+    let last = routine
+        .last_fired_unix_ms
+        .map(rel_time)
+        .unwrap_or_else(|| "never".to_string());
+    let next = if routine.enabled {
+        routine
+            .next_fire_unix_ms
+            .map(until_time)
+            .unwrap_or_else(|| "—".to_string())
+    } else {
+        "paused".to_string()
+    };
+    rsx! {
+        div { class: "glass-card routine-row",
+            div { class: "row1",
+                span { class: if routine.enabled { "dot live" } else { "dot off" } }
+                span { class: "name", "{routine.name}" }
+                span { class: "label-tech cron", "{routine.cron}" }
+            }
+            div { class: "row2 label-tech",
+                span { "next " span { class: "v", "{next}" } }
+                span { "last " span { class: "v", "{last}" } }
+            }
+        }
+    }
+}
+
+#[component]
 fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
     rsx! {
         div { class: "audit-feed",
@@ -1096,33 +1160,79 @@ fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
 }
 
 #[component]
-fn AgentStatus(name: Option<String>, connected: bool, chain_ok: Option<bool>) -> Element {
+fn AgentStatus(
+    name: Option<String>,
+    connected: bool,
+    chain_ok: Option<bool>,
+    settings: Option<SettingsSnapshot>,
+) -> Element {
     let agent = name.unwrap_or_else(|| "—".to_string());
     let chain_class = match chain_tone(chain_ok) {
         Some(t) => format!("v {t}"),
         None => "v".to_string(),
     };
     let chain = chain_label(chain_ok);
+    // Live agent vitals from the running snapshot (GetSettings). Precomputed so
+    // the rsx stays declarative.
+    let has_vitals = settings.is_some();
+    let (model, provider, ctx, autonomy, access) = match &settings {
+        Some(s) => {
+            let ctx = match s.num_ctx {
+                Some(n) if n % 1024 == 0 => format!("{}k tok", n / 1024),
+                Some(n) => format!("{n} tok"),
+                None => "auto".to_string(),
+            };
+            (
+                s.model.clone(),
+                s.provider.clone(),
+                ctx,
+                s.autonomy_level.clone(),
+                s.access_level.clone(),
+            )
+        }
+        None => (
+            "—".to_string(),
+            "—".to_string(),
+            "—".to_string(),
+            "—".to_string(),
+            "—".to_string(),
+        ),
+    };
     rsx! {
         section { class: "glass-card agent-status",
-            div { class: "panel-head", h3 { "System" } }
+            div { class: "panel-head", h3 { "Agent" } }
             div { class: "kv",
-                span { class: "label-tech", "Agent" }
+                span { class: "label-tech", "Name" }
                 span { class: "v", "{agent}" }
             }
             div { class: "kv",
                 span { class: "label-tech", "Daemon" }
                 span { class: if connected { "v ok" } else { "v off" },
+                    if connected { span { class: "dot live" } }
                     if connected { "online" } else { "offline" }
+                }
+            }
+            if has_vitals {
+                div { class: "kv",
+                    span { class: "label-tech", "Model" }
+                    span { class: "v mono", "{model}" }
+                }
+                div { class: "kv",
+                    span { class: "label-tech", "Provider" }
+                    span { class: "v", "{provider} · {ctx}" }
+                }
+                div { class: "kv",
+                    span { class: "label-tech", "Autonomy" }
+                    span { class: "v", "{autonomy}" }
+                }
+                div { class: "kv",
+                    span { class: "label-tech", "Access" }
+                    span { class: "v", "{access}" }
                 }
             }
             div { class: "kv",
                 span { class: "label-tech", "Chain" }
                 span { class: "{chain_class}", "{chain}" }
-            }
-            div { class: "kv",
-                span { class: "label-tech", "Design" }
-                span { class: "v", "Stitch" }
             }
         }
     }
@@ -2207,6 +2317,25 @@ fn scope_label(scope: &str) -> String {
 /// `rel_time` for a unix-**seconds** timestamp (memory entries store seconds).
 fn rel_time_secs(secs: u64) -> String {
     rel_time(secs.saturating_mul(1000))
+}
+
+/// Relative time to a FUTURE unix-ms timestamp ("in 6h", "in 2d"); past/now →
+/// "due". Used for a routine's next scheduled fire.
+fn until_time(ms: u64) -> String {
+    let now = js_sys::Date::now() as u64;
+    if ms == 0 || ms <= now {
+        return "due".to_string();
+    }
+    let secs = (ms - now) / 1000;
+    if secs < 60 {
+        format!("in {secs}s")
+    } else if secs < 3600 {
+        format!("in {}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("in {}h", secs / 3600)
+    } else {
+        format!("in {}d", secs / 86_400)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4896,7 +5025,17 @@ async fn ws_task(
                     payload: QueryResponsePayload::GetSettings { settings: snap },
                     ..
                 } => {
+                    // Feeds both the Settings screen and the Command Center's
+                    // agent-vitals rail (same snapshot — model/provider/ctx/
+                    // autonomy/access).
+                    dashboard.write().settings = Some(snap.clone());
                     settings.write().snapshot = Some(snap);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::Schedules { schedules },
+                    ..
+                } => {
+                    dashboard.write().schedules = schedules;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::SettingsApplied { settings: snap, restart_required },

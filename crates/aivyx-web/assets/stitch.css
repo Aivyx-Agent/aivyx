@@ -937,3 +937,32 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   padding: 8px 14px; border-top: 1px solid var(--color-secondary-dim);
   text-align: right;
 }
+
+/* ── Command Center: agent vitals + routines (v0.7.1) ───────────────────── */
+.stat-row-5 { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 900px) { .stat-row-5 { grid-template-columns: repeat(2, 1fr); } }
+
+.agent-status .v.mono { font-family: var(--font-mono); font-size: 0.78em; }
+
+/* live/idle status dot — agent rail + routine rows (scoped to avoid the
+   statusbar's own .dot) */
+.agent-status .dot, .routine-row .dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle;
+}
+.agent-status .dot.live, .routine-row .dot.live {
+  background: var(--color-sage); animation: dot-pulse 2s ease-in-out infinite;
+}
+.agent-status .dot.off, .routine-row .dot.off { background: var(--color-text-disabled); }
+@keyframes dot-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(77,139,106,0.5); }
+  50%     { box-shadow: 0 0 0 5px rgba(77,139,106,0); }
+}
+
+/* routine rows in the Routines panel */
+.routine-row { display: flex; flex-direction: column; gap: 6px; }
+.routine-row .row1 { display: flex; align-items: center; gap: 6px; }
+.routine-row .row1 .name { font-weight: 600; color: var(--color-text-primary); }
+.routine-row .row1 .cron { margin-left: auto; font-family: var(--font-mono); font-size: 0.6rem; opacity: 0.7; }
+.routine-row .row2 { display: flex; gap: 18px; }
+.routine-row .row2 .v { color: var(--color-text-primary); }
