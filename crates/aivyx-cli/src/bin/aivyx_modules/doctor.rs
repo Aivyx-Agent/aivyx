@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use aivyx_config::{AivyxConfig, LoadOptions, ProviderKind};
+use aivyx_config::{AivyxConfig, LoadOptions, MemoryProfile, ProviderKind};
 use aivyx_llm::ollama::{
     OllamaConfig, OllamaOptions, OllamaProvider, AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL,
     RECOMMENDED_LOCAL_MODEL,
@@ -29,13 +29,16 @@ pub async fn run_doctor() -> Result<(), String> {
         other => check_cloud(other, &cfg),
     };
 
+    // Chapter Engram — semantic-memory readiness (embedding provider + profile).
+    let memory_ok = check_memory(&cfg).await;
+
     // Chapter Mise — the kitchen vertical health section, only when it's
     // installed (config present). Skipped silently otherwise.
     let kitchen_ok = match std::env::var_os("HOME").map(PathBuf::from) {
         Some(home) => check_kitchen(&home).await,
         None => true,
     };
-    let all_ok = provider_ok && kitchen_ok;
+    let all_ok = provider_ok && memory_ok && kitchen_ok;
 
     println!();
     if all_ok {
@@ -188,6 +191,83 @@ fn check_cloud(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
     }
 }
 
+/// Chapter Engram — the semantic-memory readiness section. Reports the
+/// embedding provider + active profile, and (on the local path) checks the
+/// embedding model is actually pulled — the most common "configured but dark"
+/// failure. A config with no `[embedding]` is valid (semantic recall is simply
+/// off), so that path notes how to enable it and does **not** fail.
+async fn check_memory(cfg: &AivyxConfig) -> bool {
+    println!("\nMemory:");
+    let profile = match cfg.memory_profile {
+        MemoryProfile::Off => "off",
+        MemoryProfile::Lite => "lite",
+        MemoryProfile::Smart => "smart",
+    };
+
+    let Some(emb) = &cfg.embedding else {
+        println!(
+            "  semantic memory is off (no [embedding] provider)\n     → run \
+             `aivyx init`, or add an [embedding] section (a local Ollama running \
+             {model}, or OpenAI) to enable recall.",
+            model = crate::init::RECOMMENDED_EMBED_MODEL
+        );
+        return true;
+    };
+
+    println!(
+        "  embedding: `{}` ({} dims) at {}",
+        emb.model, emb.dimensions, emb.base_url
+    );
+    println!("  profile: {profile}");
+
+    // On the local path, confirm the embedding model is pulled and the server
+    // is up — without that, recall is silently dark.
+    if is_local_base_url(&emb.base_url) {
+        if !crate::init::detect_ollama(&emb.base_url).await {
+            fail(
+                &format!("embedding server not reachable at {}", emb.base_url),
+                "Start it with `ollama serve`.",
+            );
+            return false;
+        }
+        let models = crate::init::list_ollama_models(&emb.base_url)
+            .await
+            .unwrap_or_default();
+        let present = models
+            .iter()
+            .any(|m| m == &emb.model || m.starts_with(&format!("{}:", emb.model)));
+        if !present {
+            fail(
+                &format!("embedding model `{}` is not downloaded", emb.model),
+                &format!("Pull it with `ollama pull {}`.", emb.model),
+            );
+            return false;
+        }
+        pass(&format!("embedding model `{}` is available", emb.model));
+    } else {
+        // Cloud embedding — don't make a paid call; just confirm it's wired.
+        pass("embedding provider configured");
+    }
+
+    if matches!(cfg.memory_profile, MemoryProfile::Off) {
+        println!(
+            "  note: [embedding] is set but [memory] profile is off — set \
+             profile = \"smart\" (or \"lite\") to use graph-augmented recall."
+        );
+    }
+    true
+}
+
+/// Heuristic: does this embedding `base_url` point at a local server (Ollama)?
+/// Used only to decide whether the doctor can cheaply verify the model is
+/// pulled; a false negative just downgrades to the "configured" note.
+fn is_local_base_url(url: &str) -> bool {
+    url.contains("localhost")
+        || url.contains("127.0.0.1")
+        || url.contains("0.0.0.0")
+        || url.contains(":11434")
+}
+
 /// `~/.aivyx/tool-processes/kitchen/config.toml` — the kitchen vertical's
 /// presence marker. `Some(path)` iff the file exists (the vertical is installed).
 fn kitchen_config_path(home: &Path) -> Option<PathBuf> {
@@ -338,6 +418,18 @@ mod tests {
     fn truncate_shortens_long_strings() {
         assert_eq!(truncate("hello", 60), "hello");
         assert_eq!(truncate(&"x".repeat(100), 10), format!("{}…", "x".repeat(10)));
+    }
+
+    #[test]
+    fn is_local_base_url_recognizes_local_endpoints() {
+        // Chapter Engram — only local endpoints get the cheap model-pulled check.
+        assert!(is_local_base_url("http://localhost:11434"));
+        assert!(is_local_base_url("http://127.0.0.1:11434"));
+        assert!(is_local_base_url("http://0.0.0.0:11434"));
+        // Non-default-port local Ollama still recognized via the port.
+        assert!(is_local_base_url("http://my-box:11434"));
+        // Cloud endpoints are not local.
+        assert!(!is_local_base_url("https://api.openai.com"));
     }
 
     #[tokio::test]

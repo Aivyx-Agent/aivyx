@@ -34,6 +34,14 @@ const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 /// 25); current flagship is `gpt-4.1`.
 const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 
+/// Chapter Engram — the recommended local embedding model and its vector
+/// width. Ollama serves it over the OpenAI-compatible `/v1/embeddings`
+/// endpoint the embedding provider already speaks, so semantic memory works
+/// against a local Ollama with no key. `nomic-embed-text` emits 768-dim
+/// vectors.
+pub(crate) const RECOMMENDED_EMBED_MODEL: &str = "nomic-embed-text";
+const RECOMMENDED_EMBED_DIMENSIONS: usize = 768;
+
 /// Printed when `list_ollama_models` returns an empty list. Chapter P:
 /// names the **tool-capable** recommended model (`RECOMMENDED_LOCAL_MODEL`)
 /// rather than a small non-tool-caller — the agent needs tool-calling to be
@@ -167,6 +175,87 @@ async fn pull_ollama_model(
     writeln!(writer, "\r  {model} ready.                    ")
         .map_err(|e| format!("write error: {e}"))?;
     Ok(())
+}
+
+/// Chapter Engram — resolve the `[embedding]` provider for the chosen chat
+/// provider so semantic memory works from first boot.
+///
+/// - **Ollama** → offer to pull [`RECOMMENDED_EMBED_MODEL`] (skipped if already
+///   present); point `[embedding]` at the same local server, no key. A declined
+///   or failed pull degrades to `None` (semantic memory off) rather than a hard
+///   error — the operator can add it later.
+/// - **OpenAI** → reuse the operator's key against OpenAI's embeddings endpoint.
+/// - **Anthropic** → `None`: Anthropic has no embeddings API. We note it and
+///   leave semantic memory off rather than render a broken provider.
+async fn decide_embedding(
+    provider: Provider,
+    api_key: Option<&str>,
+    base_url: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<Option<EmbeddingFields>, String> {
+    match provider {
+        Provider::Ollama => {
+            let present = list_ollama_models(base_url)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|m| {
+                    m == RECOMMENDED_EMBED_MODEL
+                        || m.starts_with(&format!("{RECOMMENDED_EMBED_MODEL}:"))
+                });
+            if !present {
+                writeln!(
+                    writer,
+                    "\nSemantic memory needs a local embedding model so your agent \
+                     can recall what it has learned."
+                )
+                .map_err(|e| format!("write error: {e}"))?;
+                if prompt_yes_no(
+                    &format!("Download {RECOMMENDED_EMBED_MODEL} now (recommended)?"),
+                    true,
+                    reader,
+                    writer,
+                )? {
+                    if let Err(e) =
+                        pull_ollama_model(base_url, RECOMMENDED_EMBED_MODEL, writer).await
+                    {
+                        writeln!(
+                            writer,
+                            "  (Couldn't pull {RECOMMENDED_EMBED_MODEL}: {e} — leaving \
+                             semantic memory off; add an [embedding] section later.)"
+                        )
+                        .map_err(|e| format!("write error: {e}"))?;
+                        return Ok(None);
+                    }
+                } else {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(EmbeddingFields {
+                base_url: base_url.to_string(),
+                model: RECOMMENDED_EMBED_MODEL.to_string(),
+                dimensions: RECOMMENDED_EMBED_DIMENSIONS,
+                api_key: None,
+            }))
+        }
+        Provider::OpenAi => Ok(api_key.map(|k| EmbeddingFields {
+            base_url: aivyx_config::DEFAULT_EMBEDDING_BASE_URL.to_string(),
+            model: aivyx_config::DEFAULT_EMBEDDING_MODEL.to_string(),
+            dimensions: aivyx_config::DEFAULT_EMBEDDING_DIMENSIONS,
+            api_key: Some(k.to_string()),
+        })),
+        Provider::Anthropic => {
+            writeln!(
+                writer,
+                "\nNote: Anthropic has no embeddings API, so semantic memory stays \
+                 off. Add an [embedding] provider (OpenAI, or a local Ollama running \
+                 {RECOMMENDED_EMBED_MODEL}) to enable it."
+            )
+            .map_err(|e| format!("write error: {e}"))?;
+            Ok(None)
+        }
+    }
 }
 
 /// Extract model names from the Ollama `/api/tags` JSON response.
@@ -501,6 +590,24 @@ struct InitConfig {
     profile_behavioral_constraints: Vec<String>,
     /// Chapter W — the optional onboarding Persona/Skills seed.
     persona_seed: PersonaSeedFields,
+    /// Chapter Engram — the embedding provider that makes semantic memory
+    /// work out of the box. `Some` renders an `[embedding]` section (local
+    /// Ollama on the local path, OpenAI on the cloud path); `None` leaves
+    /// semantic memory off (e.g. Anthropic-only, which has no embeddings API,
+    /// or a declined/failed local pull).
+    embedding: Option<EmbeddingFields>,
+}
+
+/// Chapter Engram — the `[embedding]` settings the wizard resolved for the
+/// chosen provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EmbeddingFields {
+    base_url: String,
+    model: String,
+    dimensions: usize,
+    /// `Some` for the cloud (OpenAI) path; `None` for local Ollama, which
+    /// needs no key.
+    api_key: Option<String>,
 }
 
 /// Render a ready-to-use `aivyx.toml` from the wizard answers.
@@ -562,6 +669,31 @@ fn render_toml(cfg: &InitConfig) -> String {
         "\n[storage]\npath = \"{}\"\n",
         cfg.storage_path,
     ));
+
+    // Chapter Engram — `[embedding]` makes semantic memory work out of the box.
+    // Without it the auto-recall pipeline never engages (the daemon only builds
+    // it when `[embedding]` is configured), so a fresh agent would have no
+    // semantic recall at all. Local Ollama needs no key; the cloud path carries
+    // its own.
+    if let Some(emb) = &cfg.embedding {
+        out.push_str(&format!(
+            "\n[embedding]\nbase_url = \"{}\"\nmodel = \"{}\"\ndimensions = {}\n",
+            emb.base_url, emb.model, emb.dimensions,
+        ));
+        if let Some(key) = &emb.api_key {
+            out.push_str(&format!("api_key = \"{key}\"\n"));
+        }
+
+        // Chapter Engram — turn on the full memory stack for new installs that
+        // have an embedding provider. `smart` arms graph-augmented recall plus
+        // the wiki / typed-graph extraction sweeps (capped). We write it
+        // explicitly here rather than changing the compiled default (which stays
+        // `Off`): the sweeps spend tokens on the cloud path, so flipping the
+        // default would surprise-bill existing installs on upgrade — only new
+        // configs opt in. Omitted entirely without an embedding provider, where
+        // the profile would be inert anyway.
+        out.push_str("\n[memory]\nprofile = \"smart\"\n");
+    }
 
     // Phase 46: bundled web search MCP server.
     if cfg.enable_web_search {
@@ -1875,6 +2007,11 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     let persona_seed =
         collect_persona_seed(&mut reader, &mut writer, draft_provider.as_ref(), &model).await?;
 
+    // Chapter Engram — set up the embedding provider so semantic memory works
+    // from first boot (pulls the local embedding model on the Ollama path).
+    let embedding =
+        decide_embedding(provider, api_key.as_deref(), base_url, &mut reader, &mut writer).await?;
+
     // 6. Render + write.
     let cfg = InitConfig {
         provider,
@@ -1892,6 +2029,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         profile_behavioral_preferences: identity.behavioral_preferences,
         profile_behavioral_constraints: identity.behavioral_constraints,
         persona_seed,
+        embedding,
     };
     // Phase 66 — when a template was supplied, splice wizard
     // answers into the template document so the role declarations,
@@ -2460,6 +2598,7 @@ mod tests {
             profile_behavioral_preferences: Vec::new(),
             profile_behavioral_constraints: Vec::new(),
             persona_seed: PersonaSeedFields::default(),
+            embedding: None,
         }
     }
 
@@ -2487,6 +2626,143 @@ mod tests {
         assert!(!toml.contains("[profile]"));
         // No [persona_seed] section unless the operator seeded one.
         assert!(!toml.contains("[persona_seed]"));
+    }
+
+    // --- Chapter Engram (EN.3): embedding + memory-profile rendering --------
+
+    /// Local Ollama embedding renders a keyless `[embedding]` pointing at the
+    /// local server plus `[memory] profile = "smart"`.
+    #[test]
+    fn render_emits_embedding_and_smart_memory_for_local() {
+        let mut cfg = init_config_no_profile(
+            Provider::Ollama,
+            "qwen3:8b",
+            None,
+            "data/aivyx.redb",
+            "/home/user/workspace",
+            false,
+        );
+        cfg.embedding = Some(EmbeddingFields {
+            base_url: "http://localhost:11434".into(),
+            model: RECOMMENDED_EMBED_MODEL.into(),
+            dimensions: RECOMMENDED_EMBED_DIMENSIONS,
+            api_key: None,
+        });
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[embedding]"), "{toml}");
+        assert!(toml.contains("model = \"nomic-embed-text\""), "{toml}");
+        assert!(toml.contains("dimensions = 768"), "{toml}");
+        assert!(toml.contains("base_url = \"http://localhost:11434\""), "{toml}");
+        // Local needs no key.
+        assert!(!toml.contains("api_key"), "local embedding renders no key: {toml}");
+        assert!(toml.contains("[memory]"), "{toml}");
+        assert!(toml.contains("profile = \"smart\""), "{toml}");
+    }
+
+    /// OpenAI embedding renders the cloud endpoint + the key + smart memory.
+    #[test]
+    fn render_emits_embedding_with_key_and_smart_memory_for_openai() {
+        let mut cfg = init_config_no_profile(
+            Provider::OpenAi,
+            "gpt-4.1",
+            Some("sk-test"),
+            "data/aivyx.redb",
+            "/home/user/workspace",
+            false,
+        );
+        cfg.embedding = Some(EmbeddingFields {
+            base_url: aivyx_config::DEFAULT_EMBEDDING_BASE_URL.into(),
+            model: aivyx_config::DEFAULT_EMBEDDING_MODEL.into(),
+            dimensions: aivyx_config::DEFAULT_EMBEDDING_DIMENSIONS,
+            api_key: Some("sk-embed".into()),
+        });
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[embedding]"), "{toml}");
+        assert!(toml.contains("model = \"text-embedding-3-small\""), "{toml}");
+        assert!(toml.contains("dimensions = 1536"), "{toml}");
+        assert!(toml.contains("api_key = \"sk-embed\""), "{toml}");
+        assert!(toml.contains("profile = \"smart\""), "{toml}");
+    }
+
+    /// Regression guard: no embedding provider ⇒ neither `[embedding]` nor
+    /// `[memory]` is rendered — byte-for-byte the pre-Engram behavior, so
+    /// existing-style configs are untouched.
+    #[test]
+    fn render_without_embedding_omits_embedding_and_memory() {
+        let cfg = init_config_no_profile(
+            Provider::Anthropic,
+            "claude-sonnet-4-6",
+            Some("sk-ant"),
+            "data/aivyx.redb",
+            "/home/user/workspace",
+            false,
+        );
+        let toml = render_toml(&cfg);
+        assert!(!toml.contains("[embedding]"), "{toml}");
+        assert!(!toml.contains("[memory]"), "{toml}");
+    }
+
+    /// The generated local config round-trips through the loader: `[embedding]`
+    /// parses and `[memory] profile = "smart"` yields `MemoryProfile::Smart`.
+    #[test]
+    fn generated_local_embedding_config_round_trips() {
+        let mut cfg = init_config_no_profile(
+            Provider::Ollama,
+            "qwen3:8b",
+            None,
+            "data/aivyx.redb",
+            "/home/user/workspace",
+            false,
+        );
+        cfg.embedding = Some(EmbeddingFields {
+            base_url: "http://localhost:11434".into(),
+            model: RECOMMENDED_EMBED_MODEL.into(),
+            dimensions: RECOMMENDED_EMBED_DIMENSIONS,
+            api_key: None,
+        });
+        let toml = render_toml(&cfg);
+        let loaded = aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
+            toml_path: Some(write_temp_toml(&toml, "engram-rt")),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        })
+        .expect("generated toml loads");
+        assert_eq!(loaded.memory_profile, aivyx_config::MemoryProfile::Smart);
+        let emb = loaded.embedding.expect("[embedding] parsed");
+        assert_eq!(emb.model, "nomic-embed-text");
+        assert_eq!(emb.dimensions, 768);
+    }
+
+    /// `decide_embedding` for Anthropic is `None` (no embeddings API).
+    #[tokio::test]
+    async fn decide_embedding_anthropic_is_none() {
+        let mut r = std::io::Cursor::new(&b""[..]);
+        let mut w = Vec::new();
+        let got = decide_embedding(Provider::Anthropic, Some("sk-ant"), "", &mut r, &mut w)
+            .await
+            .unwrap();
+        assert!(got.is_none());
+    }
+
+    /// `decide_embedding` for OpenAI uses the key; without one it is `None`.
+    #[tokio::test]
+    async fn decide_embedding_openai_depends_on_key() {
+        let mut r = std::io::Cursor::new(&b""[..]);
+        let mut w = Vec::new();
+        let with_key = decide_embedding(Provider::OpenAi, Some("sk-x"), "", &mut r, &mut w)
+            .await
+            .unwrap()
+            .expect("openai + key → embedding");
+        assert_eq!(with_key.model, aivyx_config::DEFAULT_EMBEDDING_MODEL);
+        assert_eq!(with_key.api_key.as_deref(), Some("sk-x"));
+
+        let no_key = decide_embedding(Provider::OpenAi, None, "", &mut r, &mut w)
+            .await
+            .unwrap();
+        assert!(no_key.is_none(), "no key → no embedding");
     }
 
     #[test]

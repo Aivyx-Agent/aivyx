@@ -120,3 +120,40 @@ backends): set `[openai] constrain_tool_calls = true` and Aivyx injects
 body, so a GGUF served over HTTP is constrained the same way the in-process engine
 is. Default off. The grammar primitive now covers **both** local engines Aivyx
 ships. Live-proven against a real `llama-server` on Qwen3-4B.
+
+## 6. Making semantic memory work out of the box (Chapter Engram)
+
+Chapter P made a local model *reply*; **Chapter Engram** makes a fresh agent
+actually *remember and recall*. The gap it closes is structural: the daemon
+builds the auto-recall pipeline **only when `[embedding]` is configured**
+(`aivyx.rs` — `recall_context` is gated on the embedding provider), and `aivyx
+init` never wrote one. So the whole memory stack (Loom/Codex/Lattice/Synapse)
+was dark for any operator who didn't hand-configure embeddings — flipping the
+`[memory] profile` did nothing on its own.
+
+**What init now does:**
+
+- **Local (Ollama)** — offers to pull `nomic-embed-text` (768-dim; served over
+  the OpenAI-compatible `/v1/embeddings` endpoint the provider already speaks)
+  and writes a keyless `[embedding]` pointing at the local server. A declined or
+  failed pull degrades to "semantic memory off" with a note, not an error.
+- **Cloud (OpenAI)** — reuses the operator's key for OpenAI embeddings
+  (`text-embedding-3-small`, 1536-dim).
+- **Cloud (Anthropic-only)** — skipped with a clear note: Anthropic has no
+  embeddings API, so semantic memory stays off until the operator adds a
+  provider. No broken config is written.
+- When (and only when) an embedding provider is set, init also writes
+  `[memory] profile = "smart"` — the full graph-augmented stack.
+
+**Why `smart` is written into the config, not made the compiled default.** The
+`smart` profile runs the wiki / typed-graph extraction sweeps, which spend
+tokens on the cloud path. Flipping the *compiled* default would surprise-bill
+existing installs on upgrade, so the compiled default stays `Off` and only new
+configs opt in (the same planting model as the default cron routines). Local
+sweeps are free compute (just slower on a small model).
+
+**`aivyx doctor`** gained a Memory section: it reports the embedding provider +
+active profile, and on the local path verifies the embedding model is actually
+pulled (the common "configured but dark" failure) with an `ollama pull` hint. A
+config with no `[embedding]` is valid — the section says so and how to enable it,
+and does not fail the check.
