@@ -24,7 +24,7 @@ Observed live while testing local models this build:
 
 | Symptom | Cause | State |
 |---|---|---|
-| Empty assistant text | thinking models (qwen3) route the answer into a `thinking` field, leaving `content` empty when tools are present | **fixed** (`disable_thinking_for` → `think:false`) |
+| Empty / verbose assistant text | thinking models (qwen3) emit reasoning into `content` when `think` is mishandled | **fixed** — send `think: true` for thinking-capable models so reasoning is routed into the discarded `thinking` field and the answer/tool_calls land in `content` (v0.7.1 corrected this from the earlier `think:false`, which current Ollama hybrid models like `qwen3:30b-a3b` ignore) |
 | Tool call silently dropped (`tools=0`, no output) | Ollama 0.30.5 delivers `tool_calls` on a `done:false` chunk; the reader only read them on `done:true` | **fixed** (capture non-terminal `tool_calls`) |
 | Model emits ~1 token then stops | the agent prompt (~4–11k tokens) fills the default `num_ctx` 4096, starving generation | **needs auto-fix** (P.1) — today requires hand-set `[ollama] num_ctx` |
 | No usable model present | wizard only *hints* `ollama pull …` and leaves the user to it | **needs guided pull** (P.3) |

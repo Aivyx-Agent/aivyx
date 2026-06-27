@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-27
+
 ### Security
 
 - **Bumped `quinn-proto` 0.11.14 → 0.11.15** (RUSTSEC-2026-0185): a remote
@@ -91,6 +93,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
   each turn to `/cancel` a runaway — so they always get the small-cycle breaker
   (like `MAX_STEPS_PER_TURN` is always on), independent of the interactive
   `[agent] cycle_detection` knob.
+- **Default scheduled "starter routines" at first-run.** `aivyx init` now plants
+  a small set of read-only, self-contained `[[schedule]]` routines so a fresh
+  agent orients itself and stays useful unattended: a daily **environment-review**
+  (self-bootstrapping — first run builds a baseline of the accessible
+  environment, later runs diff it and journal changes), a nightly
+  **reflection** (consolidate the day's memory into the knowledge base), a
+  6-hourly **health-check** (silent unless something breaks), a Monday
+  **weekly-digest** (learnings + pending proposals), and an opt-in daily
+  **trend-scan** (web research across the operator's interests). Each prompt is
+  read-only and explicitly forbids destructive actions — they run unattended.
+  Gated by the wizard's existing answers: the four core routines are **enabled on
+  a local (Ollama) provider** and written **present-but-disabled on a cloud
+  provider** (discoverable, a one-line flip to enable, and cost-aware since
+  cloud schedules spend tokens); `trend-scan` additionally requires web search.
+  The wizard prints what it set up, so it is never surprise behavior. Verified
+  live on real hardware (all five fire and execute) before shipping. See
+  `docs/ROUTINES.md`.
 
 ### Fixed
 
@@ -116,6 +135,36 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - The `channel-voice-full` feature build: the voice `AgentStackSpec` literal had
   drifted from the struct (it predated `turn_timeout`), so it failed to compile
   under that feature. Restored, with the new cycle-detection knob wired in.
+- **`access_level = full` granted nothing — the most permissive level was the
+  only broken one.** `full` resolves the sandbox root to `/`, and every
+  root-anchored scope grant was built as `format!("{root}/**")`, which at root
+  `/` produced `fs.read://**` (double slash) — a glob whose leading `//` matches
+  no single-rooted path. So a `full`-access agent could not read or write a
+  single file (it would narrate a permission refusal). Fixed with a `rooted_glob`
+  helper that collapses the trailing slash (`/` → `/**`), routed through all five
+  root-anchored grant sites (`fs.read`/`fs.write`/`fs.metadata` +
+  `shell.exec:cwd` + `fs.delete`). Found live on a real-hardware dogfood; the
+  needed scope was always correct, so it hid behind a model that politely
+  refused. Regression test added.
+- **Local thinking-model output was verbose and off-style — the `think` flag was
+  inverted.** For a model advertising the `thinking` capability the Ollama
+  provider sent `think: false`, assuming that forces the answer into `content`.
+  On current Ollama (0.30) that is wrong for hybrid-reasoning models: e.g.
+  `qwen3:30b-a3b` ignores `think: false` and dumps its whole chain-of-thought
+  into `content`. `think: true` instead cleanly routes reasoning into the
+  separate `thinking` field (which the agent already discards) and leaves the
+  answer — or tool_calls — in `content`. Now sends `think: true` for
+  thinking-capable models (verified for qwen3:8b and qwen3:30b-a3b, with and
+  without tools). Test updated.
+- **Configured MCP servers' tools were registered but un-callable by the default
+  role.** Each MCP tool call needs the scope `mcp.call:<server>:<tool>`, but the
+  default-role capability floor granted no `mcp.call` scope at all — so the
+  bundled web-search server the wizard's "Enable web search?" adds was dead on
+  arrival (the agent saw the tool, lacked the scope, and reported it as "not
+  authorized"). The floor now grants `mcp.call:<server>:*` per configured MCP
+  bridge (mirroring the existing `ollama.*` grant) — least-privilege per server.
+  Roles that declare their own `capability_scopes` still name `mcp.call:<server>`
+  grants explicitly. Scope-matching regression test added.
 
 ## [0.7.0] — 2026-06-24
 
