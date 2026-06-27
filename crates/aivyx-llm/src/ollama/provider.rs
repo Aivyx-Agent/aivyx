@@ -209,13 +209,14 @@ pub struct OllamaProvider {
     /// the `None` outcome avoids re-querying on every
     /// turn when the model isn't introspectable.
     family_cache: Mutex<HashMap<String, Option<String>>>,
-    /// Per-model `thinking`-capability cache. A "thinking" model
-    /// (qwen3, …) routes its answer into a separate `thinking`
-    /// field — which the agent discards — and leaves `content`
-    /// empty when tools are present, so we send `think: false`
-    /// for these models to get the answer back in `content`.
-    /// `bool` value: `true` = supports thinking (so disable it);
-    /// caching both outcomes avoids re-querying `/api/show`.
+    /// Per-model `thinking`-capability cache. For a "thinking" model
+    /// (qwen3, …) we send `think: true` so its reasoning is routed into
+    /// the separate `thinking` field — which the agent discards — leaving
+    /// the answer (or tool_calls) in `content`. (`think: false` is NOT a
+    /// reliable suppressor on current Ollama: some hybrid models ignore
+    /// it and emit reasoning into `content`.) `bool` value: `true` =
+    /// supports thinking; caching both outcomes avoids re-querying
+    /// `/api/show`.
     thinking_cache: Mutex<HashMap<String, bool>>,
     /// Chapter P — per-model auto-`num_ctx` cache. The agent's prompt
     /// (system + tools + few-shot) runs ~4–11k tokens, which starves the
@@ -323,10 +324,11 @@ impl OllamaProvider {
             .unwrap_or(false)
     }
 
-    /// Cached lookup of whether `model` is a thinking model whose
-    /// reasoning we should suppress (`think: false`). Queries
+    /// Cached lookup of whether `model` is a thinking model. When it is,
+    /// we send `think: true` so the reasoning is routed into the separate
+    /// `thinking` field (discarded) and `content` stays clean. Queries
     /// `/api/show` once per model, then serves from cache.
-    async fn disable_thinking_for(&self, model: &str) -> bool {
+    async fn is_thinking_model(&self, model: &str) -> bool {
         {
             if let Ok(cache) = self.thinking_cache.lock() {
                 if let Some(cached) = cache.get(model) {
@@ -425,7 +427,7 @@ impl crate::LlmProvider for OllamaProvider {
         // `content` empty when tools are present. Detect the capability
         // (cached `/api/show`) and turn thinking off so the answer
         // lands in `content`.
-        let disable_thinking = self.disable_thinking_for(request.model).await;
+        let thinking_capable = self.is_thinking_model(request.model).await;
         // Chapter P — auto-`num_ctx`: only when the operator hasn't set one,
         // size the context window to the model's native length (capped) so the
         // agent prompt doesn't starve generation. An explicit `num_ctx` wins.
@@ -437,7 +439,7 @@ impl crate::LlmProvider for OllamaProvider {
         let body = build_request_body(
             &request,
             &self.config.options,
-            disable_thinking,
+            thinking_capable,
             auto_num_ctx,
         )?;
         let body_bytes = serde_json::to_vec(&body).map_err(|e| {
@@ -532,7 +534,7 @@ impl crate::LlmProvider for OllamaProvider {
 pub fn build_request_body(
     request: &LlmRequest<'_>,
     options: &OllamaOptions,
-    disable_thinking: bool,
+    thinking_capable: bool,
     auto_num_ctx: Option<u32>,
 ) -> Result<Value, LlmError> {
     if request.model.is_empty() {
@@ -553,12 +555,19 @@ pub fn build_request_body(
         "stream": true,
     });
 
-    // Suppress a thinking model's reasoning (the agent discards it,
-    // and leaving it on empties `content` when tools are present).
-    // Only emitted for models that advertise the `thinking`
-    // capability, so non-thinking models never see a `think` flag.
-    if disable_thinking {
-        body["think"] = json!(false);
+    // Route a thinking model's reasoning into the separate `thinking`
+    // field (which the agent discards) so it stays out of `content`.
+    // Counter-intuitively this means `think: true`, NOT false: on
+    // current Ollama, `think: false` does not reliably suppress a
+    // hybrid-reasoning model — qwen3:30b-a3b ignores it and dumps its
+    // chain-of-thought straight into `content` (verbose, off-persona),
+    // while `think: true` cleanly splits reasoning → `thinking` and the
+    // answer (or tool_calls) → `content`. Verified live on Ollama 0.30
+    // for qwen3:8b and qwen3:30b-a3b, with and without tools. Only
+    // emitted for models that advertise the `thinking` capability, so
+    // non-thinking models never see a `think` flag.
+    if thinking_capable {
+        body["think"] = json!(true);
     }
 
     if !request.tools.is_empty() {
@@ -849,15 +858,18 @@ mod tests {
     }
 
     #[test]
-    fn request_body_disables_think_for_thinking_models() {
-        // A thinking model (detected via /api/show capabilities)
-        // gets `think: false` so its answer lands in `content`
-        // instead of the discarded `thinking` field.
+    fn request_body_enables_think_for_thinking_models() {
+        // A thinking model (detected via /api/show capabilities) gets
+        // `think: true` so its reasoning is routed into the separate
+        // `thinking` field (discarded) and the answer / tool_calls land
+        // in `content`. `think: false` is not a reliable suppressor on
+        // current Ollama — qwen3:30b-a3b ignores it and leaks reasoning
+        // into `content`.
         let msgs = vec![LlmMessage::user_text("hello")];
         let req = simple_request(&msgs, &[]);
         let body =
             build_request_body(&req, &OllamaOptions::default(), true, None).unwrap();
-        assert_eq!(body["think"], false);
+        assert_eq!(body["think"], true);
     }
 
     #[test]
