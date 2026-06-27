@@ -5,6 +5,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-06-28
+
+### Fixed
+
+- **The autonomous loop's tools were never granted to the default role.** Arming
+  `[loop]` (or an `[autonomy]` level that arms it) spawned the loop driver, but
+  the default role's backcompat scope floor granted `memory.*` / `fs.*` /
+  `net.*` / `shell.exec` / `workspace.*` / `ollama.*` / `mcp.call:*` and **never
+  `loop.*`** — so every iteration was denied at step one (`loop.next ... not
+  currently granted`) and the driver burned its full iteration cap re-failing at
+  the same wall. The autonomous-loop backlog mechanism was effectively dead on
+  arrival for the zero-config default role. The floor now grants
+  `loop.next` / `loop.complete` / `loop.note` when the loop is armed, mirroring
+  the existing ollama/MCP grants; self-escalation scopes are still withheld.
+  Found and verified on a live multi-day dogfood run.
+
 ## [0.7.3] — 2026-06-27
 
 ### Added
