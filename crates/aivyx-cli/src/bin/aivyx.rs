@@ -229,6 +229,28 @@ const DEFAULT_TOML_PATH: &str = "aivyx.toml";
 /// channel's trust tier does not receive the tool at all."
 type GatedToolRegistration = Option<(Arc<dyn Tool>, Scope)>;
 
+/// Build the `<root>/**` recursive-glob path qualifier for a canonical
+/// sandbox root, collapsing any trailing slash so a root of `/` yields
+/// `/**` (the match-everything glob) rather than the non-matching `//**`.
+///
+/// Chapter N: `access_level = full` resolves the sandbox root to `/`,
+/// which is the only level that exercises this edge. The naive
+/// `format!("{root}/**")` then produced `//**` — a `PathGlob` qualifier
+/// whose leading `//` matches no real single-rooted path, so *every*
+/// `fs.*` / `shell.exec` scope was silently denied and a "full"-access
+/// agent could not touch a single file. Found live on the dogfood rig
+/// (qwen3:8b called `fs.read` correctly; the held grant was the bug).
+///
+/// All five root-anchored grant sites (`fs.read` / `fs.write` /
+/// `fs.metadata` / `shell.exec:cwd` / `fs.delete`) route through this so
+/// the held grant string lines up with the `<base>:<lexically-resolved
+/// path>` shape each tool's `required_scope` emits — which is itself
+/// built from `Path` components and so never doubles the root slash.
+fn rooted_glob(root: &std::path::Path) -> String {
+    let s = root.display().to_string();
+    format!("{}/**", s.trim_end_matches('/'))
+}
+
 /// Phase 11 Task 3 — registration-time trust-tier gate for
 /// `shell.exec`.
 ///
@@ -263,8 +285,8 @@ fn build_shell_exec_for_channel(
                 .map_err(|e| format!("failed to build shell.exec tool: {e}"))?;
             let canonical_cwd_root = shell.cwd_root().to_path_buf();
             let scope = Scope::parse(&format!(
-                "shell.exec:cwd:{}/**",
-                canonical_cwd_root.display()
+                "shell.exec:cwd:{}",
+                rooted_glob(&canonical_cwd_root)
             ))
             .ok_or_else(|| {
                 format!(
@@ -312,8 +334,8 @@ fn build_fs_delete_for_channel(
                 .map_err(|e| format!("failed to build fs.delete tool: {e}"))?;
             let canonical_root = tool.sandbox_root().to_path_buf();
             let scope = Scope::parse(&format!(
-                "fs.delete:{}/**",
-                canonical_root.display()
+                "fs.delete:{}",
+                rooted_glob(&canonical_root)
             ))
             .ok_or_else(|| {
                 format!(
@@ -5116,15 +5138,15 @@ async fn run_async(
     // closure clones cheaply rather than fighting the borrow checker.
     let prompt_fs_root: std::sync::Arc<std::path::Path> =
         std::sync::Arc::from(canonical_root.as_path());
-    let root_display = canonical_root.display();
-    let fs_read_scope = Scope::parse(&format!("fs.read:{root_display}/**")).ok_or_else(|| {
+    let root_glob = rooted_glob(&canonical_root);
+    let fs_read_scope = Scope::parse(&format!("fs.read:{root_glob}")).ok_or_else(|| {
         format!("canonical fs.read sandbox scope not parseable from {canonical_root:?}")
     })?;
-    let fs_write_scope = Scope::parse(&format!("fs.write:{root_display}/**")).ok_or_else(|| {
+    let fs_write_scope = Scope::parse(&format!("fs.write:{root_glob}")).ok_or_else(|| {
         format!("canonical fs.write sandbox scope not parseable from {canonical_root:?}")
     })?;
     let fs_metadata_scope =
-        Scope::parse(&format!("fs.metadata:{root_display}/**")).ok_or_else(|| {
+        Scope::parse(&format!("fs.metadata:{root_glob}")).ok_or_else(|| {
             format!("canonical fs.metadata sandbox scope not parseable from {canonical_root:?}")
         })?;
 
@@ -9394,6 +9416,38 @@ mod tests {
             Scope::parse("net.fetch").unwrap(),
             Scope::parse("shell.exec").unwrap(),
         ]
+    }
+
+    /// Chapter N regression — `access_level = full` resolves `fs_root`
+    /// to `/`, and the pre-fix grant builder `format!("{root}/**")`
+    /// produced the non-matching `//**` (a `PathGlob` whose leading `//`
+    /// matches no single-rooted path), silently denying every `fs.*` /
+    /// `shell.exec` scope so a "full"-access agent could not touch a
+    /// single file. Found live on the dogfood rig: qwen3:8b called
+    /// `fs.read` correctly; the held grant was the bug. `rooted_glob`
+    /// must collapse the trailing slash so `/` yields `/**`.
+    #[test]
+    fn rooted_glob_full_access_root_grants_child_paths() {
+        use std::path::Path;
+        assert_eq!(rooted_glob(Path::new("/")), "/**");
+        assert_eq!(rooted_glob(Path::new("/home/jarvis")), "/home/jarvis/**");
+        assert_eq!(rooted_glob(Path::new("/home/jarvis/")), "/home/jarvis/**");
+
+        // A held grant anchored at root "/" must grant a real child path.
+        let held = Scope::parse(&format!("fs.read:{}", rooted_glob(Path::new("/")))).unwrap();
+        let needed = Scope::parse("fs.read:/etc/hostname").unwrap();
+        assert!(
+            needed.is_granted_by(&held),
+            "full-access root grant `{}` must cover child fs.read",
+            held.as_str()
+        );
+
+        // The pre-fix double-slash form must NOT match — documents the bug.
+        let buggy = Scope::parse("fs.read://**").unwrap();
+        assert!(
+            !needed.is_granted_by(&buggy),
+            "the buggy `//**` grant must not match a single-rooted path"
+        );
     }
 
     /// Load `examples/aivyx.toml` from the repo root. Returns the
