@@ -1411,6 +1411,69 @@ pub async fn revert_persona_delta(
     }
 }
 
+/// Chapter Tutor — send an operator-authored skill op (`teach` / `update` /
+/// `forget`) to the daemon over the local socket. The daemon writes it to the
+/// signed persona chain via operator authority (no agent scope). Returns the
+/// chain seq of the appended delta on success. Mirrors [`revert_persona_delta`].
+pub async fn author_skill(
+    socket_path: &Path,
+    op: aivyx_ipc::protocol::SkillAuthorOp,
+    name: &str,
+    trigger: Option<&str>,
+    procedure: Option<&str>,
+) -> Result<u64, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+            buf.drain(..consumed);
+        }
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let req = FrontendMessage::AuthorSkill {
+        id: "skill-cli".into(),
+        op,
+        name: name.to_string(),
+        trigger: trigger.map(|s| s.to_string()),
+        procedure: procedure.map(|s| s.to_string()),
+    };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SkillAuthored { ok, seq, error, .. }, _)) => {
+                if ok {
+                    return seq.ok_or_else(|| {
+                        DaemonError::Protocol(
+                            "SkillAuthored ok=true but seq is None".into(),
+                        )
+                    });
+                }
+                return Err(DaemonError::Protocol(
+                    error.unwrap_or_else(|| "skill authoring failed".into()),
+                ));
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected SkillAuthored, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => {
+                read_more(&mut reader, &mut buf).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// Phase 65 — operator-driven Persona chain import over IPC.
 /// Closes the Phase 60 identity-deferral end to end. Sends the
 /// parsed export bundle to the daemon for replay against the

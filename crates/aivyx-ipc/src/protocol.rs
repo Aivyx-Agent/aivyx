@@ -575,6 +575,21 @@ pub struct SkillView {
     pub invocations: u32,
 }
 
+/// Chapter Tutor — which operator-authoring action [`FrontendMessage::AuthorSkill`]
+/// performs against the persona chain. This is the **operator** channel
+/// (CLI / Studio), distinct from the agent's scope-gated `skills.teach` tool:
+/// it writes operator-authored skills directly via the daemon's chain-append,
+/// so it needs no agent `skills.write` scope and works on a grown chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkillAuthorOp {
+    /// Add a new skill. Daemon rejects a duplicate `name` (use `Update`).
+    Teach,
+    /// Change an existing skill's `trigger` and/or `procedure` (supersession).
+    Update,
+    /// Remove an existing skill by `name`.
+    Forget,
+}
+
 /// Chapter Lantern — one MCP server's last-start health for the Studio
 /// MCP screen. Mirrors the daemon's status snapshot (Chapter Conduit
 /// CD.3): `connected` with a `tool_count`, or failed with an `error`
@@ -1629,6 +1644,24 @@ pub enum FrontendMessage {
         id: String,
         seed: PersonaSeedWire,
     },
+    /// Chapter Tutor — operator-initiated skill authoring on a **grown** chain.
+    /// The operator (via `aivyx skills teach|update|forget` or the Studio Skills
+    /// screen) authors a skill directly; the daemon appends a signed,
+    /// operator-authored `LearnedSkill` delta via the same `skill_edit` helpers
+    /// the agent tool uses, then recomputes the shared persona (adopted
+    /// next-turn). This is the human Kernel-tier authoring path — it needs **no**
+    /// agent `skills.write` scope, and the agent's `skills.teach` tool is
+    /// unchanged. `trigger`/`procedure` are required for `Teach`, optional for
+    /// `Update` (omit to keep the existing value), and ignored for `Forget`.
+    ///
+    /// Reply: [`DaemonMessage::SkillAuthored`] with the same `id`.
+    AuthorSkill {
+        id: String,
+        op: SkillAuthorOp,
+        name: String,
+        trigger: Option<String>,
+        procedure: Option<String>,
+    },
     /// Chapter X — ask the daemon to **draft** a persona seed from the
     /// operator's free-text `description` using the configured model. Read-only
     /// (drafts nothing onto the chain) — it only pre-fills the editable seed
@@ -1874,6 +1907,16 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         appended: u64,
+        error: Option<String>,
+    },
+    /// Chapter Tutor — response to [`FrontendMessage::AuthorSkill`]. `ok = true`
+    /// with `seq` (the chain seq of the appended delta) on success; `ok = false`
+    /// with `error` on a validation failure, a `Teach` name collision, an
+    /// `Update`/`Forget` of an unknown skill, or a storage error.
+    SkillAuthored {
+        id: String,
+        ok: bool,
+        seq: Option<u64>,
         error: Option<String>,
     },
     /// Chapter X — response to [`FrontendMessage::DraftPersonaSeed`]. `draft` is
@@ -2232,6 +2275,13 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         appended: u64,
+        error: Option<String>,
+    },
+    // Chapter Tutor — operator-authored skill result.
+    SkillAuthored {
+        id: String,
+        ok: bool,
+        seq: Option<u64>,
         error: Option<String>,
     },
     // Chapter X — LLM-drafted persona seed.
@@ -3073,6 +3123,59 @@ mod tests {
                 }
             }
             other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    }
+
+    // ---- Chapter Tutor — AuthorSkill / SkillAuthored IPC round-trip ----
+
+    #[test]
+    fn author_skill_request_round_trips() {
+        let msg = FrontendMessage::AuthorSkill {
+            id: "skill-cli".into(),
+            op: SkillAuthorOp::Update,
+            name: "summarize-doc".into(),
+            trigger: Some("when asked to summarize".into()),
+            procedure: None,
+        };
+        let frame = encode_frame(&msg).expect("encode");
+        let (decoded, consumed): (FrontendMessage, _) =
+            decode_frame(&frame).expect("decode");
+        assert_eq!(consumed, frame.len());
+        match decoded {
+            FrontendMessage::AuthorSkill {
+                op, name, trigger, procedure, ..
+            } => {
+                assert_eq!(op, SkillAuthorOp::Update);
+                assert_eq!(name, "summarize-doc");
+                assert_eq!(trigger.as_deref(), Some("when asked to summarize"));
+                assert_eq!(procedure, None);
+            }
+            other => panic!("expected AuthorSkill, got {other:?}"),
+        }
+    }
+
+    /// The daemon replies with `DaemonMessage::SkillAuthored`; the client
+    /// decodes `DaemonEnvelope`. This guards the cross-enum compatibility the
+    /// CLI/Studio rely on.
+    #[test]
+    fn skill_authored_daemon_message_decodes_as_envelope() {
+        let msg = DaemonMessage::SkillAuthored {
+            id: "skill-cli".into(),
+            ok: true,
+            seq: Some(42),
+            error: None,
+        };
+        let frame = encode_frame(&msg).expect("encode");
+        let (envelope, consumed): (DaemonEnvelope, _) =
+            decode_frame(&frame).expect("decode");
+        assert_eq!(consumed, frame.len());
+        match envelope {
+            DaemonEnvelope::SkillAuthored { ok, seq, error, .. } => {
+                assert!(ok);
+                assert_eq!(seq, Some(42));
+                assert_eq!(error, None);
+            }
+            other => panic!("expected SkillAuthored, got {other:?}"),
         }
     }
 

@@ -132,6 +132,8 @@ mod memory;
 mod notify;
 #[path = "aivyx_modules/persona.rs"]
 mod persona;
+#[path = "aivyx_modules/skills.rs"]
+mod skills;
 #[path = "aivyx_modules/profile.rs"]
 mod profile;
 #[path = "aivyx_modules/role.rs"]
@@ -725,6 +727,38 @@ fn run() -> Result<(), String> {
                         .await
                     }
                 },
+            }
+        });
+    }
+
+    // ---- Chapter Tutor: `aivyx skills <teach|update|forget>` -----
+    if let CliMode::Skills(sub) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move {
+            match sub {
+                SkillsSubcommand::Teach {
+                    name,
+                    trigger,
+                    procedure,
+                } => skills::run_skills_teach(&name, &trigger, &procedure).await,
+                SkillsSubcommand::Update {
+                    name,
+                    trigger,
+                    procedure,
+                } => {
+                    skills::run_skills_update(
+                        &name,
+                        trigger.as_deref(),
+                        procedure.as_deref(),
+                    )
+                    .await
+                }
+                SkillsSubcommand::Forget { name } => {
+                    skills::run_skills_forget(&name).await
+                }
             }
         });
     }
@@ -1644,6 +1678,10 @@ enum CliMode {
     /// Revert carries its target delta id inline. All three
     /// subcommands talk to a running daemon over IPC.
     Persona(PersonaSubcommand),
+    /// `aivyx skills <teach|update|forget>`: Chapter Tutor — operator-initiated
+    /// skill authoring on the persona chain (over a running daemon's IPC),
+    /// distinct from the agent's scope-gated `skills.teach` tool.
+    Skills(SkillsSubcommand),
     /// `aivyx --version` / `aivyx -V`: print `aivyx <version>` and
     /// exit 0 (Phase 61 Task 2). Standard hygiene for binaries
     /// shipped via package managers and required by cargo-dist's
@@ -1960,6 +1998,28 @@ enum PersonaSubcommand {
     /// `aivyx persona proposals <sub>` — Phase 70 review surface
     /// for the reflection auto-loop's pending Persona proposals.
     Proposals(ProposalsSubcommand),
+}
+
+/// Chapter Tutor — subcommand discriminator under [`CliMode::Skills`]. The
+/// operator's direct skill-authoring channel (over the daemon's `AuthorSkill`
+/// IPC), distinct from the agent's scope-gated `skills.teach` tool.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum SkillsSubcommand {
+    /// `aivyx skills teach <name> <trigger> <procedure>` — add a new skill.
+    Teach {
+        name: String,
+        trigger: String,
+        procedure: String,
+    },
+    /// `aivyx skills update <name> [--trigger T] [--procedure P]` — change an
+    /// existing skill's trigger and/or procedure.
+    Update {
+        name: String,
+        trigger: Option<String>,
+        procedure: Option<String>,
+    },
+    /// `aivyx skills forget <name>` — remove an existing skill.
+    Forget { name: String },
 }
 
 /// Phase 70 — operator-facing CLI for the proposal review flow.
@@ -3380,6 +3440,122 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Q1(c) at sign-off: nested enum with show/list/revert variants.
     // Phase 70 adds `proposals` for the self-learning loop's
     // operator review surface.
+    // ---- Chapter Tutor: `aivyx skills <teach|update|forget>` -----
+    if !args.is_empty() && args[0] == "skills" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx skills` requires a subcommand. Supported: \
+             teach, update, forget"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "teach" => {
+                let name = args.get(2).ok_or_else(|| {
+                    "`aivyx skills teach` usage: \
+                     teach <name> <trigger> <procedure>"
+                        .to_string()
+                })?;
+                let trigger = args.get(3).ok_or_else(|| {
+                    "`aivyx skills teach` requires a <trigger> \
+                     (when the skill applies)"
+                        .to_string()
+                })?;
+                let procedure = args.get(4).ok_or_else(|| {
+                    "`aivyx skills teach` requires a <procedure> \
+                     (what to do)"
+                        .to_string()
+                })?;
+                if args.len() > 5 {
+                    return Err(format!(
+                        "`aivyx skills teach` takes exactly \
+                         <name> <trigger> <procedure>. Quote multi-word \
+                         values. Extra: `{}`",
+                        args[5..].join(" ")
+                    ));
+                }
+                SkillsSubcommand::Teach {
+                    name: name.clone(),
+                    trigger: trigger.clone(),
+                    procedure: procedure.clone(),
+                }
+            }
+            "update" => {
+                let name = args.get(2).ok_or_else(|| {
+                    "`aivyx skills update` usage: \
+                     update <name> [--trigger T] [--procedure P]"
+                        .to_string()
+                })?;
+                let mut trigger: Option<String> = None;
+                let mut procedure: Option<String> = None;
+                let mut idx = 3;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--trigger" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--trigger` requires a value".to_string()
+                            })?;
+                            trigger = Some(v.clone());
+                            idx += 2;
+                        }
+                        "--procedure" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--procedure` requires a value".to_string()
+                            })?;
+                            procedure = Some(v.clone());
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "`aivyx skills update` unrecognized argument: \
+                                 `{other}`. Supported: --trigger, --procedure."
+                            ));
+                        }
+                    }
+                }
+                if trigger.is_none() && procedure.is_none() {
+                    return Err(
+                        "`aivyx skills update` needs at least --trigger or \
+                         --procedure."
+                            .into(),
+                    );
+                }
+                SkillsSubcommand::Update {
+                    name: name.clone(),
+                    trigger,
+                    procedure,
+                }
+            }
+            "forget" => {
+                let name = args.get(2).ok_or_else(|| {
+                    "`aivyx skills forget` requires a <name>".to_string()
+                })?;
+                if args.len() > 3 {
+                    return Err(format!(
+                        "`aivyx skills forget` accepts exactly one <name>. \
+                         Got: `{}`",
+                        args[3..].join(" ")
+                    ));
+                }
+                SkillsSubcommand::Forget { name: name.clone() }
+            }
+            other => {
+                return Err(format!(
+                    "`aivyx skills` unknown subcommand `{other}`. \
+                     Supported: teach, update, forget."
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Skills(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
     if !args.is_empty() && args[0] == "persona" {
         let sub = args.get(1).ok_or_else(|| {
             "`aivyx persona` requires a subcommand. Supported: \
@@ -10812,6 +10988,67 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["persona", "show"]))
             .expect("`persona show` must parse");
         assert_eq!(parsed.mode, CliMode::Persona(PersonaSubcommand::Show));
+    }
+
+    // ---- Chapter Tutor — `aivyx skills` parsing ----
+
+    #[test]
+    fn skills_teach_parses_positional_args() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "skills", "teach", "summarize-doc", "when asked", "read then condense",
+        ]))
+        .expect("`skills teach` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Skills(SkillsSubcommand::Teach {
+                name: "summarize-doc".into(),
+                trigger: "when asked".into(),
+                procedure: "read then condense".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn skills_teach_missing_args_errors() {
+        assert!(parse_cli_args_from(&argv(&["skills", "teach", "only-name"])).is_err());
+    }
+
+    #[test]
+    fn skills_update_parses_optional_flags() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "skills", "update", "summarize-doc", "--trigger", "new trigger",
+        ]))
+        .expect("`skills update` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Skills(SkillsSubcommand::Update {
+                name: "summarize-doc".into(),
+                trigger: Some("new trigger".into()),
+                procedure: None,
+            })
+        );
+    }
+
+    #[test]
+    fn skills_update_without_changes_errors() {
+        assert!(parse_cli_args_from(&argv(&["skills", "update", "summarize-doc"])).is_err());
+    }
+
+    #[test]
+    fn skills_forget_parses_name() {
+        let parsed = parse_cli_args_from(&argv(&["skills", "forget", "summarize-doc"]))
+            .expect("`skills forget` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Skills(SkillsSubcommand::Forget {
+                name: "summarize-doc".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn skills_unknown_subcommand_errors() {
+        assert!(parse_cli_args_from(&argv(&["skills", "bogus"])).is_err());
     }
 
     #[test]

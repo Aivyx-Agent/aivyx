@@ -65,7 +65,11 @@ fn is_confirmed(input: &Value) -> bool {
 
 /// Parse the current skill set from the effective-persona
 /// snapshot (each `learned_skills` entry is a `LearnedSkill` JSON).
-fn current_skills(effective: &SharedEffectivePersona) -> Vec<LearnedSkill> {
+///
+/// `pub(crate)` so Chapter Tutor's operator-authoring path
+/// (`daemon_server::author_skill_live`) reads the same skill set the agent
+/// tools do.
+pub(crate) fn current_skills(effective: &SharedEffectivePersona) -> Vec<LearnedSkill> {
     effective
         .read()
         .ok()
@@ -80,13 +84,19 @@ fn current_skills(effective: &SharedEffectivePersona) -> Vec<LearnedSkill> {
 
 /// Append the ops as a single operator-authored "proposal" worth
 /// of `LearnedSkill` deltas, then recompute the effective persona.
-async fn commit_ops(
+///
+/// Returns the chain seq of the **last** appended delta. `pub(crate)` so
+/// Chapter Tutor's operator-authoring path reuses the exact same append +
+/// recompute the agent skill tools use (operator- and agent-authored skills
+/// land identically on the chain).
+pub(crate) async fn commit_ops(
     persona_log: &SharedPersonaLog,
     effective: &SharedEffectivePersona,
     ops: &[PersonaDeltaOp],
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let proposal_id = format!("skill-edit:{}", uuid::Uuid::new_v4());
     let now_ms = now_unix_ms();
+    let mut last_seq = 0u64;
     for (idx, op) in ops.iter().enumerate() {
         let delta = PersonaDelta {
             delta_id: synthesize_delta_id(
@@ -101,14 +111,14 @@ async fn commit_ops(
             category: PersonaDeltaCategory::LearnedSkill,
             op: op.clone(),
         };
-        persona_log
+        last_seq = persona_log
             .append(delta)
             .await
             .map_err(|e| e.to_string())?;
     }
     let entries = persona_log.entries();
     recompute_shared_from_entries(effective, &entries);
-    Ok(())
+    Ok(last_seq)
 }
 
 /// Common injection slots — every edit tool needs the chain + the
@@ -254,7 +264,7 @@ impl Tool for SkillTeachTool {
             ..Default::default()
         };
         match commit_ops(log, eff, &[teach_op(&skill)]).await {
-            Ok(()) => ToolOutcome::Completed {
+            Ok(_) => ToolOutcome::Completed {
                 output: json!({ "taught": name }),
                 verified: Verification::NotApplicable,
             },
@@ -334,7 +344,7 @@ impl Tool for SkillUpdateTool {
         };
         let new = merged_skill(old, new_trigger, new_procedure);
         match commit_ops(log, eff, &update_ops(old, &new)).await {
-            Ok(()) => ToolOutcome::Completed {
+            Ok(_) => ToolOutcome::Completed {
                 output: json!({ "updated": name }),
                 verified: Verification::NotApplicable,
             },
@@ -403,7 +413,7 @@ impl Tool for SkillForgetTool {
             return fail(self.id, not_found(name, &skills));
         };
         match commit_ops(log, eff, &[forget_op(old)]).await {
-            Ok(()) => ToolOutcome::Completed {
+            Ok(_) => ToolOutcome::Completed {
                 output: json!({ "forgot": name }),
                 verified: Verification::NotApplicable,
             },

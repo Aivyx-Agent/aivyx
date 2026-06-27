@@ -2526,6 +2526,44 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::AuthorSkill {
+                            id,
+                            op,
+                            name,
+                            trigger,
+                            procedure,
+                        } => {
+                            // Chapter Tutor — operator-initiated skill authoring
+                            // on a grown chain: signed + audited append via the
+                            // same path the agent skill tools use, but driven by
+                            // operator authority (no agent scope), then
+                            // recomputed for next-turn adoption.
+                            let resp = match author_skill_live(
+                                persona_log.as_ref(),
+                                &shared_persona,
+                                op,
+                                &name,
+                                trigger.as_deref(),
+                                procedure.as_deref(),
+                            )
+                            .await
+                            {
+                                Ok(seq) => DaemonMessage::SkillAuthored {
+                                    id,
+                                    ok: true,
+                                    seq: Some(seq),
+                                    error: None,
+                                },
+                                Err(reason) => DaemonMessage::SkillAuthored {
+                                    id,
+                                    ok: false,
+                                    seq: None,
+                                    error: Some(reason),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::DraftPersonaSeed { id, description } => {
                             // Chapter X — one-shot LLM draft of a persona seed
                             // from the operator's description. Read-only (drafts
@@ -5394,6 +5432,67 @@ async fn seed_persona_live(
     Ok(appended)
 }
 
+/// Chapter Tutor — operator-initiated skill authoring on a **grown** chain.
+///
+/// The operator (via `aivyx skills …` or the Studio) is the authority here, so
+/// unlike the agent's scope-gated `skills.teach`/`update`/`forget` tools this
+/// runs straight from the `AuthorSkill` IPC with no agent scope. It reuses the
+/// exact same op-builders ([`crate::skill_edit`]) + chain-append
+/// ([`crate::skill_tool::commit_ops`]) the tools use, so operator- and
+/// agent-authored skills land identically (signed, audited, live-recomputed).
+/// Returns the chain seq of the last appended delta.
+async fn author_skill_live(
+    persona_log: Option<&Arc<crate::persona::PersistentPersonaLog>>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    op: aivyx_ipc::protocol::SkillAuthorOp,
+    name: &str,
+    trigger: Option<&str>,
+    procedure: Option<&str>,
+) -> Result<u64, String> {
+    use aivyx_ipc::protocol::SkillAuthorOp;
+    let log = persona_log.ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    crate::skill_edit::validate_skill_name(name)?;
+    let name = name.trim();
+    let skills = crate::skill_tool::current_skills(shared_persona);
+    let existing = crate::skill_edit::find_skill_by_name(&skills, name);
+    let ops: Vec<crate::persona::PersonaDeltaOp> = match op {
+        SkillAuthorOp::Teach => {
+            if existing.is_some() {
+                return Err(format!(
+                    "a skill named {name:?} already exists — use update"
+                ));
+            }
+            let trigger = trigger.unwrap_or("").trim();
+            let procedure = procedure.unwrap_or("").trim();
+            if trigger.is_empty() || procedure.is_empty() {
+                return Err("teach needs a non-empty trigger and procedure".into());
+            }
+            let skill = crate::persona::LearnedSkill {
+                name: name.to_string(),
+                trigger: trigger.to_string(),
+                procedure: procedure.to_string(),
+                ..Default::default()
+            };
+            vec![crate::skill_edit::teach_op(&skill)]
+        }
+        SkillAuthorOp::Update => {
+            let existing =
+                existing.ok_or_else(|| format!("no skill named {name:?} to update"))?;
+            if trigger.is_none() && procedure.is_none() {
+                return Err("update needs a new trigger and/or procedure".into());
+            }
+            let merged = crate::skill_edit::merged_skill(existing, trigger, procedure);
+            crate::skill_edit::update_ops(existing, &merged).to_vec()
+        }
+        SkillAuthorOp::Forget => {
+            let existing =
+                existing.ok_or_else(|| format!("no skill named {name:?} to forget"))?;
+            vec![crate::skill_edit::forget_op(existing)]
+        }
+    };
+    crate::skill_tool::commit_ops(log, shared_persona, &ops).await
+}
+
 /// Chapter X — map the wasm-clean wire seed to the config seed the primitive
 /// consumes.
 fn wire_to_persona_seed(wire: aivyx_ipc::protocol::PersonaSeedWire) -> aivyx_config::PersonaSeed {
@@ -6824,6 +6923,116 @@ mod tests {
         let again = seed_persona_live(Some(&log), &shared, None, wire).await;
         assert!(again.is_err(), "must refuse seeding a non-empty chain");
         assert_eq!(log.len(), 2, "chain unchanged after refusal");
+    }
+
+    /// Chapter Tutor — operator skill authoring: teach / update / forget on a
+    /// chain (no genesis gate), with collision + unknown-skill errors and
+    /// live adoption into the shared persona.
+    #[tokio::test]
+    async fn author_skill_live_teach_update_forget_and_errors() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_ipc::protocol::SkillAuthorOp;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = test_dir(&format!(
+            "tu-author-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .expect("storage");
+        let log = Arc::new(
+            crate::persona::PersistentPersonaLog::open(
+                store.domain(KeyDomain::Persona),
+                b"persona-key".to_vec(),
+            )
+            .await
+            .expect("persona log"),
+        );
+        let shared = crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona::default(),
+        );
+
+        // No persona log → clear error.
+        assert!(author_skill_live(
+            None, &shared, SkillAuthorOp::Teach, "x", Some("t"), Some("p")
+        )
+        .await
+        .is_err());
+
+        // Teach a new skill → appended + adopted live.
+        author_skill_live(
+            Some(&log),
+            &shared,
+            SkillAuthorOp::Teach,
+            "summarize-doc",
+            Some("when asked to summarize"),
+            Some("read then condense"),
+        )
+        .await
+        .expect("teach ok");
+        let skills = crate::skill_tool::current_skills(&shared);
+        assert!(skills.iter().any(|s| s.name == "summarize-doc"));
+
+        // Duplicate teach → rejected (use update).
+        assert!(author_skill_live(
+            Some(&log), &shared, SkillAuthorOp::Teach, "summarize-doc",
+            Some("t"), Some("p")
+        )
+        .await
+        .is_err());
+
+        // Teach with missing trigger/procedure → rejected.
+        assert!(author_skill_live(
+            Some(&log), &shared, SkillAuthorOp::Teach, "incomplete", None, None
+        )
+        .await
+        .is_err());
+
+        // Update existing: changes trigger, preserves the omitted procedure.
+        author_skill_live(
+            Some(&log), &shared, SkillAuthorOp::Update, "summarize-doc",
+            Some("new trigger"), None,
+        )
+        .await
+        .expect("update ok");
+        let skills = crate::skill_tool::current_skills(&shared);
+        let s = skills.iter().find(|s| s.name == "summarize-doc").unwrap();
+        assert_eq!(s.trigger, "new trigger");
+        assert_eq!(
+            s.procedure, "read then condense",
+            "omitted field preserved on update"
+        );
+
+        // Update unknown / forget unknown → errors.
+        assert!(author_skill_live(
+            Some(&log), &shared, SkillAuthorOp::Update, "nope", Some("t"), None
+        )
+        .await
+        .is_err());
+        assert!(author_skill_live(
+            Some(&log), &shared, SkillAuthorOp::Forget, "nope", None, None
+        )
+        .await
+        .is_err());
+
+        // Forget existing → removed + adopted.
+        author_skill_live(
+            Some(&log), &shared, SkillAuthorOp::Forget, "summarize-doc", None, None,
+        )
+        .await
+        .expect("forget ok");
+        let skills = crate::skill_tool::current_skills(&shared);
+        assert!(
+            !skills.iter().any(|s| s.name == "summarize-doc"),
+            "skill forgotten"
+        );
     }
 
     #[tokio::test]

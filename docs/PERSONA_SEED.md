@@ -276,3 +276,47 @@ starter = false   # opt out of the default repertoire (default: on)
 - **Operator wins** — a declared skill of the same name overrides the default.
 - **No new tool/base** — skills orchestrate existing capabilities; the lightweight
   `{name, trigger, procedure}` model, not Anthropic's SKILL.md filesystem format.
+
+## Chapter Tutor — operator-initiated skill teaching
+
+W/X/Outfit cover *seeding* (genesis) and the agent's own governed proposals. But
+once an agent is **grown** (a non-empty chain), the operator had no way to teach
+it one specific skill: the seed is genesis-only, proposals are agent-initiated,
+and the agent's `skills.teach` tool is correctly gated behind `skills.write` —
+which an autonomous agent should not hold (no-self-escalation, see
+`SECURITY_POSTURE.md`). Tutor closes that gap with an **operator authoring**
+channel, cleanly separated from agent self-teaching.
+
+**The principle.** The human operator is already the Kernel-tier authority (they
+hold the passphrase, set access, arm autonomy — none agent-reachable). So an
+operator-run teach command is *authoring*, not self-escalation. Tutor routes it
+through the daemon over the local socket (the same trust basis as
+`aivyx persona revert` / `proposals approve`), so it needs **no** agent scope and
+works on a grown chain. The agent's `skills.teach` tool and `skills.write` scope
+are unchanged.
+
+**CLI.**
+
+```sh
+aivyx skills teach  <name> <trigger> <procedure>     # add (rejects a duplicate name)
+aivyx skills update <name> [--trigger T] [--procedure P]   # change; omitted field kept
+aivyx skills forget <name>                            # remove
+```
+
+Each requires a running daemon (`aivyx daemon run`), sends an `AuthorSkill` IPC,
+and the daemon appends a signed, operator-authored `LearnedSkill` delta via the
+**same** `skill_edit` op-builders + chain-append the agent tools use — so
+operator- and agent-authored skills land identically (audited on the persona
+chain, adopted next turn, reversible via `aivyx persona revert`). Listing skills
+is the Studio Repertoire screen; `aivyx persona list` shows the underlying chain.
+
+### Invariants (Tutor)
+
+- **Operator authority, not agent scope** — the channel is the local daemon
+  socket; the agent never gains `skills.write`.
+- **Works on a grown chain** — unlike genesis seeding; not gated on an empty chain.
+- **Same chain machinery** — signed append + live recompute + reversible, shared
+  with the agent skill tools.
+- **Studio editing deferred** — the read-only Repertoire screen stays read-only
+  for now (CLI-first); the `AuthorSkill` IPC is ready for a future "Add skill"
+  button.
