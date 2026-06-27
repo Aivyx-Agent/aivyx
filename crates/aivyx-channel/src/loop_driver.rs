@@ -416,6 +416,20 @@ pub fn gate_stop_reason(
 
 /// Shared run-state handle plus the start-notify. Cloned into the
 /// driver task and every IPC handler.
+///
+/// ## Durability note (Chapter Circuit, CI.4)
+///
+/// This run state is **in-memory only** — a fresh
+/// [`LoopRunState::default`] (`active = false`) is created each
+/// daemon boot and is never persisted or reloaded (unlike team
+/// missions, which `reload()` paused state). The backlog *stories*
+/// are durable (the HMAC-chained `PersistentLoopBacklog`); the
+/// *run* is not. So a daemon crash/restart mid-run does **not**
+/// auto-resume: the stories remain pending and the operator (or an
+/// autostart hook) must re-issue `aivyx loop start`. This is the
+/// conservative default — auto-resuming an autonomous, possibly
+/// code-committing loop on every boot is a deliberate safety
+/// decision, tracked as an opt-in follow-up rather than assumed.
 #[derive(Clone)]
 pub struct SharedLoopState {
     state: Arc<RwLock<LoopRunState>>,
@@ -519,6 +533,45 @@ impl SharedLoopState {
     }
 }
 
+/// Chapter Circuit (CI.4) — clears a run's `active` flag if the
+/// driver task unwinds (panics) mid-run.
+///
+/// Every *clean* stop path calls [`SharedLoopState::finish_run`] (or
+/// `request_stop`), which clears `active`. But if an iteration
+/// panics, the driver task dies with `active` still `true` and no
+/// driver behind it — and because [`SharedLoopState::request_start`]
+/// no-ops while `active`, every future `aivyx loop start` would
+/// silently refuse ("already running"), wedging the loop until a
+/// daemon restart. This guard, scoped to a single run, runs on
+/// unwind and clears the flag so the next start can proceed. The
+/// driver `disarm()`s it on a clean run end (the stop path already
+/// recorded the precise reason); only an abnormal exit triggers the
+/// fallback clear.
+struct RunActiveGuard {
+    shared: SharedLoopState,
+    armed: bool,
+}
+
+impl RunActiveGuard {
+    fn new(shared: SharedLoopState) -> Self {
+        RunActiveGuard { shared, armed: true }
+    }
+
+    /// The run ended (or is ending) through a path that already
+    /// owns the `active` flag — don't fire the fallback clear.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RunActiveGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.shared.finish_run("driver aborted unexpectedly");
+        }
+    }
+}
+
 /// How long the idle driver waits for a start signal before
 /// re-checking the shutdown token. Bounded so daemon shutdown is
 /// responsive even when no run is active.
@@ -607,10 +660,17 @@ pub async fn run_loop_driver(
         // of idle slack.
         let mut stall = StallTracker::new(max_idle_iterations);
 
+        // Chapter Circuit (CI.4) — arm the wedge guard for this run.
+        // On a clean end we disarm it (the stop path owns `active`);
+        // on a panic it clears `active` so the loop isn't wedged.
+        let mut active_guard = RunActiveGuard::new(shared.clone());
+
         loop {
             if shutdown.is_cancelled() {
                 // Leave the run flagged active so it can resume on
-                // restart-via-start; just stop driving.
+                // restart-via-start; just stop driving. (Disarm so the
+                // guard doesn't overwrite that intent on the way out.)
+                active_guard.disarm();
                 return;
             }
             let remaining = backlog.remaining_count();
@@ -728,6 +788,11 @@ pub async fn run_loop_driver(
                 break;
             }
         }
+
+        // Chapter Circuit (CI.4) — the run ended cleanly (every `break`
+        // above ran `finish_run`, which cleared `active` + recorded the
+        // reason). Disarm the wedge guard so it doesn't overwrite that.
+        active_guard.disarm();
     }
 }
 
@@ -1164,6 +1229,45 @@ mod tests {
         // The quality-gate + commit steps reference `shell` and `git`.
         assert!(p.contains("`shell`"), "lost the shell quality-gate step");
         assert!(p.contains("`git`"), "lost the git commit step");
+    }
+
+    #[test]
+    fn run_active_guard_clears_active_on_abnormal_drop() {
+        // Simulates a driver task that unwinds mid-run: the guard
+        // drops while still armed and must clear `active` so the next
+        // `loop start` isn't wedged.
+        let s = SharedLoopState::new();
+        assert!(s.request_start(10, 0));
+        assert!(s.snapshot().active);
+        {
+            let _guard = RunActiveGuard::new(s.clone());
+            // dropped here without disarm (the "panic" case)
+        }
+        let snap = s.snapshot();
+        assert!(!snap.active, "an armed drop must clear active");
+        assert_eq!(
+            snap.last_stop_reason.as_deref(),
+            Some("driver aborted unexpectedly"),
+        );
+        // The wedge is gone — a fresh start succeeds.
+        assert!(s.request_start(10, 1));
+    }
+
+    #[test]
+    fn run_active_guard_disarm_leaves_active_untouched() {
+        // The clean-end path: the run owns `active` (e.g. left active
+        // on shutdown for restart-via-start), so a disarmed guard must
+        // not touch it.
+        let s = SharedLoopState::new();
+        assert!(s.request_start(10, 0));
+        {
+            let mut guard = RunActiveGuard::new(s.clone());
+            guard.disarm();
+        }
+        assert!(
+            s.snapshot().active,
+            "a disarmed guard must leave active as the run left it",
+        );
     }
 
     #[test]

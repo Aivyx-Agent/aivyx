@@ -7,7 +7,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
-- **Chapter Circuit — agentic-loop hardening (CI.0–CI.3).** A deliberate
+- **Chapter Circuit — agentic-loop hardening (CI.0–CI.4).** A deliberate
   audit + hardening pass over the autonomous loop, prompted by the v0.7.4
   scope-floor bug.
   - **CI.0** — the loop's `team.run` delegation tool is now granted to the
@@ -38,6 +38,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
     decided to keep `team.run` available whenever the loop is armed (rather than
     posture-gate it) while documenting that loop-delegated team missions are not
     yet bounded by an aggregate budget — both captured as tracked follow-ups.
+  - **CI.4** — durability & re-entrancy audit. Fixed a wedge: if the loop driver
+    task panicked mid-run it left the run flagged `active` with no driver behind
+    it, so every later `loop start` silently no-op'd ("already running") until a
+    daemon restart — a new run-scoped guard now clears the flag on an abnormal
+    exit. Documented that loop run-state is in-memory only (a daemon restart
+    mid-run does not auto-resume; stories persist, the operator re-issues
+    `loop start`); opt-in auto-resume is a tracked follow-up.
 
 ## [0.7.4] — 2026-06-28
 
