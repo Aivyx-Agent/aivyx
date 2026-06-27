@@ -1510,7 +1510,13 @@ async fn collect_persona_seed(
             seed.learned_context.push(ctx);
         }
 
-        if prompt_yes_no("  Add a starter skill?", false, reader, writer)? {
+        writeln!(
+            writer,
+            "  Your agent already comes with starter skills (summarize a document, \
+             research a topic, draft a reply, daily briefing, capture a note)."
+        )
+        .map_err(|e| e.to_string())?;
+        if prompt_yes_no("  Add one of your own?", false, reader, writer)? {
             let name = prompt_line(
                 "    Skill name (kebab-case, e.g. rust-review): ",
                 reader,
@@ -2582,8 +2588,17 @@ mod tests {
         .expect("generated toml loads");
         let seed = cfg.persona_seed.expect("[persona_seed] parsed");
         assert_eq!(seed.character_traits, vec!["pragmatic", "precise"]);
-        assert_eq!(seed.skills.len(), 1);
-        assert_eq!(seed.skills[0].name, "rust-review");
+        // Chapter Outfit — the loader merges the default starter skills into the
+        // operator's seed (starter-on by default). The operator's declared skill
+        // survives; the defaults are appended.
+        assert!(
+            seed.skills.iter().any(|s| s.name == "rust-review"),
+            "operator skill survives the starter merge"
+        );
+        assert_eq!(
+            seed.skills.len(),
+            1 + aivyx_config::default_starter_skills().len()
+        );
     }
 
     /// Write `toml` to a unique temp file and return its path (no tempfile dep).

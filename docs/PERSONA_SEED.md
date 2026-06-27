@@ -232,3 +232,47 @@ flow.
 - **LLM-optional** — drafting degrades to a typed error with no model; seeding is
   LLM-free and always available.
 - **Studio only / local-first** — same scope + offline rules as R–W.
+
+## Chapter Outfit — default starter skills
+
+W/X let the **operator** seed skills. Outfit gives a *fresh* agent a small,
+curated repertoire even when the operator declares none — so a brand-new agent
+can do real work on turn one instead of arriving with zero skills. It is the
+skills analogue of the default cron routines and the default system-prompt
+charter (Chapter Keel): an opinionated, default-on starting posture.
+
+**The five starter skills** (`aivyx_config::default_starter_skills`):
+`summarize-document`, `research-and-summarize`, `draft-reply`, `daily-briefing`,
+`capture-note`. Each is a lightweight `{name, trigger, procedure}` recipe whose
+procedure composes Aivyx's own tools and pillars (the Sheaf readers, `web.search`
+/ `web.extract`, memory, workspace, persona) — the connective tissue that
+activates the capabilities the charter tells the agent to use.
+
+**Mechanism (compiled-in + genesis-planted).** The set is compiled into
+`aivyx-config`, not written into `aivyx.toml`. At config-load the loader merges
+it into `[persona_seed].skills` (`merge_starter_skills`), and the **existing**
+one-time `seed_persona_chain_if_empty` plants it onto the signed chain at first
+boot — so the seeding path is unchanged. A fresh agent (empty chain) gets the
+skills; an already-running agent (non-empty chain) is **never** retro-injected.
+Once planted they are ordinary `LearnedSkill`s: visible in the Studio Skills
+library, scored by Whetstone, and removable via `skills.forget`.
+
+**Config (`[skills]`).**
+
+```toml
+[skills]
+starter = false   # opt out of the default repertoire (default: on)
+```
+
+**Precedence.** Operator-declared `[[persona_seed.skill]]` entries win on a
+`name` collision; the remaining defaults are still appended.
+
+### Invariants (Outfit)
+
+- **Default-on, fully opt-out** — `[skills] starter = false` is byte-identical to
+  a pre-Outfit build.
+- **Genesis-only** — starter skills are a first-run gift, never injected into a
+  grown persona chain (the `seed_persona_chain_if_empty` guard).
+- **Operator wins** — a declared skill of the same name overrides the default.
+- **No new tool/base** — skills orchestrate existing capabilities; the lightweight
+  `{name, trigger, procedure}` model, not Anthropic's SKILL.md filesystem format.

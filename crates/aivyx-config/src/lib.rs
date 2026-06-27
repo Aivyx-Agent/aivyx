@@ -229,6 +229,102 @@ What you will not do
 - You cannot and will not widen your own authority, reach, or autonomy. What you can access and when you run unattended are the operator's decisions, not yours.
 - Everything you do is recorded to a tamper-evident log. Act as though it is, because it is.";
 
+/// Default starter skills (Chapter Outfit) — the small, curated repertoire a
+/// brand-new agent is equipped with so it can do real work on turn one instead
+/// of arriving with none.
+///
+/// Like [`DEFAULT_SYSTEM_PROMPT`], these are compiled-in and default-on. Unlike
+/// the charter (which is read live every turn), they are **genesis-planted**:
+/// the loader merges them into [`PersonaSeed::skills`] at config-load (unless
+/// opted out), and the daemon's existing one-time `seed_persona_chain_if_empty`
+/// appends them to the signed persona chain at first boot iff the chain is
+/// empty. So a fresh agent gets them; an already-running agent is never
+/// retro-injected. Once planted they are ordinary `LearnedSkill`s — visible in
+/// the Studio Skills library, refinable, and removable via `skills.forget`.
+///
+/// Each is a lightweight `{name, trigger, procedure}` recipe (not Anthropic's
+/// SKILL.md filesystem format). Per the research, the **trigger** is the field
+/// that decides whether the skill fires, so it names concrete situations and
+/// keywords; the **procedure** encodes a reliable sequence over Aivyx's own
+/// tools and pillars (memory, workspace, the Sheaf readers, the web tools),
+/// which is where a fresh agent is weakest. Only the `name: trigger` line of
+/// each renders into the system prompt every turn (`render_skills_section`),
+/// so the standing context cost is a handful of short lines.
+///
+/// Suppressed entirely when `[skills] starter = false` (byte-identical to a
+/// pre-Outfit build). Operator-declared `[[persona_seed.skill]]` entries take
+/// precedence on a name collision.
+pub fn default_starter_skills() -> Vec<SeedSkill> {
+    vec![
+        SeedSkill {
+            name: "summarize-document".to_string(),
+            trigger: "When the operator asks you to summarize, condense, or give \
+                      the key points of a document, file, PDF, spreadsheet, or web \
+                      article."
+                .to_string(),
+            procedure: "Load the source with the right tool — `fs.read` for text, \
+                        `data.pdf` / `data.csv` / `data.xlsx` for those formats, \
+                        `web.extract` for a URL. Then produce a tight summary: a \
+                        one-line gist, then 3–7 key points as bullets, then any \
+                        action items or open questions. Mirror the document's own \
+                        terms and don't pad. If the source is large, summarize it \
+                        section by section first, then condense."
+                .to_string(),
+        },
+        SeedSkill {
+            name: "research-and-summarize".to_string(),
+            trigger: "When the operator asks you to look something up, research a \
+                      topic, or find out about something you don't already know."
+                .to_string(),
+            procedure: "Check your memory first in case you already know. Then \
+                        `web.search` for the topic, `web.extract` the 2–3 most \
+                        relevant results, and synthesize a concise answer with a \
+                        short source list. Flag anything conflicting or uncertain \
+                        rather than papering over it. If the finding is worth \
+                        keeping, save it to memory under a fitting topic."
+                .to_string(),
+        },
+        SeedSkill {
+            name: "draft-reply".to_string(),
+            trigger: "When the operator asks you to draft a reply, email, message, \
+                      or written response."
+                .to_string(),
+            procedure: "Gather the context you're replying to. Match the operator's \
+                        communication style from your persona. Draft the response \
+                        and SHOW it for approval — never send, post, or commit it \
+                        yourself. Offer a shorter and a longer variant only when the \
+                        right length is unclear."
+                .to_string(),
+        },
+        SeedSkill {
+            name: "daily-briefing".to_string(),
+            trigger: "When the operator asks for a briefing, a catch-up, or \
+                      \"what's going on\", or when a scheduled routine asks for a \
+                      digest."
+                .to_string(),
+            procedure: "Assemble a concise briefing from what you have: recent items \
+                        from memory, your latest workspace journal notes, the status \
+                        of your scheduled routines, and any persona or skill \
+                        proposals awaiting the operator's review. Lead with anything \
+                        time-sensitive. Keep it a short, friendly briefing — not an \
+                        exhaustive dump."
+                .to_string(),
+        },
+        SeedSkill {
+            name: "capture-note".to_string(),
+            trigger: "When the operator shares a fact, preference, decision, or \
+                      instruction worth remembering."
+                .to_string(),
+            procedure: "Write it to memory under a fitting topic (create one if \
+                        needed), phrased so a future recall is useful. Confirm in one \
+                        line what you saved and where. Save durable things that \
+                        change how you'll act later — not one-off conversational \
+                        trivia."
+                .to_string(),
+        },
+    ]
+}
+
 /// Default per-topic memory-write tripwire. Matches
 /// [`aivyx_memory::DEFAULT_MAX_PER_TOPIC`] (10_000) by value. We pin
 /// the constant here rather than re-exporting from `aivyx-memory` to
@@ -4409,6 +4505,40 @@ struct RawSeedSkill {
     procedure: String,
 }
 
+/// Chapter Outfit — merge the compiled-in [`default_starter_skills`] into the
+/// operator's (possibly absent) `[persona_seed]`.
+///
+/// - `starter_enabled == false` ⇒ the seed is returned untouched (opt-out is
+///   byte-identical).
+/// - Otherwise each default skill is appended **unless** the operator already
+///   declared a skill with the same `name` — operator entries win on collision.
+/// - A `None` seed with starter on becomes `Some` carrying just the defaults,
+///   so a bare install still gets the repertoire planted at genesis.
+///
+/// The genesis-once guard lives downstream in `seed_persona_chain_if_empty`, so
+/// an already-running agent is never retro-injected even though its loaded
+/// config now carries the defaults.
+fn merge_starter_skills(
+    seed: Option<PersonaSeed>,
+    starter_enabled: bool,
+) -> Option<PersonaSeed> {
+    if !starter_enabled {
+        return seed;
+    }
+    let mut merged = seed.unwrap_or_default();
+    for default in default_starter_skills() {
+        if merged.skills.iter().any(|s| s.name == default.name) {
+            continue;
+        }
+        merged.skills.push(default);
+    }
+    if merged == PersonaSeed::default() {
+        None
+    } else {
+        Some(merged)
+    }
+}
+
 /// Chapter W — map the raw `[persona_seed]` to `Option<PersonaSeed>`.
 /// Normalizes each list (trim, drop empties); a skill is kept only when it has
 /// a non-empty `name` (its identifier). An entirely-empty seed → `None` (no
@@ -4735,6 +4865,10 @@ struct RawRecallFeedback {
 struct RawSkills {
     #[serde(default)]
     auto_propose: RawSkillsAutoPropose,
+    /// Chapter Outfit — `[skills] starter`. `None`/absent ⇒ on. `false` ⇒
+    /// suppress the compiled-in [`default_starter_skills`] (byte-identical to a
+    /// pre-Outfit build).
+    starter: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -5661,7 +5795,14 @@ impl AivyxConfig {
         let persona_lifecycle = build_persona_lifecycle_config(
             &toml.persona_lifecycle,
         )?;
-        let persona_seed = build_persona_seed(&toml.persona_seed);
+        // Chapter Outfit — merge the compiled-in default starter skills into
+        // the operator's seed (operator wins on name collision) unless
+        // `[skills] starter = false`. The genesis-once guard downstream keeps
+        // an already-running agent from being retro-injected.
+        let persona_seed = merge_starter_skills(
+            build_persona_seed(&toml.persona_seed),
+            toml.skills.starter.unwrap_or(true),
+        );
         // For the section-level layers, an explicitly-present section
         // (`Some`) is the operator's choice and wins; only when absent does
         // the profile synthesize an `enabled` config. `[recall_cluster]` is

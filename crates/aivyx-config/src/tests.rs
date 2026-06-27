@@ -7448,10 +7448,12 @@ fn proactive_enabled_all_signals_off_is_invalid() {
 // ------------------------------------------------------------------
 
 /// No `[persona_seed]` section → `persona_seed: None` (no onboarding seed).
+/// `[skills] starter = false` isolates this from Chapter Outfit's default
+/// starter-skill merge (tested separately).
 #[test]
 fn persona_seed_absent_section_is_none() {
     let env = EnvScope::new();
-    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).expect("load");
+    let cfg = load_with_toml("\n[skills]\nstarter = false\n", "seed-absent");
     assert!(cfg.persona_seed.is_none());
     drop(env);
 }
@@ -7470,7 +7472,8 @@ fn persona_seed_parses_facets_and_skills() {
          \n[[persona_seed.skill]]\n\
          name = \"rust-review\"\n\
          trigger = \"when asked to review Rust\"\n\
-         procedure = \"check unwraps + lifetimes; cite file:line\"\n",
+         procedure = \"check unwraps + lifetimes; cite file:line\"\n\
+         \n[skills]\nstarter = false\n",
         "seed-full",
     );
     let s = cfg.persona_seed.expect("section present");
@@ -7499,7 +7502,8 @@ fn persona_seed_normalizes_blanks_and_drops_nameless_skills() {
          \n[[persona_seed.skill]]\n\
          name = \"kept\"\n\
          trigger = \"t\"\n\
-         procedure = \"p\"\n",
+         procedure = \"p\"\n\
+         \n[skills]\nstarter = false\n",
         "seed-norm",
     );
     let s = cfg.persona_seed.expect("section present");
@@ -7515,10 +7519,116 @@ fn persona_seed_normalizes_blanks_and_drops_nameless_skills() {
 fn persona_seed_all_blank_is_none() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[persona_seed]\nlearned_context = [\"\", \"  \"]\ncharacter_traits = []\n",
+        "\n[persona_seed]\nlearned_context = [\"\", \"  \"]\ncharacter_traits = []\n\
+         \n[skills]\nstarter = false\n",
         "seed-empty",
     );
     assert!(cfg.persona_seed.is_none());
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// Chapter Outfit — default starter skills
+// ------------------------------------------------------------------
+
+/// Drift guard on the compiled-in starter repertoire: a fixed count of
+/// well-formed `{name, trigger, procedure}` recipes with unique kebab-case
+/// names, and a compactness ceiling so the standing per-turn cost (the
+/// `name: trigger` line each renders) can't quietly balloon.
+#[test]
+fn default_starter_skills_carry_valid_recipes() {
+    let skills = crate::default_starter_skills();
+    assert_eq!(skills.len(), 5, "the curated starter set is five skills");
+
+    let mut seen = std::collections::HashSet::new();
+    for sk in &skills {
+        assert!(!sk.name.trim().is_empty(), "skill has a name");
+        assert!(!sk.trigger.trim().is_empty(), "{} has a trigger", sk.name);
+        assert!(!sk.procedure.trim().is_empty(), "{} has a procedure", sk.name);
+        // Kebab-case identifier: lowercase, no whitespace.
+        assert!(
+            sk.name.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+            "skill name {:?} is kebab-case",
+            sk.name
+        );
+        assert!(seen.insert(&sk.name), "skill name {:?} is unique", sk.name);
+        // Compactness: a recipe, not an essay.
+        assert!(
+            sk.trigger.len() < 240 && sk.procedure.len() < 600,
+            "skill {:?} stays compact (trigger {}, procedure {})",
+            sk.name,
+            sk.trigger.len(),
+            sk.procedure.len()
+        );
+    }
+}
+
+/// A bare config (no `[persona_seed]`, no `[skills]`) gets the full starter
+/// repertoire merged in — the default-on behavior that equips a fresh agent.
+#[test]
+fn bare_config_merges_default_starter_skills() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).expect("load");
+    let seed = cfg.persona_seed.expect("starter skills make the seed Some");
+    let names: Vec<&str> = seed.skills.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(seed.skills.len(), 5);
+    assert!(names.contains(&"summarize-document"));
+    assert!(names.contains(&"daily-briefing"));
+    assert!(names.contains(&"capture-note"));
+    // Only skills are seeded by default — no facets get invented.
+    assert!(seed.learned_context.is_empty());
+    assert!(seed.character_traits.is_empty());
+    drop(env);
+}
+
+/// Operator-declared skills win on a name collision: the operator's
+/// `daily-briefing` replaces the default, and the other four defaults are still
+/// appended (no duplicate, no loss).
+#[test]
+fn operator_declared_skill_wins_over_starter_default() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[[persona_seed.skill]]\n\
+         name = \"daily-briefing\"\n\
+         trigger = \"my own trigger\"\n\
+         procedure = \"my own procedure\"\n",
+        "outfit-collision",
+    );
+    let seed = cfg.persona_seed.expect("seed present");
+    // 1 operator skill + 4 non-colliding defaults = 5 (no duplicate).
+    assert_eq!(seed.skills.len(), 5);
+    let briefings: Vec<&crate::SeedSkill> =
+        seed.skills.iter().filter(|s| s.name == "daily-briefing").collect();
+    assert_eq!(briefings.len(), 1, "no duplicate daily-briefing");
+    assert_eq!(
+        briefings[0].procedure, "my own procedure",
+        "operator's version wins, not the default"
+    );
+    drop(env);
+}
+
+/// `[skills] starter = false` suppresses the defaults entirely — byte-identical
+/// to a pre-Outfit build. A bare config stays `None`; an operator seed keeps
+/// only the operator's own skills.
+#[test]
+fn skills_starter_false_suppresses_defaults() {
+    let env = EnvScope::new();
+    // Bare + opt-out → no seed at all.
+    let bare = load_with_toml("\n[skills]\nstarter = false\n", "outfit-off-bare");
+    assert!(bare.persona_seed.is_none());
+
+    // Operator seed + opt-out → exactly the operator's skills, no defaults.
+    let with_op = load_with_toml(
+        "\n[[persona_seed.skill]]\n\
+         name = \"rust-review\"\n\
+         trigger = \"t\"\n\
+         procedure = \"p\"\n\
+         \n[skills]\nstarter = false\n",
+        "outfit-off-op",
+    );
+    let seed = with_op.persona_seed.expect("operator seed present");
+    assert_eq!(seed.skills.len(), 1);
+    assert_eq!(seed.skills[0].name, "rust-review");
     drop(env);
 }
 
