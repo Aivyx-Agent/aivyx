@@ -993,6 +993,41 @@ mod tests {
         assert!(prompt.ends_with(LOOP_SYSTEM_PROMPT));
     }
 
+    /// Chapter Circuit (CI.0) — prompt↔floor contract drift guard.
+    ///
+    /// The canonical iteration prompt instructs the loop agent to call a
+    /// specific set of tools. Each such tool MUST be reachable by the
+    /// zero-config default role, or the instruction is dead on arrival — the
+    /// exact failure mode that left `loop.*` (v0.7.4) and `team.run` (CI.0)
+    /// denied for every iteration. The grants live in the daemon binary's
+    /// backcompat floor (`aivyx-cli/src/bin/aivyx.rs`, gated on the loop being
+    /// armed). This test can't reach that inline floor, so it pins the *prompt*
+    /// side: if someone edits the instruction to add/rename a tool, this guard
+    /// fails and points them at the floor grant they must keep in lockstep.
+    ///
+    /// Disposition of each named tool:
+    /// - `loop.next` / `loop.complete` / `loop.note` — floor-granted when armed.
+    /// - `team.run` — floor-granted when armed (the delegation branch).
+    /// - `shell` (`shell.exec`) — already in the floor (Local channel).
+    /// - `git` (`git.write`) — intentionally NOT floor-granted (Forge: operator
+    ///   opts in per-repo). The unconditional commit step is a known task-fit
+    ///   mismatch tracked by CI.2; it is listed here so the coupling is explicit.
+    #[test]
+    fn iteration_prompt_only_names_reachable_tools() {
+        let p = LOOP_SYSTEM_PROMPT;
+        for tool in ["loop.next", "loop.complete", "loop.note", "team.run"] {
+            assert!(
+                p.contains(tool),
+                "iteration prompt no longer names `{tool}` — if you removed it, \
+                 drop the matching floor grant in aivyx.rs (loop-armed block); \
+                 if you renamed it, update the grant to match.",
+            );
+        }
+        // The quality-gate + commit steps reference `shell` and `git`.
+        assert!(p.contains("`shell`"), "lost the shell quality-gate step");
+        assert!(p.contains("`git`"), "lost the git commit step");
+    }
+
     #[tokio::test]
     async fn read_progress_notes_disabled_or_absent_is_empty() {
         use aivyx_memory::{InMemoryMemory, Memory};

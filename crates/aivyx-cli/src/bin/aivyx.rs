@@ -6943,6 +6943,23 @@ async fn run_async(
         backcompat_floor.push(Scope::parse("loop.next").unwrap());
         backcompat_floor.push(Scope::parse("loop.complete").unwrap());
         backcompat_floor.push(Scope::parse("loop.note").unwrap());
+        // Chapter Circuit (CI.0) — the iteration prompt explicitly offers the
+        // agent `team.run` to delegate a large story to a durable Nonagon team
+        // mission; `team.run` was designed for exactly this (the loop iteration)
+        // but, like `loop.*`, was never added to the floor — so the delegation
+        // branch was dead for the default role. Grant it when the loop is armed,
+        // the same gate. (CI.3 will revisit whether this should additionally
+        // gate on the `[autonomy]` posture — arming the loop already implies a
+        // supervised+/explicit-`[loop]` opt-in, which is the gate today.)
+        //
+        // NOTE — `git.write` is intentionally NOT granted here. Forge made
+        // committing operator-opt-in per-repo (declare `git.write:<repo>` in a
+        // role's `capability_scopes`; see the git.read floor note above): it is
+        // a Trusted/destructive operation, not a zero-config default. The
+        // iteration prompt's unconditional "commit the change with `git`" step
+        // is therefore a prompt/task-fit mismatch (it assumes a code backlog),
+        // addressed in CI.2 — not a missing floor grant.
+        backcompat_floor.push(Scope::parse("team.run").unwrap());
     }
 
     // Walk the active role's inheritance chain, intersecting
