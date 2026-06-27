@@ -154,18 +154,20 @@ impl TestSandbox {
         let tmp = std::env::var("TMPDIR")
             .or_else(|_| std::env::var("TEMP"))
             .unwrap_or_else(|_| "/tmp".to_string());
-        // Process id + nanoseconds is sufficient uniqueness for a
-        // single-process integration test. Tests in the same crate
-        // run in parallel threads, not processes, so a plain atomic
-        // counter would also work — nanos keep the name informative
-        // when a test drops cleanup and you're staring at leftover
-        // directories.
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let pid = std::process::id();
-        let parent = PathBuf::from(tmp).join(format!("aivyx-fs-e2e-{pid}-{nanos}"));
+        // `pid-nanos` alone collides when two tests in this binary call
+        // `new()` within the same coarse-clock tick under a loaded parallel
+        // run — the second `RedbStorage::open` then fails on the redb lock
+        // ("scratch storage must open" panic, the flake that failed the
+        // v0.7.4 release). A uuid makes the sandbox path unconditionally
+        // unique (matches the SharedStoreDir fix in storage_persistence_e2e).
+        let uniq = uuid::Uuid::new_v4();
+        let parent =
+            PathBuf::from(tmp).join(format!("aivyx-fs-e2e-{pid}-{nanos}-{uniq}"));
         let root = parent.join("root");
         std::fs::create_dir_all(&root).expect("test sandbox root must be creatable");
         TestSandbox { root, parent }

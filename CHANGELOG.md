@@ -62,6 +62,16 @@ All notable changes to Aivyx are recorded here. This project adheres to
     delegation dispatch wasn't observed because the small local model
     consistently self-implements even when told to delegate.)
 
+### Fixed
+
+- **Flaky e2e store-path collision.** Four `aivyx-channel` integration suites
+  (`fs_tool_e2e`, `cli_e2e`, `audit_persistence_e2e`, `memory_tool_e2e`) built
+  their scratch `store.redb` path from `pid + nanos`, which is not unique across
+  the crate's parallel test threads — under CI load two tests could land on the
+  same clock tick, collide on the path, and fail the second `RedbStorage::open`
+  on the redb lock (this failed the v0.7.4 release's quality gate). Each path now
+  carries a uuid, matching the existing `storage_persistence_e2e` fix.
+
 ## [0.7.4] — 2026-06-28
 
 ### Fixed
