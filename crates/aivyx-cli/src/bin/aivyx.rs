@@ -6928,6 +6928,22 @@ async fn run_async(
             backcompat_floor.push(s);
         }
     }
+    // Phase 173 — when the autonomous loop is armed, grant the default role
+    // (empty `capability_scopes`) the `loop.*` scopes its iterations require.
+    // The loop driver fires the loop-iter prompt whose very first step is
+    // `loop.next`; without these scopes the floor-only agent is denied on
+    // step 1 of EVERY iteration ("loop.next ... not currently granted") and
+    // the driver burns its full iteration cap re-failing at the same wall —
+    // the backlog mechanism is dead on arrival. Gated on `loop_state.is_some()`
+    // (the same "armed" signal that spawns the driver), mirroring the
+    // ollama/mcp floor grants above. Self-escalation scopes the flailing model
+    // also reaches for (e.g. `role.update`) are deliberately NOT granted —
+    // P8 no-self-escalation.
+    if loop_state.is_some() {
+        backcompat_floor.push(Scope::parse("loop.next").unwrap());
+        backcompat_floor.push(Scope::parse("loop.complete").unwrap());
+        backcompat_floor.push(Scope::parse("loop.note").unwrap());
+    }
 
     // Walk the active role's inheritance chain, intersecting
     // declared scopes leaf-to-root. Empty levels substitute the
