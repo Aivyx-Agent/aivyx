@@ -8,8 +8,15 @@
 # correctly on real runners. cargo-dist's `release.yml` is the sole release
 # CREATOR; this workflow waits for that release to exist and then UPLOADS its
 # bundles to it — never creates the release — so the two don't race on "create"
-# (which is what broke the first v0.7.0 run). The Intel-macOS runner can queue
-# for a while in the public-repo pool, so its asset may attach late.
+# (which is what broke the first v0.7.0 run).
+#
+# BOTH macOS targets build on the Apple-Silicon runner (`macos-14`): aarch64
+# natively and x86_64 by cross-compiling with `--target` (the macOS SDK ships
+# both slices). The old Intel runner (`macos-13`) is gone — GitHub is winding
+# down hosted Intel macOS runners and they queued *indefinitely* in the public
+# pool, so the x86_64 job never started and the whole run sat "queued" forever
+# (v0.7.1–v0.7.3 each left the Intel `.zip` un-shipped). Cross-building keeps
+# both architectures without depending on a runner that won't schedule.
 # Windows is intentionally absent — it rides on the future daemon port.
 name: desktop-release
 
@@ -60,14 +67,14 @@ jobs:
           path: target/release/bundle/deb/*.deb
 
   macos:
+    # Both slices build on the Apple-Silicon runner: aarch64 natively, x86_64
+    # cross-compiled via `--target`. No Intel runner (it never schedules).
+    runs-on: macos-14
     strategy:
       matrix:
-        include:
-          - runner: macos-13 # x86_64
-            target: x86_64-apple-darwin
-          - runner: macos-14 # aarch64 (Apple Silicon)
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.runner }}
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,11 +83,12 @@ jobs:
       - run: cargo install cargo-bundle --locked
       - name: Bundle (.app)
         working-directory: crates/aivyx-desktop
-        run: cargo bundle --release --format osx
+        run: cargo bundle --release --format osx --target ${{ matrix.target }}
       # A `.app` is a directory — zip it so it can be a single release asset.
+      # With `--target`, cargo writes under `target/<triple>/release/…`.
       - name: Zip the .app
         run: |
-          cd target/release/bundle/osx
+          cd target/${{ matrix.target }}/release/bundle/osx
           zip -r -y "aivyx-desktop-${{ matrix.target }}.zip" *.app
       # Wait for the cargo-dist release, then upload (never create) — see the
       # Linux job for why.
@@ -94,10 +102,10 @@ jobs:
             echo "waiting for cargo-dist to create release $GITHUB_REF_NAME… ($i)"
             sleep 20
           done
-          gh release upload "$GITHUB_REF_NAME" target/release/bundle/osx/*.zip --clobber
+          gh release upload "$GITHUB_REF_NAME" target/${{ matrix.target }}/release/bundle/osx/*.zip --clobber
       - name: Upload artifact (manual dispatch)
         if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: aivyx-desktop-${{ matrix.target }}
-          path: target/release/bundle/osx/*.zip
+          path: target/${{ matrix.target }}/release/bundle/osx/*.zip
