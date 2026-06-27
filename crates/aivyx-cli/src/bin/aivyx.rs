@@ -6738,6 +6738,20 @@ async fn run_async(
         backcompat_floor.push(Scope::parse("ollama.show").unwrap());
         backcompat_floor.push(Scope::parse("ollama.pull").unwrap());
     }
+    // Grant the default role (empty `capability_scopes`) the scope to call
+    // the tools of every configured MCP server. Each call's required scope is
+    // `mcp.call:<server>:<tool>`; `mcp.call:<server>:*` grants exactly that
+    // server's tools (least-privilege per server). Without this, a configured
+    // `[[mcp_server]]` — including the bundled web-search the wizard's "Enable
+    // web search?" adds — registers tools the default agent holds no scope to
+    // invoke, so it silently refuses them ("web_search isn't authorized").
+    // Roles that declare their own `capability_scopes` bypass the floor and
+    // must name `mcp.call:<server>` grants explicitly.
+    for bridge in &mcp_bridges {
+        if let Some(s) = Scope::parse(&format!("mcp.call:{}:*", bridge.server_name())) {
+            backcompat_floor.push(s);
+        }
+    }
 
     // Walk the active role's inheritance chain, intersecting
     // declared scopes leaf-to-root. Empty levels substitute the

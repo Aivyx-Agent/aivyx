@@ -1262,6 +1262,27 @@ mod tests {
     }
 
     #[test]
+    fn mcp_server_wildcard_grants_that_servers_tools_only() {
+        // An MCP tool call requires `mcp.call:<server>:<tool>`. The default-role
+        // floor grants `mcp.call:<server>:*` per configured server so the agent
+        // can actually invoke a configured server's tools (e.g. the bundled
+        // web-search the wizard adds). Verify the per-server wildcard grants
+        // that server's tools but NOT another server's.
+        let needed = Scope::parse("mcp.call:web-search:web_search").unwrap();
+        let held = Scope::parse("mcp.call:web-search:*").unwrap();
+        assert!(
+            needed.is_granted_by(&held),
+            "mcp.call:web-search:* must grant mcp.call:web-search:web_search"
+        );
+
+        let other_server = Scope::parse("mcp.call:other:web_search").unwrap();
+        assert!(
+            !other_server.is_granted_by(&held),
+            "a web-search grant must not authorize a different server's tools"
+        );
+    }
+
+    #[test]
     fn base_and_qualifier_split() {
         let sc = s("fs.read:/etc/*");
         assert_eq!(sc.base(), "fs.read");
