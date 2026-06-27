@@ -52,6 +52,26 @@ fn env_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poison| poison.into_inner())
 }
 
+thread_local! {
+    /// `true` while an [`EnvScope`] is live on this thread. The loader
+    /// helpers assert on it so a test that reads ambient env (HOME,
+    /// `AIVYX_*`) without holding the env-guard fails *deterministically*
+    /// here instead of flaking when it races a parallel env-mutating test.
+    static ENV_SCOPE_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Assert an [`EnvScope`] is live on this thread. Called by the loader
+/// helpers — anything that resolves config from the ambient environment
+/// must serialize behind the env-guard.
+fn assert_env_guarded() {
+    assert!(
+        ENV_SCOPE_ACTIVE.with(std::cell::Cell::get),
+        "config loaded without a live EnvScope — wrap the test in \
+         `let env = EnvScope::new();` so ambient env reads can't race \
+         parallel env-mutating tests",
+    );
+}
+
 /// Snapshot + clear every env var this test crate might mutate, then
 /// restore on drop. Prevents a flaky test from polluting the process
 /// environment for any later test or for the rest of the cargo run.
@@ -67,6 +87,7 @@ struct EnvScope {
 impl EnvScope {
     fn new() -> Self {
         let guard = env_lock();
+        ENV_SCOPE_ACTIVE.with(|f| f.set(true));
         let vars = [
             "ANTHROPIC_API_KEY",
             "AIVYX_MODEL",
@@ -136,6 +157,7 @@ impl EnvScope {
 
 impl Drop for EnvScope {
     fn drop(&mut self) {
+        ENV_SCOPE_ACTIVE.with(|f| f.set(false));
         for (var, prior) in self.saved.drain(..) {
             match prior {
                 Some(value) => {
@@ -7234,6 +7256,7 @@ async fn embedding_store_key_without_section_stays_none() {
 // ------------------------------------------------------------------
 
 fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
+    assert_env_guarded();
     let tmp = TempDir::new(tag);
     let toml_path = tmp.path().join("aivyx.toml");
     std::fs::write(&toml_path, body).unwrap();
@@ -7251,6 +7274,7 @@ fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
 /// Like [`load_with_toml`] but returns the `Result` so error-path tests can
 /// assert the typed `ConfigError` instead of panicking on load.
 fn load_with_toml_result(body: &str, tag: &str) -> Result<AivyxConfig, ConfigError> {
+    assert_env_guarded();
     let tmp = TempDir::new(tag);
     let toml_path = tmp.path().join("aivyx.toml");
     std::fs::write(&toml_path, body).unwrap();
@@ -10641,15 +10665,19 @@ fn workspace_env_beats_toml_path() {
 fn team_config_path_absent_section_is_none() {
     // No `[team]` section → no team-config pointer (the daemon falls back to
     // the conventional `team.toml` / built-in Nonagon).
+    let env = EnvScope::new();
     let cfg = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "team-absent");
     assert_eq!(cfg.team_config_path, None);
+    drop(env);
 }
 
 #[test]
 fn team_config_path_is_parsed_from_the_team_section() {
+    let env = EnvScope::new();
     let cfg = load_with_toml(
         "\n[team]\nconfig_path = \"teams/boh.toml\"\n",
         "team-present",
     );
     assert_eq!(cfg.team_config_path, Some(PathBuf::from("teams/boh.toml")));
+    drop(env);
 }
