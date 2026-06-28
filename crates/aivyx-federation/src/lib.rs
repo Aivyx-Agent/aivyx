@@ -42,6 +42,9 @@
 //!   [`PeerContent`](received::PeerContent) binds a verified request to its
 //!   provenance + attenuated authority; validates it; gates execution to
 //!   attenuated caps only.
+//! - [`consent`] — PP.5: classify whether a peer crossing needs the operator's
+//!   confirm-first gate before it can have effect (a peer requests; only the
+//!   operator's gate lets it act). No cross-boundary self-escalation.
 
 #![forbid(unsafe_code)]
 
@@ -66,6 +69,7 @@ pub enum FederationError {
     Validation(String),
 }
 
+pub mod consent;
 pub mod identity;
 pub mod received;
 pub mod relay;
