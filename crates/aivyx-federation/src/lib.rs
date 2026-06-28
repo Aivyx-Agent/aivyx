@@ -38,6 +38,10 @@
 //! - [`relay`] — PP.3: compose the wasm-clean relay verbs
 //!   ([`aivyx_ipc::federation`]) with the signing envelope; the auditable
 //!   [`Crossing`](relay::Crossing) shape (live emission deferred with transport).
+//! - [`received`] — PP.4: peer content as untrusted input —
+//!   [`PeerContent`](received::PeerContent) binds a verified request to its
+//!   provenance + attenuated authority; validates it; gates execution to
+//!   attenuated caps only.
 
 #![forbid(unsafe_code)]
 
@@ -63,5 +67,6 @@ pub enum FederationError {
 }
 
 pub mod identity;
+pub mod received;
 pub mod relay;
 pub mod trust;
