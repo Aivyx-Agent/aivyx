@@ -5,6 +5,34 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Chapter Passport — the identity & cross-boundary trust keystone (FED.1–5).**
+  The open-core trust **substrate** for agent-to-agent interaction across an
+  operator boundary — the one primitive `VISION.md` flags as impossible to
+  retrofit (*"a network of agents is a Nonagon team with the trust boundary
+  moved"*). New `crates/aivyx-federation`:
+  - **Identity** — an operator-owned Ed25519 keypair + signed, replay-guarded
+    request envelope; key-at-rest sealed with a subkey derived from the storage
+    `MasterKey`; key material never logged.
+  - **Trust** — a per-peer `TrustPolicy` (deny-by-default; allowed scopes in the
+    `Scope` vocabulary; a confirm-first autonomy ceiling) and the cross-operator
+    attenuation (`effective = asked ∩ policy ∩ host-ceiling`, autonomy floored) —
+    NT-02 generalized so a peer can never exceed what *both* operators allow, and
+    revocation narrows reach immediately.
+  - **Relay shape** — the `chat`/`task`/`search` verbs as wasm-clean
+    `aivyx-ipc::federation` types ("as if the peer is a stranger"), plus the
+    forensic `Crossing` shape for the audit chain.
+  - **Untrusted peer content** — provenance-tagged, payload-validated, runnable
+    only under its attenuated authority (never the host's broader caps).
+  - **Operator consent** — peer-initiated effect (a `task`, or any irreversible
+    scope) routes through the existing confirm-first gate; no cross-boundary
+    self-escalation.
+
+  Substrate only — no transport, peer discovery, reputation, or the Nexus
+  product (built last, on an installed base). Proven end-to-end by a
+  two-identity in-process integration test.
+
 ## [0.7.5] — 2026-06-28
 
 ### Added

@@ -162,18 +162,23 @@ layer).
 
 ## 9. Phase plan (built last; designed now)
 
-| Phase | Deliverable |
-|---|---|
-| **FED.0** | This design contract. |
-| **FED.1** | Identity: operator-owned Ed25519 keypair + the signed, replay-guarded request envelope (modernized `FederationAuth`/`SignedHeader`). |
-| **FED.2** | `TrustPolicy` + the cross-operator attenuation — generalize NT-02's intersection over `Scope`/`CapabilitySet` + the Reins autonomy ceiling. |
-| **FED.3** | The relay protocol in `aivyx-ipc` (one shape, local + remote) + auditing every crossing. |
-| **FED.4** | The privacy/sandbox boundary for peer content (provenance, attenuated execution). |
-| **FED.5** | Operator-consent gating for peer-initiated effect (reuse confirm-first / approval gates). |
+| Phase | Deliverable | Status |
+|---|---|---|
+| **FED.0** | This design contract. | ✅ |
+| **FED.1** | Identity: operator-owned Ed25519 keypair + the signed, replay-guarded request envelope (modernized `FederationAuth`/`SignedHeader`). | ✅ `aivyx-federation::identity` |
+| **FED.2** | `TrustPolicy` + the cross-operator attenuation — generalize NT-02's intersection over `Scope`/`CapabilitySet` + the Reins autonomy ceiling. | ✅ `::trust` |
+| **FED.3** | The relay protocol in `aivyx-ipc` (one shape, local + remote) + auditing every crossing. | ◑ verbs + audit *shape* (`aivyx-ipc::federation`, `::relay::Crossing`); the `AuditEvent` variant + live emission land with transport |
+| **FED.4** | The privacy/sandbox boundary for peer content (provenance, attenuated execution). | ✅ `::received` |
+| **FED.5** | Operator-consent gating for peer-initiated effect (reuse confirm-first / approval gates). | ✅ `::consent` |
 
-The **Nexus product** on top of FED.1–5 — discovery, reputation, the agent-hiring
-market and its economics — is designed privately and built when there's an
-installed base to network (the last link in `VISION.md`'s chain).
+**Built as Chapter Passport (2026-06-28)** — the open-core trust **substrate**
+in `crates/aivyx-federation`, proven end-to-end by a two-identity in-process
+integration test (`tests/keystone_e2e.rs`). What remains, by design, is
+everything **network-shaped**: a **transport / relay server**, peer
+**discovery**, and the live `AuditEvent::FederationCrossing` emission — plus the
+**Nexus product** on top (reputation, the agent-hiring market and its
+economics), designed privately and built when there's an installed base to
+network (the last link in `VISION.md`'s chain).
 
 ## 10. Open questions (resolve in-phase, not blocking FED.0)
 

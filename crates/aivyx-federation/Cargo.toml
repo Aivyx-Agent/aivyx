@@ -40,3 +40,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 uuid = { workspace = true }
 serde_json = { workspace = true }
+# PP.6 integration proof names the public-API types from the substrate's deps.
+aivyx-capability = { path = "../aivyx-capability" }
+aivyx-config = { path = "../aivyx-config" }
+aivyx-ipc = { path = "../aivyx-ipc" }
