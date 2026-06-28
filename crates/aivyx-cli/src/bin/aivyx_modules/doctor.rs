@@ -40,12 +40,42 @@ pub async fn run_doctor() -> Result<(), String> {
     };
     let all_ok = provider_ok && memory_ok && kitchen_ok;
 
+    // Chapter Anchor — service-install status. Informational: not being
+    // installed is fine for interactive use, so it never fails the doctor.
+    check_service();
+
     println!();
     if all_ok {
         println!("✓ Looks good — your agent is ready. Run `aivyx` to start.");
         Ok(())
     } else {
         Err("one or more checks failed — see the notes above.".into())
+    }
+}
+
+/// Chapter Anchor — report whether the daemon is installed as a persistent
+/// service (and whether it's running). Purely informational: an interactive
+/// user needs no service, so this never flips the doctor's exit status.
+fn check_service() {
+    println!("\nService:");
+    match crate::daemon_service::installed_unit_path() {
+        Some(path) => {
+            pass(&format!("installed as a user service ({})", path.display()));
+            match crate::daemon_service::is_active() {
+                Some(true) => pass("running — survives logout/reboot"),
+                Some(false) => println!(
+                    "  ⚠ installed but not running\n     \
+                     → start it: `systemctl --user start aivyx-daemon` (or re-run `aivyx daemon install`)"
+                ),
+                None => {}
+            }
+        }
+        None => {
+            println!(
+                "  • not installed as a service — fine for interactive use.\n     \
+                 → for a 'runs for days' agent: `aivyx daemon install`"
+            );
+        }
     }
 }
 

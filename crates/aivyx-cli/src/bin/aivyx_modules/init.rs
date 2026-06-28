@@ -2096,6 +2096,13 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         "  aivyx daemon run --web-ui  — run the daemon + open the Studio at \
          http://127.0.0.1:{web_ui_port}"
     );
+    // Chapter Anchor — the runs-for-days path: a real service so the agent keeps
+    // running (and its scheduled routines keep firing) across logout + reboot.
+    if matches!(crate::daemon_service::Platform::detect(), crate::daemon_service::Platform::Linux | crate::daemon_service::Platform::MacOs) {
+        eprintln!(
+            "  aivyx daemon install       — run it as a background service (survives logout/reboot)"
+        );
+    }
     eprintln!("  aivyx doctor               — re-check your setup any time");
     if cfg.provider == Provider::Ollama {
         eprintln!(

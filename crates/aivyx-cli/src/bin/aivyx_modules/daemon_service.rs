@@ -167,6 +167,40 @@ pub fn run_uninstall() -> Result<(), String> {
     }
 }
 
+/// The installed unit/plist path, if the service is installed on this host.
+/// `None` when not installed (or unsupported platform). Used by `aivyx doctor`.
+pub fn installed_unit_path() -> Option<PathBuf> {
+    let path = match Platform::detect() {
+        Platform::Linux => user_config_dir().ok()?.join("systemd/user").join(SERVICE_UNIT),
+        Platform::MacOs => macos_plist_path().ok()?,
+        Platform::Unsupported => return None,
+    };
+    path.exists().then_some(path)
+}
+
+/// Best-effort liveness of the installed service. `None` when it can't be
+/// determined (unsupported platform, or the query command isn't available).
+pub fn is_active() -> Option<bool> {
+    match Platform::detect() {
+        Platform::Linux => {
+            let out = Command::new("systemctl")
+                .args(["--user", "is-active", SERVICE_UNIT])
+                .output()
+                .ok()?;
+            Some(String::from_utf8_lossy(&out.stdout).trim() == "active")
+        }
+        Platform::MacOs => {
+            let uid = current_uid().ok()?;
+            let out = Command::new("launchctl")
+                .args(["print", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+                .output()
+                .ok()?;
+            Some(out.status.success())
+        }
+        Platform::Unsupported => None,
+    }
+}
+
 fn install_linux(web_ui: bool, start: bool) -> Result<(), String> {
     let bin = current_exe_path()?;
     let config_dir = user_config_dir()?;
