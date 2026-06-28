@@ -826,7 +826,7 @@ mod tests {
                 events: vec![LlmStreamEvent::TextChunk(self.line.clone())].into_iter(),
                 terminal: Some(LlmStepEnd::FinalMessage {
                     text: self.line.clone(),
-                    usage: self.usage.clone(),
+                    usage: self.usage,
                 }),
             }))
         }
