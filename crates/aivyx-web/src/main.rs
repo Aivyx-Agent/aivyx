@@ -938,9 +938,7 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
     }
     let active = missions
         .iter()
-        .filter(|m| {
-            !matches!(m.phase, TeamMissionPhase::Done | TeamMissionPhase::Rejected)
-        })
+        .filter(|m| !m.phase.is_terminal())
         .count();
     let chain = dashboard.chain_ok;
     let routines = dashboard.schedules.clone();
@@ -4138,6 +4136,7 @@ fn phase_label(p: TeamMissionPhase) -> &'static str {
         TeamMissionPhase::AwaitingApproval => "awaiting approval",
         TeamMissionPhase::Done => "done",
         TeamMissionPhase::Rejected => "rejected",
+        TeamMissionPhase::Halted => "halted (budget)",
     }
 }
 
@@ -4146,6 +4145,7 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
         TeamMissionPhase::AwaitingApproval => "amber",
         TeamMissionPhase::Done => "sage",
         TeamMissionPhase::Rejected => "error",
+        TeamMissionPhase::Halted => "error",
         _ => "",
     }
 }

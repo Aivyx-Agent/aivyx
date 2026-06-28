@@ -136,6 +136,8 @@ pub enum MissionPhase {
     Done,
     /// A quality gate rejected the work (`MissionStatus::GateRejected`).
     Rejected,
+    /// Chapter Ballast — halted by a per-mission budget cap.
+    Halted,
 }
 
 impl MissionPhase {
@@ -146,6 +148,7 @@ impl MissionPhase {
             MissionPhase::AwaitingApproval => "approval",
             MissionPhase::Done => "done",
             MissionPhase::Rejected => "rejected",
+            MissionPhase::Halted => "halted",
         }
     }
 }
@@ -258,6 +261,7 @@ fn phase_from(p: TeamMissionPhase) -> MissionPhase {
         TeamMissionPhase::AwaitingApproval => MissionPhase::AwaitingApproval,
         TeamMissionPhase::Done => MissionPhase::Done,
         TeamMissionPhase::Rejected => MissionPhase::Rejected,
+        TeamMissionPhase::Halted => MissionPhase::Halted,
     }
 }
 

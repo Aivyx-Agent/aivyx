@@ -78,6 +78,13 @@ pub struct TeamRunDeps {
     /// The daemon's full tool set; each specialist gets exactly the subset its
     /// `tool_allowlist` names, capability-attenuated against the lead (NT-02).
     pub base_tools: Vec<Arc<dyn Tool>>,
+    /// Chapter Ballast (Opp D) — model pricing used to meter a mission's
+    /// spend against `mission_budget`. Local models price at $0.
+    pub pricing: Arc<aivyx_cost::Pricing>,
+    /// Chapter Ballast (Opp D) — the per-mission aggregate cap (tokens + $).
+    /// `MissionBudget::default()` (no caps) ⇒ unbounded: the metering hook +
+    /// halt check are skipped entirely and the run is byte-identical to before.
+    pub mission_budget: aivyx_cost::MissionBudget,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -223,8 +230,9 @@ pub async fn drive_registered(
         .snapshot(id)
         .and_then(|r| r.config)
         .unwrap_or(default_config);
-    let runtime = assemble_runtime(deps, config)?;
-    drive(shared, runtime, id, policy, &deps.audit).await
+    let (runtime, meter) = assemble_runtime(deps, config)?;
+    let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
+    drive(shared, runtime, id, policy, &deps.audit, budget_guard).await
 }
 
 /// Resume (`approve`) or abort (`!approve`) a mission paused at a human gate.
@@ -426,25 +434,44 @@ impl TeamMissionService {
 /// Build the resumable runtime for a team. The plan-driven daemon path needs
 /// only `assembly.runtime()` (the pool + bus ride along inside the `Arc`); the
 /// lead agent + its tools are the CLI's lead-driven path, not ours.
+///
+/// Chapter Ballast — when `deps.mission_budget` is bounded, the team's audit
+/// hook is wrapped in a [`MeteringAuditHook`] so this mission's spend is tallied
+/// (the returned [`MissionMeter`] feeds the driver's wave-boundary halt check).
+/// When unbounded, the real audit is used directly and `None` is returned — the
+/// run is byte-identical to pre-Ballast.
 fn assemble_runtime(
     deps: &TeamRunDeps,
     config: TeamConfig,
-) -> Result<Arc<TeamRuntime>, MissionDriverError> {
+) -> Result<(Arc<TeamRuntime>, Option<crate::mission_meter::MissionMeter>), MissionDriverError> {
     let lead = config
         .lead_member()
         .ok_or_else(|| TeamError::Config("team has no lead".into()))?
         .clone();
     let lead_caps = lead.declared_capabilities()?;
+
+    let (audit, meter): (Arc<dyn AuditHook>, Option<crate::mission_meter::MissionMeter>) =
+        if deps.mission_budget.is_unbounded() {
+            (Arc::clone(&deps.audit), None)
+        } else {
+            let hook = crate::mission_meter::MeteringAuditHook::new(
+                Arc::clone(&deps.audit),
+                Arc::clone(&deps.pricing),
+            );
+            let meter = hook.meter();
+            (Arc::new(hook), Some(meter))
+        };
+
     let assembly = TeamAssembly::build(
         config,
         Arc::clone(&deps.provider),
         deps.model.clone(),
         deps.max_tokens,
-        Arc::clone(&deps.audit),
+        audit,
         deps.base_tools.clone(),
         lead_caps,
     )?;
-    Ok(assembly.runtime())
+    Ok((assembly.runtime(), meter))
 }
 
 /// Drive `id` from its current checkpoint until it pauses at a human gate or
@@ -456,6 +483,10 @@ async fn drive(
     id: &str,
     policy: GatePolicy,
     audit: &Arc<dyn AuditHook>,
+    // Chapter Ballast — `Some` when a per-mission budget is armed: the meter
+    // tracks this mission's spend and the budget says when to halt. `None` ⇒
+    // unbounded (the observer's `should_halt` stays the default no-op).
+    budget_guard: Option<(crate::mission_meter::MissionMeter, aivyx_cost::MissionBudget)>,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
     let mut record = shared
         .snapshot(id)
@@ -475,6 +506,7 @@ async fn drive(
         shared: shared.clone(),
         id: id.to_string(),
         tx,
+        budget_guard,
     };
     let channel = MissionLeadChannel::new();
     let run = tokio::spawn(async move {
@@ -500,6 +532,22 @@ async fn drive(
             record.phase = match report.status {
                 MissionStatus::Completed => TeamMissionPhase::Done,
                 MissionStatus::GateRejected { .. } => TeamMissionPhase::Rejected,
+                // Chapter Ballast — a per-mission budget cap tripped at a wave
+                // boundary. Land the reason on the audit chain so the operator
+                // reviewing later sees exactly why the mission stopped (the
+                // same legibility the headless-refusal path gets), and preserve
+                // the partial outputs already captured above.
+                MissionStatus::Halted { reason } => {
+                    eprintln!(
+                        "aivyx team: mission {id} halted — {reason}"
+                    );
+                    audit.on_event(AuditTag::HeadlessRefusal {
+                        run_id: id.to_string(),
+                        step: "<budget>".to_string(),
+                        reason: format!("team mission halted: {reason}"),
+                    });
+                    TeamMissionPhase::Halted
+                }
             };
         }
         RunYield::AwaitingHuman { step, outputs } => {
@@ -547,6 +595,9 @@ struct RegistryObserver {
     shared: SharedMissionState,
     id: String,
     tx: mpsc::UnboundedSender<()>,
+    /// Chapter Ballast — `Some` when a per-mission budget is armed. The meter
+    /// reads this mission's running spend; the budget says when a cap trips.
+    budget_guard: Option<(crate::mission_meter::MissionMeter, aivyx_cost::MissionBudget)>,
 }
 
 impl MissionObserver for RegistryObserver {
@@ -562,6 +613,14 @@ impl MissionObserver for RegistryObserver {
             r.outputs.insert(step_id.to_string(), verdict.to_string());
         });
         let _ = self.tx.send(());
+    }
+
+    /// Chapter Ballast — the runtime calls this at each wave boundary. Compare
+    /// the mission's metered spend so far against its caps; a breach returns the
+    /// reason, halting the mission gracefully before the next wave launches.
+    fn should_halt(&self) -> Option<String> {
+        let (meter, budget) = self.budget_guard.as_ref()?;
+        budget.breach(meter.tokens(), meter.usd())
     }
 }
 
@@ -751,6 +810,9 @@ mod tests {
 
     struct FakeProvider {
         line: String,
+        /// Usage reported by every sub-turn (Chapter Ballast tests use a
+        /// non-zero value so the per-mission meter accumulates).
+        usage: LlmUsage,
     }
 
     #[async_trait]
@@ -764,7 +826,7 @@ mod tests {
                 events: vec![LlmStreamEvent::TextChunk(self.line.clone())].into_iter(),
                 terminal: Some(LlmStepEnd::FinalMessage {
                     text: self.line.clone(),
-                    usage: LlmUsage::default(),
+                    usage: self.usage.clone(),
                 }),
             }))
         }
@@ -804,11 +866,14 @@ mod tests {
 
     fn deps(line: &str) -> TeamRunDeps {
         TeamRunDeps {
-            provider: Arc::new(FakeProvider { line: line.into() }),
+            provider: Arc::new(FakeProvider { line: line.into(), usage: LlmUsage::default() }),
             model: "test-model".into(),
             max_tokens: 1024,
             audit: Arc::new(NullAuditHook),
             base_tools: vec![],
+            pricing: Arc::new(aivyx_cost::Pricing::default()),
+            // Unbounded by default — the metering hook + halt check are skipped.
+            mission_budget: aivyx_cost::MissionBudget::default(),
         }
     }
 
@@ -828,11 +893,13 @@ mod tests {
 
     fn deps_with_audit(line: &str, audit: Arc<dyn AuditHook>) -> TeamRunDeps {
         TeamRunDeps {
-            provider: Arc::new(FakeProvider { line: line.into() }),
+            provider: Arc::new(FakeProvider { line: line.into(), usage: LlmUsage::default() }),
             model: "test-model".into(),
             max_tokens: 1024,
             audit,
             base_tools: vec![],
+            pricing: Arc::new(aivyx_cost::Pricing::default()),
+            mission_budget: aivyx_cost::MissionBudget::default(),
         }
     }
 
@@ -866,6 +933,77 @@ mod tests {
         assert_eq!(rec.outputs["a"], "done-line");
         assert_eq!(rec.outputs["b"], "done-line");
         assert!(rec.pending_gate.is_none());
+    }
+
+    /// Chapter Ballast — a per-mission token cap halts a runaway mission at a
+    /// wave boundary, preserving the work already done. Each sub-turn reports
+    /// ≥1000 tokens; the 500-token cap is clear after wave 1, so wave 2 never
+    /// launches. (The first boundary check, with the meter at 0, lets wave 1
+    /// run.)
+    #[tokio::test]
+    async fn per_mission_token_cap_halts_a_runaway_mission() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let mut deps = deps("spend");
+        deps.provider = Arc::new(FakeProvider {
+            line: "spend".into(),
+            usage: LlmUsage {
+                input_tokens: 600,
+                output_tokens: 400,
+                ..Default::default()
+            },
+        });
+        deps.mission_budget = aivyx_cost::MissionBudget {
+            max_tokens: Some(500),
+            max_usd: None,
+        };
+        let plan = MissionPlan::new(
+            "runaway",
+            vec![
+                Step::delegate("a", "researcher", "p"),
+                Step::delegate("b", "writer", "p").after(["a"]),
+            ],
+        );
+        let id = team_run(&shared, &deps, default_nonagon(), plan, "halt1")
+            .await
+            .unwrap();
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(
+            rec.phase,
+            TeamMissionPhase::Halted,
+            "mission halted on the token cap"
+        );
+        assert!(rec.outputs.contains_key("a"), "wave 1 work preserved");
+        assert!(!rec.outputs.contains_key("b"), "wave 2 never ran");
+    }
+
+    /// Chapter Ballast — with no cap set, the same multi-wave mission runs to
+    /// completion (byte-identical to pre-Ballast).
+    #[tokio::test]
+    async fn no_mission_cap_runs_to_completion_even_with_spend() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let mut deps = deps("spend");
+        deps.provider = Arc::new(FakeProvider {
+            line: "spend".into(),
+            usage: LlmUsage {
+                input_tokens: 9_000,
+                output_tokens: 9_000,
+                ..Default::default()
+            },
+        });
+        // mission_budget left at default (unbounded).
+        let plan = MissionPlan::new(
+            "unbounded",
+            vec![
+                Step::delegate("a", "researcher", "p"),
+                Step::delegate("b", "writer", "p").after(["a"]),
+            ],
+        );
+        let id = team_run(&shared, &deps, default_nonagon(), plan, "nocap1")
+            .await
+            .unwrap();
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(rec.phase, TeamMissionPhase::Done);
+        assert!(rec.outputs.contains_key("b"));
     }
 
     #[tokio::test]

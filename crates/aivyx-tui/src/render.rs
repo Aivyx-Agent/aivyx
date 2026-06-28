@@ -192,6 +192,7 @@ fn phase_badge(phase: MissionPhase) -> Span<'static> {
         MissionPhase::Planning => ("◦ planning", palette::DIM),
         MissionPhase::Done => ("✓ done", palette::DIMMER),
         MissionPhase::Rejected => ("✗ rejected", palette::ERR),
+        MissionPhase::Halted => ("⊘ halted (budget)", palette::ERR),
     };
     Span::styled(text, bold(color))
 }

@@ -33,12 +33,21 @@ pub enum TeamMissionPhase {
     Done,
     /// Ended by a gate: an auto gate's FAIL verdict, or a human reject.
     Rejected,
+    /// Chapter Ballast (Opp D) — halted at a wave boundary because a
+    /// per-mission budget cap tripped. Terminal; completed-step outputs are
+    /// preserved. Distinct from `Rejected` so the operator sees *why* it ended.
+    Halted,
 }
 
 impl TeamMissionPhase {
     /// Whether the mission has reached a terminal phase (no further driving).
     pub fn is_terminal(self) -> bool {
-        matches!(self, TeamMissionPhase::Done | TeamMissionPhase::Rejected)
+        matches!(
+            self,
+            TeamMissionPhase::Done
+                | TeamMissionPhase::Rejected
+                | TeamMissionPhase::Halted
+        )
     }
 }
 

@@ -531,6 +531,7 @@ mod tests {
             per_day_usd: Some(20.0),
             on_exceeded: BudgetAction::Deny,
             alert_at: Some(0.8),
+            ..Default::default()
         };
         write_budget_section(&path, &b).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
@@ -565,6 +566,7 @@ mod tests {
             per_day_usd: Some(15.0),
             on_exceeded: BudgetAction::Alert,
             alert_at: None,
+            ..Default::default()
         };
         write_budget_section(&path, &b).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();

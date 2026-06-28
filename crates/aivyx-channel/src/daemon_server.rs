@@ -4664,9 +4664,15 @@ async fn handle_query(
                     }
                 }
             };
+            // Chapter Ballast — per-mission caps are not edited from this
+            // Studio budget screen; `write_budget_section` only rewrites the
+            // run/day/on_exceeded/alert keys, so any `per_mission_*` already in
+            // the file survives. None here is therefore non-destructive.
             let budget = aivyx_cost::BudgetConfig {
                 per_run_usd,
                 per_day_usd,
+                per_mission_usd: None,
+                per_mission_tokens: None,
                 on_exceeded: action,
                 alert_at,
             };

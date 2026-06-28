@@ -184,6 +184,12 @@ impl Tool for DecomposeTaskTool {
                         out["rejected_step"] = json!(step);
                         out["verdict"] = json!(verdict);
                     }
+                    // This in-process path runs with the null observer, which
+                    // never halts; the arm exists for exhaustiveness.
+                    MissionStatus::Halted { reason } => {
+                        out["status"] = json!("halted");
+                        out["halt_reason"] = json!(reason);
+                    }
                 }
                 ToolOutcome::Completed {
                     output: out,

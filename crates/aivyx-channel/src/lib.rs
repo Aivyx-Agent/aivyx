@@ -35,6 +35,7 @@ pub mod daemon_server;
 pub mod document_browse;
 pub mod mcp_status;
 pub mod mission;
+pub mod mission_meter;
 pub mod mission_tool;
 pub mod schedule;
 pub mod schedule_tool;

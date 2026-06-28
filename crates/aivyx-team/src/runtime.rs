@@ -35,6 +35,12 @@ pub enum MissionStatus {
     /// A gate's reviewer rejected the upstream work; the gate's dependents
     /// were skipped. The partial outputs are still in the report.
     GateRejected { step: String, verdict: String },
+    /// Chapter Ballast (Opp D) — the mission was halted at a wave boundary
+    /// because an external budget cap tripped (the observer's
+    /// [`should_halt`](MissionObserver::should_halt) returned a reason). The
+    /// already-completed steps' outputs are preserved in the report; no further
+    /// steps run. A graceful, terminal stop — not an error.
+    Halted { reason: String },
 }
 
 /// The result of a mission run: the goal, every completed step's output
@@ -72,8 +78,19 @@ pub trait MissionObserver: Send + Sync {
     /// A `Gate` step's reviewer returned a verdict. `passed` is `gate_passed`.
     /// Maps to `StepState::Gated` (passed) / `StepState::Failed` (rejected).
     fn on_gate(&self, _step_id: &str, _passed: bool, _verdict: &str) {}
-    /// The mission ended (Completed or GateRejected).
+    /// The mission ended (Completed, GateRejected, or Halted).
     fn on_mission_finished(&self, _report: &MissionReport) {}
+
+    /// Chapter Ballast (Opp D) — checked at each wave boundary, **before** the
+    /// next ready set is launched. Return `Some(reason)` to halt the mission
+    /// gracefully (a terminal [`MissionStatus::Halted`] preserving completed
+    /// outputs); `None` (the default) lets the run proceed unchanged. The
+    /// daemon's mission driver overrides this to enforce a per-mission budget
+    /// ([`aivyx_cost::MissionBudget`]); every other observer keeps the default
+    /// so behavior is byte-identical.
+    fn should_halt(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The null observer — `TeamRuntime::run` walks the DAG with this, preserving
@@ -178,6 +195,20 @@ impl TeamRuntime {
         let mut completed: HashSet<String> = outputs.keys().cloned().collect();
 
         while completed.len() < plan.steps.len() {
+            // Chapter Ballast — budget check at the wave boundary, before any
+            // more specialist sub-turns are launched. A tripped cap halts the
+            // mission gracefully: completed outputs are preserved, no new steps
+            // run. Bounded overspend = the in-flight wave that already ran.
+            if let Some(reason) = observer.should_halt() {
+                let report = MissionReport {
+                    goal: plan.goal.clone(),
+                    outputs,
+                    status: MissionStatus::Halted { reason },
+                };
+                observer.on_mission_finished(&report);
+                return Ok(RunYield::Done(report));
+            }
+
             // The ready set — sorted for deterministic scheduling/reporting.
             let mut ready = plan.ready(&completed);
             ready.sort_by(|a, b| a.id.cmp(&b.id));
@@ -403,6 +434,78 @@ mod tests {
             !events.iter().any(|e| e.starts_with("start:after_g")),
             "the rejected gate's dependent never started: {events:?}"
         );
+    }
+
+    // ---- Chapter Ballast: wave-boundary budget halt ----
+
+    /// Returns `None` for the first `allow` wave-boundary checks, then halts —
+    /// modelling a per-mission budget that trips after some work has run.
+    struct HaltAfterWaves {
+        allow: usize,
+        seen: std::sync::atomic::AtomicUsize,
+    }
+    impl MissionObserver for HaltAfterWaves {
+        fn should_halt(&self) -> Option<String> {
+            let n = self.seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n >= self.allow {
+                Some(format!("test budget cap (wave {n})"))
+            } else {
+                None
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn budget_halt_stops_at_wave_boundary_preserving_outputs() {
+        // a (wave 1) → b (wave 2). The observer permits one wave boundary, so
+        // wave 1 runs and the mission halts before wave 2 launches.
+        let rt = runtime(FakeProvider::always("ok"), &["worker"]);
+        let plan = MissionPlan::new(
+            "halting",
+            vec![
+                Step::delegate("a", "worker", "step one"),
+                Step::delegate("b", "worker", "step two").after(["a"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let obs = HaltAfterWaves {
+            allow: 1,
+            seen: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let yielded = rt
+            .run_until_pause(&plan, BTreeMap::new(), &lead, &obs)
+            .await
+            .unwrap();
+        let report = match yielded {
+            RunYield::Done(r) => r,
+            other => panic!("expected a terminal halt, got {other:?}"),
+        };
+        match &report.status {
+            MissionStatus::Halted { reason } => {
+                assert!(reason.contains("test budget cap"), "reason: {reason}");
+            }
+            other => panic!("expected Halted, got {other:?}"),
+        }
+        // Wave 1's output is preserved; wave 2 never ran.
+        assert!(report.outputs.contains_key("a"), "a completed: {:?}", report.outputs);
+        assert!(!report.outputs.contains_key("b"), "b never ran: {:?}", report.outputs);
+    }
+
+    #[tokio::test]
+    async fn no_halt_by_default_runs_to_completion() {
+        // The default observer never halts — byte-identical to pre-Ballast.
+        let rt = runtime(FakeProvider::always("ok"), &["worker"]);
+        let plan = MissionPlan::new(
+            "no-halt",
+            vec![
+                Step::delegate("a", "worker", "step one"),
+                Step::delegate("b", "worker", "step two").after(["a"]),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let report = rt.run(&plan, &lead).await.unwrap();
+        assert_eq!(report.status, MissionStatus::Completed);
+        assert!(report.outputs.contains_key("b"));
     }
 
     // ---- L.2: checkpoint/resume + human-approval gates ----

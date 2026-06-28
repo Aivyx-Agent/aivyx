@@ -196,6 +196,7 @@ mod tests {
             per_day_usd: Some(usd),
             on_exceeded: BudgetAction::Deny,
             alert_at: Some(0.8),
+            ..Default::default()
         }
     }
 

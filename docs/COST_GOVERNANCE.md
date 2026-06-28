@@ -109,21 +109,21 @@ impl BudgetEnforcer {
   that TOCTOU — the one piece of archive machinery the new concurrency
   genuinely needs.
 
-> **Known limitation — loop-delegated team missions are unbounded (Chapter
-> Circuit, CI.3).** When an autonomous-loop iteration delegates a story with
-> `team.run`, the team mission runs **in the background, tracked separately**:
-> its sub-turns are bounded per-call by `max_tokens` (a generation cap, not a
-> budget) but there is **no aggregate per-mission token/$ cap**, and the
-> mission's spend is **not** counted against the spawning loop's run-window
-> caps (`max_run_tokens` / `max_run_usd`). The brakes that *do* apply: the
-> mission inherits the daemon's **Interactive** gate posture, so any
-> confirm-first / destructive step **pauses for human approval**; the loop
-> delegates **at most one mission per story** and is told to "delegate
-> sparingly." The decision (CI.3) was to keep `team.run` available whenever the
-> loop is armed and accept this, rather than posture-gate it (which would
-> reintroduce a prompt↔scope mismatch). Closing the gap — a real per-mission
-> aggregate budget + counting delegated spend toward the loop's caps — is the
-> "bound team missions" item in K.4 below, now tracked as a Circuit follow-up.
+> **Loop-delegated team missions are now bounded (Chapter Ballast, Opp D).**
+> A loop-delegated mission's specialist sub-turns run on the shared HMAC chain,
+> so their spend **already counts** toward the spawning loop's run-window caps
+> (`max_run_tokens` / `max_run_usd`) — the loop sums the whole window. Chapter
+> Ballast adds the missing piece: a **per-mission aggregate cap**
+> (`[budget] per_mission_tokens` + `per_mission_usd`). A per-mission
+> [`MeteringAuditHook`](../crates/aivyx-channel/src/mission_meter.rs) wraps the
+> real audit, tallying only that mission's priced spend; the driver checks it at
+> each **wave boundary** and **halts gracefully** when a cap trips (terminal
+> `Halted` phase, completed-step outputs preserved, the reason audited).
+> Bounded overspend = the one in-flight wave. Both caps default to `None`
+> (opt-in, byte-identical when unset); tokens bound local/free runs where the
+> $ cap (priced at $0) never trips. The other brakes still apply: the mission
+> inherits the daemon's **Interactive** gate posture (confirm-first steps pause
+> for approval) and the loop delegates **at most one mission per story**.
 
 ## 5. Phase plan
 
@@ -135,7 +135,7 @@ Chapter-J lesson: these came in ~40–60% under).*
 | **K.1 Pricing** | the `aivyx-cost` crate; `TokenCounts` / `ModelRate` / `Cost` / `Pricing` (defaults + `cost_of` + overrides); local-free + unknown-flagged semantics. Pure, no storage. | ~15–20 |
 | **K.2 Priced ledger over the chain** | a `CostReport` that scans `TurnEnded` usage, prices it, and aggregates (per-day / per-session / total, priced vs untracked). Decide + (if taken) add `model` to `TurnEnded` for per-turn precision. | ~15–25 |
 | **K.3 BudgetEnforcer** | `BudgetConfig` + `check` (Alert/Deny) + reservations (team concurrency). Pure logic over a ledger view. | ~15–25 |
-| **K.4 Wiring** | record/price each turn; **pre-call $ gate** in the turn loop; generalise the autonomous-loop budget to $; bound team missions. `aivyx cost` report CLI. | ~15–25 |
+| **K.4 Wiring** | record/price each turn; **pre-call $ gate** in the turn loop; generalise the autonomous-loop budget to $; ~~bound team missions~~ (done — Chapter Ballast, `[budget] per_mission_tokens`/`per_mission_usd`). `aivyx cost` report CLI. | ~15–25 |
 | **K.5 Config** | `[budget]` + `[pricing.<model>]` in `aivyx.toml` (aivyx-config), threaded through the daemon. | ~10–15 |
 
 ```

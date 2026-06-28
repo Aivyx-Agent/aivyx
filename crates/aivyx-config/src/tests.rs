@@ -10253,6 +10253,26 @@ fn chapter_k_loader_parses_budget_section() {
 }
 
 #[test]
+fn ballast_loader_parses_per_mission_caps() {
+    // Chapter Ballast — the per-mission caps load from `[budget]` and default
+    // to None (unbounded) when absent.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[budget]\nper_mission_tokens = 200000\nper_mission_usd = 1.0\n",
+        "ballast-mission-caps",
+    );
+    assert_eq!(cfg.budget.per_mission_tokens, Some(200_000));
+    assert_eq!(cfg.budget.per_mission_usd, Some(1.0));
+    // The run/day caps stay independent (unset here).
+    assert!(cfg.budget.per_run_usd.is_none());
+
+    let bare = load_with_toml("\n[budget]\nper_run_usd = 2.0\n", "ballast-default");
+    assert!(bare.budget.per_mission_tokens.is_none());
+    assert!(bare.budget.per_mission_usd.is_none());
+    drop(env);
+}
+
+#[test]
 fn chapter_k_loader_rejects_negative_budget_cap() {
     let env = EnvScope::new();
     let tmp = TempDir::new("chapter-k-bad-budget");

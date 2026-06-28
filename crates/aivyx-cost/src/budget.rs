@@ -42,6 +42,17 @@ pub struct BudgetConfig {
     /// Max USD per **rolling day**.
     #[serde(default)]
     pub per_day_usd: Option<f64>,
+    /// Chapter Ballast (Opp D) — max USD a **single loop-delegated team
+    /// mission** may spend across all its specialist sub-turns. `None` ⇒
+    /// unbounded (today's behavior). Enforced at wave boundaries by the team
+    /// mission driver, distinct from `per_run_usd` (the whole loop run window).
+    #[serde(default)]
+    pub per_mission_usd: Option<f64>,
+    /// Chapter Ballast (Opp D) — max **tokens** a single team mission may spend.
+    /// `None` ⇒ unbounded. Bounds local/free runs where the $ cap (priced at
+    /// $0) never trips.
+    #[serde(default)]
+    pub per_mission_tokens: Option<u64>,
     /// Whether exceeding a cap alerts or denies.
     #[serde(default)]
     pub on_exceeded: BudgetAction,
@@ -62,6 +73,8 @@ impl Default for BudgetConfig {
         BudgetConfig {
             per_run_usd: None,
             per_day_usd: None,
+            per_mission_usd: None,
+            per_mission_tokens: None,
             on_exceeded: BudgetAction::Deny,
             alert_at: default_alert_at(),
         }
@@ -107,6 +120,56 @@ impl BudgetVerdict {
         } else {
             self
         }
+    }
+}
+
+/// Chapter Ballast (Opp D) — a per-mission aggregate cap (tokens + $), checked
+/// at each team-mission **wave boundary**. Pure, so the halt decision is
+/// unit-testable without a daemon. Distinct from [`BudgetEnforcer`] (the turn
+/// loop's reservation-based $ gate): a mission cap is a simple cumulative
+/// ceiling over the mission's own metered spend.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MissionBudget {
+    /// Token ceiling; `None` ⇒ unbounded.
+    pub max_tokens: Option<u64>,
+    /// USD ceiling; `None` ⇒ unbounded.
+    pub max_usd: Option<f64>,
+}
+
+impl MissionBudget {
+    /// Lift the per-mission caps out of a `[budget]` config.
+    pub fn from_config(cfg: &BudgetConfig) -> Self {
+        MissionBudget {
+            max_tokens: cfg.per_mission_tokens,
+            max_usd: cfg.per_mission_usd,
+        }
+    }
+
+    /// True when no cap is set — the mission is unbounded (today's behavior)
+    /// and the driver can skip metering entirely (byte-identical path).
+    pub fn is_unbounded(&self) -> bool {
+        self.max_tokens.is_none() && self.max_usd.is_none()
+    }
+
+    /// `Some(reason)` once the accumulated mission spend has reached either cap;
+    /// `None` while within budget. Tokens checked first so a local/free run
+    /// (priced at $0) is still bounded.
+    pub fn breach(&self, tokens: u64, usd: f64) -> Option<String> {
+        if let Some(cap) = self.max_tokens {
+            if tokens >= cap {
+                return Some(format!(
+                    "per-mission token cap reached ({tokens} >= {cap})"
+                ));
+            }
+        }
+        if let Some(cap) = self.max_usd {
+            if usd >= cap {
+                return Some(format!(
+                    "per-mission dollar cap reached (${usd:.2} >= ${cap:.2})"
+                ));
+            }
+        }
+        None
     }
 }
 
@@ -229,6 +292,7 @@ mod tests {
             per_day_usd: day,
             on_exceeded: action,
             alert_at: Some(0.8),
+            ..Default::default()
         }
     }
 
@@ -365,5 +429,52 @@ mod tests {
     fn action_serde_is_snake_case() {
         assert_eq!(serde_json::to_string(&BudgetAction::Deny).unwrap(), "\"deny\"");
         assert_eq!(serde_json::to_string(&BudgetAction::Alert).unwrap(), "\"alert\"");
+    }
+
+    // ---- Chapter Ballast: MissionBudget ----
+
+    #[test]
+    fn mission_budget_default_is_unbounded() {
+        let mb = MissionBudget::default();
+        assert!(mb.is_unbounded());
+        // No cap ever trips, however large the spend.
+        assert_eq!(mb.breach(u64::MAX, 1_000_000.0), None);
+    }
+
+    #[test]
+    fn mission_budget_token_cap_trips() {
+        let mb = MissionBudget { max_tokens: Some(1000), max_usd: None };
+        assert!(!mb.is_unbounded());
+        assert_eq!(mb.breach(999, 0.0), None);
+        assert!(mb.breach(1000, 0.0).unwrap().contains("token cap"));
+        assert!(mb.breach(5000, 0.0).is_some());
+    }
+
+    #[test]
+    fn mission_budget_dollar_cap_trips() {
+        let mb = MissionBudget { max_tokens: None, max_usd: Some(1.00) };
+        assert_eq!(mb.breach(10_000, 0.99), None);
+        assert!(mb.breach(10_000, 1.00).unwrap().contains("dollar cap"));
+    }
+
+    #[test]
+    fn mission_budget_token_cap_bounds_local_runs_priced_at_zero() {
+        // The reason both caps exist: a local run prices at $0, so only the
+        // token cap can bound it.
+        let mb = MissionBudget { max_tokens: Some(500), max_usd: Some(10.0) };
+        // $0 spend never trips the dollar cap, but tokens do.
+        assert!(mb.breach(500, 0.0).unwrap().contains("token cap"));
+    }
+
+    #[test]
+    fn mission_budget_from_config_lifts_the_caps() {
+        let cfg = BudgetConfig {
+            per_mission_tokens: Some(123),
+            per_mission_usd: Some(4.5),
+            ..Default::default()
+        };
+        let mb = MissionBudget::from_config(&cfg);
+        assert_eq!(mb.max_tokens, Some(123));
+        assert_eq!(mb.max_usd, Some(4.5));
     }
 }

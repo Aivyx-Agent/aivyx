@@ -7736,6 +7736,15 @@ async fn run_async(
                 max_tokens: DEFAULT_MAX_TOKENS,
                 audit: Arc::clone(&audit),
                 base_tools: tools.snapshot(),
+                // Chapter Ballast (Opp D) — price + cap loop-delegated team
+                // missions. `[budget] per_mission_*` (default None) ⇒ unbounded,
+                // so missions run byte-identically unless the operator opts in.
+                pricing: Arc::new(aivyx_cost::Pricing::with_overrides(
+                    config_pricing.clone(),
+                )),
+                mission_budget: aivyx_cost::MissionBudget::from_config(
+                    &config_budget,
+                ),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`

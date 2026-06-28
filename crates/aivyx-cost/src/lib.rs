@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 pub mod budget;
 pub mod rate_limit;
 pub mod report;
-pub use budget::{BudgetAction, BudgetConfig, BudgetEnforcer, BudgetVerdict, Reservation};
+pub use budget::{
+    BudgetAction, BudgetConfig, BudgetEnforcer, BudgetVerdict, MissionBudget, Reservation,
+};
 pub use rate_limit::{RateAction, RateLimitConfig, RateLimiter, RateVerdict, ToolRateConfig};
 pub use report::{CostReport, ModelLine};
 
