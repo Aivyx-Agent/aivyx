@@ -5,6 +5,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Chapter Plumb — default report routines no longer confabulate.** A fresh-agent
+  check-in caught the `weekly-digest` routine *fabricating* a week of
+  accomplishments (zero tool calls) — and `trend-scan` silently doing nothing —
+  because those default `[[schedule]]` prompts were passive "summarize / search"
+  instructions the local model could satisfy by inventing prose instead of
+  reading (empty) memory/journal. The reporting prompts now **name an explicit
+  first read** (recall memory + read the journal; *actually* web-search for
+  trend-scan), report **only what's genuinely found**, and say "nothing notable
+  to report yet" when the record is empty — never invent, infer, or pad.
+  Re-verified live: the digest now grounds in real memory instead of fabricating.
+  (A daemon-level "an aggregation routine that made no tool calls is a no-op"
+  backstop is noted as a follow-up.)
+
 ## [0.7.6] — 2026-06-28
 
 ### Added

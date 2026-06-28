@@ -844,10 +844,10 @@ fn toml_string_array(items: &[String]) -> String {
 // ---------------------------------------------------------------------------
 
 const ROUTINE_ENVIRONMENT_REVIEW: &str = "Perform your daily environment review, strictly read-only — never modify, delete, move, or run destructive commands, and stay within your access scope. Check memory under the topic 'environment-baseline'. If no baseline exists, survey your accessible environment concisely — your workspace and key directories, the tools available to you, and a brief system summary — and save it to memory under 'environment-baseline'. If a baseline exists, compare the current state to it, journal a short note of anything new or notable to your workspace, and update the baseline. Be concise.";
-const ROUTINE_NIGHTLY_REFLECTION: &str = "Nightly reflection. Review what you learned today from recent memory. Consolidate the important facts into your knowledge base, tidy stale or duplicate memories, and note any skills or operator preferences worth refining. Journal a brief reflection to your workspace. Keep it short.";
+const ROUTINE_NIGHTLY_REFLECTION: &str = "Nightly reflection. FIRST read your actual record — recall your recent memories and read your workspace journal. Then, based ONLY on what you actually find there, consolidate the important facts, tidy stale or duplicate memories, and note any skills or operator preferences worth refining. Journal a brief reflection. If little happened, say so briefly — never invent activity you didn't find. Keep it short.";
 const ROUTINE_HEALTH_CHECK: &str = "Run a quick self-health check: confirm your model is responding and that a trivial tool call works. If everything is healthy reply with a short OK. Only raise an alert if something is actually wrong.";
-const ROUTINE_WEEKLY_DIGEST: &str = "Weekly digest. Summarize what you have learned and worked on over the past week from your memory and journal, and list any pending persona or skill proposals awaiting the operator's review. Keep it a concise, friendly briefing.";
-const ROUTINE_TREND_SCAN: &str = "Run a trend-scan across the operator's interest areas (see your profile and primary use cases). Search the web for recent, reputable sources, cross-reference the key points, separate solid facts from speculation, save the distilled findings to memory under a clear topic, and journal a short digest leading with whatever is genuinely new or notable.";
+const ROUTINE_WEEKLY_DIGEST: &str = "Weekly digest. FIRST read your actual record before writing anything: recall your recent memories, read your workspace journal, and check for pending persona or skill proposals awaiting review. Then write a short, friendly briefing of ONLY what you genuinely found there — what you actually learned or worked on, and any proposals to review. If the record is empty or thin, say so plainly (e.g. \"nothing notable to report yet\"). Never invent, infer, or pad the digest with activity you did not actually find in memory or the journal.";
+const ROUTINE_TREND_SCAN: &str = "Run a trend-scan across the operator's interest areas (see your profile and primary use cases). You MUST actually search the web first — call your web search tool for recent, reputable sources; do not answer from memory or prior knowledge alone. Cross-reference the key points across several results, separate solid facts from speculation, save the distilled findings to memory under a clear topic, and journal a short digest leading with whatever is genuinely new, with links. If the search returns nothing useful, say so plainly and stop — never fabricate findings, sources, or links.";
 
 /// Render the default starter routines as `[[schedule]]` blocks.
 ///
@@ -2828,6 +2828,32 @@ mod tests {
         ] {
             assert!(!enabled_of(&toml, name), "cloud routine {name} must be disabled");
         }
+    }
+
+    /// Chapter Plumb (PL.2) — the reporting routines must stay GROUNDED: they
+    /// have to name an explicit first read and forbid invention, or the local
+    /// model satisfies them with prose and confabulates (the fresh-Jarvis
+    /// weekly-digest fabricated a week of work with 0 tool calls). This guard
+    /// fails if a future edit quietly reverts them to passive "summarize"
+    /// prompts.
+    #[test]
+    fn reporting_routines_are_grounded_and_anti_fabrication() {
+        // weekly-digest: read-first + never-invent + say-nothing-when-empty.
+        let d = ROUTINE_WEEKLY_DIGEST.to_lowercase();
+        assert!(d.contains("first read"), "digest must read before writing");
+        assert!(d.contains("journal") && d.contains("memor"), "digest must ground in memory + journal");
+        assert!(d.contains("never invent"), "digest must forbid invention");
+        assert!(d.contains("nothing notable to report yet"), "digest must have an explicit empty-case");
+
+        // trend-scan: must actually search; never fabricate findings/sources.
+        let t = ROUTINE_TREND_SCAN.to_lowercase();
+        assert!(t.contains("must actually search the web"), "trend-scan must force a real search");
+        assert!(t.contains("never fabricate"), "trend-scan must forbid fabricated findings");
+
+        // nightly-reflection: grounded too (read-first + don't invent).
+        let r = ROUTINE_NIGHTLY_REFLECTION.to_lowercase();
+        assert!(r.contains("first read"), "reflection must read before reflecting");
+        assert!(r.contains("never invent"), "reflection must forbid invention");
     }
 
     #[test]
