@@ -19,16 +19,16 @@ verifiable offline.
 
 ![The Aivyx Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
 
-## Status (v0.7.11 — source-available, BUSL-1.1, 2026-06-29)
+## Status (v0.7.12 — source-available, BUSL-1.1, 2026-06-29)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), Repertoire (a Studio Skills library showing every skill + its effectiveness), Stencil + Bridle + Emboss (reliable local tool-calling via grammar-constrained decoding on both local engines), Abacus (a pure-compute utilities pack — calc / unit + timezone convert / date math), Sheaf (structured-data readers — CSV / XLSX / PDF over `fs.read`), Conduit (operator-added MCP servers that work — `env` / `headers` / `aivyx mcp status`), Keel (the default system prompt enriched from a one-line stub into a real operating charter), Outfit (default starter skills so a fresh agent works on turn one), Engram (semantic memory that works out of the box — `init` configures embeddings + turns on the memory stack), Tutor (`aivyx skills teach` — operator-initiated skill authoring on a grown agent), Ember (embedding-free "lite" recall — `[memory] profile = lite` gives BM25 lexical + co-occurrence recall with zero setup), and Ballast (a per-mission budget that caps + gracefully halts runaway autonomous team missions) — and 15 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), Repertoire (a Studio Skills library showing every skill + its effectiveness), Stencil + Bridle + Emboss (reliable local tool-calling via grammar-constrained decoding on both local engines), Abacus (a pure-compute utilities pack — calc / unit + timezone convert / date math), Sheaf (structured-data readers — CSV / XLSX / PDF over `fs.read`), Conduit (operator-added MCP servers that work — `env` / `headers` / `aivyx mcp status`), Keel (the default system prompt enriched from a one-line stub into a real operating charter), Outfit (default starter skills so a fresh agent works on turn one), Engram (semantic memory that works out of the box — `init` configures embeddings + turns on the memory stack), Tutor (`aivyx skills teach` — operator-initiated skill authoring on a grown agent), Ember (embedding-free "lite" recall — `[memory] profile = lite` gives BM25 lexical + co-occurrence recall with zero setup), Ballast (a per-mission budget that caps + gracefully halts runaway autonomous team missions), and Helm (opt-in `[loop] resume_on_boot` so autonomous runs survive a daemon restart) — and 15 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — on each version tag, cargo-dist builds the CLI (Linux x86_64/aarch64 musl + macOS x86_64/aarch64) and a separate workflow builds the **desktop app** (`.deb` + macOS `.app`); both attach to the GitHub Release. Latest is **`v0.7.11`** (a release-gate hotfix that republishes 0.7.10's CLI binaries — Chapter Ballast per-mission budgets for autonomous team missions, plus `aivyx init --template` parity with a plain init) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) or the [desktop app](docs/INSTALL.md#desktop-app) |
+| Release pipeline | **Active** — on each version tag, cargo-dist builds the CLI (Linux x86_64/aarch64 musl + macOS x86_64/aarch64) and a separate workflow builds the **desktop app** (`.deb` + macOS `.app`); both attach to the GitHub Release. Latest is **`v0.7.12`** (Chapter Helm — opt-in `[loop] resume_on_boot` so autonomous loop runs survive a daemon restart) via the [shell installer](docs/INSTALL.md#shell-installer-recommended) or the [desktop app](docs/INSTALL.md#desktop-app) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Chat · Memory (+ graph) · Wiki (knowledge pages) · Graph (typed knowledge graph) · Skills (the skill library) · Settings · Agents · Teams · Documents (browse + edit) · Voice; offline, local-first, served on `:7843` |
 | Workspace crates | 33 |
-| Rust tests | 5,261 passing |
+| Rust tests | 5,267 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 87 |
@@ -224,9 +224,8 @@ real need.
 ## Release pipeline status
 
 The release pipeline is **active** on the public repo. The latest
-release is `v0.7.11` (a release-gate hotfix republishing 0.7.10's CLI
-binaries — Chapter Ballast per-mission budgets for autonomous team
-missions, plus `aivyx init --template` parity with a plain init):
+release is `v0.7.12` (Chapter Helm — opt-in `[loop] resume_on_boot` so
+autonomous loop runs survive a daemon restart):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
   the CLI for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every

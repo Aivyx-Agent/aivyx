@@ -5,6 +5,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.12] — 2026-06-29
+
+### Added
+
+- **Chapter Helm — autonomous loop runs survive a daemon restart.** A new opt-in
+  `[loop] resume_on_boot` resumes an interrupted autonomous-loop run when the
+  daemon restarts — so a "runs for days" agent (e.g. under systemd
+  `Restart=on-failure`) keeps working through its backlog instead of silently
+  stopping after a crash. It resumes only when a run was genuinely active when
+  the daemon stopped (a crash or restart) and stories remain pending; an
+  explicit `aivyx loop stop` is remembered across the restart and is **not**
+  resumed. Default off — auto-resuming a code-committing loop is a deliberate
+  operator choice.
+
 ## [0.7.11] — 2026-06-29
 
 ### Fixed
