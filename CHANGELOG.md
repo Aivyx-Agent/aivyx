@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-06-28
+
 ### Added
 
 - **Chapter Anchor — `aivyx daemon install` (run for days).** The bare daemon —
