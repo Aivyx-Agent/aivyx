@@ -29,8 +29,11 @@ rand = { workspace = true }
 # AEAD) — the "modernize onto the new core" path (PP.0 decision 1).
 aivyx-crypto = { path = "../aivyx-crypto" }
 
-# PP.2 (trust)  will add: aivyx-config (Reins AutonomyLevel ceiling).
+# PP.2 (trust) — the Reins AutonomyLevel is the per-peer autonomy ceiling.
+aivyx-config = { path = "../aivyx-config" }
+
 # PP.3 (relay)  will add: aivyx-ipc (wasm-clean relay protocol types) + aivyx-audit.
 
 [dev-dependencies]
 uuid = { workspace = true }
+serde_json = { workspace = true }
