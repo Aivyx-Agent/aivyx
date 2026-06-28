@@ -501,6 +501,52 @@ against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
 agent to anything sensitive.
 
+## Running as a service — runs for days (Chapter Anchor)
+
+`aivyx` is most useful left running: the daemon keeps its scheduled
+routines firing, its autonomous loop available, and the Studio up.
+`aivyx daemon run` ties the daemon to your terminal; **`aivyx daemon
+install`** registers it as a real background service that survives
+logout and reboot — no hand-rolled `systemd`/`launchd` files.
+
+```sh
+# install + start the daemon as a per-user service
+aivyx daemon install            # add --web-ui to also serve the Studio
+                                # add --no-start to install without starting
+
+# check it (also shown in `aivyx doctor`)
+systemctl --user status aivyx-daemon          # Linux
+launchctl print gui/$(id -u)/com.aivyx.daemon # macOS
+journalctl --user -u aivyx-daemon -f          # Linux logs
+
+# remove it (stops, disables, deletes the unit + its secret env file)
+aivyx daemon uninstall
+```
+
+- **Linux** — a systemd **user** unit at
+  `~/.config/systemd/user/aivyx-daemon.service`, plus
+  `loginctl enable-linger` so it runs **without an active login
+  session** (the runs-for-days requirement). No root, no `sudo`.
+- **macOS** — a launchd `LaunchAgent` at
+  `~/Library/LaunchAgents/com.aivyx.daemon.plist` (`RunAtLoad`,
+  restart-on-crash).
+- **The store passphrase.** The service is unattended, so it can't
+  prompt: `daemon install` captures your passphrase (from
+  `AIVYX_PASSPHRASE` or a one-time hidden prompt) and stores it for
+  the service. On **Linux** it goes in a `0600` env file
+  (`~/.config/aivyx/daemon.env`) the unit references — never in the
+  unit itself. On **macOS** it rides the plist's
+  `EnvironmentVariables` (the plist is written `0600`). Either way the
+  secret is owner-only at rest.
+- **Working directory.** The unit runs from the directory holding your
+  `aivyx.toml` (the cwd at install time, else `$HOME`), so the daemon
+  finds your config.
+- **Windows / containers** — use the [Docker appliance](#docker--the-server-appliance)
+  (always-on by design) or the desktop app's autostart instead.
+
+Re-running `aivyx daemon install` is idempotent — it rewrites the unit
+and restarts the service, picking up a new binary path or `--web-ui`.
+
 ## Running Aivyx on Discord (Phase 107)
 
 The Discord adapter mirrors the Telegram pattern: one bot
@@ -6260,6 +6306,10 @@ from the block to avoid noise.
 ## Uninstall
 
 ```sh
+# If you installed it as a service (Chapter Anchor), remove that first —
+# stops + disables the unit and deletes its secret env file.
+aivyx daemon uninstall 2>/dev/null
+
 # Remove the binary
 rm "$(command -v aivyx)"
 

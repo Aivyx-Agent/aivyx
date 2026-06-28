@@ -114,6 +114,11 @@ edit files in scope, and **Settings** to adjust access, autonomy, and budgets.
 The HMAC audit log (with offline **Verify chain**) lives in the
 legacy inspection panes at `/classic`.
 
+To keep it running for days — scheduled routines firing, the loop
+available — install it as a background service (no hand-rolled
+`systemd`/`launchd`): `aivyx daemon install` (Linux/macOS; survives
+logout + reboot). See [`docs/INSTALL.md`](docs/INSTALL.md#running-as-a-service--runs-for-days-chapter-anchor).
+
 **Terminal frontends + the Nonagon (Chapter I/J):**
 
 ```sh
