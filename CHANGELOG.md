@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.8] — 2026-06-28
+
 ### Fixed
 
 - **`aivyx init` no longer shreds list items that contain commas.** The wizard's
