@@ -670,41 +670,13 @@ fn render_toml(cfg: &InitConfig) -> String {
         cfg.storage_path,
     ));
 
-    // Chapter Engram — `[embedding]` makes semantic memory work out of the box.
-    // Without it the auto-recall pipeline never engages (the daemon only builds
-    // it when `[embedding]` is configured), so a fresh agent would have no
-    // semantic recall at all. Local Ollama needs no key; the cloud path carries
-    // its own.
-    if let Some(emb) = &cfg.embedding {
-        out.push_str(&format!(
-            "\n[embedding]\nbase_url = \"{}\"\nmodel = \"{}\"\ndimensions = {}\n",
-            emb.base_url, emb.model, emb.dimensions,
-        ));
-        if let Some(key) = &emb.api_key {
-            out.push_str(&format!("api_key = \"{key}\"\n"));
-        }
+    // Chapter Engram — `[embedding]` + `[memory] profile`. Shared with the
+    // `--template` path (backlog #3) so both render this identically.
+    out.push_str(&render_embedding_section(cfg));
 
-        // Chapter Engram — turn on the full memory stack for new installs that
-        // have an embedding provider. `smart` arms graph-augmented recall plus
-        // the wiki / typed-graph extraction sweeps (capped). We write it
-        // explicitly here rather than changing the compiled default (which stays
-        // `Off`): the sweeps spend tokens on the cloud path, so flipping the
-        // default would surprise-bill existing installs on upgrade — only new
-        // configs opt in. Omitted entirely without an embedding provider, where
-        // the profile would be inert anyway.
-        out.push_str("\n[memory]\nprofile = \"smart\"\n");
-    }
-
-    // Phase 46: bundled web search MCP server.
-    if cfg.enable_web_search {
-        out.push_str(
-            "\n[[mcp_server]]\n\
-             name = \"web-search\"\n\
-             command = \"aivyx\"\n\
-             args = [\"mcp-server\", \"web-search\"]\n\
-             bundled = true\n",
-        );
-    }
+    // Phase 46: bundled web search MCP server. Shared with the `--template`
+    // path (backlog #3).
+    out.push_str(&render_web_search_section(cfg));
 
     // Phase 57: Profile section per Q4(c). Only emit when the
     // operator customized at least one field. A blank-everywhere
@@ -753,46 +725,9 @@ fn render_toml(cfg: &InitConfig) -> String {
         }
     }
 
-    // Chapter W — the onboarding Persona/Skills seed. The daemon plants this
-    // on the persona chain at first boot (iff empty); editing it later has no
-    // effect (the chain is authoritative once seeded). Only emitted when the
-    // operator declared something — otherwise the Persona starts empty.
-    let seed = &cfg.persona_seed;
-    if seed.has_content() {
-        out.push_str("\n[persona_seed]\n");
-        if !seed.learned_context.is_empty() {
-            out.push_str(&format!(
-                "learned_context = {}\n",
-                toml_string_array(&seed.learned_context),
-            ));
-        }
-        if !seed.communication_adaptations.is_empty() {
-            out.push_str(&format!(
-                "communication_adaptations = {}\n",
-                toml_string_array(&seed.communication_adaptations),
-            ));
-        }
-        if !seed.character_traits.is_empty() {
-            out.push_str(&format!(
-                "character_traits = {}\n",
-                toml_string_array(&seed.character_traits),
-            ));
-        }
-        if !seed.relationship_milestones.is_empty() {
-            out.push_str(&format!(
-                "relationship_milestones = {}\n",
-                toml_string_array(&seed.relationship_milestones),
-            ));
-        }
-        for sk in &seed.skills {
-            out.push_str(&format!(
-                "\n[[persona_seed.skill]]\nname = \"{}\"\ntrigger = \"{}\"\nprocedure = \"{}\"\n",
-                escape_toml_string(&sk.name),
-                escape_toml_string(&sk.trigger),
-                escape_toml_string(&sk.procedure),
-            ));
-        }
-    }
+    // Chapter W — the onboarding Persona/Skills seed. Shared with the
+    // `--template` path (backlog #3).
+    out.push_str(&render_persona_seed_section(cfg));
 
     // Phase 180 — secure-by-default. New configs request the
     // bundled sandbox preset: tool processes are OS-isolated
@@ -802,6 +737,95 @@ fn render_toml(cfg: &InitConfig) -> String {
     out.push_str("\n[sandbox]\n");
     out.push_str("default_backend = \"auto\"\n");
 
+    out
+}
+
+/// Chapter Engram — render `[embedding]` + `[memory] profile = smart`. Empty
+/// string when the wizard resolved no embedding provider (semantic memory stays
+/// off — the profile would be inert anyway).
+///
+/// Shared by `render_toml` and the `--template` path (backlog #3): a
+/// `--template` init used to skip semantic memory entirely. Without
+/// `[embedding]` the daemon never builds the auto-recall pipeline, so a fresh
+/// templated agent had no semantic recall at all. `smart` arms graph-augmented
+/// recall + the (capped) wiki / typed-graph sweeps; written explicitly here
+/// rather than as a compiled default so only new configs opt in (the cloud
+/// sweeps spend tokens — flipping the default would surprise-bill upgrades).
+fn render_embedding_section(cfg: &InitConfig) -> String {
+    let Some(emb) = &cfg.embedding else {
+        return String::new();
+    };
+    let mut out = format!(
+        "\n[embedding]\nbase_url = \"{}\"\nmodel = \"{}\"\ndimensions = {}\n",
+        emb.base_url, emb.model, emb.dimensions,
+    );
+    if let Some(key) = &emb.api_key {
+        out.push_str(&format!("api_key = \"{key}\"\n"));
+    }
+    out.push_str("\n[memory]\nprofile = \"smart\"\n");
+    out
+}
+
+/// Phase 46 — the bundled web-search MCP server block. Empty when the operator
+/// declined web search. Shared by `render_toml` and the `--template` path.
+fn render_web_search_section(cfg: &InitConfig) -> String {
+    if !cfg.enable_web_search {
+        return String::new();
+    }
+    String::from(
+        "\n[[mcp_server]]\n\
+         name = \"web-search\"\n\
+         command = \"aivyx\"\n\
+         args = [\"mcp-server\", \"web-search\"]\n\
+         bundled = true\n",
+    )
+}
+
+/// Chapter W — render the onboarding `[persona_seed]` + `[[persona_seed.skill]]`
+/// blocks. Empty string when the operator declared nothing. The daemon plants
+/// this on the persona chain at first boot (iff empty); editing it later has no
+/// effect (the chain is authoritative once seeded).
+///
+/// Shared by `render_toml` and the `--template` path (backlog #3): a
+/// `--template` init used to silently drop the operator's persona answers.
+fn render_persona_seed_section(cfg: &InitConfig) -> String {
+    let seed = &cfg.persona_seed;
+    if !seed.has_content() {
+        return String::new();
+    }
+    let mut out = String::from("\n[persona_seed]\n");
+    if !seed.learned_context.is_empty() {
+        out.push_str(&format!(
+            "learned_context = {}\n",
+            toml_string_array(&seed.learned_context),
+        ));
+    }
+    if !seed.communication_adaptations.is_empty() {
+        out.push_str(&format!(
+            "communication_adaptations = {}\n",
+            toml_string_array(&seed.communication_adaptations),
+        ));
+    }
+    if !seed.character_traits.is_empty() {
+        out.push_str(&format!(
+            "character_traits = {}\n",
+            toml_string_array(&seed.character_traits),
+        ));
+    }
+    if !seed.relationship_milestones.is_empty() {
+        out.push_str(&format!(
+            "relationship_milestones = {}\n",
+            toml_string_array(&seed.relationship_milestones),
+        ));
+    }
+    for sk in &seed.skills {
+        out.push_str(&format!(
+            "\n[[persona_seed.skill]]\nname = \"{}\"\ntrigger = \"{}\"\nprocedure = \"{}\"\n",
+            escape_toml_string(&sk.name),
+            escape_toml_string(&sk.trigger),
+            escape_toml_string(&sk.procedure),
+        ));
+    }
     out
 }
 
@@ -1561,7 +1585,41 @@ fn render_with_template(
          # Customize freely; the template's structure is preserved.\n\n",
     );
     out.push_str(&doc.to_string());
+
+    // Backlog #3 — parity with the plain `render_toml` path. The template
+    // path previously authored only the keys above, so a `--template` init
+    // silently had NO semantic memory (Chapter Engram), dropped the operator's
+    // onboarding persona answers (Chapter W), and ignored the web-search
+    // choice (Phase 46). Append each shared section the template doesn't
+    // already declare — respecting a template author's explicit choice and
+    // never producing a duplicate (non-array) table.
+    //
+    // `[embedding]` + `[memory]` are guarded together: if the template manages
+    // either, we leave its memory configuration alone.
+    if doc.get("embedding").is_none() && doc.get("memory").is_none() {
+        out.push_str(&render_embedding_section(cfg));
+    }
+    if doc.get("persona_seed").is_none() {
+        out.push_str(&render_persona_seed_section(cfg));
+    }
+    if !template_declares_web_search(&doc) {
+        out.push_str(&render_web_search_section(cfg));
+    }
     out
+}
+
+/// True when the template already declares an MCP server named `web-search`,
+/// so the `--template` path doesn't append a duplicate. `[[mcp_server]]` is an
+/// array of tables, so this scans every entry.
+fn template_declares_web_search(doc: &toml_edit::DocumentMut) -> bool {
+    doc.get("mcp_server")
+        .and_then(|item| item.as_array_of_tables())
+        .map(|servers| {
+            servers.iter().any(|t| {
+                t.get("name").and_then(|v| v.as_str()) == Some("web-search")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Entry point for the init wizard. Called from `run()` in the
@@ -3279,6 +3337,107 @@ mod tests {
         let out = render_with_template(&cfg, "coder", doc);
         assert!(out.contains("[sandbox]"));
         assert!(out.contains("default_backend = \"auto\""));
+    }
+
+    // -- Backlog #3: --template parity with the plain render path ----------
+
+    /// A minimal template document (just the keys the wizard always sets).
+    fn minimal_template_doc() -> toml_edit::DocumentMut {
+        "[agent]\nprovider = \"ollama\"\nmodel = \"x\"\n\
+         [fs]\nroot = \".\"\n[storage]\npath = \"s.redb\"\n"
+            .parse()
+            .unwrap()
+    }
+
+    fn cfg_with_embedding_and_seed(enable_web_search: bool) -> InitConfig {
+        InitConfig {
+            embedding: Some(EmbeddingFields {
+                base_url: "http://localhost:11434".into(),
+                model: "nomic-embed-text".into(),
+                dimensions: 768,
+                api_key: None,
+            }),
+            persona_seed: PersonaSeedFields {
+                character_traits: vec!["warm".into()],
+                skills: vec![SeedSkillFields {
+                    name: "summarize".into(),
+                    trigger: "when asked to summarize".into(),
+                    procedure: "give a tight gist + bullets".into(),
+                }],
+                ..PersonaSeedFields::default()
+            },
+            ..init_config_no_profile(
+                Provider::Ollama,
+                "qwen3:8b",
+                None,
+                "s.redb",
+                ".",
+                enable_web_search,
+            )
+        }
+    }
+
+    #[test]
+    fn template_path_adds_engram_persona_and_web_search() {
+        // The big one: a --template init must NOT silently skip semantic
+        // memory (Engram), the persona seed (Chapter W), or web search.
+        let cfg = cfg_with_embedding_and_seed(true);
+        let out = render_with_template(&cfg, "coder", minimal_template_doc());
+
+        assert!(out.contains("[embedding]"), "embedding section: {out}");
+        assert!(out.contains("model = \"nomic-embed-text\""));
+        assert!(out.contains("[memory]") && out.contains("profile = \"smart\""));
+        assert!(out.contains("[persona_seed]"), "persona seed: {out}");
+        assert!(out.contains("[[persona_seed.skill]]"));
+        assert!(out.contains("name = \"web-search\""), "web search: {out}");
+        // The result must still be valid TOML (no duplicate tables).
+        out.parse::<toml_edit::DocumentMut>()
+            .expect("template output is valid TOML");
+    }
+
+    #[test]
+    fn template_path_respects_a_template_that_declares_these_sections() {
+        // A (user) template that manages its own embedding / memory /
+        // persona seed / web search must not get duplicated sections —
+        // which would also make the TOML invalid.
+        let cfg = cfg_with_embedding_and_seed(true);
+        let doc: toml_edit::DocumentMut = "[agent]\nprovider = \"ollama\"\nmodel = \"x\"\n\
+             [fs]\nroot = \".\"\n[storage]\npath = \"s.redb\"\n\
+             [embedding]\nbase_url = \"http://x\"\nmodel = \"custom-embed\"\ndimensions = 1024\n\
+             [memory]\nprofile = \"lite\"\n\
+             [persona_seed]\ncharacter_traits = [\"curated\"]\n\
+             [[mcp_server]]\nname = \"web-search\"\ncommand = \"aivyx\"\nargs = [\"mcp-server\", \"web-search\"]\n"
+            .parse()
+            .unwrap();
+        let out = render_with_template(&cfg, "custom", doc);
+
+        // Template's choices win; nothing duplicated.
+        assert_eq!(out.matches("[embedding]").count(), 1, "{out}");
+        assert_eq!(out.matches("[memory]").count(), 1);
+        assert_eq!(out.matches("[persona_seed]").count(), 1);
+        assert_eq!(out.matches("name = \"web-search\"").count(), 1);
+        assert!(out.contains("model = \"custom-embed\""), "template embed kept");
+        assert!(out.contains("profile = \"lite\""), "template profile kept");
+        out.parse::<toml_edit::DocumentMut>()
+            .expect("template output is valid TOML");
+    }
+
+    #[test]
+    fn template_path_skips_engram_when_no_embedding_resolved() {
+        // No embedding provider resolved → no [embedding]/[memory] (matches
+        // render_toml: the profile would be inert anyway).
+        let cfg = init_config_no_profile(
+            Provider::Ollama,
+            "qwen3:8b",
+            None,
+            "s.redb",
+            ".",
+            false,
+        );
+        let out = render_with_template(&cfg, "coder", minimal_template_doc());
+        assert!(!out.contains("[embedding]"));
+        assert!(!out.contains("[persona_seed]"));
+        assert!(!out.contains("name = \"web-search\""));
     }
 
     #[test]
