@@ -926,11 +926,40 @@ fn opt(s: String) -> Option<String> {
     }
 }
 
+/// Split a comma-separated wizard list into trimmed, non-empty items —
+/// **but not on commas inside parentheses/brackets/braces** (backlog #7). So
+/// an item like `Research my passions (flying, food, coffee)` stays a single
+/// item instead of being shredded into three. Unbalanced delimiters degrade
+/// gracefully (depth never goes negative; trailing text is flushed).
 fn split_list(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(|x| x.trim().to_string())
-        .filter(|x| !x.is_empty())
-        .collect()
+    let mut items = Vec::new();
+    let mut cur = String::new();
+    let mut depth: i32 = 0;
+    for ch in s.chars() {
+        match ch {
+            '(' | '[' | '{' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            ')' | ']' | '}' => {
+                depth = depth.saturating_sub(1);
+                cur.push(ch);
+            }
+            ',' if depth == 0 => {
+                let t = cur.trim();
+                if !t.is_empty() {
+                    items.push(t.to_string());
+                }
+                cur.clear();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    let t = cur.trim();
+    if !t.is_empty() {
+        items.push(t.to_string());
+    }
+    items
 }
 
 /// Run the guided identity builder. Offers an LLM-assisted draft
@@ -1701,12 +1730,11 @@ fn render_seed_summary(
     Ok(())
 }
 
-/// Split a comma-separated line into trimmed, non-empty entries.
+/// Split a comma-separated line into trimmed, non-empty entries. Delegates to
+/// [`split_list`] so it shares the paren-aware behaviour (backlog #7) — commas
+/// inside `(...)` don't split.
 fn split_comma_list(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
+    split_list(s)
 }
 
 pub async fn run_init_wizard(
@@ -2854,6 +2882,30 @@ mod tests {
         let r = ROUTINE_NIGHTLY_REFLECTION.to_lowercase();
         assert!(r.contains("first read"), "reflection must read before reflecting");
         assert!(r.contains("never invent"), "reflection must forbid invention");
+    }
+
+    /// Backlog #7 — list items with internal commas (parenthetical groups) must
+    /// stay whole, not shred. Plain comma-separation still works.
+    #[test]
+    fn split_list_is_paren_aware() {
+        // plain case unchanged
+        assert_eq!(split_list("a, b, c"), vec!["a", "b", "c"]);
+        // commas inside parens do NOT split
+        assert_eq!(
+            split_list("Research my passions (flying, food, coffee)"),
+            vec!["Research my passions (flying, food, coffee)"]
+        );
+        // top-level commas split; parenthetical commas don't
+        assert_eq!(
+            split_list("Build apps, Research (a, b, c), Track tasks"),
+            vec!["Build apps", "Research (a, b, c)", "Track tasks"]
+        );
+        // brackets/braces too
+        assert_eq!(split_list("x [1, 2], y"), vec!["x [1, 2]", "y"]);
+        // trimming + empties dropped; trailing comma ok
+        assert_eq!(split_list(" a ,  , b, "), vec!["a", "b"]);
+        // unbalanced parens degrade gracefully (no panic, content preserved)
+        assert_eq!(split_list("a (b, c"), vec!["a (b, c"]);
     }
 
     #[test]

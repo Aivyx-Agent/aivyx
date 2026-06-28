@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aivyx init` no longer shreds list items that contain commas.** The wizard's
+  comma-separated Profile fields (use cases, behavioral preferences/constraints,
+  character traits) are now split **paren-aware** — a comma inside `(...)`/`[...]`
+  no longer splits, so an item like "Research my passions (flying, food, coffee)"
+  stays a single entry instead of fragmenting.
+
 ## [0.7.7] — 2026-06-28
 
 ### Fixed
