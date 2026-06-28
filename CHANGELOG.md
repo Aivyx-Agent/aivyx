@@ -5,6 +5,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.9] — 2026-06-28
+
+### Added
+
+- **Chapter Ember — embedding-free "lite" recall.** `[memory] profile = lite`
+  now delivers real recall with **zero setup** — no embedding model, no vectors,
+  no paid generation. It fuses BM25 lexical search with a co-occurrence graph
+  walk (seeded from the lexical hits) over the memory the agent already has.
+  Previously `lite` produced *no* recall because the whole recall stack was gated
+  on an embedding provider. `aivyx doctor` reports it as "lite recall active".
+  Set `profile = smart` with an `[embedding]` section for semantic recall; a
+  `smart` config with no embeddings stays off (and now warns). (Backlog
+  opportunity C.)
+
 ### Fixed
 
 - **Chapter Etch — the agent now reliably persists explicit "remember this"
@@ -19,6 +33,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
   Live-verified: "Remember my home airport is YSSY" → a fresh-context "is it good
   flying at my home airport?" now recalls YSSY and answers, instead of asking
   which airport. (Backlog #8.)
+- **A `smart` memory profile with no embeddings is no longer silently inert.**
+  `[memory] profile = smart` arms the semantic recall stack, but with no
+  `[embedding]` provider the semantic source does nothing — the trap that can
+  leave "smart" memory dark. The config loader now warns at startup and
+  `aivyx doctor` flags the mismatch (use `profile = lite` for embedding-free
+  recall, or add an `[embedding]` section). (Backlog #1.)
+- **Clearer error when a non-interactive `aivyx` collides with a running
+  daemon.** A piped/non-TTY turn (`printf … | aivyx`) opened the store directly
+  and failed with redb's opaque "Cannot acquire lock" while the daemon held it.
+  It now explains the situation and points to `aivyx --headless "…"` (which
+  routes over the daemon) or `aivyx daemon stop`. (Backlog #2.)
+- **The daemon no longer logs clean client disconnects as errors.** A finishing
+  CLI query dropping its socket produced a `connection handler error: Broken
+  pipe` line on every call, spamming `journalctl` and masking real errors. Clean
+  hang-ups are now silent; genuine faults still log. (Backlog #4.)
 
 ## [0.7.8] — 2026-06-28
 
