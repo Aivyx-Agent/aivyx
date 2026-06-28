@@ -4752,9 +4752,10 @@ async fn run_async(
         skill_authoring: config_skill_authoring,
         // Chapter Synapse — `[memory] profile` has already expanded into
         // the embedding/recall_cluster/wiki/graph fields at config-load,
-        // so the daemon reads those as usual; the profile itself is
-        // introspection-only here.
-        memory_profile: _,
+        // so the daemon reads those as usual.
+        // Chapter Ember — also read directly: `profile = lite` with no
+        // `[embedding]` selects the embedding-free `LiteRecallContext`.
+        memory_profile,
         // Phase 87 — `[persona_consolidation]` config. Wired
         // into the daemon's reflection-cron consolidation
         // pass via DaemonConfig below.
@@ -5467,6 +5468,15 @@ async fn run_async(
         None => None,
     };
 
+    // Chapter Ember — the embedding-free "lite" recall tier. `[memory]
+    // profile = lite` arms BM25 lexical + co-occurrence recall over EXISTING
+    // memory with no embedding model (the "smart recall, zero setup" path).
+    // Gated specifically on `Lite` (not `arms_recall_fusion()`): a `smart`
+    // config with no `[embedding]` deliberately stays zero-recall + the
+    // dead-memory warning (backlog #1) rather than silently downgrading.
+    let lite_recall = matches!(memory_profile, aivyx_config::MemoryProfile::Lite)
+        && embedding_provider.is_none();
+
     // Phase 76 — automatic semantic recall. Built once when both
     // a provider and the `[embedding]` config exist (the config
     // carries the rag_top_k / rag_min_similarity knobs). Shared
@@ -5475,10 +5485,18 @@ async fn run_async(
     // Phase 77 — the recall-feedback log. Built once and shared:
     // the recall hook appends to it, and (Task 8) the reflection
     // loop reads it. `None` when auto-recall is off.
+    // Chapter Ember — ALSO built for the lite tier so its recall events
+    // feed the same fold/prune cadence (the co-occurrence ledger below is
+    // derived from this handle, and the reflection fold needs no embeddings).
     let recall_log: Option<
         Arc<aivyx_channel::recall_log::PersistentRecallLog>,
     > = match (&embedding_provider, config_embedding.as_ref()) {
         (Some(_), Some(_)) => {
+            Some(Arc::new(aivyx_channel::recall_log::PersistentRecallLog::new(
+                storage.domain(KeyDomain::RecallEvents),
+            )))
+        }
+        _ if lite_recall => {
             Some(Arc::new(aivyx_channel::recall_log::PersistentRecallLog::new(
                 storage.domain(KeyDomain::RecallEvents),
             )))
@@ -5717,6 +5735,34 @@ async fn run_async(
                 cfg.recall_graph_typed_weight,
             );
             Some(Arc::new(sc))
+        }
+        // Chapter Ember — the embedding-free lite tier. No provider, no
+        // `[embedding]` config; fuse BM25 lexical + a co-occurrence walk
+        // (seeded from the lexical hits) over existing memory. Tuning uses
+        // sensible defaults (lite = zero setup); the `[recall_cluster]`
+        // section — synthesized for any recall-fusion profile, including
+        // lite — supplies the walk's affinity floor / cap when present.
+        _ if lite_recall => {
+            // Lite arms a single co-occurrence hop, mirroring the smart
+            // profile's `SMART_RECALL_GRAPH_HOPS`.
+            const LITE_GRAPH_HOPS: u32 = 1;
+            let top_k = aivyx_config::DEFAULT_RAG_TOP_K;
+            let (min_aff, cap) = config_recall_cluster
+                .as_ref()
+                .map(|c| (c.min_affinity, c.max_siblings as usize))
+                .unwrap_or((0.0, top_k));
+            let mut lc = aivyx_channel::memory_recall::LiteRecallContext::new(
+                Arc::clone(&memory),
+                top_k,
+            )
+            .with_fusion(1.0, LITE_GRAPH_HOPS, 0.5, 1.0);
+            if let Some(cooc) = &cooccurrence_ledger {
+                lc = lc.with_cooccurrence(Arc::clone(cooc), min_aff, cap);
+            }
+            if let Some(log) = &recall_log {
+                lc = lc.with_recall_log(Arc::clone(log));
+            }
+            Some(Arc::new(lc) as Arc<dyn aivyx_core::llm_planner::ContextProvider>)
         }
         _ => None,
     };

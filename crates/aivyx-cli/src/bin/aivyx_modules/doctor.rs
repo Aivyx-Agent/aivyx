@@ -239,7 +239,19 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
         // no `[embedding]`, the semantic source is inert. Call out that
         // mismatch loudly (it's a misconfig, not a deliberate "off"); `off`
         // and the embedding-free `lite` profile just note how to enable it.
-        if matches!(cfg.memory_profile, MemoryProfile::Smart) {
+        if matches!(cfg.memory_profile, MemoryProfile::Lite) {
+            // Chapter Ember — lite is embedding-free BY DESIGN: BM25 lexical +
+            // co-occurrence recall over existing memory, zero setup. Report it
+            // as active, not "off".
+            pass(
+                "lite recall active (lexical BM25 + co-occurrence, no embeddings)",
+            );
+            println!(
+                "     → add an [embedding] section (a local Ollama running \
+                 {model}, or OpenAI) and set `profile = smart` for semantic recall.",
+                model = crate::init::RECOMMENDED_EMBED_MODEL
+            );
+        } else if matches!(cfg.memory_profile, MemoryProfile::Smart) {
             println!(
                 "  ⚠ `[memory] profile = smart` is set but there is no \
                  [embedding] provider, so semantic recall is inert.\n     → add \

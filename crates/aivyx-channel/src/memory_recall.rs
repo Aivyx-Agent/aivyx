@@ -1073,6 +1073,307 @@ impl ContextProvider for SemanticMemoryContext {
     }
 }
 
+/// Chapter Ember — the embedding-free **lite** recall provider.
+///
+/// `[memory] profile = lite` promises smarter-than-nothing recall with
+/// ZERO setup: no embedding model to pull, no vectors, no paid generation.
+/// This `ContextProvider` delivers it by fusing two sources that work
+/// purely over memory the agent already has:
+///
+///   1. **BM25 lexical search** ([`Memory::lexical_search_scored`]) — the
+///      primary ranker, and
+///   2. a **co-occurrence graph walk** seeded from the lexical hit topics
+///      ([`PersistentCooccurrenceLedger::neighbors_within`], the Phase 83
+///      ledger) — associative recall the literal query missed.
+///
+/// The two rankers are blended with the same weighted RRF
+/// ([`crate::recall_fusion`]) the embedded path uses and rendered with the
+/// same [`SemanticMemoryContext::format_block`] + breadcrumb, so a lite
+/// turn is indistinguishable downstream from an embedded one — it just
+/// never calls an embedding model.
+///
+/// This is a **separate** type from [`SemanticMemoryContext`] on purpose:
+/// that path is a long, byte-identical-guaranteed hot path, and threading
+/// an optional provider through it would risk that contract. `LiteRecallContext`
+/// is the smaller, embed-free sibling the binary builds when
+/// `profile = lite` and no `[embedding]` provider is configured.
+///
+/// [`PersistentCooccurrenceLedger::neighbors_within`]:
+///     crate::cooccurrence_ledger::PersistentCooccurrenceLedger::neighbors_within
+pub struct LiteRecallContext {
+    memory: Arc<dyn Memory>,
+    /// Max primary hits to return (mirrors `rag_top_k`).
+    top_k: usize,
+    /// Phase 90 heuristic recall gate — skip recall on a message shorter
+    /// than this many trimmed chars. `0` (default) disables the gate.
+    recall_gate_min_chars: usize,
+    /// Weight of the BM25 lexical ranker in the RRF blend. `1.0` default.
+    lexical_weight: f32,
+    /// Co-occurrence graph-walk depth (seeded from lexical hits). `0`
+    /// disables the graph source (lexical-only).
+    graph_hops: u32,
+    /// Per-hop affinity decay for the graph walk.
+    graph_decay: f32,
+    /// Weight of the graph-walk ranker in the RRF blend. `0.0` disables it.
+    graph_weight: f32,
+    /// The Phase 83 co-occurrence ledger. `None` ⇒ lexical-only recall.
+    cooccurrence_ledger: Option<
+        Arc<crate::cooccurrence_ledger::PersistentCooccurrenceLedger>,
+    >,
+    /// Affinity floor for the graph walk (from `[recall_cluster]` when set).
+    graph_min_affinity: f32,
+    /// Neighbor cap for the graph walk (from `[recall_cluster]` when set).
+    graph_cap: usize,
+    /// Phase 77 recall-feedback log. `None` ⇒ no logging (recall unaffected).
+    recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
+}
+
+impl LiteRecallContext {
+    /// Construct a lite recall provider. `top_k` mirrors `rag_top_k`. The
+    /// fusion / graph knobs default to the lexical-only blend; arm the graph
+    /// source with [`with_cooccurrence`](Self::with_cooccurrence) +
+    /// [`with_fusion`](Self::with_fusion).
+    pub fn new(memory: Arc<dyn Memory>, top_k: usize) -> Self {
+        Self {
+            memory,
+            top_k,
+            recall_gate_min_chars: 0,
+            lexical_weight: 1.0,
+            graph_hops: 0,
+            graph_decay: DEFAULT_LITE_GRAPH_DECAY,
+            graph_weight: 0.0,
+            cooccurrence_ledger: None,
+            graph_min_affinity: 0.0,
+            graph_cap: top_k,
+            recall_log: None,
+        }
+    }
+
+    /// Set the RRF fusion tuning: the lexical ranker's weight and the
+    /// graph-walk depth / weight. With `graph_hops = 0` or `graph_weight =
+    /// 0.0` the graph source stays off (lexical-only).
+    pub fn with_fusion(
+        mut self,
+        lexical_weight: f32,
+        graph_hops: u32,
+        graph_decay: f32,
+        graph_weight: f32,
+    ) -> Self {
+        self.lexical_weight = lexical_weight;
+        self.graph_hops = graph_hops;
+        self.graph_decay = graph_decay;
+        self.graph_weight = graph_weight;
+        self
+    }
+
+    /// Attach the co-occurrence ledger + its walk floor/cap (the
+    /// `[recall_cluster]` min_affinity / max_siblings when present). The
+    /// graph source still only fires when `graph_hops > 0 && graph_weight > 0.0`.
+    pub fn with_cooccurrence(
+        mut self,
+        ledger: Arc<crate::cooccurrence_ledger::PersistentCooccurrenceLedger>,
+        min_affinity: f32,
+        cap: usize,
+    ) -> Self {
+        self.cooccurrence_ledger = Some(ledger);
+        self.graph_min_affinity = min_affinity;
+        self.graph_cap = cap.max(1);
+        self
+    }
+
+    /// Attach the Phase 77 recall-feedback log (best-effort append per turn).
+    pub fn with_recall_log(
+        mut self,
+        log: Arc<crate::recall_log::PersistentRecallLog>,
+    ) -> Self {
+        self.recall_log = Some(log);
+        self
+    }
+
+    /// Set the Phase 90 recall gate (`0` = off).
+    pub fn with_recall_gate(mut self, min_chars: usize) -> Self {
+        self.recall_gate_min_chars = min_chars;
+        self
+    }
+
+    /// Chapter Etch (backlog #8), lite variant — store-only explicit capture.
+    /// Detects a "remember / note / save this" request and persists the fact
+    /// under [`EXPLICIT_MEMORY_TOPIC`]. Unlike the embedded path there is no
+    /// `put_vector` (no embedding provider) — the text is stored for lexical
+    /// recall, which is exactly the recall surface lite uses anyway. Best-effort.
+    async fn capture_explicit_memory(&self, user_message: &str) {
+        let Some(fact) = extract_remember_request(user_message) else {
+            return;
+        };
+        match self.memory.put(EXPLICIT_MEMORY_TOPIC, &fact).await {
+            Ok(_) => eprintln!(
+                "aivyx memory: captured explicit request → {EXPLICIT_MEMORY_TOPIC}: {fact}"
+            ),
+            Err(e) => {
+                eprintln!("aivyx memory: explicit-capture write failed: {e}")
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ContextProvider for LiteRecallContext {
+    async fn recall(
+        &self,
+        user_message: &str,
+        session_id: aivyx_core::SessionId,
+    ) -> Option<String> {
+        // Chapter Etch — store-only explicit capture (no embed in lite).
+        // Runs before the gate so even a short "remember X" is captured.
+        self.capture_explicit_memory(user_message).await;
+
+        // Phase 90 heuristic recall gate — short-circuit a noise turn.
+        if crate::recall_gate::should_gate_recall(
+            user_message,
+            self.recall_gate_min_chars,
+        ) {
+            return None;
+        }
+
+        // Primary source: BM25 lexical search over existing memory. No
+        // embed call anywhere in this path — that's the whole point.
+        let lexical = self
+            .memory
+            .lexical_search_scored(user_message, self.top_k)
+            .await
+            .unwrap_or_default();
+        if lexical.is_empty() {
+            // Nothing matched lexically — also nothing to seed the graph
+            // walk. Return None (the best-effort no-op contract).
+            return None;
+        }
+
+        let lexical_ranks: Vec<(String, u64)> = lexical
+            .iter()
+            .map(|(e, _)| (e.topic.clone(), e.seq))
+            .collect();
+        let mut lookup: HashMap<(String, u64), MemoryEntry> = HashMap::new();
+        for (e, _) in &lexical {
+            lookup.insert((e.topic.clone(), e.seq), e.clone());
+        }
+
+        let mut sources: Vec<(f32, Vec<(String, u64)>)> =
+            vec![(self.lexical_weight, lexical_ranks)];
+
+        // Co-occurrence graph-walk ranker, seeded from the lexical hit
+        // topics (the embedded path seeds from the semantic hits — here
+        // lexical is the only primary, so it carries the seeds). Reuses the
+        // `[recall_cluster]` min_affinity / cap as the walk floor / cap.
+        // Best-effort throughout.
+        if self.graph_hops > 0 && self.graph_weight > 0.0 {
+            if let Some(ledger) = &self.cooccurrence_ledger {
+                let now = now_secs();
+                let seed_topics: HashSet<String> =
+                    lexical.iter().map(|(e, _)| e.topic.clone()).collect();
+                let mut best_neighbor: HashMap<String, f32> = HashMap::new();
+                for topic in &seed_topics {
+                    let Ok(neighbors) = ledger
+                        .neighbors_within(
+                            topic,
+                            now,
+                            self.graph_hops,
+                            self.graph_decay,
+                            self.graph_min_affinity,
+                            self.graph_cap,
+                        )
+                        .await
+                    else {
+                        continue;
+                    };
+                    for n in neighbors {
+                        if seed_topics.contains(&n.topic) {
+                            continue;
+                        }
+                        best_neighbor
+                            .entry(n.topic)
+                            .and_modify(|a| {
+                                if n.affinity > *a {
+                                    *a = n.affinity;
+                                }
+                            })
+                            .or_insert(n.affinity);
+                    }
+                }
+                let mut neigh: Vec<(String, f32)> =
+                    best_neighbor.into_iter().collect();
+                neigh.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+                let mut graph_ranks: Vec<(String, u64)> = Vec::new();
+                for (topic, _aff) in neigh.into_iter().take(self.graph_cap) {
+                    if let Ok(mut es) = self.memory.get_recent(&topic, 1).await {
+                        if let Some(mem) = es.pop() {
+                            graph_ranks.push((mem.topic.clone(), mem.seq));
+                            lookup
+                                .entry((mem.topic.clone(), mem.seq))
+                                .or_insert(mem);
+                        }
+                    }
+                }
+                if !graph_ranks.is_empty() {
+                    sources.push((self.graph_weight, graph_ranks));
+                }
+            }
+        }
+
+        let fused = crate::recall_fusion::reciprocal_rank_fusion_weighted(
+            &sources,
+            crate::recall_fusion::RRF_K,
+            self.top_k,
+        );
+        let final_hits: Vec<(MemoryEntry, f32)> = fused
+            .into_iter()
+            .filter_map(|(topic, seq, score)| {
+                lookup.remove(&(topic, seq)).map(|e| (e, score))
+            })
+            .collect();
+        if final_hits.is_empty() {
+            return None;
+        }
+
+        // Same operator-visible breadcrumb the embedded path emits.
+        eprintln!("{}", recall_marker_line(&final_hits));
+
+        // Phase 77 recall-feedback log (best-effort; never errors the turn).
+        if let Some(log) = &self.recall_log {
+            let event = crate::recall_log::RecallEvent {
+                ts_secs: now_secs(),
+                session_id,
+                query_text: crate::recall_log::truncate_query_text(
+                    user_message,
+                ),
+                hits: final_hits
+                    .iter()
+                    .map(|(e, score)| crate::recall_log::RecallHit {
+                        topic: e.topic.clone(),
+                        seq: e.seq,
+                        score: *score,
+                        cluster: false,
+                        judgment: None,
+                    })
+                    .collect(),
+            };
+            let _ = log.append(&event).await;
+        }
+
+        // Reuse the embedded path's renderer so the injected block is
+        // byte-for-byte the same shape (header + truncation + age).
+        Some(SemanticMemoryContext::format_block(&final_hits, now_secs()))
+    }
+}
+
+/// Per-hop affinity decay default for the lite graph walk — matches the
+/// embedded path's `DEFAULT_RECALL_GRAPH_DECAY` so lite and smart walks
+/// behave identically.
+const DEFAULT_LITE_GRAPH_DECAY: f32 = 0.5;
+
 /// The operator-visible per-turn recall breadcrumb. Pure +
 /// public so it is unit-testable without capturing stderr.
 /// Topics are de-duplicated, stable-ordered (first-seen), and
@@ -2359,5 +2660,144 @@ mod tests {
         assert!(fus > sem, "fusion recall@3 {fus} must beat semantic-only {sem}");
         assert!((fus - 1.0).abs() < 1e-6, "fusion recalls all three targets (got {fus})");
         assert!(sem < 0.5, "semantic-only misses the lexical + graph targets (got {sem})");
+    }
+
+    // ------------------------------------------------------------------
+    // Chapter Ember — embedding-free LiteRecallContext.
+    // ------------------------------------------------------------------
+
+    use crate::cooccurrence_ledger::PersistentCooccurrenceLedger;
+    use crate::recall_log::PersistentRecallLog;
+
+    /// BM25 lexical recall works with NO embedding provider — the core
+    /// promise of the lite tier.
+    #[tokio::test]
+    async fn lite_recalls_lexically_without_embeddings() {
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        memory
+            .put("coffee", "the operator likes a flat white, no sugar")
+            .await
+            .unwrap();
+        memory
+            .put("car", "the garage door code is 4417")
+            .await
+            .unwrap();
+
+        // top_k = 1 so only the single best-ranked hit returns — proves
+        // BM25 ranks the coffee memory above the unrelated one.
+        let lite = LiteRecallContext::new(Arc::clone(&memory), 1);
+        let block = lite
+            .recall("what coffee does the operator like", sid())
+            .await
+            .expect("lexical hit recalled with no embeddings");
+        assert!(
+            block.contains("flat white"),
+            "expected the coffee memory as the top hit: {block}"
+        );
+        assert!(
+            !block.contains("garage door"),
+            "the unrelated memory should not be the top hit: {block}"
+        );
+    }
+
+    /// No lexical match → None (the best-effort no-op contract), so the
+    /// turn is left byte-identical to no-recall.
+    #[tokio::test]
+    async fn lite_returns_none_when_nothing_matches() {
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        memory.put("coffee", "flat white no sugar").await.unwrap();
+        let lite = LiteRecallContext::new(Arc::clone(&memory), 5);
+        assert!(lite
+            .recall("quantum chromodynamics lattice gauge theory", sid())
+            .await
+            .is_none());
+    }
+
+    /// The recall gate short-circuits a too-short message before any work.
+    #[tokio::test]
+    async fn lite_recall_gate_skips_short_messages() {
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        memory.put("coffee", "flat white no sugar").await.unwrap();
+        let lite = LiteRecallContext::new(Arc::clone(&memory), 5)
+            .with_recall_gate(50);
+        assert!(lite.recall("coffee?", sid()).await.is_none());
+    }
+
+    /// The co-occurrence walk pulls in an affined sibling the literal query
+    /// never matched — seeded from the lexical hit, with no embeddings.
+    #[tokio::test]
+    async fn lite_graph_walk_pulls_affined_sibling() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-lite-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([84u8; 32]),
+        )
+        .await
+        .unwrap();
+        let log = Arc::new(PersistentRecallLog::new(
+            store.domain(KeyDomain::RecallEvents),
+        ));
+        let cooc = Arc::new(PersistentCooccurrenceLedger::new(
+            store.domain(KeyDomain::CooccurrenceLedger),
+        ));
+        let now = now_secs();
+        // "coffee" (the lexical hit) durably co-occurs with "pastry"
+        // (the sibling the query never lexically reaches).
+        cooc.record_window(&[(("coffee".into(), "pastry".into()), 5.0)], now)
+            .await
+            .unwrap();
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        memory
+            .put("coffee", "flat white, single-origin Ethiopian")
+            .await
+            .unwrap();
+        memory
+            .put("pastry", "almond croissant from the corner bakery")
+            .await
+            .unwrap();
+
+        let lite = LiteRecallContext::new(Arc::clone(&memory), 5)
+            .with_fusion(1.0, 1, 0.5, 1.0)
+            .with_cooccurrence(Arc::clone(&cooc), 1.0, 5)
+            .with_recall_log(Arc::clone(&log));
+        let block = lite
+            .recall("tell me about the coffee", sid())
+            .await
+            .expect("recall present");
+        assert!(block.contains("flat white"), "primary lexical hit: {block}");
+        assert!(
+            block.contains("almond croissant"),
+            "graph-walk sibling co-injected: {block}"
+        );
+        // The recall-feedback event was logged (drives the fold cadence).
+        let ev = log.events_since(0).await.unwrap();
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].hits.iter().any(|h| h.topic == "pastry"));
+    }
+
+    /// A leading "remember X" is captured store-only (no embed) so a later
+    /// lexical recall finds it — Chapter Etch on the lite path.
+    #[tokio::test]
+    async fn lite_captures_explicit_remember_request() {
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let lite = LiteRecallContext::new(Arc::clone(&memory), 5);
+        // First turn: a remember request. Recall itself may return None;
+        // the capture is the point.
+        let _ = lite
+            .recall("Remember my home airport is YSSY", sid())
+            .await;
+        // The fact is now in memory under the explicit topic.
+        let block = lite
+            .recall("what is my home airport", sid())
+            .await
+            .expect("captured fact is lexically recallable");
+        assert!(block.contains("YSSY"), "captured home airport: {block}");
     }
 }
