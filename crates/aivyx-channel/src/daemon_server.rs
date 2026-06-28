@@ -96,6 +96,23 @@ impl DaemonError {
     pub fn to_string_compat(&self) -> String {
         self.to_string()
     }
+
+    /// True when this error is a client hanging up the socket cleanly —
+    /// a CLI invocation finishing and dropping its end — rather than a
+    /// genuine fault. Backlog #4: the daemon used to log every such
+    /// disconnect at error level (`connection handler error: io error:
+    /// Broken pipe`), spamming `journalctl` once per CLI query and
+    /// masking real errors. These are expected lifecycle events, not
+    /// faults, so callers suppress them.
+    pub fn is_clean_disconnect(&self) -> bool {
+        use std::io::ErrorKind::{BrokenPipe, ConnectionReset, UnexpectedEof};
+        match self {
+            DaemonError::Io(e) => {
+                matches!(e.kind(), BrokenPipe | ConnectionReset | UnexpectedEof)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Channel factory: given a `FrontendType`, returns the appropriate
@@ -1483,7 +1500,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
 
         let handle = tokio::spawn(async move {
             if let Err(e) = handle_connection(ctx).await {
-                eprintln!("aivyx daemon: connection handler error: {e}");
+                // Backlog #4: a clean client hang-up (CLI query finishing
+                // and dropping the socket) is an expected lifecycle event,
+                // not a fault — don't spam it at error level.
+                if !e.is_clean_disconnect() {
+                    eprintln!("aivyx daemon: connection handler error: {e}");
+                }
             }
         });
         handles.push(handle);
@@ -6131,6 +6153,31 @@ fn stream_event_to_payload(event: &StreamEvent<'_>) -> StreamEventPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_disconnects_are_classified_for_quiet_logging() {
+        // Backlog #4 — a client hanging up the socket is not a fault.
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::UnexpectedEof,
+        ] {
+            let e = DaemonError::Io(Error::new(kind, "peer gone"));
+            assert!(
+                e.is_clean_disconnect(),
+                "{kind:?} should be a clean disconnect"
+            );
+        }
+        // A genuine I/O fault and non-I/O errors must still log loudly.
+        assert!(!DaemonError::Io(Error::new(
+            ErrorKind::PermissionDenied,
+            "nope"
+        ))
+        .is_clean_disconnect());
+        assert!(!DaemonError::Protocol("bad handshake".into())
+            .is_clean_disconnect());
+    }
 
     #[test]
     fn interactive_parks_an_escalation_headless_does_not() {

@@ -1160,9 +1160,48 @@ fn run() -> Result<(), String> {
         // `spawn_blocking` call lands on a live tokio pool. Opening
         // outside the runtime would panic the moment `open` tried to
         // reach for the current handle.
-        let storage = RedbStorage::open(StorageConfig::new(storage_path.clone()), master_key)
-            .await
-            .map_err(|e| format!("failed to open encrypted store at {storage_path:?}: {e}"))?;
+        let storage = match RedbStorage::open(
+            StorageConfig::new(storage_path.clone()),
+            master_key,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // Backlog #2 — a non-TTY/piped `aivyx` opens the redb store
+                // cold here, before the daemon-vs-in-process dispatch in
+                // `run_async`. If a daemon is already running it holds the
+                // store lock, so this open fails with redb's opaque
+                // "Database already open. Cannot acquire lock." Turn that
+                // into an actionable message: send the turn to the daemon
+                // (`aivyx --headless`, which routes over IPC and never opens
+                // the store), or stop the daemon. Only rewrite genuine lock
+                // collisions while a daemon is actually up; any other open
+                // failure keeps its original error.
+                let msg = e.to_string();
+                let looks_like_lock = msg.contains("acquire lock")
+                    || msg.contains("already open");
+                let daemon_up = !no_daemon
+                    && match default_socket_path() {
+                        Ok(sp) => {
+                            aivyx_channel::daemon_client::daemon_is_running(&sp).await
+                        }
+                        Err(_) => false,
+                    };
+                if looks_like_lock && daemon_up {
+                    return Err(format!(
+                        "a daemon is already running and holds the store \
+                         lock at {storage_path:?}. Send non-interactive \
+                         turns to it with `aivyx --headless \"...\"` (routes \
+                         over the daemon IPC), or stop the daemon first with \
+                         `aivyx daemon stop`."
+                    ));
+                }
+                return Err(format!(
+                    "failed to open encrypted store at {storage_path:?}: {e}"
+                ));
+            }
+        };
 
         if verify_only {
             return run_verify_only(storage, audit_chain_key).await;

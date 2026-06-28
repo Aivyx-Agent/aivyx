@@ -10832,3 +10832,57 @@ fn team_config_path_is_parsed_from_the_team_section() {
     assert_eq!(cfg.team_config_path, Some(PathBuf::from("teams/boh.toml")));
     drop(env);
 }
+
+// ------------------------------------------------------------------
+// Backlog #1 — silent dead-memory config: `profile = smart` with no
+// `[embedding]` provider warns (semantic recall would be inert).
+// ------------------------------------------------------------------
+
+#[test]
+fn smart_profile_without_embedding_warns() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\nprofile = \"smart\"\n",
+        "smart-no-embedding",
+    );
+    assert!(
+        cfg.warnings.iter().any(|w| w.contains("profile = smart")
+            && w.contains("[embedding]")),
+        "expected a dead-memory warning, got: {:?}",
+        cfg.warnings
+    );
+    drop(env);
+}
+
+#[test]
+fn smart_profile_with_embedding_does_not_warn() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\nprofile = \"smart\"\n\
+         [embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\n",
+        "smart-with-embedding",
+    );
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("semantic recall is inert")),
+        "no dead-memory warning when embedding is configured: {:?}",
+        cfg.warnings
+    );
+    drop(env);
+}
+
+#[test]
+fn lite_profile_without_embedding_does_not_warn() {
+    // `lite` is embedding-free by design (lexical + co-occurrence over
+    // existing data), so it must NOT trip the dead-memory warning.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[memory]\nprofile = \"lite\"\n",
+        "lite-no-embedding",
+    );
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("semantic recall is inert")),
+        "lite profile is intentionally embedding-free: {:?}",
+        cfg.warnings
+    );
+    drop(env);
+}

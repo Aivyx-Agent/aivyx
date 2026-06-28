@@ -235,12 +235,26 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
     };
 
     let Some(emb) = &cfg.embedding else {
-        println!(
-            "  semantic memory is off (no [embedding] provider)\n     → run \
-             `aivyx init`, or add an [embedding] section (a local Ollama running \
-             {model}, or OpenAI) to enable recall.",
-            model = crate::init::RECOMMENDED_EMBED_MODEL
-        );
+        // Backlog #1 — `profile = smart` arms the semantic stack but, with
+        // no `[embedding]`, the semantic source is inert. Call out that
+        // mismatch loudly (it's a misconfig, not a deliberate "off"); `off`
+        // and the embedding-free `lite` profile just note how to enable it.
+        if matches!(cfg.memory_profile, MemoryProfile::Smart) {
+            println!(
+                "  ⚠ `[memory] profile = smart` is set but there is no \
+                 [embedding] provider, so semantic recall is inert.\n     → add \
+                 an [embedding] section (a local Ollama running {model}, or \
+                 OpenAI), or use `profile = lite` for embedding-free recall.",
+                model = crate::init::RECOMMENDED_EMBED_MODEL
+            );
+        } else {
+            println!(
+                "  semantic memory is off (no [embedding] provider)\n     → run \
+                 `aivyx init`, or add an [embedding] section (a local Ollama running \
+                 {model}, or OpenAI) to enable recall.",
+                model = crate::init::RECOMMENDED_EMBED_MODEL
+            );
+        }
         return true;
     };
 

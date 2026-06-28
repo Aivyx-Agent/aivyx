@@ -6942,6 +6942,26 @@ impl AivyxConfig {
                 .unwrap_or_default(),
         };
 
+        // Backlog #1 — silent dead-memory config. `profile = smart` arms
+        // the semantic recall stack, but with no `[embedding]` provider the
+        // semantic source is inert (the exact trap that left an operator's
+        // "smart" memory dark for months). `lite` is embedding-free by
+        // design (lexical + co-occurrence over existing data), so it gets
+        // no warning. Non-fatal — accumulate it like the other loader
+        // warnings; `aivyx doctor` carries the actionable fix.
+        if matches!(memory_profile, MemoryProfile::Smart)
+            && embedding.is_none()
+        {
+            warnings.push(
+                "`[memory] profile = smart` is set but no `[embedding]` \
+                 provider is configured, so semantic recall is inert. \
+                 Add an `[embedding]` section (e.g. a local Ollama with \
+                 `nomic-embed-text`), or use `profile = lite` for \
+                 embedding-free recall. Run `aivyx doctor` for details."
+                    .to_string(),
+            );
+        }
+
         Ok(Self {
             anthropic_api_key,
             openai_api_key,
