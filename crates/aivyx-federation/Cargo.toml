@@ -18,6 +18,19 @@ thiserror = { workspace = true }
 # reusing `Scope::is_granted_by` (NT-02 generalized).
 aivyx-capability = { path = "../aivyx-capability" }
 
-# PP.1 (identity) will add: ed25519-dalek, base64, sha2, hex, chacha20poly1305, rand.
-# PP.2 (trust)    will add: aivyx-config (Reins AutonomyLevel ceiling).
-# PP.3 (relay)    will add: aivyx-ipc (wasm-clean relay protocol types) + aivyx-audit.
+# PP.1 (identity) — Ed25519 keypair + signed, replay-guarded envelope.
+ed25519-dalek = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+# Key-at-rest is sealed with a subkey derived from the storage MasterKey, reusing
+# the new core's audited HKDF + ChaCha20-Poly1305 (NOT the salvage's hand-rolled
+# AEAD) — the "modernize onto the new core" path (PP.0 decision 1).
+aivyx-crypto = { path = "../aivyx-crypto" }
+
+# PP.2 (trust)  will add: aivyx-config (Reins AutonomyLevel ceiling).
+# PP.3 (relay)  will add: aivyx-ipc (wasm-clean relay protocol types) + aivyx-audit.
+
+[dev-dependencies]
+uuid = { workspace = true }

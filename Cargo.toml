@@ -139,6 +139,12 @@ serde_jcs = "0.2"
 # Base64 encoding for binary response bodies in web.fetch (Phase 37)
 base64 = "0.22"
 
+# Federation keystone (Chapter Passport) — Ed25519 agent identity + signatures.
+# rand 0.8 pins rand_core 0.6 to match ed25519-dalek 2.x's keygen RNG bound.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+
 # LLM provider HTTP transport (feature-gated in aivyx-llm via provider-anthropic)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 # Bearer token wrapper — prevents accidental Debug/logging of API keys
