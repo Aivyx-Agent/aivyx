@@ -104,6 +104,8 @@ mod autonomy;
 mod workspace;
 #[path = "aivyx_modules/doctor.rs"]
 mod doctor;
+#[path = "aivyx_modules/daemon_service.rs"]
+mod daemon_service;
 #[path = "aivyx_modules/audit_export.rs"]
 mod audit_export;
 #[path = "aivyx_modules/identity.rs"]
