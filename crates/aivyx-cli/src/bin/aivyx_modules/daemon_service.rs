@@ -35,10 +35,6 @@
 //! AN.0 ships the pure, tested render/plan layer below; AN.1 wires the CLI and
 //! performs the side effects (write the unit, enable linger, `enable --now`).
 
-// macOS items (LAUNCHD_LABEL, the launchd plan) are wired in AN.2; suppress the
-// dead-code warning for them until then.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -151,11 +147,7 @@ pub fn plan_linux(
 pub fn run_install(web_ui: bool, start: bool) -> Result<(), String> {
     match Platform::detect() {
         Platform::Linux => install_linux(web_ui, start),
-        Platform::MacOs => Err(
-            "macOS service install lands in Anchor AN.2 — for now use the desktop \
-             app's autostart or run `aivyx daemon run`."
-                .into(),
-        ),
+        Platform::MacOs => install_macos(web_ui, start),
         Platform::Unsupported => Err(
             "no supported service manager on this platform — run `aivyx daemon run` \
              directly, or use the Docker appliance (docs/INSTALL.md)."
@@ -168,7 +160,7 @@ pub fn run_install(web_ui: bool, start: bool) -> Result<(), String> {
 pub fn run_uninstall() -> Result<(), String> {
     match Platform::detect() {
         Platform::Linux => uninstall_linux(),
-        Platform::MacOs => Err("macOS service uninstall lands in Anchor AN.2.".into()),
+        Platform::MacOs => uninstall_macos(),
         Platform::Unsupported => {
             Err("no service was installed by aivyx on this platform.".into())
         }
@@ -252,6 +244,132 @@ fn uninstall_linux() -> Result<(), String> {
         eprintln!("aivyx daemon: no installed service found — nothing to remove.");
     }
     Ok(())
+}
+
+/// Render the launchd `LaunchAgent` plist.
+///
+/// Unlike systemd, launchd has **no `EnvironmentFile` equivalent**, so the
+/// passphrase rides the plist's `EnvironmentVariables` (the standard launchd
+/// pattern) — the plist itself is therefore written `0o600`. This is the one
+/// place macOS differs from Linux's secret-out-of-the-unit design; the at-rest
+/// protection (owner-only) is the same. (A future enhancement could teach the
+/// daemon a passphrase-*file* source for parity.) All interpolated values are
+/// XML-escaped so a `&`/`<` in a path or passphrase can't break the plist.
+/// `KeepAlive`/`SuccessfulExit=false` mirrors systemd's `Restart=on-failure`
+/// (restart on crash, but honor a clean `daemon stop`).
+pub fn render_launchd_plist(
+    bin_path: &str,
+    web_ui: bool,
+    working_dir: &str,
+    passphrase: &str,
+) -> String {
+    let mut program_args = format!(
+        "        <string>{}</string>\n        <string>daemon</string>\n        <string>run</string>\n",
+        xml_escape(bin_path),
+    );
+    if web_ui {
+        program_args.push_str("        <string>--web-ui</string>\n");
+    }
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \x20   <key>Label</key>\n    <string>{label}</string>\n\
+         \x20   <key>ProgramArguments</key>\n    <array>\n{program_args}    </array>\n\
+         \x20   <key>WorkingDirectory</key>\n    <string>{workdir}</string>\n\
+         \x20   <key>EnvironmentVariables</key>\n    <dict>\n\
+         \x20       <key>AIVYX_PASSPHRASE</key>\n        <string>{pass}</string>\n    </dict>\n\
+         \x20   <key>RunAtLoad</key>\n    <true/>\n\
+         \x20   <key>KeepAlive</key>\n    <dict>\n        <key>SuccessfulExit</key>\n        <false/>\n    </dict>\n\
+         </dict>\n\
+         </plist>\n",
+        label = LAUNCHD_LABEL,
+        workdir = xml_escape(working_dir),
+        pass = xml_escape(passphrase),
+    )
+}
+
+/// Minimal XML text escaping for plist string values.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn macos_plist_path() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    Ok(PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join(format!("{LAUNCHD_LABEL}.plist")))
+}
+
+fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
+    let bin = current_exe_path()?;
+    let working_dir = install_working_dir();
+    let passphrase = resolve_passphrase()?;
+    let plist_path = macos_plist_path()?;
+
+    if let Some(parent) = plist_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create LaunchAgents dir: {e}"))?;
+    }
+    std::fs::write(&plist_path, render_launchd_plist(&bin, web_ui, &working_dir, &passphrase))
+        .map_err(|e| format!("write plist {}: {e}", plist_path.display()))?;
+    set_permissions_600(&plist_path)?; // the plist carries the secret → owner-only
+
+    if start {
+        let uid = current_uid()?;
+        let domain = format!("gui/{uid}");
+        let plist = plist_path.display().to_string();
+        // bootout first so a re-install replaces a running agent (idempotent);
+        // ignore the error when nothing is loaded yet.
+        let _ = run_cmd("launchctl", &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")]);
+        run_cmd("launchctl", &["bootstrap", &domain, &plist])?;
+        let _ = run_cmd("launchctl", &["enable", &format!("{domain}/{LAUNCHD_LABEL}")]);
+    }
+
+    eprintln!(
+        "aivyx daemon: installed as a launchd LaunchAgent.\n  \
+         plist:  {} (0600 — carries the passphrase)\n  \
+         logs:   log show --predicate 'process == \"aivyx\"'{}",
+        plist_path.display(),
+        if start { "\n  (started; runs at login)" } else { "\n  (written; load with `launchctl bootstrap gui/$(id -u) <plist>`)" },
+    );
+    Ok(())
+}
+
+fn uninstall_macos() -> Result<(), String> {
+    let plist_path = macos_plist_path()?;
+    if let Ok(uid) = current_uid() {
+        let _ = run_cmd("launchctl", &["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")]);
+    }
+    let mut removed = false;
+    if plist_path.exists() {
+        std::fs::remove_file(&plist_path)
+            .map_err(|e| format!("remove plist {}: {e}", plist_path.display()))?;
+        removed = true;
+    }
+    if removed {
+        eprintln!("aivyx daemon: launchd service uninstalled (plist removed).");
+    } else {
+        eprintln!("aivyx daemon: no installed service found — nothing to remove.");
+    }
+    Ok(())
+}
+
+fn current_uid() -> Result<String, String> {
+    let out = Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|e| format!("resolve uid via `id -u`: {e}"))?;
+    if !out.status.success() {
+        return Err("`id -u` failed".into());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// The passphrase for the unattended service: `AIVYX_PASSPHRASE` if set+non-empty
@@ -393,5 +511,38 @@ mod tests {
     #[test]
     fn env_file_holds_the_passphrase_and_nothing_else() {
         assert_eq!(render_env_file("s3cr3t"), "AIVYX_PASSPHRASE=s3cr3t\n");
+    }
+
+    #[test]
+    fn launchd_plist_is_well_formed_with_load_bearing_keys() {
+        let plist = render_launchd_plist("/usr/local/bin/aivyx", false, "/Users/u", "pw");
+        assert!(plist.starts_with("<?xml version=\"1.0\""));
+        assert!(plist.contains("<key>Label</key>\n    <string>com.aivyx.daemon</string>"));
+        assert!(plist.contains("<string>/usr/local/bin/aivyx</string>"));
+        assert!(plist.contains("<string>daemon</string>"));
+        assert!(plist.contains("<string>run</string>"));
+        assert!(plist.contains("<key>RunAtLoad</key>\n    <true/>"));
+        // KeepAlive/SuccessfulExit=false mirrors Restart=on-failure
+        assert!(plist.contains("<key>SuccessfulExit</key>"));
+        assert!(plist.contains("</plist>"));
+    }
+
+    #[test]
+    fn launchd_plist_threads_web_ui_and_carries_the_secret() {
+        let with = render_launchd_plist("/b/aivyx", true, "/w", "pw");
+        assert!(with.contains("<string>--web-ui</string>"));
+        let without = render_launchd_plist("/b/aivyx", false, "/w", "pw");
+        assert!(!without.contains("--web-ui"));
+        // macOS DOES carry the secret in the plist (0600) — the documented
+        // platform difference from Linux's env-file.
+        assert!(without.contains("<key>AIVYX_PASSPHRASE</key>\n        <string>pw</string>"));
+    }
+
+    #[test]
+    fn launchd_plist_xml_escapes_values() {
+        // a passphrase with XML-special chars must not break the plist
+        let plist = render_launchd_plist("/b/aivyx", false, "/w", "a&b<c>\"d'");
+        assert!(plist.contains("a&amp;b&lt;c&gt;&quot;d&apos;"));
+        assert!(!plist.contains("a&b<c>"));
     }
 }
