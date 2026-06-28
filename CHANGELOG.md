@@ -5,6 +5,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Chapter Etch — the agent now reliably persists explicit "remember this"
+  requests.** Previously a local model treated "remember X" as conversation and
+  often never called `memory.write`, so a later turn couldn't recall it (and a
+  soft charter instruction didn't move it — verified). Now the per-turn memory
+  hook **deterministically** detects a leading "remember / note / save / don't
+  forget X" request in the operator's message and persists the fact itself —
+  independent of the model's tool-calling — embedding it so it's immediately
+  recallable. Conservative detection: it ignores questions, reminiscing
+  ("remember when…"), reminders ("remember to…"), and first-person mentions.
+  Live-verified: "Remember my home airport is YSSY" → a fresh-context "is it good
+  flying at my home airport?" now recalls YSSY and answers, instead of asking
+  which airport. (Backlog #8.)
+
 ## [0.7.8] — 2026-06-28
 
 ### Fixed

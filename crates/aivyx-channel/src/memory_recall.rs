@@ -159,6 +159,88 @@ pub struct SemanticMemoryContext {
 /// with a real entry's `(topic, seq)` key (entry seqs count up from 0).
 const WIKI_PAGE_SEQ: u64 = u64::MAX;
 
+/// Chapter Etch (backlog #8) — the topic explicit operator "remember this"
+/// facts land under.
+const EXPLICIT_MEMORY_TOPIC: &str = "operator-notes";
+
+/// Chapter Etch (backlog #8) — detect an explicit "remember / note / save this"
+/// request in the operator's message and return the fact to persist (the
+/// statement with the trigger phrase stripped), or `None` when it isn't such a
+/// request.
+///
+/// Conservative on purpose — it skips things that *mention* "remember" but are
+/// not a request to store a fact: questions ("do you remember my airport?"),
+/// reminiscing ("remember when we…"), reminders ("remember to call…", which is a
+/// task, not a fact), and first-person ("I can't remember…"). Pure + ASCII
+/// triggers (byte len == char len, so the original-case slice aligns), so it's
+/// fully unit-testable.
+fn extract_remember_request(msg: &str) -> Option<String> {
+    let trimmed = msg.trim();
+    if trimmed.is_empty() || trimmed.ends_with('?') {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+
+    // "remember"-shaped phrases that are NOT a request to store a fact.
+    const NOT_A_SAVE: &[&str] = &[
+        "do you remember",
+        "don't you remember",
+        "remember when",
+        "remember how",
+        "remember the time",
+        "remember to ",
+        "remember if ",
+        "i remember",
+        "i don't remember",
+        "i can't remember",
+        "i cannot remember",
+    ];
+    if NOT_A_SAVE.iter().any(|p| lower.starts_with(p)) {
+        return None;
+    }
+
+    // Leading imperative save-triggers, most-specific first so e.g.
+    // "remember that X" strips "remember that " (not just "remember ").
+    const TRIGGERS: &[&str] = &[
+        "remember that ",
+        "remember this: ",
+        "remember this, ",
+        "remember this ",
+        "please remember that ",
+        "please remember ",
+        "remember ",
+        "note that ",
+        "make a note that ",
+        "make a note of ",
+        "make a note: ",
+        "make a note ",
+        "don't forget that ",
+        "don't forget ",
+        "do not forget ",
+        "keep in mind that ",
+        "keep in mind ",
+        "for the record, ",
+        "for the record ",
+        "save this: ",
+        "save this, ",
+        "save this ",
+        "save to memory: ",
+        "save to memory ",
+    ];
+    for t in TRIGGERS {
+        if lower.starts_with(t) {
+            let fact = trimmed[t.len()..]
+                .trim()
+                .trim_end_matches(['.', '!'])
+                .trim();
+            if !fact.is_empty() {
+                return Some(fact.to_string());
+            }
+        }
+    }
+    None
+}
+
 impl SemanticMemoryContext {
     pub fn new(
         memory: Arc<dyn Memory>,
@@ -190,6 +272,40 @@ impl SemanticMemoryContext {
             recall_wiki_weight: 0.0,
             typed_graph_store: None,
             recall_graph_typed_weight: 0.0,
+        }
+    }
+
+    /// Chapter Etch (backlog #8) — persist an explicit operator "remember /
+    /// note / save this" request that the local model would otherwise treat as
+    /// conversation and drop. Best-effort: logs + swallows errors, never panics
+    /// (it runs inside the best-effort recall hook). Stores under
+    /// [`EXPLICIT_MEMORY_TOPIC`] and embeds the fact immediately so it is
+    /// semantically recallable on the next turn (the same put → embed →
+    /// put_vector path the hourly backfill uses); a failed embed still leaves
+    /// the text stored for lexical recall + the next backfill pass.
+    async fn capture_explicit_memory(&self, user_message: &str) {
+        let Some(fact) = extract_remember_request(user_message) else {
+            return;
+        };
+        let seq = match self.memory.put(EXPLICIT_MEMORY_TOPIC, &fact).await {
+            Ok(seq) => seq,
+            Err(e) => {
+                eprintln!("aivyx memory: explicit-capture write failed: {e}");
+                return;
+            }
+        };
+        eprintln!(
+            "aivyx memory: captured explicit request → {EXPLICIT_MEMORY_TOPIC}: {fact}"
+        );
+        if let Ok(mut vecs) =
+            self.provider.embed(std::slice::from_ref(&fact)).await
+        {
+            if !vecs.is_empty() {
+                let _ = self
+                    .memory
+                    .put_vector(EXPLICIT_MEMORY_TOPIC, seq, vecs.remove(0))
+                    .await;
+            }
         }
     }
 
@@ -402,6 +518,17 @@ impl ContextProvider for SemanticMemoryContext {
         user_message: &str,
         session_id: aivyx_core::SessionId,
     ) -> Option<String> {
+        // Chapter Etch (backlog #8) — deterministically persist an explicit
+        // "remember / note / save this" request. The local model treats such
+        // requests as conversational and frequently never calls `memory.write`
+        // itself, so a soft charter instruction can't be relied on (verified
+        // live). Capturing here — in the per-turn memory hook, which already
+        // runs every turn with the user's message + a Memory handle — makes it
+        // structural and guaranteed. Best-effort + fire-and-forget: it never
+        // affects the recall result below. Runs BEFORE the recall gate so even a
+        // short "remember X" message is still captured.
+        self.capture_explicit_memory(user_message).await;
+
         // Phase 90 — heuristic recall gate. On a noise turn
         // (trimmed message shorter than the operator-set
         // threshold), short-circuit before any embed call;
@@ -997,6 +1124,47 @@ mod tests {
     use super::*;
     use aivyx_llm::embedding::EmbeddingError;
     use aivyx_memory::InMemoryMemory;
+
+    /// Chapter Etch (backlog #8) — the explicit "remember this" detector must
+    /// capture genuine save requests (stripping the trigger) and ignore
+    /// questions / reminiscing / reminders / first-person mentions of "remember".
+    #[test]
+    fn extract_remember_request_captures_only_genuine_saves() {
+        // genuine saves → fact extracted, trigger + trailing punctuation stripped
+        assert_eq!(
+            extract_remember_request("Remember my home airport is YSSY").as_deref(),
+            Some("my home airport is YSSY")
+        );
+        assert_eq!(
+            extract_remember_request("Remember that I prefer tea.").as_deref(),
+            Some("I prefer tea")
+        );
+        assert_eq!(
+            extract_remember_request("Please remember the gate code is 1234").as_deref(),
+            Some("the gate code is 1234")
+        );
+        assert_eq!(
+            extract_remember_request("Note that the meeting moved to 3pm").as_deref(),
+            Some("the meeting moved to 3pm")
+        );
+        assert_eq!(
+            extract_remember_request("don't forget I'm vegetarian!").as_deref(),
+            Some("I'm vegetarian")
+        );
+
+        // NOT saves → None
+        for non in [
+            "Do you remember my airport?",
+            "Remember when we discussed the budget?",
+            "remember to call the school tomorrow", // a reminder/task, not a fact
+            "I can't remember my code",
+            "What's the weather at YSSY?",
+            "",
+            "remember", // bare trigger, nothing to store
+        ] {
+            assert_eq!(extract_remember_request(non), None, "should ignore: {non:?}");
+        }
+    }
 
     /// Maps a text to a fixed-dim vector by byte sum (lane 0),
     /// or fails on demand. Deterministic so cosine ordering is
