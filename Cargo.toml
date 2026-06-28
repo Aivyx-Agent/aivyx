@@ -96,7 +96,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.7.10"
+version = "0.7.11"
 edition = "2024"
 rust-version = "1.85"
 # Chapter Charter (CR.2): relicensed MIT -> BUSL-1.1 (docs/LICENSING.md).

@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.11] — 2026-06-29
+
+### Fixed
+
+- **Release pipeline gate.** A test helper added in 0.7.10 (Chapter Ballast)
+  triggered a `clone_on_copy` clippy lint, which the cargo-dist release gate
+  (`clippy --all-targets -D warnings`) treats as an error — so 0.7.10's CLI
+  installer binaries failed to publish (the desktop app and Docker image, built
+  by separate workflows, shipped fine). This release republishes the CLI
+  binaries with the lint fixed. No runtime behavior change from 0.7.10.
+
 ## [0.7.10] — 2026-06-29
 
 ### Added

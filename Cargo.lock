@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-audit"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-auth-cli"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-calendar"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-capability"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "globset",
  "serde",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-channel"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-cli"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-config"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-cost",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-contacts"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-core"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-crypto",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-cost"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-crypto"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-dataread"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-desktop"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-ipc",
  "auto-launch",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-discord"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-drive"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-federation"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-config",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-gmail"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-google-oauth"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-ipc"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-team-types",
  "serde",
@@ -424,14 +424,14 @@ dependencies = [
 
 [[package]]
 name = "aivyx-kitchen"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-vertical-sdk",
 ]
 
 [[package]]
 name = "aivyx-kitchen-toolkit"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-llm"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-mcp"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-memory"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-n8n"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-notion"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-obsidian"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-slack"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-storage"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-crypto",
  "async-trait",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-team"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-team-types"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "serde",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-telegram"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-tool"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-toolkit"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-tui"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-channel",
  "crossterm 0.29.0",
@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-vertical-sdk"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-voice"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-web"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "aivyx-ipc",
  "console_error_panic_hook",
