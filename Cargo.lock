@@ -372,6 +372,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-config",
  "aivyx-crypto",
+ "aivyx-ipc",
  "base64 0.22.1",
  "ed25519-dalek",
  "hex",

@@ -32,7 +32,10 @@ aivyx-crypto = { path = "../aivyx-crypto" }
 # PP.2 (trust) — the Reins AutonomyLevel is the per-peer autonomy ceiling.
 aivyx-config = { path = "../aivyx-config" }
 
-# PP.3 (relay)  will add: aivyx-ipc (wasm-clean relay protocol types) + aivyx-audit.
+# PP.3 (relay) — the wasm-clean relay verbs (RelayRequest/Response) the signed
+# envelope wraps; serde_json produces the canonical body bytes that are signed.
+aivyx-ipc = { path = "../aivyx-ipc" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }

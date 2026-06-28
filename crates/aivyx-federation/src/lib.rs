@@ -35,6 +35,9 @@
 //!   replay-guarded request envelope.
 //! - [`trust`] — PP.2: per-peer `TrustPolicy` (deny-by-default) + the
 //!   cross-operator attenuation (`effective = asked ∩ policy ∩ ceiling ∩ cap`).
+//! - [`relay`] — PP.3: compose the wasm-clean relay verbs
+//!   ([`aivyx_ipc::federation`]) with the signing envelope; the auditable
+//!   [`Crossing`](relay::Crossing) shape (live emission deferred with transport).
 
 #![forbid(unsafe_code)]
 
@@ -60,4 +63,5 @@ pub enum FederationError {
 }
 
 pub mod identity;
+pub mod relay;
 pub mod trust;

@@ -29,6 +29,11 @@ pub mod wiki;
 /// `GraphEntity` / `GraphPath`) shared by the daemon, IPC, the
 /// `graph.query` tool, and the Studio graph view.
 pub mod graph;
+/// Chapter Passport — the federation relay protocol verbs (`RelayRequest` /
+/// `RelayResponse`), the wasm-clean wire shape both the local Nonagon bus and a
+/// future cross-operator relay carry (docs/FEDERATION.md §5). Crypto + the
+/// signing envelope live in `aivyx-federation`.
+pub mod federation;
 
 pub use backlog::{Story, StoryStatus};
 pub use insights::{
@@ -41,6 +46,7 @@ pub use ledgers::{
     AccumulatedCorrections, AccumulatedHelpfulness, CooccurrencePatterns, PairScore,
     TopicCorrections, TopicScore,
 };
+pub use federation::{RelayRequest, RelayResponse};
 pub use loop_state::LoopRunState;
 pub use persona::{
     EffectivePersona, LearnedSkill, PersonaDelta, PersonaDeltaCategory, PersonaDeltaOp,
