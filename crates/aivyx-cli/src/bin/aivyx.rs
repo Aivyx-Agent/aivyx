@@ -5056,7 +5056,16 @@ async fn run_async(
                         autonomy_level.value,
                     );
                 }
-                Some(aivyx_channel::loop_driver::SharedLoopState::new())
+                let mut ls = aivyx_channel::loop_driver::SharedLoopState::new();
+                // Chapter Helm (Opp F) — attach the persisted run marker only
+                // when resume_on_boot is set, so the start/stop marker writes
+                // (and the boot-resume read) happen only for opt-in installs.
+                if c.resume_on_boot {
+                    ls = ls.with_resume_store(
+                        storage.domain(KeyDomain::LoopState),
+                    );
+                }
+                Some(ls)
             }
             None if autonomy_posture.loop_enabled => {
                 eprintln!(

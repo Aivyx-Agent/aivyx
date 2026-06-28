@@ -435,6 +435,13 @@ pub struct SharedLoopState {
     state: Arc<RwLock<LoopRunState>>,
     /// Wakes the idle driver when a run is requested.
     notify: Arc<Notify>,
+    /// Chapter Helm (Opp F) — optional persisted run marker (a
+    /// `KeyDomain::LoopState` handle). When set, an operator `loop start`
+    /// persists "active" and `loop stop` persists "idle", so an opt-in
+    /// `[loop] resume_on_boot` can resume a crash-interrupted run while
+    /// respecting a deliberate stop. `None` (tests, no store) ⇒ no
+    /// persistence, byte-identical to before.
+    resume_store: Option<aivyx_storage::DomainHandle>,
 }
 
 impl Default for SharedLoopState {
@@ -448,6 +455,41 @@ impl SharedLoopState {
         SharedLoopState {
             state: Arc::new(RwLock::new(LoopRunState::default())),
             notify: Arc::new(Notify::new()),
+            resume_store: None,
+        }
+    }
+
+    /// Chapter Helm — attach the persisted run marker store
+    /// (`storage.domain(KeyDomain::LoopState)`). Builder; the daemon calls it
+    /// when `[loop] resume_on_boot` is set.
+    pub fn with_resume_store(
+        mut self,
+        store: aivyx_storage::DomainHandle,
+    ) -> Self {
+        self.resume_store = Some(store);
+        self
+    }
+
+    /// Chapter Helm — persist the run marker (operator intent). Awaited so a
+    /// `loop stop` is durable before the daemon could exit. The operator-driven
+    /// IPC handlers call this right after `request_start` (true) /
+    /// `request_stop` (false). Best-effort: a write failure is logged, never
+    /// fatal. No-op when no store is attached (`resume_on_boot` off).
+    pub async fn persist_run_marker(&self, active: bool) {
+        if let Some(store) = &self.resume_store {
+            if let Err(e) = crate::loop_resume::set_run_active(store, active).await
+            {
+                eprintln!("aivyx loop: failed to persist run marker: {e}");
+            }
+        }
+    }
+
+    /// Chapter Helm — read the persisted marker for the boot-resume decision.
+    /// `false` when no store is attached or the marker is absent/unreadable.
+    pub async fn persisted_run_active(&self) -> bool {
+        match &self.resume_store {
+            Some(store) => crate::loop_resume::run_was_active(store).await,
+            None => false,
         }
     }
 
@@ -1401,5 +1443,54 @@ mod tests {
     fn sum_turn_usage_empty_is_zero() {
         assert_eq!(sum_turn_usage(&[]), 0);
         assert_eq!(sum_turn_usage(&[non_turn_entry(0)]), 0);
+    }
+
+    // ---- Chapter Helm: persisted run marker ----
+
+    #[tokio::test]
+    async fn run_marker_persists_start_and_clears_on_stop() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+        let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(base)
+            .join(format!("aivyx-helm-marker-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([9u8; 32]),
+        )
+        .await
+        .unwrap();
+        let state = SharedLoopState::new()
+            .with_resume_store(store.domain(KeyDomain::LoopState));
+
+        // No marker yet → not active.
+        assert!(!state.persisted_run_active().await);
+
+        // Operator start → marker active (the IPC handler order).
+        assert!(state.request_start(5, 0));
+        state.persist_run_marker(true).await;
+        assert!(
+            state.persisted_run_active().await,
+            "start persists the active marker"
+        );
+
+        // Operator stop → marker cleared (a deliberate stop wins on restart).
+        assert!(state.request_stop());
+        state.persist_run_marker(false).await;
+        assert!(
+            !state.persisted_run_active().await,
+            "explicit stop clears the marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_marker_is_noop_without_a_store() {
+        // No store attached (resume_on_boot off) → persistence is a no-op and
+        // the read is always false. Byte-identical to pre-Helm.
+        let state = SharedLoopState::new();
+        state.persist_run_marker(true).await;
+        assert!(!state.persisted_run_active().await);
     }
 }

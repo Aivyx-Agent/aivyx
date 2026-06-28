@@ -8652,6 +8652,20 @@ fn loop_present_disabled_is_allowed_partial() {
     assert!(!l.enabled);
     assert_eq!(l.max_iterations, crate::DEFAULT_LOOP_MAX_ITERATIONS);
     assert_eq!(l.default_priority, crate::DEFAULT_LOOP_PRIORITY);
+    // Chapter Helm — resume_on_boot defaults off.
+    assert!(!l.resume_on_boot);
+    drop(env);
+}
+
+/// Chapter Helm — `resume_on_boot` parses from `[loop]`.
+#[test]
+fn loop_resume_on_boot_parses() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[loop]\nenabled = true\nresume_on_boot = true\n",
+        "loop-resume",
+    );
+    assert!(cfg.loop_config.expect("section present").resume_on_boot);
     drop(env);
 }
 

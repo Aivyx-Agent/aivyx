@@ -32,7 +32,7 @@ verifiable offline.
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 87 |
-| Encrypted storage domains | 24 |
+| Encrypted storage domains | 25 |
 
 ## Five-minute setup
 

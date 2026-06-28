@@ -229,6 +229,12 @@ pub enum KeyDomain {
     /// refinement signal — never skills, the persona, recall, or any
     /// other ledger.
     SkillHelpfulnessLedger,
+    /// Chapter Helm (Opp F) — small persisted loop run-state. Holds the
+    /// "a run is active" marker so an opt-in `[loop] resume_on_boot` can
+    /// resume an interrupted run after a daemon restart (the in-memory
+    /// `SharedLoopState` is lost on restart). A handful of fixed keys, not a
+    /// chain — distinct domain so it's HKDF-isolated like every other.
+    LoopState,
 }
 
 impl KeyDomain {
@@ -264,6 +270,7 @@ impl KeyDomain {
             KeyDomain::KnowledgeWiki => b"knowledge-wiki",
             KeyDomain::KnowledgeGraph => b"knowledge-graph",
             KeyDomain::SkillHelpfulnessLedger => b"skill-helpfulness-ledger",
+            KeyDomain::LoopState => b"loop-state",
         }
     }
 
@@ -308,12 +315,13 @@ impl KeyDomain {
             KeyDomain::SkillHelpfulnessLedger => {
                 "aivyx_skill_helpfulness_ledger_v1"
             }
+            KeyDomain::LoopState => "aivyx_loop_state_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 24] = [
+    pub const ALL: [KeyDomain; 25] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -338,6 +346,7 @@ impl KeyDomain {
         KeyDomain::KnowledgeWiki,
         KeyDomain::KnowledgeGraph,
         KeyDomain::SkillHelpfulnessLedger,
+        KeyDomain::LoopState,
     ];
 }
 
@@ -523,7 +532,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 24],
+    subkeys: [SubKey; 25],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -600,7 +609,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 24], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 25], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -639,6 +648,7 @@ impl RedbStorage {
             master.derive_subkey(
                 KeyDomain::SkillHelpfulnessLedger.as_bytes(),
             )?,
+            master.derive_subkey(KeyDomain::LoopState.as_bytes())?,
         ])
     }
 
@@ -671,6 +681,7 @@ impl RedbStorage {
             KeyDomain::KnowledgeWiki => &self.subkeys[21],
             KeyDomain::KnowledgeGraph => &self.subkeys[22],
             KeyDomain::SkillHelpfulnessLedger => &self.subkeys[23],
+            KeyDomain::LoopState => &self.subkeys[24],
         }
     }
 }
@@ -1049,7 +1060,7 @@ mod tests {
         // "Encrypted storage domains" row + the `aivyx-storage` line in
         // `README.md`, and the storage-domain figure in
         // `docs/BACKEND_AUDIT_*.md`.**
-        assert_eq!(KeyDomain::ALL.len(), 24, "encrypted storage domain count");
+        assert_eq!(KeyDomain::ALL.len(), 25, "encrypted storage domain count");
     }
 
     #[test]
@@ -1113,7 +1124,8 @@ mod tests {
                 | KeyDomain::TeamMissions
                 | KeyDomain::KnowledgeWiki
                 | KeyDomain::KnowledgeGraph
-                | KeyDomain::SkillHelpfulnessLedger => {}
+                | KeyDomain::SkillHelpfulnessLedger
+                | KeyDomain::LoopState => {}
             }
         }
     }

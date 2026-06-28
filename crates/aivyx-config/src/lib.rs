@@ -2825,6 +2825,15 @@ pub struct LoopConfig {
     /// `0` disables it (caps become the only stop). Default
     /// [`DEFAULT_LOOP_MAX_IDLE_ITERATIONS`].
     pub max_idle_iterations: u32,
+    /// Chapter Helm (Opp F) — auto-resume an interrupted run on daemon boot.
+    /// When `true`, a daemon restart while a run was active (a crash or a
+    /// `systemctl restart`) re-starts the run if the backlog still has pending
+    /// stories — so a "runs for days" agent under `Restart=on-failure` keeps
+    /// working instead of silently stopping. An **explicit** `aivyx loop stop`
+    /// clears the persisted marker, so a deliberate stop is respected across a
+    /// restart. Default `false` (opt-in): auto-resuming a code-committing
+    /// autonomous loop on every boot is a deliberate operator choice.
+    pub resume_on_boot: bool,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -4816,6 +4825,9 @@ struct RawLoop {
     // Chapter Circuit (CI.1) — cross-iteration stall breaker.
     #[serde(default)]
     max_idle_iterations: Option<u32>,
+    // Chapter Helm (Opp F) — auto-resume an interrupted run on daemon boot.
+    #[serde(default)]
+    resume_on_boot: Option<bool>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -8622,7 +8634,8 @@ fn build_loop_config(
         || raw.progress_inject_count.is_some()
         || raw.max_run_tokens.is_some()
         || raw.max_run_usd.is_some()
-        || raw.max_idle_iterations.is_some();
+        || raw.max_idle_iterations.is_some()
+        || raw.resume_on_boot.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -8654,6 +8667,7 @@ fn build_loop_config(
     let max_idle_iterations = raw
         .max_idle_iterations
         .unwrap_or(DEFAULT_LOOP_MAX_IDLE_ITERATIONS);
+    let resume_on_boot = raw.resume_on_boot.unwrap_or(false);
 
     if enabled {
         if max_iterations == 0 {
@@ -8689,6 +8703,7 @@ fn build_loop_config(
         max_run_tokens,
         max_run_usd,
         max_idle_iterations,
+        resume_on_boot,
     }))
 }
 

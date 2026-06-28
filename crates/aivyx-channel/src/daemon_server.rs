@@ -882,6 +882,43 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         _ => None,
     };
 
+    // Chapter Helm (Opp F) — opt-in auto-resume. If `[loop] resume_on_boot`
+    // is set, a run was active when the daemon last stopped (the persisted
+    // marker — a crash / `systemctl restart`, NOT an explicit `loop stop`),
+    // and the backlog still has pending stories, kick off a run so a
+    // "runs for days" agent under `Restart=on-failure` keeps working instead
+    // of silently stalling. The just-spawned driver picks up `request_start`'s
+    // notify. Best-effort: any miss just means the operator runs `loop start`.
+    if let (Some(state), Some(backlog), Some(cfg)) =
+        (&loop_state, &loop_backlog, &loop_config)
+    {
+        if cfg.resume_on_boot {
+            let marker_active = state.persisted_run_active().await;
+            let pending = backlog.remaining_count();
+            if crate::loop_resume::should_resume_on_boot(
+                cfg.resume_on_boot,
+                marker_active,
+                pending,
+            ) {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                if state.request_start(cfg.max_iterations, now_ms) {
+                    eprintln!(
+                        "aivyx loop: resume_on_boot — resuming an interrupted \
+                         run ({pending} pending stories)"
+                    );
+                }
+            } else if marker_active {
+                eprintln!(
+                    "aivyx loop: resume_on_boot set, but the backlog is empty \
+                     — nothing to resume"
+                );
+            }
+        }
+    }
+
     // Phase 71 — spawn the reflection scheduler if any
     // `[[reflection_schedule]]` entries are configured AND an
     // audit log is available (the loop reads the chain to
@@ -3612,6 +3649,10 @@ async fn handle_query(
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             if state.request_start(requested, now_ms) {
+                // Chapter Helm — persist the active marker so an opt-in
+                // `resume_on_boot` resumes this run after a crash/restart.
+                // No-op unless resume_on_boot attached a store.
+                state.persist_run_marker(true).await;
                 QueryResponsePayload::LoopControl {
                     ok: true,
                     message: format!(
@@ -3633,6 +3674,9 @@ async fn handle_query(
                 };
             };
             if state.request_stop() {
+                // Chapter Helm — an explicit stop clears the marker, so a
+                // later restart does NOT resume (the deliberate stop wins).
+                state.persist_run_marker(false).await;
                 QueryResponsePayload::LoopControl {
                     ok: true,
                     message: "loop run stopping (after the current \
