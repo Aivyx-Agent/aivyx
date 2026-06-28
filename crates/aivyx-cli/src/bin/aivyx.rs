@@ -480,6 +480,16 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    // ---- Chapter Anchor: service install / uninstall --------------------
+    // Pure filesystem + `systemctl`/`loginctl` shell-outs — no socket, no
+    // runtime, no store. Handled before everything heavier.
+    if let CliMode::DaemonInstall { web_ui, start } = mode {
+        return daemon_service::run_install(web_ui, start);
+    }
+    if matches!(mode, CliMode::DaemonUninstall) {
+        return daemon_service::run_uninstall();
+    }
+
     // ---- Lightweight daemon management subcommands ----------------------
     // These need only the socket path — no API key, no config, no store.
     // A minimal tokio runtime is spun up just for the IPC round-trip.
@@ -1656,6 +1666,11 @@ enum CliMode {
     DaemonStatus,
     /// `aivyx daemon stop`: send graceful shutdown to a running daemon.
     DaemonStop,
+    /// `aivyx daemon install [--web-ui] [--no-start]` (Chapter Anchor): install
+    /// the daemon as a persistent user service (systemd user unit + linger).
+    DaemonInstall { web_ui: bool, start: bool },
+    /// `aivyx daemon uninstall`: stop, disable, and remove the service.
+    DaemonUninstall,
     /// `aivyx init`: interactive first-run setup wizard (Phase 44).
     /// Phase 66 added the optional template pre-fill via
     /// `aivyx init --template <name>`. The wizard still walks the
@@ -2257,6 +2272,49 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
     // Check for `daemon <subcommand>` first.
     if args.len() >= 2 && args[0] == "daemon" {
+        // Chapter Anchor — `install` / `uninstall` carry their own flags and
+        // never touch the socket, so they parse + return ahead of run/status/stop.
+        let anchor = |mode| {
+            Ok(CliArgs {
+                mode,
+                channel: ChannelKind::Local,
+                role: None,
+                no_daemon: false,
+                mcp_servers: Vec::new(),
+                mcp_sse_servers: Vec::new(),
+                provider: None,
+                web_ui_port: None,
+            })
+        };
+        match args[1].as_str() {
+            "install" => {
+                let mut web_ui = false;
+                let mut start = true;
+                let mut di = 2;
+                while di < args.len() {
+                    match args[di].as_str() {
+                        "--web-ui" => web_ui = true,
+                        "--no-start" => start = false,
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument after `daemon install`: `{other}`. \
+                                 Supports: --web-ui, --no-start"
+                            ));
+                        }
+                    }
+                    di += 1;
+                }
+                return anchor(CliMode::DaemonInstall { web_ui, start });
+            }
+            "uninstall" => {
+                if args.len() > 2 {
+                    return Err("`daemon uninstall` takes no arguments".to_string());
+                }
+                return anchor(CliMode::DaemonUninstall);
+            }
+            _ => {}
+        }
+
         let (mode, subcmd) = match args[1].as_str() {
             "run" => (CliMode::DaemonRun, "daemon run"),
             "status" => (CliMode::DaemonStatus, "daemon status"),
@@ -2264,7 +2322,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized daemon subcommand: `{other}`. \
-                     Supported: daemon run, daemon status, daemon stop"
+                     Supported: daemon run, daemon status, daemon stop, install, uninstall"
                 ));
             }
         };
@@ -10044,6 +10102,38 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["daemon", "stop"]))
             .expect("`daemon stop` must parse");
         assert_eq!(parsed.mode, CliMode::DaemonStop);
+    }
+
+    #[test]
+    fn daemon_install_parses_with_defaults() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "install"]))
+            .expect("`daemon install` must parse");
+        assert_eq!(parsed.mode, CliMode::DaemonInstall { web_ui: false, start: true });
+    }
+
+    #[test]
+    fn daemon_install_parses_web_ui_and_no_start_flags() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "install", "--web-ui", "--no-start"]))
+            .expect("`daemon install --web-ui --no-start` must parse");
+        assert_eq!(parsed.mode, CliMode::DaemonInstall { web_ui: true, start: false });
+    }
+
+    #[test]
+    fn daemon_install_rejects_unknown_flag() {
+        let err = parse_cli_args_from(&argv(&["daemon", "install", "--bogus"]))
+            .expect_err("an unknown install flag must error");
+        assert!(err.contains("unrecognized"), "error must mention unrecognized: {err}");
+    }
+
+    #[test]
+    fn daemon_uninstall_parses_and_rejects_args() {
+        let parsed = parse_cli_args_from(&argv(&["daemon", "uninstall"]))
+            .expect("`daemon uninstall` must parse");
+        assert_eq!(parsed.mode, CliMode::DaemonUninstall);
+        assert!(
+            parse_cli_args_from(&argv(&["daemon", "uninstall", "x"])).is_err(),
+            "`daemon uninstall` takes no args"
+        );
     }
 
     #[test]
