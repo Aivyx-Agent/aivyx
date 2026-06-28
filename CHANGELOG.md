@@ -5,6 +5,28 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.10] — 2026-06-29
+
+### Added
+
+- **Chapter Ballast — a per-mission budget for autonomous team missions.** When
+  the autonomous loop delegates a story to a background team mission, that
+  mission previously had no aggregate spending limit (only a per-call token
+  cap). Two new opt-in `[budget]` caps — `per_mission_tokens` and
+  `per_mission_usd` — bound a single mission's total spend across all its
+  specialist sub-turns; a tripped cap **halts the mission gracefully** at the
+  next step boundary (completed work preserved, the reason recorded). Tokens
+  bound local/free runs where the dollar cap (priced at $0) never trips. Both
+  default to unbounded, so behavior is unchanged unless you opt in.
+
+### Fixed
+
+- **`aivyx init --template <name>` now matches a plain `aivyx init`.** The
+  template path silently skipped semantic-memory setup (`[embedding]` +
+  `[memory] profile`), the onboarding persona seed, and the web-search server —
+  so a templated agent diverged from a default one. It now applies each of those
+  (any a template already declares is respected, never duplicated).
+
 ## [0.7.9] — 2026-06-28
 
 ### Added
