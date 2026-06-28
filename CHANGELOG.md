@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-06-28
+
 ### Fixed
 
 - **Chapter Plumb — default report routines no longer confabulate.** A fresh-agent
