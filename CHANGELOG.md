@@ -7,6 +7,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Chapter Anchor — `aivyx daemon install` (run for days).** The bare daemon —
+  the default install — now installs as a first-class persistent **user**
+  service so a local-first agent meant to run for days actually stays running
+  (its scheduled routines firing, its loop available) across logout and reboot,
+  without hand-rolled `systemd`/`launchd` files.
+  - **`aivyx daemon install [--web-ui] [--no-start]`** + **`aivyx daemon
+    uninstall`**. Linux = a systemd user unit + `loginctl enable-linger` (no
+    root); macOS = a launchd `LaunchAgent`. Idempotent re-install.
+  - The unattended store passphrase is captured at install (`AIVYX_PASSPHRASE`
+    or a one-time hidden prompt) and kept owner-only at rest — a `0600`
+    `EnvironmentFile` the unit references on Linux (never in the unit itself),
+    the `0600` plist's `EnvironmentVariables` on macOS.
+  - `aivyx doctor` gains a **Service** section (installed / running), and
+    `aivyx init` points new users at `daemon install`. Documented in
+    `docs/INSTALL.md`. Live-verified end to end on the dogfood rig.
+
 - **Chapter Passport — the identity & cross-boundary trust keystone (FED.1–5).**
   The open-core trust **substrate** for agent-to-agent interaction across an
   operator boundary — the one primitive `VISION.md` flags as impossible to
