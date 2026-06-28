@@ -1,0 +1,23 @@
+[package]
+name = "aivyx-federation"
+description = "Agent identity & cross-boundary trust — the federation keystone (Chapter Passport / docs/FEDERATION.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+# The new-core capability vocabulary — `TrustPolicy.allowed_scopes` and the
+# cross-operator attenuation (PP.2) are expressed in `Scope` / `CapabilitySet`,
+# reusing `Scope::is_granted_by` (NT-02 generalized).
+aivyx-capability = { path = "../aivyx-capability" }
+
+# PP.1 (identity) will add: ed25519-dalek, base64, sha2, hex, chacha20poly1305, rand.
+# PP.2 (trust)    will add: aivyx-config (Reins AutonomyLevel ceiling).
+# PP.3 (relay)    will add: aivyx-ipc (wasm-clean relay protocol types) + aivyx-audit.

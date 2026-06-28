@@ -1,0 +1,63 @@
+//! # Aivyx Federation — the Identity & Cross-Boundary Trust keystone
+//!
+//! Chapter **Passport** (FED.1–5). This crate is the open-core **trust
+//! substrate** for agent-to-agent interaction across an operator boundary —
+//! the one primitive `VISION.md` says to *get right early* because it cannot be
+//! safely retrofitted. The design contract is `docs/FEDERATION.md` (FED.0).
+//!
+//! The central insight: **"a network of agents is a Nonagon team with the trust
+//! boundary moved."** Same delegation, attenuation, gates, and audit; the only
+//! new thing is *identity and trust at the boundary between operators*. So this
+//! crate generalizes the local-team machinery
+//! ([`aivyx_capability::Scope`] attenuation, NT-02) across that boundary.
+//!
+//! ## Scope of this crate (the discipline line)
+//!
+//! This is the **substrate only** — identity, per-peer trust + attenuation, the
+//! relay protocol *shape*, peer-content provenance/sandboxing, and operator
+//! consent gating. Everything **network-shaped** — peer discovery, a transport
+//! / relay server, reputation, and the agent-hiring economics — is the *private
+//! Nexus product*, built last on an installed base (`docs/FEDERATION.md` §10).
+//! Nothing here assumes a transport or a topology.
+//!
+//! ## Modernization (Chapter Passport PP.0)
+//!
+//! Salvaged and modernized from the pre-rebuild `aivyx-federation` onto the new
+//! core:
+//! - old `aivyx_core::AutonomyTier` → Reins [`AutonomyLevel`](aivyx_config) ceiling;
+//! - old free-string scopes → [`aivyx_capability::Scope`];
+//! - old HTTP relay/client → deferred (transport is the Nexus product);
+//! - every crossing routes onto `aivyx-audit` (PP.3).
+//!
+//! ## Module map (filled phase by phase)
+//!
+//! - [`identity`] — PP.1: operator-owned Ed25519 keypair + signed,
+//!   replay-guarded request envelope.
+//! - [`trust`] — PP.2: per-peer `TrustPolicy` (deny-by-default) + the
+//!   cross-operator attenuation (`effective = asked ∩ policy ∩ ceiling ∩ cap`).
+
+#![forbid(unsafe_code)]
+
+use thiserror::Error;
+
+/// Errors from the federation substrate. Per-crate error (the new-core
+/// convention) rather than a shared `AivyxError` — keeps the keystone's failure
+/// surface explicit. **Never carries key material** (the identity invariant).
+#[derive(Debug, Error)]
+pub enum FederationError {
+    /// An identity / signature / replay failure (PP.1).
+    #[error("federation identity error: {0}")]
+    Identity(String),
+
+    /// A peer is not trusted for the requested action (PP.2). Deny-by-default:
+    /// the absence of a `TrustPolicy`, or a request outside it, lands here.
+    #[error("federation trust denied: {0}")]
+    TrustDenied(String),
+
+    /// Malformed input (instance id, key bytes, policy, …).
+    #[error("federation validation error: {0}")]
+    Validation(String),
+}
+
+pub mod identity;
+pub mod trust;

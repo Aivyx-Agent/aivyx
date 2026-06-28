@@ -366,6 +366,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-federation"
+version = "0.7.5"
+dependencies = [
+ "aivyx-capability",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aivyx-gmail"
 version = "0.7.5"
 dependencies = [
