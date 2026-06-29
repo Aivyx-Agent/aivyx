@@ -5,6 +5,24 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.16] — 2026-06-30
+
+### Added
+
+- **Deterministic auto-delegation for the autonomous loop (Chapter Foreman).**
+  Opt-in `[loop] delegate_above = N`: before each solo turn the loop scores the
+  next backlog story with a structural complexity heuristic and, if it scores
+  `>= N`, hands it to the agent team (headless) instead of attempting it solo —
+  so delegation no longer depends on a small local model choosing to call
+  `team.run`. Default off.
+
+### Fixed
+
+- **`aivyx team status` shows the real halt reason.** A mission stopped with
+  `aivyx team abort` (or a budget cap) now reports *why* it halted (e.g.
+  "aborted by operator") instead of always labelling it "(budget)". The reason
+  is persisted on the mission record and rendered in the detail view.
+
 ## [0.7.15] — 2026-06-29
 
 Three multi-agent / autonomy refinements.
