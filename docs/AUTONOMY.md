@@ -88,7 +88,7 @@ the operator's approval over reach or identity. See [`SECURITY_POSTURE.md`](SECU
 | `[access] level` | `aivyx-config` (Chapter N) | filesystem + shell reach (`fs_root`) |
 | `confirm_destructive` | `[access]` (Chapter N) | whether irreversible ops escalate to a confirm-first gate |
 | `gate_policy` | `aivyx-core::GatePolicy` (Chapter H) | what an *unattended* run does at a gate: `Interactive` (park) vs `RejectAndAbort` |
-| `[loop]` arm + caps | `aivyx-config` (Phases 173–176, K) | the autonomous loop: `max_iterations` / `max_run_secs` / `max_run_tokens` / `max_run_usd` + the post-iteration verification gate |
+| `[loop]` arm + caps | `aivyx-config` (Phases 173–176, K) | the autonomous loop: `max_iterations` / `max_run_secs` / `max_run_tokens` / `max_run_usd` + the post-iteration verification gate (`gate_command`) + per-story acceptance verification (`verify_completion`, Chapter Verdict — an LLM judge gates `loop.complete` against the story's acceptance criteria instead of trusting the agent's self-report; fails open; stack on `gate_command` for artifact-grounded truth) |
 | `[budget]` | `aivyx-cost` (Chapter K) | per-turn dollar/token spend caps that alert or deny |
 | growth governance | persona-proposal loop (Chapters V/W/X/Praxis/Whetstone) | self-improvement is **propose-only**: skills + persona changes surface for human approve/edit/reject |
 

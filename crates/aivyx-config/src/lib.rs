@@ -2847,6 +2847,14 @@ pub struct LoopConfig {
     /// restart. Default `false` (opt-in): auto-resuming a code-committing
     /// autonomous loop on every boot is a deliberate operator choice.
     pub resume_on_boot: bool,
+    /// Chapter Verdict (Opp E) — verify story completion with an LLM acceptance
+    /// judge. When `true`, `loop.complete` is gated: the judge checks the agent's
+    /// `summary` against the story's acceptance criteria (its `body`) and a FAIL
+    /// keeps the story `Pending` (the agent is told why) instead of trusting the
+    /// self-report. Costs one extra LLM call per completion and judges a summary
+    /// (stack `gate_command` for artifact-grounded truth). Fails open on a judge
+    /// outage. Default `false` (opt-in).
+    pub verify_completion: bool,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -4862,6 +4870,9 @@ struct RawLoop {
     // Chapter Helm (Opp F) — auto-resume an interrupted run on daemon boot.
     #[serde(default)]
     resume_on_boot: Option<bool>,
+    // Chapter Verdict (Opp E) — LLM acceptance judge on loop.complete.
+    #[serde(default)]
+    verify_completion: Option<bool>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -8695,7 +8706,8 @@ fn build_loop_config(
         || raw.max_run_tokens.is_some()
         || raw.max_run_usd.is_some()
         || raw.max_idle_iterations.is_some()
-        || raw.resume_on_boot.is_some();
+        || raw.resume_on_boot.is_some()
+        || raw.verify_completion.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -8728,6 +8740,7 @@ fn build_loop_config(
         .max_idle_iterations
         .unwrap_or(DEFAULT_LOOP_MAX_IDLE_ITERATIONS);
     let resume_on_boot = raw.resume_on_boot.unwrap_or(false);
+    let verify_completion = raw.verify_completion.unwrap_or(false);
 
     if enabled {
         if max_iterations == 0 {
@@ -8764,6 +8777,7 @@ fn build_loop_config(
         max_run_usd,
         max_idle_iterations,
         resume_on_boot,
+        verify_completion,
     }))
 }
 

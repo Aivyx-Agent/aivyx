@@ -158,6 +158,10 @@ pub struct LoopCompleteTool {
     id: ToolId,
     schema: Value,
     backlog: OnceLock<SharedBacklog>,
+    /// Chapter Verdict — when set (`[loop] verify_completion`), an LLM judge
+    /// must accept the agent's `summary` against the story's acceptance criteria
+    /// before it is marked Done. Unset ⇒ completion is self-reported as before.
+    judge: OnceLock<std::sync::Arc<crate::completion_judge::CompletionJudge>>,
 }
 
 impl std::fmt::Debug for LoopCompleteTool {
@@ -186,16 +190,35 @@ impl LoopCompleteTool {
                         "type": "string",
                         "description": "The id of the story to mark Done \
                                         (from loop.next)."
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "A concrete summary of what you did to \
+                                        satisfy this story's acceptance criteria \
+                                        (what changed, what you produced). When \
+                                        completion verification is enabled, an \
+                                        independent reviewer checks this against \
+                                        the criteria before the story is accepted."
                     }
                 },
                 "required": ["story_id"]
             }),
             backlog: OnceLock::new(),
+            judge: OnceLock::new(),
         }
     }
 
     pub fn set_backlog(&self, backlog: SharedBacklog) -> Result<(), SharedBacklog> {
         self.backlog.set(backlog)
+    }
+
+    /// Chapter Verdict — enable completion verification with `judge`. Idempotent
+    /// per process (returns the value back on a second set, like `set_backlog`).
+    pub fn set_judge(
+        &self,
+        judge: std::sync::Arc<crate::completion_judge::CompletionJudge>,
+    ) -> Result<(), std::sync::Arc<crate::completion_judge::CompletionJudge>> {
+        self.judge.set(judge)
     }
 }
 
@@ -211,11 +234,15 @@ impl Tool for LoopCompleteTool {
 
     fn description(&self) -> &str {
         "Mark an autonomous-loop backlog story as Done. Input is a JSON \
-         object with a `story_id` field (from loop.next). Call this ONLY \
-         after the story's quality gates pass (tests/typecheck) and the \
-         work is committed. Returns `{ \"completed\": \"<id>\", \
-         \"remaining\": N }`. Marking an unknown or already-resolved story \
-         fails."
+         object with a `story_id` field (from loop.next) and an optional \
+         `summary` of what you did. Call this ONLY after the story's quality \
+         gates pass (tests/typecheck) and the work is committed. Returns \
+         `{ \"completed\": \"<id>\", \"remaining\": N }`. If completion \
+         verification is enabled, a reviewer checks your `summary` against the \
+         story's acceptance criteria first; on rejection the story stays \
+         pending and the result is `{ \"accepted\": false, \"reason\": ... }` \
+         — address the reason and call again. Marking an unknown or \
+         already-resolved story fails."
     }
 
     fn input_schema(&self) -> &Value {
@@ -250,7 +277,7 @@ impl Tool for LoopCompleteTool {
 
         // Guard: refuse to "complete" a story that isn't pending,
         // surfacing a clear reason rather than a chain error.
-        match backlog.get(&story_id) {
+        let story = match backlog.get(&story_id) {
             None => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
@@ -266,7 +293,35 @@ impl Tool for LoopCompleteTool {
                     ),
                 });
             }
-            Some(_) => {}
+            Some(story) => story,
+        };
+
+        // Chapter Verdict — when an acceptance judge is wired, it must accept the
+        // agent's `summary` against the story's criteria before we mark it Done.
+        // A FAIL leaves the story Pending and returns the reason (no error — the
+        // agent reads it and keeps working). Fails open on a judge outage.
+        if let Some(judge) = self.judge.get() {
+            let summary = input
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let verdict = judge.verify(&story.title, &story.body, &summary).await;
+            if !verdict.passed {
+                return ToolOutcome::Completed {
+                    output: json!({
+                        "accepted": false,
+                        "story_id": story_id,
+                        "reason": verdict.reason,
+                        "guidance": "the story was NOT marked done — your summary \
+                                     does not yet satisfy its acceptance criteria. \
+                                     Do the remaining work, then call loop.complete \
+                                     again with a summary that addresses the reason.",
+                    }),
+                    verified: Verification::NotApplicable,
+                };
+            }
         }
 
         match backlog.mark_done(story_id.clone(), now_unix_ms()).await {
@@ -755,5 +810,109 @@ mod tests {
             mem.get_recent(LOOP_PROGRESS_TOPIC, 10).await.unwrap().len(),
             3
         );
+    }
+
+    // ---- Chapter Verdict: the acceptance-judge gate on loop.complete ----
+
+    use crate::completion_judge::CompletionJudge;
+    use aivyx_llm::{
+        LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    };
+
+    /// A provider whose every reply is `line` — so a test can feed the judge a
+    /// canned `PASS`/`FAIL` verdict.
+    struct CannedProvider {
+        line: String,
+    }
+    #[async_trait]
+    impl LlmProvider for CannedProvider {
+        async fn chat_stream(
+            &self,
+            _req: LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            Ok(Box::new(CannedStream {
+                terminal: Some(LlmStepEnd::FinalMessage {
+                    text: self.line.clone(),
+                    usage: LlmUsage::default(),
+                }),
+            }))
+        }
+    }
+    struct CannedStream {
+        terminal: Option<LlmStepEnd>,
+    }
+    #[async_trait]
+    impl LlmStream for CannedStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(None)
+        }
+        async fn finish(mut self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            Ok(self.terminal.take().unwrap())
+        }
+    }
+
+    fn judge_returning(line: &str) -> Arc<CompletionJudge> {
+        Arc::new(CompletionJudge::new(
+            Arc::new(CannedProvider { line: line.into() }) as Arc<dyn LlmProvider>,
+            "judge-model",
+        ))
+    }
+
+    #[tokio::test]
+    async fn judge_fail_keeps_the_story_pending() {
+        let (bl, dir) = backlog().await;
+        bl.add_story("s".into(), 1, 1, "Ship X".into(), "X must be done".into())
+            .await
+            .unwrap();
+        let done = LoopCompleteTool::new();
+        assert!(done.set_backlog(Arc::clone(&bl)).is_ok());
+        assert!(done.set_judge(judge_returning("FAIL — no evidence X was done")).is_ok());
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+
+        let out = done
+            .execute(json!({ "story_id": "s", "summary": "I thought about it" }), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["accepted"], false);
+                assert!(output["reason"].as_str().unwrap().contains("evidence"));
+            }
+            other => panic!("expected a rejection result, got {other:?}"),
+        }
+        // The story was NOT marked done — still pending, still counted.
+        assert!(matches!(bl.get("s").unwrap().status, StoryStatus::Pending));
+        assert_eq!(bl.remaining_count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn judge_pass_marks_the_story_done() {
+        let (bl, dir) = backlog().await;
+        bl.add_story("s".into(), 1, 1, "Ship X".into(), "X must be done".into())
+            .await
+            .unwrap();
+        let done = LoopCompleteTool::new();
+        assert!(done.set_backlog(Arc::clone(&bl)).is_ok());
+        assert!(done.set_judge(judge_returning("PASS — X was shipped and tested")).is_ok());
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+
+        let out = done
+            .execute(
+                json!({ "story_id": "s", "summary": "Implemented X, added tests, committed" }),
+                &ctx,
+            )
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                assert_eq!(output["completed"], "s");
+                assert_eq!(output["remaining"], 0);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert!(matches!(bl.get("s").unwrap().status, StoryStatus::Done { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -6325,6 +6325,21 @@ async fn run_async(
         aivyx_channel::loop_tool::LoopCompleteTool,
     > = Arc::new(aivyx_channel::loop_tool::LoopCompleteTool::new());
     let _ = loop_complete_tool.set_backlog(Arc::clone(&loop_backlog));
+    // Chapter Verdict (Opp E) — when `[loop] verify_completion` is on, wire an
+    // LLM acceptance judge (the daemon's provider/model) so loop.complete is
+    // gated against each story's acceptance criteria instead of self-reported.
+    if config_loop.as_ref().map(|c| c.verify_completion).unwrap_or(false) {
+        let judge = Arc::new(
+            aivyx_channel::completion_judge::CompletionJudge::new(
+                Arc::clone(&provider),
+                model.clone(),
+            ),
+        );
+        let _ = loop_complete_tool.set_judge(judge);
+        eprintln!(
+            "aivyx loop: completion verification ON — an LLM judge gates loop.complete"
+        );
+    }
     tool_list.push(Arc::clone(&loop_complete_tool) as Arc<dyn Tool>);
     // Phase 175 — loop.note appends a learning to the reserved
     // progress topic the driver injects into each fresh
