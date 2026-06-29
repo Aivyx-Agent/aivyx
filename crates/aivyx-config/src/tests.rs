@@ -8717,6 +8717,27 @@ fn loop_present_disabled_is_allowed_partial() {
     drop(env);
 }
 
+/// Chapter Foreman — `delegate_above` parses; absent ⇒ None (off); 0 ⇒ None.
+#[test]
+fn loop_delegate_above_parses() {
+    let env = EnvScope::new();
+    let on = load_with_toml(
+        "\n[loop]\nenabled = true\ndelegate_above = 5\n",
+        "loop-deleg",
+    );
+    assert_eq!(on.loop_config.expect("present").delegate_above, Some(5));
+    // Absent → off.
+    let off = load_with_toml("\n[loop]\nenabled = true\n", "loop-nodeleg");
+    assert_eq!(off.loop_config.expect("present").delegate_above, None);
+    // 0 is treated as off (no story scores below 0; explicit "never").
+    let zero = load_with_toml(
+        "\n[loop]\nenabled = true\ndelegate_above = 0\n",
+        "loop-zerodeleg",
+    );
+    assert_eq!(zero.loop_config.expect("present").delegate_above, None);
+    drop(env);
+}
+
 /// Chapter Helm — `resume_on_boot` parses from `[loop]`.
 #[test]
 fn loop_resume_on_boot_parses() {

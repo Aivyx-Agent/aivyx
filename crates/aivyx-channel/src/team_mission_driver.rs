@@ -484,6 +484,40 @@ impl TeamMissionService {
         self.start(plan, config).await
     }
 
+    /// Chapter Foreman — decompose `goal`, register the mission, and **drive it
+    /// to a terminal state inline** (not spawned), returning the mission id and
+    /// its final phase. The autonomous loop's auto-delegation uses this to hand a
+    /// complex story to the team and wait for the result. `policy` is passed
+    /// explicitly so the loop can run it **headless** (a human gate auto-rejects
+    /// rather than parking forever in an unattended run).
+    pub async fn run_goal_blocking(
+        &self,
+        goal: &str,
+        config: Option<TeamConfig>,
+        policy: GatePolicy,
+    ) -> Result<(String, TeamMissionPhase), MissionDriverError> {
+        let cancel = aivyx_core::CancellationToken::new();
+        let plan = aivyx_team::decompose_goal(
+            self.deps.provider.as_ref(),
+            &self.deps.model,
+            goal,
+            config.as_ref().unwrap_or(&self.config),
+            &cancel,
+        )
+        .await?;
+        let id = register_mission(
+            &self.state,
+            plan,
+            uuid::Uuid::new_v4().to_string(),
+            config.clone(),
+        )
+        .await?;
+        let default_config = config.unwrap_or_else(|| self.config.clone());
+        let phase =
+            drive_registered(&self.state, &self.deps, default_config, &id, policy).await?;
+        Ok((id, phase))
+    }
+
     /// Resolve a paused gate, spawning the resume drive on approval. Returns
     /// the immediate phase (`Executing` on approve, `Rejected` on reject).
     pub async fn resolve(

@@ -874,6 +874,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 .as_ref()
                 .map(|c| c.max_idle_iterations)
                 .unwrap_or(0);
+            // Chapter Foreman — arm deterministic auto-delegation iff
+            // `[loop] delegate_above` is set AND a team service exists.
+            let ld_delegate = match (
+                loop_config.as_ref().and_then(|c| c.delegate_above),
+                &team_missions,
+            ) {
+                (Some(threshold), Some(svc)) => {
+                    Some((std::sync::Arc::new(svc.clone()), threshold))
+                }
+                _ => None,
+            };
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -889,6 +900,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_pricing,
                     ld_max_idle,
                     ld_shutdown,
+                    ld_delegate,
                 )
                 .await;
             }))

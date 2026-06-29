@@ -166,6 +166,18 @@ async fn recent_progress_note(
     read_progress_notes(memory, 1).await.into_iter().next()
 }
 
+/// Chapter Foreman — append a one-line note to the loop progress log (the same
+/// reserved topic `loop.note` writes), so a delegation decision shows up in the
+/// next iteration's injected context + the operator's view. Best-effort.
+async fn write_progress_note(
+    memory: Option<&Arc<dyn aivyx_memory::Memory>>,
+    text: &str,
+) {
+    if let Some(mem) = memory {
+        let _ = mem.put(crate::loop_tool::LOOP_PROGRESS_TOPIC, text).await;
+    }
+}
+
 /// Chapter Circuit (CI.1) — the cross-iteration stall breaker.
 ///
 /// The driver fires a fresh-context iteration and — unlike Bridle's
@@ -653,6 +665,11 @@ pub async fn run_loop_driver(
     pricing: aivyx_cost::Pricing,
     max_idle_iterations: u32,
     shutdown: CancellationToken,
+    // Chapter Foreman — opt-in deterministic auto-delegation. `Some((svc,
+    // threshold))` ⇒ before each solo turn the driver scores the next pending
+    // story; one scoring `>= threshold` is handed to the team (headless) instead
+    // of the model. `None` ⇒ off (byte-identical to pre-Foreman).
+    delegate: Option<(Arc<crate::team_mission_driver::TeamMissionService>, u32)>,
 ) {
     // Chapter K — the dollar cap prices LlmCost events with the rate table the
     // daemon built (built-in defaults + any `[pricing.<model>]` overrides, K.5).
@@ -757,6 +774,95 @@ pub async fn run_loop_driver(
                     shared.iteration(),
                 );
                 break;
+            }
+
+            // Chapter Foreman — deterministic auto-delegation. Peek the next
+            // pending story; if it scores complex enough, hand it to the team
+            // (headless, inline) instead of firing a solo turn — this does NOT
+            // depend on the model choosing `team.run`. A completed mission marks
+            // the story done; any other outcome leaves it pending with a note.
+            if let Some((svc, threshold)) = &delegate {
+                if let Some(story) = backlog.next_pending() {
+                    let assessment =
+                        crate::task_complexity::assess(&story.title, &story.body);
+                    if assessment.should_delegate(*threshold) {
+                        let iter = shared.iteration() + 1;
+                        shared.record_iteration();
+                        eprintln!(
+                            "aivyx loop: iteration {iter} — delegating story {} to \
+                             the team ({})",
+                            story.id,
+                            assessment.explain(),
+                        );
+                        let goal = if story.body.trim().is_empty() {
+                            story.title.clone()
+                        } else {
+                            format!("{}\n\n{}", story.title, story.body)
+                        };
+                        let made_progress = match svc
+                            .run_goal_blocking(
+                                &goal,
+                                None,
+                                aivyx_core::GatePolicy::RejectAndAbort,
+                            )
+                            .await
+                        {
+                            Ok((mid, crate::team_mission::TeamMissionPhase::Done)) => {
+                                let _ = backlog
+                                    .mark_done(story.id.clone(), now_unix_ms())
+                                    .await;
+                                write_progress_note(
+                                    memory.as_ref(),
+                                    &format!(
+                                        "delegated story '{}' to team mission {mid} → done",
+                                        story.title
+                                    ),
+                                )
+                                .await;
+                                true
+                            }
+                            Ok((mid, phase)) => {
+                                write_progress_note(
+                                    memory.as_ref(),
+                                    &format!(
+                                        "delegated story '{}' → mission {mid} ended \
+                                         {phase:?}; left pending for review",
+                                        story.title
+                                    ),
+                                )
+                                .await;
+                                false
+                            }
+                            Err(e) => {
+                                write_progress_note(
+                                    memory.as_ref(),
+                                    &format!(
+                                        "delegation of story '{}' failed: {e}; left \
+                                         pending",
+                                        story.title
+                                    ),
+                                )
+                                .await;
+                                false
+                            }
+                        };
+                        // Stall accounting mirrors the solo path: a completed
+                        // delegation is progress; a failed/halted one is not, so
+                        // repeated failures trip the breaker instead of spinning.
+                        let should_stop = stall.record(made_progress);
+                        shared.record_idle(stall.consecutive_idle);
+                        if should_stop {
+                            let reason = format!(
+                                "no progress for {max_idle_iterations} consecutive \
+                                 iteration(s) (stall breaker)"
+                            );
+                            shared.finish_run(&reason);
+                            eprintln!("aivyx loop: run ended — {reason}");
+                            break;
+                        }
+                        continue;
+                    }
+                }
             }
 
             let iter = shared.iteration() + 1;

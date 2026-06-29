@@ -105,6 +105,7 @@ pub mod digest;
 /// stops a run the moment the tree goes red.
 pub mod loop_gate;
 pub mod completion_judge;
+pub mod task_complexity;
 pub mod helpfulness_ledger;
 pub mod skill_authoring;
 pub mod skill_effectiveness;

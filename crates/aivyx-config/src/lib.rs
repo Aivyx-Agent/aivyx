@@ -2855,6 +2855,13 @@ pub struct LoopConfig {
     /// (stack `gate_command` for artifact-grounded truth). Fails open on a judge
     /// outage. Default `false` (opt-in).
     pub verify_completion: bool,
+    /// Chapter Foreman — deterministic auto-delegation threshold. `Some(n)` ⇒
+    /// before each solo turn the loop scores the next pending story (a pure
+    /// structural complexity heuristic) and, if it scores `>= n`, hands it to the
+    /// agent team (headless) instead of attempting it solo — so delegation does
+    /// not depend on a small local model choosing `team.run`. `None` (default) ⇒
+    /// off. A practical threshold is ~4–6.
+    pub delegate_above: Option<u32>,
 }
 
 /// Default per-run iteration cap. Conservative on purpose — an
@@ -4873,6 +4880,9 @@ struct RawLoop {
     // Chapter Verdict (Opp E) — LLM acceptance judge on loop.complete.
     #[serde(default)]
     verify_completion: Option<bool>,
+    // Chapter Foreman — deterministic complexity threshold for auto-delegation.
+    #[serde(default)]
+    delegate_above: Option<u32>,
 }
 
 /// Phase 91 — `[recall_judgment]` deserialize target.
@@ -8707,7 +8717,8 @@ fn build_loop_config(
         || raw.max_run_usd.is_some()
         || raw.max_idle_iterations.is_some()
         || raw.resume_on_boot.is_some()
-        || raw.verify_completion.is_some();
+        || raw.verify_completion.is_some()
+        || raw.delegate_above.is_some();
     if !any_set {
         return Ok(None);
     }
@@ -8741,6 +8752,7 @@ fn build_loop_config(
         .unwrap_or(DEFAULT_LOOP_MAX_IDLE_ITERATIONS);
     let resume_on_boot = raw.resume_on_boot.unwrap_or(false);
     let verify_completion = raw.verify_completion.unwrap_or(false);
+    let delegate_above = raw.delegate_above.filter(|n| *n > 0);
 
     if enabled {
         if max_iterations == 0 {
@@ -8778,6 +8790,7 @@ fn build_loop_config(
         max_idle_iterations,
         resume_on_boot,
         verify_completion,
+        delegate_above,
     }))
 }
 
