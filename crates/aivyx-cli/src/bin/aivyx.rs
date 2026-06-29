@@ -6528,8 +6528,21 @@ async fn run_async(
     }
     // Chapter Conduit (CD.3) — persist the snapshot for `aivyx mcp
     // status`. Best-effort: a write failure must not abort startup.
-    if let Err(e) = aivyx_channel::mcp_status::write_snapshot(&mcp_status_entries) {
-        eprintln!("aivyx: could not write MCP status snapshot: {e}");
+    //
+    // Backlog #9 — write it ONLY from the actual daemon (`aivyx daemon run`).
+    // `run_async` also runs for transient CLI invocations (a `--headless` turn,
+    // the REPL), which build their own MCP bridges; letting those write would
+    // clobber the running daemon's good snapshot with their ephemeral (often
+    // empty) state — the bug that made `aivyx mcp status` report "no servers"
+    // while the daemon's MCP was live (the snapshot's mtime kept moving with no
+    // daemon restart). The snapshot represents daemon state, so only the daemon
+    // owns it.
+    if matches!(mode, CliMode::DaemonRun) {
+        if let Err(e) =
+            aivyx_channel::mcp_status::write_snapshot(&mcp_status_entries)
+        {
+            eprintln!("aivyx: could not write MCP status snapshot: {e}");
+        }
     }
 
     // ---- Phase 49: tool processes (PRODUCT.md P12) ----------------------
