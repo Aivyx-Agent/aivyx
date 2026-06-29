@@ -5,6 +5,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.14] — 2026-06-29
+
+### Fixed
+
+- **`aivyx mcp status` no longer falsely reports "no MCP servers".** The status
+  snapshot is daemon state, but it was being overwritten by transient CLI
+  invocations (a `--headless` turn, the REPL), which clobbered the running
+  daemon's snapshot with empty entries — so the command showed no servers while
+  MCP was actually live. Only the daemon writes the snapshot now. (Backlog #9.)
+- **The `trend-scan` routine never broadcasts fabricated findings.** A new
+  delivery gate (`notify_when = "on_completed_grounded"`, now the default for
+  `trend-scan`) only pushes a result when the turn actually did work (≥1 tool
+  call). A trend-scan that produced "findings" with no real web search is
+  suppressed instead of being sent as if real. (Backlog #6 follow-on.)
+
 ## [0.7.13] — 2026-06-29
 
 ### Fixed
