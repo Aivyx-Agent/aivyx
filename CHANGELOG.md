@@ -5,6 +5,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.13] — 2026-06-29
+
+### Fixed
+
+- **The weekly digest no longer fabricates.** A check-in caught the scheduled
+  `weekly-digest` inventing profile-themed "accomplishments" that never happened
+  (a "Flutter revenue dashboard", etc.) — a local model fills a sparse summary
+  with plausible fiction no matter how the prompt is worded. The digest is now
+  **assembled deterministically by the daemon** from your actual memory (entries
+  written since the last digest) plus the live pending-proposal count, with real
+  dates; if nothing was recorded it says so plainly. There is no LLM in the
+  content path, so it cannot confabulate. (Backlog #6, Chapter Ledger.)
+
+### Added
+
+- **Chapter Deckhand — opt-in "use your open applications" (experimental).** With
+  `[applications] enabled = true`, the agent can use the GUI apps open on your own
+  machine: list windows, focus one, type / press keys / click, and screenshot.
+  Default **off**; Trusted-tier only; input injection is **confirm-first**; every
+  action is an audited tool call. Linux X11 / Xwayland in this release (needs
+  `xdotool` + a screenshot tool); native-Wayland windows are a known limitation.
+  See `docs/APPLICATIONS.md`.
+
 ## [0.7.12] — 2026-06-29
 
 ### Added
