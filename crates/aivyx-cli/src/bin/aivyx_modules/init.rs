@@ -927,7 +927,11 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     // Chapter Ledger (#6 fix) — the weekly digest is now a deterministic report
     // built from the memory substrate, not an LLM turn that confabulates.
     emit("weekly-digest", "0 0 8 * * 1", ROUTINE_WEEKLY_DIGEST, core_enabled, "on_completed_non_empty", Some("digest"));
-    emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_non_empty", None);
+    // Chapter Ledger (#6 grounding-gate) — trend-scan is generative web
+    // synthesis, so it can't be made deterministic; instead gate its delivery
+    // on `on_completed_grounded` — if the turn made NO tool calls (no real
+    // search), its "findings" are fabricated and are never broadcast.
+    emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_grounded", None);
 
     out
 }

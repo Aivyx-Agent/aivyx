@@ -5853,6 +5853,7 @@ fn notify_when_variants_parse() {
         ("always", NotifyWhen::Always),
         ("on_failed", NotifyWhen::OnFailed),
         ("on_completed_non_empty", NotifyWhen::OnCompletedNonEmpty),
+        ("on_completed_grounded", NotifyWhen::OnCompletedGrounded),
     ] {
         let env = EnvScope::new();
         let tmp = TempDir::new(&format!("notify-when-{input}"));

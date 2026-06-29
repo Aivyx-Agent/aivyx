@@ -1719,6 +1719,14 @@ pub enum NotifyWhen {
     /// (operators who want "only when something useful was
     /// produced").
     OnCompletedNonEmpty,
+    /// Chapter Ledger (#6 trend-scan grounding-gate) — dispatch only when the
+    /// turn completed, the body is non-empty, AND it made **at least one tool
+    /// call**. A generative aggregation routine (e.g. `trend-scan`) that didn't
+    /// actually do any work — no web search, no read — produced its prose from
+    /// the model's imagination, so its findings are fabricated and must not be
+    /// broadcast to the operator. This is the structural "a no-tool aggregation
+    /// turn is a no-op" backstop Plumb deferred, expressed as a notify gate.
+    OnCompletedGrounded,
 }
 
 impl NotifyWhen {
@@ -1729,6 +1737,7 @@ impl NotifyWhen {
             NotifyWhen::Always => "always",
             NotifyWhen::OnFailed => "on_failed",
             NotifyWhen::OnCompletedNonEmpty => "on_completed_non_empty",
+            NotifyWhen::OnCompletedGrounded => "on_completed_grounded",
         }
     }
 }
@@ -4216,6 +4225,7 @@ fn resolve_trigger_notify_fields(
             "always" => NotifyWhen::Always,
             "on_failed" => NotifyWhen::OnFailed,
             "on_completed_non_empty" => NotifyWhen::OnCompletedNonEmpty,
+            "on_completed_grounded" => NotifyWhen::OnCompletedGrounded,
             other => {
                 return Err(ConfigError::Invalid {
                     field: "trigger.notify_when",
@@ -4223,7 +4233,7 @@ fn resolve_trigger_notify_fields(
                         "{trigger_kind} `{trigger_name}` notify_when = \
                          `{other}` is not recognized. Supported: \
                          `always` (default), `on_failed`, \
-                         `on_completed_non_empty`."
+                         `on_completed_non_empty`, `on_completed_grounded`."
                     ),
                 });
             }

@@ -770,6 +770,17 @@ pub fn condition_gate_passes(
             matches!(outcome, TurnOutcome::Completed { .. })
                 && !rendered_body.trim().is_empty()
         }
+        // Chapter Ledger — grounding gate: completed + non-empty + did real
+        // work (≥1 tool call). A generative aggregation routine that produced
+        // prose with no tool calls invented it; suppress the broadcast.
+        NotifyWhen::OnCompletedGrounded => {
+            !rendered_body.trim().is_empty()
+                && matches!(
+                    outcome,
+                    TurnOutcome::Completed { tool_calls_made, .. }
+                        if *tool_calls_made >= 1
+                )
+        }
     }
 }
 
@@ -846,6 +857,30 @@ mod tests {
             duration: Duration::from_secs(1),
         };
         assert!(render_notify_body(&outcome).is_empty());
+    }
+
+    #[test]
+    fn grounding_gate_suppresses_a_no_tool_aggregation_turn() {
+        use aivyx_config::NotifyWhen::OnCompletedGrounded as Grounded;
+        let nonempty = |tools: usize| TurnOutcome::Completed {
+            final_message: "Trend: retirees diversifying income.".into(),
+            tool_calls_made: tools,
+            duration: Duration::from_secs(2),
+        };
+        let body = "Trend: retirees diversifying income.";
+        // 0 tool calls → fabricated (no real search) → gate fails (suppress).
+        assert!(!condition_gate_passes(Grounded, &nonempty(0), body));
+        // ≥1 tool call → grounded → gate passes (deliver).
+        assert!(condition_gate_passes(Grounded, &nonempty(1), body));
+        assert!(condition_gate_passes(Grounded, &nonempty(3), body));
+        // Empty body never passes, even with tools.
+        assert!(!condition_gate_passes(Grounded, &nonempty(2), "  "));
+        // A failed turn never passes the grounded gate.
+        assert!(!condition_gate_passes(
+            Grounded,
+            &TurnOutcome::Failed(AivyxError::Channel("x".into())),
+            "irrelevant",
+        ));
     }
 
     #[test]
