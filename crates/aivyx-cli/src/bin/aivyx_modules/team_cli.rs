@@ -81,6 +81,14 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
         TeamSubcommand::Reject { mission_id, step } => {
             resolve_gate(&socket_path, mission_id, step, false).await
         }
+        TeamSubcommand::Abort { mission_id } => {
+            let message =
+                aivyx_channel::daemon_client::abort_team_mission(&socket_path, mission_id)
+                    .await
+                    .map_err(|e| format!("team abort failed: {e}"))?;
+            println!("{message}");
+            Ok(())
+        }
         // The offline / in-process verbs are dispatched elsewhere (`team.rs`).
         TeamSubcommand::Roster { .. }
         | TeamSubcommand::Init { .. }

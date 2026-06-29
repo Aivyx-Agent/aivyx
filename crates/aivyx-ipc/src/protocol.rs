@@ -420,6 +420,11 @@ pub enum QueryPayload {
         step: String,
         approve: bool,
     },
+    /// Chapter Belay — request that a running mission halt at its next wave
+    /// boundary. Responds with [`QueryResponsePayload::TeamMissionAborted`].
+    AbortTeamMission {
+        mission_id: String,
+    },
     /// Chapter U — read the daemon's effective config snapshot for the
     /// Settings screen: access level + resolved `fs_root` + confirm posture,
     /// provider / model / `num_ctx`, the `[budget]` caps, and whether an
@@ -1053,6 +1058,12 @@ pub enum QueryResponsePayload {
     TeamGateResolved {
         mission_id: String,
         phase: crate::TeamMissionPhase,
+    },
+    /// Chapter Belay — response to [`QueryPayload::AbortTeamMission`]. A short
+    /// human-readable status (the mission will halt at its next wave boundary).
+    TeamMissionAborted {
+        mission_id: String,
+        message: String,
     },
     /// Chapter Y — response to [`QueryPayload::GetTeamRoster`]. The daemon's
     /// active team configuration, rendered as-is by the Studio's Teams screen.

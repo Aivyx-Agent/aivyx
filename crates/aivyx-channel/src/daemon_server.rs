@@ -3970,6 +3970,20 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::AbortTeamMission { mission_id } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            match svc.abort(&mission_id) {
+                Ok(message) => {
+                    QueryResponsePayload::TeamMissionAborted { mission_id, message }
+                }
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "abort_team_mission_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
         QueryPayload::GetProfile { from_disk } => {
             // `from_disk = false` (default): the running snapshot the daemon
             // is using (the Command-Center / status meaning). `true`: re-read

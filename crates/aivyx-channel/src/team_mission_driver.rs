@@ -64,6 +64,9 @@ pub enum MissionDriverError {
     /// The mission-drive task panicked.
     #[error("mission run task failed: {0}")]
     Join(String),
+    /// Chapter Belay — abort was requested on a mission that isn't running.
+    #[error("mission {0} cannot be aborted ({1})")]
+    NotAbortable(String, String),
 }
 
 /// Chapter Ensemble — builds an LLM provider (the daemon's kind) at a given
@@ -105,6 +108,11 @@ pub struct TeamRunDeps {
 pub struct SharedMissionState {
     store: DomainHandle,
     registry: Arc<RwLock<BTreeMap<String, TeamMissionRecord>>>,
+    /// Chapter Belay — runtime-only abort flags, keyed by mission id. The drive
+    /// arms one when a mission starts executing; the observer reads it at each
+    /// wave boundary; `request_abort` sets it. Not persisted (a flag is
+    /// meaningless across a restart — an interrupted mission re-drives fresh).
+    abort_flags: Arc<RwLock<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 impl SharedMissionState {
@@ -114,6 +122,36 @@ impl SharedMissionState {
         SharedMissionState {
             store,
             registry: Arc::new(RwLock::new(BTreeMap::new())),
+            abort_flags: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Chapter Belay — arm a fresh abort flag for an executing mission and
+    /// return it (the drive hands the clone to the observer's `should_halt`).
+    fn arm_abort(&self, id: &str) -> Arc<std::sync::atomic::AtomicBool> {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.abort_flags
+            .write()
+            .expect("abort flags lock")
+            .insert(id.to_string(), Arc::clone(&flag));
+        flag
+    }
+
+    /// Chapter Belay — drop a mission's abort flag once its drive ends.
+    fn disarm_abort(&self, id: &str) {
+        self.abort_flags.write().expect("abort flags lock").remove(id);
+    }
+
+    /// Chapter Belay — request that an executing mission halt at its next wave
+    /// boundary. Returns `true` if the mission was running (a flag was armed),
+    /// `false` if not (already terminal, paused, or unknown).
+    pub fn request_abort(&self, id: &str) -> bool {
+        match self.abort_flags.read().expect("abort flags lock").get(id) {
+            Some(flag) => {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                true
+            }
+            None => false,
         }
     }
 
@@ -318,6 +356,46 @@ pub async fn prepare_gate_resolution(
     Ok(phase)
 }
 
+/// Chapter Belay — request that a **running** mission stop. Sets the mission's
+/// abort flag; its drive halts gracefully at the next wave boundary (in-flight
+/// specialist turns finish, completed outputs are preserved), landing the
+/// mission in `Halted` with reason "aborted by operator" — the same terminal
+/// shape as a tripped budget cap. A mission paused at a human gate isn't running,
+/// so it can't be aborted this way — reject its gate instead. Returns a short
+/// status message on success.
+pub fn abort_mission(
+    shared: &SharedMissionState,
+    id: &str,
+) -> Result<String, MissionDriverError> {
+    let record = shared
+        .snapshot(id)
+        .ok_or_else(|| MissionDriverError::NotFound(id.to_string()))?;
+    match record.phase {
+        TeamMissionPhase::Executing => {
+            if shared.request_abort(id) {
+                Ok(format!(
+                    "abort requested — mission {id} will halt at its next step boundary"
+                ))
+            } else {
+                // Executing in the record but no armed flag (e.g. a just-finished
+                // race): nothing to halt.
+                Err(MissionDriverError::NotAbortable(
+                    id.to_string(),
+                    "the mission is no longer running".to_string(),
+                ))
+            }
+        }
+        TeamMissionPhase::AwaitingApproval => Err(MissionDriverError::NotAbortable(
+            id.to_string(),
+            "it is paused at a human gate — reject the gate instead".to_string(),
+        )),
+        other => Err(MissionDriverError::NotAbortable(
+            id.to_string(),
+            format!("it is not currently running (phase {other:?})"),
+        )),
+    }
+}
+
 /// The daemon's team-mission surface: the [`SharedMissionState`] registry, the
 /// shared [`TeamRunDeps`], and the team [`TeamConfig`] to assemble. Cloned into
 /// every IPC handler (it's the one handle the `TeamRun` / `TeamMissionList` /
@@ -419,6 +497,12 @@ impl TeamMissionService {
             self.spawn_drive(id.to_string());
         }
         Ok(phase)
+    }
+
+    /// Chapter Belay — request that a running mission halt at its next wave
+    /// boundary. Returns a short status message.
+    pub fn abort(&self, id: &str) -> Result<String, MissionDriverError> {
+        abort_mission(&self.state, id)
     }
 
     /// Spawn the background drive for an already-registered/-resumed mission.
@@ -561,12 +645,16 @@ async fn drive(
     // The observer pings on each step completion; the drive runs in a task so
     // that when it ends the observer (and its sender) drop, closing the ping
     // channel and ending the drain loop.
+    // Chapter Belay — arm this mission's abort flag; the observer halts the run
+    // at the next wave boundary if an operator requests an abort.
+    let abort = shared.arm_abort(id);
     let (tx, mut rx) = mpsc::unbounded_channel();
     let observer = RegistryObserver {
         shared: shared.clone(),
         id: id.to_string(),
         tx,
         budget_guard,
+        abort: Some(abort),
     };
     let channel = MissionLeadChannel::new();
     let run = tokio::spawn(async move {
@@ -644,6 +732,8 @@ async fn drive(
     }
     let phase = record.phase;
     shared.put(record).await?;
+    // Chapter Belay — the drive is over; drop the abort flag.
+    shared.disarm_abort(id);
     Ok(phase)
 }
 
@@ -658,6 +748,9 @@ struct RegistryObserver {
     /// Chapter Ballast — `Some` when a per-mission budget is armed. The meter
     /// reads this mission's running spend; the budget says when a cap trips.
     budget_guard: Option<(crate::mission_meter::MissionMeter, aivyx_cost::MissionBudget)>,
+    /// Chapter Belay — the mission's abort flag. Set by `request_abort`; read at
+    /// each wave boundary in `should_halt`.
+    abort: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl MissionObserver for RegistryObserver {
@@ -679,6 +772,12 @@ impl MissionObserver for RegistryObserver {
     /// the mission's metered spend so far against its caps; a breach returns the
     /// reason, halting the mission gracefully before the next wave launches.
     fn should_halt(&self) -> Option<String> {
+        // Chapter Belay — an operator abort takes priority over the budget check.
+        if let Some(flag) = &self.abort {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                return Some("aborted by operator".to_string());
+            }
+        }
         let (meter, budget) = self.budget_guard.as_ref()?;
         budget.breach(meter.tokens(), meter.usd())
     }
@@ -1072,6 +1171,61 @@ mod tests {
 
     fn fake_provider() -> Arc<dyn LlmProvider> {
         Arc::new(FakeProvider { line: "x".into(), usage: LlmUsage::default() })
+    }
+
+    // ---- Chapter Belay: abort a running mission ----
+
+    #[tokio::test]
+    async fn anchor_request_abort_sets_the_armed_flag() {
+        use std::sync::atomic::Ordering;
+        let shared = SharedMissionState::new(team_domain().await);
+        // No flag armed yet → request is a no-op.
+        assert!(!shared.request_abort("m"));
+        let flag = shared.arm_abort("m");
+        assert!(!flag.load(Ordering::SeqCst));
+        // Armed → request sets the flag the observer reads.
+        assert!(shared.request_abort("m"));
+        assert!(flag.load(Ordering::SeqCst));
+        // Disarmed (drive ended) → request is a no-op again.
+        shared.disarm_abort("m");
+        assert!(!shared.request_abort("m"));
+    }
+
+    #[tokio::test]
+    async fn anchor_abort_mission_rejects_non_running() {
+        let shared = SharedMissionState::new(team_domain().await);
+        // Unknown mission.
+        assert!(matches!(
+            abort_mission(&shared, "nope"),
+            Err(MissionDriverError::NotFound(_))
+        ));
+        // A registered-but-not-executing mission can't be aborted this way.
+        let plan = MissionPlan::new("g", vec![Step::delegate("a", "researcher", "p")]);
+        register_mission(&shared, plan, "m", None).await.unwrap();
+        assert!(matches!(
+            abort_mission(&shared, "m"),
+            Err(MissionDriverError::NotAbortable(..))
+        ));
+    }
+
+    #[tokio::test]
+    async fn anchor_observer_halts_when_aborted() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let shared = SharedMissionState::new(team_domain().await);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let flag = Arc::new(AtomicBool::new(false));
+        let obs = RegistryObserver {
+            shared,
+            id: "m".into(),
+            tx,
+            budget_guard: None,
+            abort: Some(Arc::clone(&flag)),
+        };
+        // Not aborted, no budget → no halt.
+        assert!(obs.should_halt().is_none());
+        // Operator abort → the runtime's wave-boundary check halts the mission.
+        flag.store(true, Ordering::SeqCst);
+        assert_eq!(obs.should_halt(), Some("aborted by operator".to_string()));
     }
 
     #[test]

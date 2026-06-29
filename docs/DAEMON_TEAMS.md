@@ -166,6 +166,15 @@ future option that doesn't change this contract.
   - `aivyx team status [<id>]` / `aivyx team list` → render snapshots
     (pure render fns, mirror `loop_cli::render_status`).
   - `aivyx team approve|reject <id> <step>` → `ResolveTeamGate`.
+  - `aivyx team abort <id>` → `AbortTeamMission` (**Chapter Belay**): stop a
+    **running** mission. It halts gracefully at its next wave boundary —
+    in-flight specialist turns finish, completed outputs are preserved — landing
+    in `Halted` (reason "aborted by operator"), the same terminal shape as a
+    tripped budget cap. Reuses the runtime's existing `observer.should_halt()`
+    hook (no new cancellation plumbing into specialist turns). A mission *paused
+    at a human gate* isn't running, so it can't be aborted this way — `reject`
+    its gate instead. Completing the operator control surface over autonomous
+    missions: budget-halt (Ballast) + gate approve/reject (L) + **abort**.
 - **TUI** (`aivyx-tui`):
   - A periodic mission-poll tick in `app.rs` maps `TeamMissionList`
     snapshots → `MissionRow`s → `Msg::MissionsUpdated`. The panel goes live.

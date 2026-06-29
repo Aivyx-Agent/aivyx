@@ -962,6 +962,29 @@ pub async fn resolve_team_gate(
     }
 }
 
+/// Chapter Belay — request that a running team mission halt. Returns the
+/// daemon's status message.
+pub async fn abort_team_mission(
+    socket_path: &Path,
+    mission_id: String,
+) -> Result<String, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "abort-team-mission",
+        QueryPayload::AbortTeamMission { mission_id },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::TeamMissionAborted { message, .. } => Ok(message),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamMissionAborted, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(

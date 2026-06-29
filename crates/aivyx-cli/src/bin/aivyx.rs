@@ -480,7 +480,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    // ---- Chapter Anchor: service install / uninstall --------------------
+    // ---- Chapter Belay: service install / uninstall --------------------
     // Pure filesystem + `systemctl`/`loginctl` shell-outs — no socket, no
     // runtime, no store. Handled before everything heavier.
     if let CliMode::DaemonInstall { web_ui, start } = mode {
@@ -1705,7 +1705,7 @@ enum CliMode {
     DaemonStatus,
     /// `aivyx daemon stop`: send graceful shutdown to a running daemon.
     DaemonStop,
-    /// `aivyx daemon install [--web-ui] [--no-start]` (Chapter Anchor): install
+    /// `aivyx daemon install [--web-ui] [--no-start]` (Chapter Belay): install
     /// the daemon as a persistent user service (systemd user unit + linger).
     DaemonInstall { web_ui: bool, start: bool },
     /// `aivyx daemon uninstall`: stop, disable, and remove the service.
@@ -1892,6 +1892,9 @@ enum TeamSubcommand {
     Approve { mission_id: String, step: String },
     /// Chapter L — `aivyx team reject <id> <step>`: reject a human gate.
     Reject { mission_id: String, step: String },
+    /// Chapter Belay — `aivyx team abort <id>`: stop a running mission (it
+    /// halts gracefully at its next step boundary, preserving completed work).
+    Abort { mission_id: String },
 }
 
 impl TeamSubcommand {
@@ -1906,6 +1909,7 @@ impl TeamSubcommand {
                 | TeamSubcommand::Status { .. }
                 | TeamSubcommand::Approve { .. }
                 | TeamSubcommand::Reject { .. }
+                | TeamSubcommand::Abort { .. }
         )
     }
 }
@@ -2311,7 +2315,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
     // Check for `daemon <subcommand>` first.
     if args.len() >= 2 && args[0] == "daemon" {
-        // Chapter Anchor — `install` / `uninstall` carry their own flags and
+        // Chapter Belay — `install` / `uninstall` carry their own flags and
         // never touch the socket, so they parse + return ahead of run/status/stop.
         let anchor = |mode| {
             Ok(CliArgs {
@@ -3147,10 +3151,16 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     TeamSubcommand::Reject { mission_id, step }
                 }
             }
+            "abort" => {
+                let mission_id = args.get(2).cloned().ok_or_else(|| {
+                    "`aivyx team abort` requires a <mission-id>".to_string()
+                })?;
+                TeamSubcommand::Abort { mission_id }
+            }
             "" => {
                 return Err(
                     "`aivyx team` requires a subcommand: roster | init | run | start | \
-                     list | status | approve | reject"
+                     list | status | approve | reject | abort"
                         .to_string(),
                 );
             }
