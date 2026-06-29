@@ -5,6 +5,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.15] — 2026-06-29
+
+Three multi-agent / autonomy refinements.
+
+### Added
+
+- **Heterogeneous teams (Chapter Ensemble).** Each `[[team.member]]` may now
+  declare its own `model` and/or `base_url` (same provider kind). A coordinator
+  can run on a big model while grunt specialists run on a small fast one
+  (role-fit + cost), and pointing roles at different endpoints (e.g. a second
+  Ollama / GPU) gives true parallel execution instead of serializing on one
+  server. Both optional — omit them and a role uses the team's shared default.
+- **Per-story acceptance verification (Chapter Verdict).** Opt-in
+  `[loop] verify_completion`: when the autonomous loop calls `loop.complete`, an
+  LLM judge checks the agent's summary against the story's acceptance criteria
+  and blocks the completion on a FAIL (the story stays pending) instead of
+  trusting the self-report. Fails open; stack with `gate_command` for
+  artifact-grounded checks.
+- **Abort a running team mission (Chapter Belay).** `aivyx team abort <id>`
+  stops a running mission — it halts gracefully at its next step boundary
+  (in-flight work finishes, completed outputs preserved). Completes the operator
+  control surface alongside budget caps and human-gate approve/reject.
+
 ## [0.7.14] — 2026-06-29
 
 ### Fixed
