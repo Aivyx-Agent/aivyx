@@ -213,6 +213,9 @@ pub async fn run_mission(
         // join this set once that toolkit crate is wired in.)
         base_tools,
         lead_caps.clone(),
+        // Chapter Ensemble — the CLI lead-driven `team run` uses one shared
+        // backend for all roles; per-role overrides are a daemon-mission path.
+        std::collections::HashMap::new(),
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 
@@ -361,6 +364,8 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: vec![],
             trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
         };
         let cfg = TeamConfig {
             name: "custom-team".into(),
@@ -453,6 +458,8 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: vec![],
             trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
         };
         let cfg = TeamConfig {
             name: "duo".into(),

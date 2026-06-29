@@ -30,6 +30,16 @@ use crate::config::{DialogueConfig, TeamError, TeamMember};
 use crate::message_bus::MessageBus;
 use crate::message_tools::{ReadMessagesTool, SendMessageTool};
 
+/// Chapter Ensemble — a per-role LLM backend override (its own provider +
+/// model). The daemon builds these for any member that declared a `model` /
+/// `base_url` override; members without one fall back to the team's shared
+/// provider + model. Distinct endpoints give true parallel execution.
+#[derive(Clone)]
+pub struct SpecialistBackend {
+    pub provider: Arc<dyn LlmProvider>,
+    pub model: String,
+}
+
 /// The shared deps the daemon injects so the pool can build specialists.
 pub struct SpecialistFactory {
     provider: Arc<dyn LlmProvider>,
@@ -42,6 +52,10 @@ pub struct SpecialistFactory {
     /// `send_message` / `read_message` tools bound to its name + this bus, so
     /// peers can talk. Opt-in: without it, specialists are tool-only.
     dialogue: Option<(Arc<MessageBus>, DialogueConfig)>,
+    /// Chapter Ensemble — per-member backend overrides, keyed by member name.
+    /// Empty ⇒ every specialist uses the shared `provider`/`model` (byte-
+    /// identical to pre-Ensemble).
+    member_backends: std::collections::HashMap<String, SpecialistBackend>,
 }
 
 impl SpecialistFactory {
@@ -59,7 +73,18 @@ impl SpecialistFactory {
             audit,
             base_tools,
             dialogue: None,
+            member_backends: std::collections::HashMap::new(),
         }
+    }
+
+    /// Chapter Ensemble — attach per-member backend overrides (role → its own
+    /// provider + model). Members not in the map use the shared default.
+    pub fn with_member_backends(
+        mut self,
+        backends: std::collections::HashMap<String, SpecialistBackend>,
+    ) -> Self {
+        self.member_backends = backends;
+        self
     }
 
     /// Wire team dialogue: every specialist `build`-t hereafter also gets its
@@ -80,9 +105,16 @@ impl SpecialistFactory {
         let registry = Arc::new(ToolRegistry::new(self.member_tools(member)));
 
         // Captured by the planner factory (invoked once per turn, in J.2.2).
-        let provider = Arc::clone(&self.provider);
+        // Chapter Ensemble — use this member's backend override if it declared
+        // one, else the team's shared provider + model.
+        let backend = self.member_backends.get(&member.name);
+        let provider = backend
+            .map(|b| Arc::clone(&b.provider))
+            .unwrap_or_else(|| Arc::clone(&self.provider));
+        let model = backend
+            .map(|b| b.model.clone())
+            .unwrap_or_else(|| self.model.clone());
         let registry_for_planner = Arc::clone(&registry);
-        let model = self.model.clone();
         let max_tokens = self.max_tokens;
         let soul = member.soul.clone();
 
@@ -196,6 +228,8 @@ mod tests {
             tool_allowlist: tools.iter().map(|s| s.to_string()).collect(),
             capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
             trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
         }
     }
     fn factory(base: Vec<Arc<dyn Tool>>) -> SpecialistFactory {

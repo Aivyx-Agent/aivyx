@@ -47,6 +47,18 @@ pub struct TeamMember {
     pub capability_scopes: Vec<String>,
     /// The member's declared trust ceiling, floored to the lead's at spawn.
     pub trust_ceiling: TrustTier,
+    /// Chapter Ensemble — optional per-role model override. `None` ⇒ the
+    /// team's shared default model. Lets a coordinator run on a big model
+    /// while grunt specialists run on a small fast one (role-fit + cost).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Chapter Ensemble — optional per-role endpoint (same provider kind as
+    /// the daemon's). `None` ⇒ the shared default endpoint. Pointing roles at
+    /// different endpoints (e.g. a second Ollama / GPU) gives TRUE parallel
+    /// execution instead of serializing on one server. Cross-provider-kind
+    /// (e.g. a cloud lead + local grunts) is a deliberate later step.
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 impl TeamMember {
@@ -230,7 +242,29 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
             trust_ceiling: tier,
+            model: None,
+            base_url: None,
         }
+    }
+
+    #[test]
+    fn ensemble_member_model_and_base_url_round_trip() {
+        // Chapter Ensemble — per-role model/base_url parse + survive a round-trip;
+        // absent → None.
+        let toml = "\n[team]\nname = \"t\"\nlead = \"lead\"\n\
+            \n[[team.member]]\nname = \"lead\"\nrole = \"R\"\nsoul = \"s\"\n\
+            trust_ceiling = \"Trusted\"\nmodel = \"qwen3:30b\"\n\
+            \n[[team.member]]\nname = \"grunt\"\nrole = \"R\"\nsoul = \"s\"\n\
+            trust_ceiling = \"Trusted\"\nmodel = \"qwen3:8b\"\nbase_url = \"http://gpu-b:11434\"\n";
+        let cfg = TeamConfig::from_toml(toml).unwrap();
+        let lead = cfg.members.iter().find(|m| m.name == "lead").unwrap();
+        assert_eq!(lead.model.as_deref(), Some("qwen3:30b"));
+        assert_eq!(lead.base_url, None);
+        let grunt = cfg.members.iter().find(|m| m.name == "grunt").unwrap();
+        assert_eq!(grunt.model.as_deref(), Some("qwen3:8b"));
+        assert_eq!(grunt.base_url.as_deref(), Some("http://gpu-b:11434"));
+        // Round-trips.
+        assert_eq!(TeamConfig::from_toml(&cfg.to_toml().unwrap()).unwrap(), cfg);
     }
 
     fn team(members: Vec<TeamMember>, lead: &str) -> TeamConfig {

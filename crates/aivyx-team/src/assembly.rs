@@ -48,6 +48,7 @@ impl TeamAssembly {
     /// attenuated to a subset of it (NT-02), and the lead agent itself is
     /// mounted with it, so it must grant `team.delegate` + `team.message` for
     /// the orchestration/dialogue tools to be callable.
+    #[allow(clippy::too_many_arguments)]
     pub fn build(
         config: TeamConfig,
         provider: Arc<dyn LlmProvider>,
@@ -56,13 +57,18 @@ impl TeamAssembly {
         audit: Arc<dyn AuditHook>,
         base_tools: Vec<Arc<dyn Tool>>,
         lead_caps: CapabilitySet,
+        member_backends: std::collections::HashMap<
+            String,
+            crate::factory::SpecialistBackend,
+        >,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
         let bus = MessageBus::new(dialogue.message_bus_capacity);
 
         let factory = SpecialistFactory::new(provider, model, max_tokens, audit, base_tools)
-            .with_dialogue(Arc::clone(&bus), dialogue.clone());
+            .with_dialogue(Arc::clone(&bus), dialogue.clone())
+            .with_member_backends(member_backends);
         let pool = Arc::new(SpecialistPool::new(factory, config.clone(), lead_caps.clone()));
         let runtime = Arc::new(TeamRuntime::new(Arc::clone(&pool)));
 
@@ -142,6 +148,8 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
             trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
         }
     }
 
@@ -175,6 +183,7 @@ mod tests {
             Arc::new(NullAuditHook),
             vec![],
             lead_caps(),
+            std::collections::HashMap::new(),
         )
         .expect("valid team")
     }
@@ -191,6 +200,7 @@ mod tests {
             Arc::new(NullAuditHook),
             vec![],
             lead_caps(),
+            std::collections::HashMap::new(),
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
     }
@@ -253,6 +263,7 @@ mod tests {
             Arc::new(NullAuditHook),
             vec![],
             lead_caps(),
+            std::collections::HashMap::new(),
         )
         .unwrap();
 

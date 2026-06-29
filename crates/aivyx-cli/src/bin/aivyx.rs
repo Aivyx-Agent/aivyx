@@ -7781,6 +7781,29 @@ async fn run_async(
                 mission_budget: aivyx_cost::MissionBudget::from_config(
                     &config_budget,
                 ),
+                // Chapter Ensemble — per-role endpoint builder (same provider
+                // kind). v1 supports Ollama (the local/multi-GPU case where a
+                // per-role `base_url` buys true parallelism): build a fresh
+                // local-Ollama provider at the role's URL. Per-role endpoints
+                // use default Ollama options (not the operator's `[ollama]`
+                // tuning) — a documented v1 simplification. Other kinds → None
+                // (a per-role `base_url` falls back to the shared provider).
+                member_provider_builder: if matches!(
+                    provider_kind.value,
+                    ProviderKind::Ollama
+                ) {
+                    Some(std::sync::Arc::new(
+                        |url: &str| -> Result<Arc<dyn aivyx_llm::LlmProvider>, String> {
+                            let cfg = aivyx_llm::ollama::OllamaConfig::default_local()
+                                .with_base_url(url.to_string());
+                            aivyx_llm::ollama::OllamaProvider::new(cfg)
+                                .map(|p| Arc::new(p) as Arc<dyn aivyx_llm::LlmProvider>)
+                                .map_err(|e| e.to_string())
+                        },
+                    ))
+                } else {
+                    None
+                },
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`

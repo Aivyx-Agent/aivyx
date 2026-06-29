@@ -66,6 +66,11 @@ pub enum MissionDriverError {
     Join(String),
 }
 
+/// Chapter Ensemble — builds an LLM provider (the daemon's kind) at a given
+/// `base_url`, for a team member that declared its own per-role endpoint.
+pub type MemberProviderBuilder =
+    Arc<dyn Fn(&str) -> Result<Arc<dyn LlmProvider>, String> + Send + Sync>;
+
 /// The daemon's shared deps for assembling a team — the same live provider,
 /// model, audit chain, and tool set every other daemon turn runs on.
 #[derive(Clone)]
@@ -85,6 +90,12 @@ pub struct TeamRunDeps {
     /// `MissionBudget::default()` (no caps) ⇒ unbounded: the metering hook +
     /// halt check are skipped entirely and the run is byte-identical to before.
     pub mission_budget: aivyx_cost::MissionBudget,
+    /// Chapter Ensemble — builds an LLM provider of the daemon's kind at a
+    /// given `base_url`, for a team member that declared a per-role endpoint.
+    /// `None` ⇒ per-role `base_url` overrides are ignored (members fall back to
+    /// the shared provider; per-role `model` still applies). The binary supplies
+    /// it because provider construction lives there.
+    pub member_provider_builder: Option<MemberProviderBuilder>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -462,6 +473,15 @@ fn assemble_runtime(
             (Arc::new(hook), Some(meter))
         };
 
+    // Chapter Ensemble — resolve per-role backend overrides from the team
+    // config (a member's own `model` and/or `base_url`).
+    let member_backends = resolve_member_backends(
+        &config.members,
+        &deps.provider,
+        &deps.model,
+        deps.member_provider_builder.as_ref(),
+    )?;
+
     let assembly = TeamAssembly::build(
         config,
         Arc::clone(&deps.provider),
@@ -470,8 +490,48 @@ fn assemble_runtime(
         audit,
         deps.base_tools.clone(),
         lead_caps,
+        member_backends,
     )?;
     Ok((assembly.runtime(), meter))
+}
+
+/// Chapter Ensemble — resolve per-role backend overrides. A member with its own
+/// `model` and/or `base_url` gets a [`SpecialistBackend`]; members without
+/// either are absent (they use the shared default). A `base_url` is honoured
+/// only when `builder` is wired (else the role falls back to the shared
+/// provider, keeping any `model` override). Pure over its inputs so the
+/// resolution is unit-testable without a daemon.
+#[allow(clippy::type_complexity)]
+fn resolve_member_backends(
+    members: &[aivyx_team::TeamMember],
+    default_provider: &Arc<dyn LlmProvider>,
+    default_model: &str,
+    builder: Option<&MemberProviderBuilder>,
+) -> Result<std::collections::HashMap<String, aivyx_team::SpecialistBackend>, MissionDriverError>
+{
+    let mut map = std::collections::HashMap::new();
+    for m in members {
+        if m.model.is_none() && m.base_url.is_none() {
+            continue;
+        }
+        let provider = match (&m.base_url, builder) {
+            (Some(url), Some(build)) => build(url).map_err(|e| {
+                TeamError::Config(format!(
+                    "team member {:?} base_url {url:?}: {e}",
+                    m.name
+                ))
+            })?,
+            // base_url set but no builder wired → can't honour the endpoint;
+            // fall back to the shared provider (any model override still applies).
+            _ => Arc::clone(default_provider),
+        };
+        let model = m.model.clone().unwrap_or_else(|| default_model.to_string());
+        map.insert(
+            m.name.clone(),
+            aivyx_team::SpecialistBackend { provider, model },
+        );
+    }
+    Ok(map)
 }
 
 /// Drive `id` from its current checkpoint until it pauses at a human gate or
@@ -874,6 +934,7 @@ mod tests {
             pricing: Arc::new(aivyx_cost::Pricing::default()),
             // Unbounded by default — the metering hook + halt check are skipped.
             mission_budget: aivyx_cost::MissionBudget::default(),
+            member_provider_builder: None,
         }
     }
 
@@ -900,6 +961,7 @@ mod tests {
             base_tools: vec![],
             pricing: Arc::new(aivyx_cost::Pricing::default()),
             mission_budget: aivyx_cost::MissionBudget::default(),
+            member_provider_builder: None,
         }
     }
 
@@ -1004,6 +1066,62 @@ mod tests {
         let rec = shared.snapshot(&id).unwrap();
         assert_eq!(rec.phase, TeamMissionPhase::Done);
         assert!(rec.outputs.contains_key("b"));
+    }
+
+    // ---- Chapter Ensemble: per-role backend resolution ----
+
+    fn fake_provider() -> Arc<dyn LlmProvider> {
+        Arc::new(FakeProvider { line: "x".into(), usage: LlmUsage::default() })
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn ensemble_resolves_only_overridden_members() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let default_provider = fake_provider();
+        let mut m_model = member("a", "R", &[]);
+        m_model.model = Some("fast-model".into());
+        let mut m_url = member("b", "R", &[]);
+        m_url.base_url = Some("http://gpu-b:11434".into());
+        let m_none = member("c", "R", &[]);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls2 = Arc::clone(&calls);
+        let builder: Arc<
+            dyn Fn(&str) -> Result<Arc<dyn LlmProvider>, String> + Send + Sync,
+        > = Arc::new(move |_url| {
+            calls2.fetch_add(1, Ordering::Relaxed);
+            Ok(fake_provider())
+        });
+
+        let map = resolve_member_backends(
+            &[m_model, m_url, m_none],
+            &default_provider,
+            "default-model",
+            Some(&builder),
+        )
+        .unwrap();
+
+        // Only the two overridden members are present; the plain one isn't.
+        assert_eq!(map.len(), 2);
+        assert!(!map.contains_key("c"));
+        // model-only → keeps default provider, overrides the model.
+        assert_eq!(map["a"].model, "fast-model");
+        // base_url-only → built provider (builder called once), default model.
+        assert_eq!(map["b"].model, "default-model");
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn ensemble_base_url_falls_back_when_no_builder() {
+        // base_url set but no builder wired → shared provider, model override kept.
+        let default_provider = fake_provider();
+        let mut m = member("a", "R", &[]);
+        m.base_url = Some("http://x".into());
+        m.model = Some("mm".into());
+        let map =
+            resolve_member_backends(&[m], &default_provider, "dm", None).unwrap();
+        assert_eq!(map["a"].model, "mm");
     }
 
     #[tokio::test]
@@ -1131,6 +1249,8 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
             trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
         }
     }
 

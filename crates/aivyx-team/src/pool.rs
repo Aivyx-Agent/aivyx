@@ -271,6 +271,8 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
             trust_ceiling: tier,
+            model: None,
+            base_url: None,
         }
     }
 

@@ -1,5 +1,31 @@
 # Team Roster — create & edit the Nonagon from the Studio (Chapter Roster)
 
+> **Per-role models (Chapter Ensemble).** Each `[[team.member]]` may declare its
+> own LLM backend, so a team is no longer one-model-fits-all:
+>
+> ```toml
+> [[team.member]]
+> name = "coordinator"
+> # ... role / soul / scopes ...
+> model = "qwen3:30b-a3b"          # the big brain for the lead
+>
+> [[team.member]]
+> name = "researcher"
+> model = "qwen3:8b"               # a fast/cheap model for grunt work
+> base_url = "http://gpu-b:11434"  # a second endpoint → TRUE parallel
+> ```
+>
+> Both are optional; omit them and the member uses the team's shared default
+> provider + model (byte-identical to before). `model` alone gives role-fit +
+> cost (and parallelism on a cloud provider, whose model endpoints run
+> independently). `base_url` points a role at a different **same-kind** endpoint
+> (e.g. a second Ollama / GPU) for true local parallelism instead of serializing
+> on one server. v1 supports the **Ollama** kind for `base_url`; a per-role
+> endpoint uses default Ollama options (not the operator's `[ollama]` tuning),
+> and cross-provider-kind teams (e.g. a cloud lead + local grunts) are a later
+> step. The mission driver builds each role's backend at assembly; specialists
+> without an override share the daemon's provider.
+
 > **Status:** ✅ **COMPLETE (RO.0–RO.5).** The write half of [Chapter Y](DAEMON_TEAMS.md)'s
 > read-only Teams screen and the deferred "Teams" step of [Chapter Genesis](ONBOARDING.md):
 > the operator can now **define a team** — pick the lead, add/remove specialists

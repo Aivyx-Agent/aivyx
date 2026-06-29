@@ -27,6 +27,8 @@ fn member(
         tool_allowlist: tools.iter().map(|s| s.to_string()).collect(),
         capability_scopes,
         trust_ceiling: TrustTier::Trusted,
+        model: None,
+        base_url: None,
     }
 }
 

@@ -4333,6 +4333,10 @@ fn TeamsPanel() -> Element {
                                 tool_allowlist: vec!["team.message".to_string()],
                                 capability_scopes: Vec::new(),
                                 trust_ceiling: TrustTier::SemiTrusted,
+                                // Chapter Ensemble — per-role model/endpoint
+                                // default to the team's shared backend.
+                                model: None,
+                                base_url: None,
                             });
                         }
                     },

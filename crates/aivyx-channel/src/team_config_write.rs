@@ -72,6 +72,8 @@ mod tests {
             tool_allowlist: vec![],
             capability_scopes: vec![],
             trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
         }
     }
 

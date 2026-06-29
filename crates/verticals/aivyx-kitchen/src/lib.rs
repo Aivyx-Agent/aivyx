@@ -32,6 +32,8 @@ fn member(name: &str, role: &str, soul: &str, tools: &[&str], scopes: &[&str]) -
         tool_allowlist: tools.iter().map(|s| s.to_string()).collect(),
         capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
         trust_ceiling: TrustTier::Trusted,
+        model: None,
+        base_url: None,
     }
 }
 
