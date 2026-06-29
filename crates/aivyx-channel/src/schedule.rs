@@ -42,6 +42,13 @@ pub struct ScheduleRecord {
     /// backwards compatibility.
     #[serde(default)]
     pub notify_when: aivyx_config::NotifyWhen,
+    /// Chapter Ledger (#6 fix) — when set, the scheduler runs a **deterministic
+    /// daemon-assembled report** instead of firing the `prompt` as an LLM turn.
+    /// The only value today is `"digest"` (the weekly digest, built from the
+    /// memory substrate so it can't confabulate). `None` (default) = the normal
+    /// LLM-prompt routine, so every pre-Ledger record deserializes unchanged.
+    #[serde(default)]
+    pub report_kind: Option<String>,
 }
 
 impl ScheduleRecord {
@@ -64,6 +71,7 @@ impl ScheduleRecord {
             notify_target: None,
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
         })
     }
 

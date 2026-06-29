@@ -754,11 +754,25 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let _scheduler_handle = schedule_store.map(|store| {
         let sched_dispatch = trigger_dispatch.clone();
         let sched_shutdown = shutdown.clone();
+        // Chapter Ledger — the deterministic-digest context, built where the
+        // memory + proposal handles live. `report_kind = "digest"` schedules use
+        // this instead of an LLM turn (so the digest can't confabulate, #6).
+        let report_ctx = memory.clone().map(|mem| {
+            let mut builder = crate::digest::WeeklyDigestBuilder::new(mem);
+            if let Some(p) = &persona_proposal_log {
+                builder = builder.with_proposals(Arc::clone(p));
+            }
+            crate::daemon_scheduler::ReportContext {
+                digest: Arc::new(builder),
+                notify: notify_dispatcher.clone(),
+            }
+        });
         tokio::spawn(async move {
             crate::daemon_scheduler::run_scheduler(
                 sched_dispatch,
                 store,
                 sched_shutdown,
+                report_ctx,
             )
             .await;
         })

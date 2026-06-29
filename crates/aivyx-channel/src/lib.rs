@@ -98,6 +98,7 @@ pub mod loop_tool;
 /// re-arming until the backlog is empty or a hard cap is hit.
 pub mod loop_driver;
 pub mod loop_resume;
+pub mod digest;
 /// Phase 174 — driver-side gate verification. The `GateRunner`
 /// trait + the production `ShellGateRunner` that runs the
 /// operator-configured gate command (build/tests) so the driver

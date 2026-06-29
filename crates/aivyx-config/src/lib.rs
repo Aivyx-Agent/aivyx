@@ -1762,6 +1762,10 @@ pub struct ScheduleConfig {
     /// `Always` (today's behavior, no behavior change for
     /// pre-Phase-72 configs).
     pub notify_when: NotifyWhen,
+    /// Chapter Ledger — `report_kind = "digest"` makes the scheduler run a
+    /// deterministic daemon-assembled report instead of the LLM `prompt`.
+    /// `None` (default) = normal LLM-prompt routine.
+    pub report_kind: Option<String>,
 }
 
 /// One reflection-schedule entry loaded from
@@ -3981,6 +3985,9 @@ struct RawSchedule {
     /// Phase 72 — conditional dispatch gate. Default `"always"`.
     #[serde(default)]
     notify_when: Option<String>,
+    /// Chapter Ledger — `report_kind = "digest"` → deterministic report.
+    #[serde(default)]
+    report_kind: Option<String>,
 }
 
 fn default_reflection_lookback_secs() -> u64 {
@@ -6513,6 +6520,7 @@ impl AivyxConfig {
                 notify_target: r.notify_target,
                 notify_targets,
                 notify_when,
+                report_kind: r.report_kind,
             });
         }
 

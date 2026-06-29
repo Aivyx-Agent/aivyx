@@ -897,7 +897,7 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
          # --------------------------------------------------------------------------\n",
     );
 
-    let mut emit = |name: &str, cron: &str, prompt: &str, enabled: bool, notify: &str| {
+    let mut emit = |name: &str, cron: &str, prompt: &str, enabled: bool, notify: &str, report_kind: Option<&str>| {
         out.push_str(&format!(
             "\n[[schedule]]\n\
              name = \"{}\"\n\
@@ -913,13 +913,21 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
             b(enabled),
             notify,
         ));
+        // Chapter Ledger — a deterministic daemon-assembled report (no LLM in
+        // the content path, so it can't confabulate). The `prompt` above is kept
+        // only as human documentation; the scheduler ignores it for a report.
+        if let Some(kind) = report_kind {
+            out.push_str(&format!("report_kind = \"{kind}\"\n"));
+        }
     };
 
-    emit("environment-review", "0 0 7 * * *", ROUTINE_ENVIRONMENT_REVIEW, core_enabled, "on_completed_non_empty");
-    emit("nightly-reflection", "0 0 2 * * *", ROUTINE_NIGHTLY_REFLECTION, core_enabled, "on_completed_non_empty");
-    emit("health-check", "0 0 */6 * * *", ROUTINE_HEALTH_CHECK, core_enabled, "on_failed");
-    emit("weekly-digest", "0 0 8 * * 1", ROUTINE_WEEKLY_DIGEST, core_enabled, "on_completed_non_empty");
-    emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_non_empty");
+    emit("environment-review", "0 0 7 * * *", ROUTINE_ENVIRONMENT_REVIEW, core_enabled, "on_completed_non_empty", None);
+    emit("nightly-reflection", "0 0 2 * * *", ROUTINE_NIGHTLY_REFLECTION, core_enabled, "on_completed_non_empty", None);
+    emit("health-check", "0 0 */6 * * *", ROUTINE_HEALTH_CHECK, core_enabled, "on_failed", None);
+    // Chapter Ledger (#6 fix) — the weekly digest is now a deterministic report
+    // built from the memory substrate, not an LLM turn that confabulates.
+    emit("weekly-digest", "0 0 8 * * 1", ROUTINE_WEEKLY_DIGEST, core_enabled, "on_completed_non_empty", Some("digest"));
+    emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_non_empty", None);
 
     out
 }
@@ -2940,6 +2948,32 @@ mod tests {
         let r = ROUTINE_NIGHTLY_REFLECTION.to_lowercase();
         assert!(r.contains("first read"), "reflection must read before reflecting");
         assert!(r.contains("never invent"), "reflection must forbid invention");
+    }
+
+    /// Chapter Ledger (#6 fix) — the weekly-digest routine is rendered as a
+    /// DETERMINISTIC report (`report_kind = "digest"`), so the scheduler builds
+    /// it from the memory substrate instead of an LLM turn that confabulates.
+    /// Other routines stay LLM prompts (no report_kind).
+    #[test]
+    fn weekly_digest_is_a_deterministic_report() {
+        use toml_edit::DocumentMut;
+        let cfg =
+            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let toml = render_default_schedules(&cfg);
+        let doc: DocumentMut = toml.parse().unwrap();
+        let scheds = doc["schedule"].as_array_of_tables().unwrap();
+        let kind_of = |name: &str| -> Option<String> {
+            scheds
+                .iter()
+                .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+                .and_then(|t| t.get("report_kind").and_then(|v| v.as_str()))
+                .map(String::from)
+        };
+        assert_eq!(kind_of("weekly-digest").as_deref(), Some("digest"));
+        // The LLM routines carry no report_kind.
+        assert_eq!(kind_of("environment-review"), None);
+        assert_eq!(kind_of("trend-scan"), None);
+        assert_eq!(kind_of("health-check"), None);
     }
 
     /// Backlog #7 — list items with internal commas (parenthetical groups) must

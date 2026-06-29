@@ -63,10 +63,22 @@ pub fn config_to_records(
                 r.notify_target = c.notify_target.clone();
                 r.notify_targets = c.notify_targets.clone();
                 r.notify_when = c.notify_when;
+                r.report_kind = c.report_kind.clone();
                 r
             })
         })
         .collect()
+}
+
+/// Chapter Ledger — context the scheduler uses to run a `report_kind = "digest"`
+/// routine **deterministically** (no LLM). `None` ⇒ digest routines fall back
+/// to firing their prompt as a normal LLM turn (so the daemon still works if
+/// the builder wasn't wired).
+#[derive(Clone)]
+pub struct ReportContext {
+    pub digest: std::sync::Arc<crate::digest::WeeklyDigestBuilder>,
+    pub notify:
+        Option<std::sync::Arc<crate::notify_dispatcher::NotifyDispatcher>>,
 }
 
 /// Run the scheduler loop. This future never returns normally — it
@@ -82,13 +94,14 @@ pub async fn run_scheduler(
     dispatch: TriggerDispatch,
     store: DomainHandle,
     shutdown: CancellationToken,
+    report_ctx: Option<ReportContext>,
 ) {
     loop {
         if shutdown.is_cancelled() {
             return;
         }
 
-        let sleep_dur = match tick(&dispatch, &store).await {
+        let sleep_dur = match tick(&dispatch, &store, report_ctx.as_ref()).await {
             Ok(dur) => dur,
             Err(e) => {
                 eprintln!("aivyx scheduler: tick error: {e}");
@@ -108,6 +121,7 @@ pub async fn run_scheduler(
 async fn tick(
     dispatch: &TriggerDispatch,
     store: &DomainHandle,
+    report_ctx: Option<&ReportContext>,
 ) -> Result<Duration, String> {
     let schedules = schedule::list_schedules(store)
         .await
@@ -129,7 +143,7 @@ async fn tick(
 
         if next_fire <= now {
             if !already_fired_in_window(sched, next_fire) {
-                fire_schedule(dispatch, store, sched).await;
+                fire_schedule(dispatch, store, sched, report_ctx).await;
             }
             // Recompute next fire after this one.
             if let Some(after_now) = sched.next_fire_time_after(now) {
@@ -187,7 +201,24 @@ async fn fire_schedule(
     dispatch: &TriggerDispatch,
     store: &DomainHandle,
     sched: &ScheduleRecord,
+    report_ctx: Option<&ReportContext>,
 ) {
+    // Chapter Ledger — a `report_kind = "digest"` routine runs a deterministic
+    // daemon-assembled digest instead of an LLM turn, so it cannot confabulate
+    // (#6). Falls through to the normal LLM path if no builder is wired.
+    if sched.report_kind.as_deref() == Some("digest") {
+        if let Some(ctx) = report_ctx {
+            run_digest_report(ctx, sched).await;
+            update_last_fired(store, sched).await;
+            return;
+        }
+        eprintln!(
+            "aivyx scheduler: schedule {:?} is report_kind=digest but no digest \
+             builder is wired — falling back to the LLM prompt",
+            sched.schedule_id
+        );
+    }
+
     dispatch
         .fire(
             TriggerSource::Cron,
@@ -199,6 +230,47 @@ async fn fire_schedule(
         )
         .await;
 
+    update_last_fired(store, sched).await;
+}
+
+/// Chapter Ledger — build the deterministic digest (since the last fire) +
+/// persist it + push it to any notify targets. No LLM in the content path.
+async fn run_digest_report(ctx: &ReportContext, sched: &ScheduleRecord) {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Cover everything since the last fire (ms→s); first run → since 0.
+    let since_secs = sched.last_fired_at.map(|ms| ms / 1000).unwrap_or(0);
+
+    let text = ctx.digest.run(since_secs, now_secs).await;
+    eprintln!(
+        "aivyx scheduler: deterministic digest written ({} chars) for {:?}",
+        text.len(),
+        sched.schedule_id
+    );
+
+    // Deliver to notify targets (the digest text is always a real, non-empty,
+    // successful completion). `OnFailed` opts out (a digest never fails);
+    // `Always` / `OnCompletedNonEmpty` deliver the briefing.
+    if !sched.notify_targets.is_empty()
+        && sched.notify_when != aivyx_config::NotifyWhen::OnFailed
+    {
+        if let Some(notify) = &ctx.notify {
+            let subject = format!("cron: {}", sched.schedule_id);
+            for target in &sched.notify_targets {
+                if let Err(e) = notify.dispatch(target, &text, Some(&subject)).await {
+                    eprintln!(
+                        "aivyx scheduler: digest notify to {target:?} failed: {e}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Stamp `last_fired_at = now` (shared by both fire paths).
+async fn update_last_fired(store: &DomainHandle, sched: &ScheduleRecord) {
     // Update last_fired_at regardless of outcome.
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -318,6 +390,7 @@ mod tests {
             notify_target: None,
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert_eq!(records.len(), 1);
@@ -338,6 +411,7 @@ mod tests {
             notify_target: None,
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
         }];
         assert!(config_to_records(&configs).is_err());
     }
@@ -354,6 +428,7 @@ mod tests {
             notify_target: None,
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(!records[0].enabled);
@@ -371,6 +446,7 @@ mod tests {
             notify_target: None,
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(records[0].wrap_mission);

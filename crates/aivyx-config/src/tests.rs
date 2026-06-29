@@ -4379,6 +4379,23 @@ notify_target = "phone"
 }
 
 #[test]
+fn ledger_schedule_report_kind_parses() {
+    // Chapter Ledger — `report_kind = "digest"` parses; absent → None.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[[schedule]]\nname = \"weekly-digest\"\ncron = \"0 0 8 * * 1\"\n\
+         prompt = \"unused for a report\"\nreport_kind = \"digest\"\n\
+         \n[[schedule]]\nname = \"env\"\ncron = \"0 0 7 * * *\"\nprompt = \"go\"\n",
+        "ledger-report-kind",
+    );
+    let digest = cfg.schedules.iter().find(|s| s.name == "weekly-digest").unwrap();
+    assert_eq!(digest.report_kind.as_deref(), Some("digest"));
+    let env_sched = cfg.schedules.iter().find(|s| s.name == "env").unwrap();
+    assert_eq!(env_sched.report_kind, None);
+    drop(env);
+}
+
+#[test]
 fn schedule_notify_target_unknown_target_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-unknown");
