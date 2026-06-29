@@ -4136,7 +4136,7 @@ fn phase_label(p: TeamMissionPhase) -> &'static str {
         TeamMissionPhase::AwaitingApproval => "awaiting approval",
         TeamMissionPhase::Done => "done",
         TeamMissionPhase::Rejected => "rejected",
-        TeamMissionPhase::Halted => "halted (budget)",
+        TeamMissionPhase::Halted => "halted",
     }
 }
 

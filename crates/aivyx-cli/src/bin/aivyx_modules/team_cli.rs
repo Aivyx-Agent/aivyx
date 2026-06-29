@@ -154,7 +154,7 @@ fn phase_label(phase: TeamMissionPhase) -> &'static str {
         TeamMissionPhase::AwaitingApproval => "awaiting approval",
         TeamMissionPhase::Done => "done",
         TeamMissionPhase::Rejected => "rejected",
-        TeamMissionPhase::Halted => "halted (budget)",
+        TeamMissionPhase::Halted => "halted",
     }
 }
 
@@ -205,6 +205,12 @@ fn render_mission_status(record: &TeamMissionRecord) -> String {
              (`aivyx team approve|reject {} {gate}`)\n",
             record.id
         ));
+    }
+    // Chapter Belay — when halted, show *why* (budget cap vs operator abort).
+    if record.phase == TeamMissionPhase::Halted {
+        if let Some(reason) = &record.halt_reason {
+            out.push_str(&format!("  reason: {reason}\n"));
+        }
     }
     out.push_str("  steps:\n");
     for step in &record.plan.steps {
@@ -283,6 +289,22 @@ mod tests {
         assert!(out.contains("[pending  ] write"));
         assert!(out.contains("researcher (delegate)"));
         assert!(out.contains("reviewer (gate)"));
+    }
+
+    #[test]
+    fn halted_shows_the_real_reason_not_a_hardcoded_budget() {
+        // Chapter Belay / backlog #10 — Halted now has >1 cause; the renderer
+        // must show the actual reason, not always say "(budget)".
+        let mut rec = sample(TeamMissionPhase::Halted, None);
+        rec.halt_reason = Some("aborted by operator".to_string());
+        let out = render_mission_status(&rec);
+        assert!(out.contains("phase: halted"));
+        assert!(!out.contains("(budget)"), "must not hardcode budget");
+        assert!(out.contains("reason: aborted by operator"));
+        // The list view stays columnar — just the short phase, no reason spill.
+        let list = render_mission_list(&[rec]);
+        assert!(list.contains("halted"));
+        assert!(!list.contains("aborted by operator"));
     }
 
     #[test]

@@ -677,26 +677,31 @@ async fn drive(
         RunYield::Done(report) => {
             record.outputs = report.outputs;
             record.pending_gate = None;
+            // Chapter Belay — stashed here so it can be set on `record` after the
+            // phase assignment (mutating `record` inside `record.phase = match …`
+            // would be a borrow conflict).
+            let mut halted_reason: Option<String> = None;
             record.phase = match report.status {
                 MissionStatus::Completed => TeamMissionPhase::Done,
                 MissionStatus::GateRejected { .. } => TeamMissionPhase::Rejected,
-                // Chapter Ballast — a per-mission budget cap tripped at a wave
-                // boundary. Land the reason on the audit chain so the operator
-                // reviewing later sees exactly why the mission stopped (the
-                // same legibility the headless-refusal path gets), and preserve
-                // the partial outputs already captured above.
+                // A halt at a wave boundary — a per-mission budget cap (Ballast)
+                // or an operator abort (Belay). Land the reason on the audit
+                // chain (same legibility as the headless-refusal path), preserve
+                // the partial outputs above, and stash the reason for the record.
                 MissionStatus::Halted { reason } => {
                     eprintln!(
                         "aivyx team: mission {id} halted — {reason}"
                     );
                     audit.on_event(AuditTag::HeadlessRefusal {
                         run_id: id.to_string(),
-                        step: "<budget>".to_string(),
+                        step: "<halt>".to_string(),
                         reason: format!("team mission halted: {reason}"),
                     });
+                    halted_reason = Some(reason);
                     TeamMissionPhase::Halted
                 }
             };
+            record.halt_reason = halted_reason;
         }
         RunYield::AwaitingHuman { step, outputs } => {
             record.outputs = outputs;
@@ -1135,6 +1140,12 @@ mod tests {
         );
         assert!(rec.outputs.contains_key("a"), "wave 1 work preserved");
         assert!(!rec.outputs.contains_key("b"), "wave 2 never ran");
+        // Chapter Belay / backlog #10 — the halt reason is persisted (so
+        // `team status` shows *why*, not a hardcoded "budget").
+        assert!(
+            rec.halt_reason.is_some(),
+            "the halt reason should be persisted on the record"
+        );
     }
 
     /// Chapter Ballast — with no cap set, the same multi-wave mission runs to

@@ -71,6 +71,12 @@ pub struct TeamMissionRecord {
     /// The gate step id awaiting approval, set iff `phase == AwaitingApproval`.
     #[serde(default)]
     pub pending_gate: Option<String>,
+    /// Why the mission `Halted` — e.g. a per-mission budget cap detail (Chapter
+    /// Ballast) or "aborted by operator" (Chapter Belay). Set iff `phase ==
+    /// Halted`; lets the operator see *which* cause ended it rather than guessing.
+    /// `#[serde(default)]` keeps pre-existing records decoding.
+    #[serde(default)]
+    pub halt_reason: Option<String>,
     /// Chapter L — the team this mission runs (a vertical pack's `TeamConfig`).
     /// `None` ⇒ the daemon's default team (the Nonagon). Persisted so a resume
     /// after a restart re-assembles the *same* team the plan was built for.
@@ -95,6 +101,7 @@ impl TeamMissionRecord {
             outputs: BTreeMap::new(),
             phase: TeamMissionPhase::Planning,
             pending_gate: None,
+            halt_reason: None,
             config: None,
             started_at_unix_ms: now,
             updated_at_unix_ms: now,
@@ -149,6 +156,7 @@ impl TeamMissionRecord {
                 .unwrap_or_else(|| "coordinator".to_string()),
             phase: self.phase,
             pending_gate: self.pending_gate.clone(),
+            halt_reason: self.halt_reason.clone(),
             progress: ((done * 100) / total) as u16,
             steps,
         }
@@ -184,6 +192,10 @@ pub struct TeamMissionView {
     /// AwaitingApproval` — what `aivyx team approve|reject <id> <step>` /
     /// the approve/reject affordances target.
     pub pending_gate: Option<String>,
+    /// Why the mission `Halted` (budget cap detail, or "aborted by operator"),
+    /// when `phase == Halted`. Lets a client show *which* cause ended it.
+    #[serde(default)]
+    pub halt_reason: Option<String>,
     /// Completion percent in `0..=100` (completed steps / total).
     pub progress: u16,
     pub steps: Vec<TeamStepView>,

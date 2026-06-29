@@ -912,6 +912,7 @@ mod tests {
             lead: "chef".into(),
             phase: TeamMissionPhase::AwaitingApproval,
             pending_gate: Some("approve".into()),
+            halt_reason: None,
             progress: 33,
             steps: vec![
                 TeamStepView { label: "research — researcher (delegate)".into(), state: TeamStepState::Done },
@@ -955,6 +956,7 @@ mod tests {
             lead: "coordinator".into(),
             phase: TeamMissionPhase::Rejected,
             pending_gate: None,
+            halt_reason: None,
             progress: 50,
             steps: vec![TeamStepView {
                 label: "approve — reviewer (gate)".into(),
