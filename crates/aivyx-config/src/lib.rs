@@ -3720,6 +3720,11 @@ struct RawToml {
     /// `[[tool_process]]` table-array. Phase 49 — PRODUCT.md P12.
     #[serde(default, rename = "tool_process")]
     tool_processes: Option<Vec<RawToolProcess>>,
+    /// `[applications]` — Chapter Deckhand opt-in. When enabled, synthesizes
+    /// the `aivyx-apps` tool process (unsandboxed) so the agent can use the
+    /// GUI apps open on the operator's machine.
+    #[serde(default)]
+    applications: Option<RawApplications>,
     /// `[sandbox]` section. Phase 180 — bundled default sandbox.
     #[serde(default)]
     sandbox: RawSandboxDefaults,
@@ -3895,6 +3900,18 @@ struct RawMcpServer {
 ///
 /// enabled = true   # default
 /// ```
+/// `[applications]` deserialize target (Chapter Deckhand). Opt-in toggle for
+/// the `aivyx-apps` desktop tool process.
+#[derive(Debug, Default, Deserialize)]
+struct RawApplications {
+    /// Master switch. Default off.
+    #[serde(default)]
+    enabled: Option<bool>,
+    /// Override the `aivyx-apps` binary path (default: `aivyx-apps` on PATH).
+    #[serde(default)]
+    binary_path: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawToolProcess {
     name: String,
@@ -6418,6 +6435,31 @@ impl AivyxConfig {
                 sandbox,
                 disable_sandbox: r.disable_sandbox,
             });
+        }
+
+        // Chapter Deckhand — `[applications] enabled = true` synthesizes the
+        // `aivyx-apps` tool process. It runs UNSANDBOXED on purpose: driving
+        // the open GUI apps needs the host display + input, which a sandbox
+        // would (correctly) block — the safety comes from the Trusted-only
+        // `app.*` scopes + confirm-first `app.input`, not from process
+        // isolation. Opt-in; absent/false ⇒ nothing added (byte-identical).
+        if let Some(app) = toml.applications {
+            if app.enabled.unwrap_or(false) {
+                let command = app
+                    .binary_path
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "aivyx-apps".to_string());
+                tool_processes.push(ToolProcessConfig {
+                    name: "applications".to_string(),
+                    command,
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    scope_overrides: std::collections::HashMap::new(),
+                    enabled: true,
+                    sandbox: None,
+                    disable_sandbox: true,
+                });
+            }
         }
 
         // --- [sandbox] default backend (Phase 180) -----------------

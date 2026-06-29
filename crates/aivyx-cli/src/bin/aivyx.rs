@@ -7082,6 +7082,20 @@ async fn run_async(
             backcompat_floor.push(s);
         }
     }
+    // Chapter Deckhand — when the `aivyx-apps` desktop tool process is
+    // configured (via `[applications] enabled = true`, which synthesizes a
+    // tool process named "applications"), grant the default role the `app.*`
+    // scopes its tools require. Without this the tools register but the
+    // floor-only agent holds no scope to call them (the same dead-on-arrival
+    // signature as the ollama/mcp floor grants). The ceiling intersection
+    // keeps these Trusted-only and `app.input` stays confirm-first.
+    if config_tool_processes.iter().any(|tp| tp.name == "applications") {
+        for base in ["app.read", "app.control", "app.input"] {
+            if let Some(s) = Scope::parse(base) {
+                backcompat_floor.push(s);
+            }
+        }
+    }
     // Phase 173 — when the autonomous loop is armed, grant the default role
     // (empty `capability_scopes`) the `loop.*` scopes its iterations require.
     // The loop driver fires the loop-iter prompt whose very first step is

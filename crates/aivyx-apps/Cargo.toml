@@ -1,0 +1,37 @@
+[package]
+name = "aivyx-apps"
+description = "Opt-in 'use your open applications' tool process for Aivyx (Chapter Deckhand) — Linux/X11 desktop control via xdotool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-apps"
+path = "src/main.rs"
+
+[dependencies]
+# Tool-process SDK — same multi-tool harness shape as aivyx-toolkit.
+aivyx-tool = { path = "../aivyx-tool" }
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+
+# Async runtime. `process` for shelling to xdotool / screenshot tools;
+# io-util/io-std for the harness frames; macros for #[tokio::main].
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "io-std", "process", "fs"] }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Chapter Deckhand deliberately adds NO new external Rust crates: the v1
+# Linux backend shells out to the standard `xdotool` (windows + input) and a
+# screenshot CLI. This keeps the dependency + license surface unchanged
+# (the charter's GPL-free / minimal-deps posture) and matches the
+# tool-process precedent of wrapping host commands.

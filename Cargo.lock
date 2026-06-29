@@ -67,6 +67,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-apps"
+version = "0.7.12"
+dependencies = [
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-tool",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "aivyx-audit"
 version = "0.7.12"
 dependencies = [

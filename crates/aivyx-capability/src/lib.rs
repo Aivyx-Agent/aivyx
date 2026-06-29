@@ -241,6 +241,24 @@ const KNOWN_BASES: &[&str] = &[
     //                    third-party-tool-process gating).
     "contacts.read",
     "contacts.write",
+    // Open desktop applications (Chapter Deckhand — aivyx-apps
+    // third-party tool process, opt-in via `[applications]`). Lets the
+    // agent use the GUI apps already open on the operator's own hardware.
+    // Three bases (observe / manage-windows / inject-input):
+    //   app.read    — app.list (enumerate open windows),
+    //                 app.screenshot (capture a window/screen).
+    //   app.control — app.focus (raise/focus a window — reversible).
+    //   app.input   — app.type / app.key / app.click (inject keystrokes /
+    //                 clicks into the focused app — IRREVERSIBLE, confirm-first
+    //                 via IRREVERSIBLE_BASES).
+    // All three are Trusted-tier ONLY (in CEILING_TRUSTED, absent from
+    // CEILING_SEMITRUSTED, like shell.exec / git.write): driving the GUI apps
+    // on the operator's own machine reaches the whole desktop and can't be
+    // sandboxed, so a remote/SemiTrusted adapter must never hold any of them.
+    // Even `app.read` exposes whatever is on screen.
+    "app.read",
+    "app.control",
+    "app.input",
     // mission (Phase 21 — PRODUCT.md P2, Phase 28 — list/status)
     "mission.create",
     "mission.gate",
@@ -479,6 +497,7 @@ const IRREVERSIBLE_BASES: &[&str] = &[
     "shell.spawn",        // long-running process spawn
     "net.post",           // outbound HTTP (data / money)
     "git.write",          // rewrites version history
+    "app.input",          // injects keystrokes/clicks into the live desktop
     "kitchen.order.send", // money leaves the building
     // Self-governance — already Kernel-tier (unreachable from an agent turn),
     // listed for defense-in-depth so no future wiring can auto-approve them.
@@ -1107,6 +1126,15 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // address book; contacts.delete is irreversible).
         "contacts.read",
         "contacts.write",
+        // Chapter Deckhand — aivyx-apps third-party tool process (opt-in
+        // `[applications]`). All three bases Trusted-tier ONLY: driving the GUI
+        // apps on the operator's own machine reaches the whole desktop and
+        // is inherently un-sandboxable, so a remote/SemiTrusted adapter must
+        // never hold them. `app.input` is also in IRREVERSIBLE_BASES
+        // (confirm-first when `[access] confirm_destructive` is on).
+        "app.read",
+        "app.control",
+        "app.input",
         // Kitchen / BOH vertical pack — `kitchen.read` (the read +
         // compute tool surface). Trusted-tier-only default, matching
         // the email.* / web.search / drive.* third-party-tool-process
@@ -2050,7 +2078,7 @@ mod tests {
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            90,
+            93,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

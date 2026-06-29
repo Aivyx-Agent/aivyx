@@ -232,6 +232,20 @@ base, Trusted-tier only. See the Lattice addendum in
 | `kitchen.order.send` | `kitchen.order.send` | Trusted | submit an order |
 | `kitchen.haccp.log` | `kitchen.haccp.log` | Trusted | HACCP compliance log |
 
+## Open applications (tool process `aivyx-apps`, opt-in — Chapter Deckhand)
+
+Opt-in via `[applications]`; default off. Lets the agent use the GUI apps already
+open on the operator's own machine. Linux/X11 (+ Xwayland) first; Wayland-native
+windows are a documented limitation. Both bases are Trusted-only and the
+`app.control` input tools are confirm-first (see `docs/APPLICATIONS.md`).
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `app.list` | `app.read` | Trusted | enumerate open windows (id/title/active) |
+| `app.screenshot` | `app.read` | Trusted | capture the screen (a vision model interprets it) |
+| `app.focus` | `app.control` | Trusted | raise/focus a window (reversible) |
+| `app.type` / `app.key` / `app.click` | `app.input` | Trusted | inject input — **confirm-first** (irreversible) |
+
 ---
 
 ## Tool-name → capability-scope mapping

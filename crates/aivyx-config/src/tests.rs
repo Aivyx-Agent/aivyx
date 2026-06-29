@@ -2444,6 +2444,48 @@ wordcount = "memory.read:topic:wc/**"
 }
 
 #[test]
+fn deckhand_applications_opt_in_synthesizes_unsandboxed_tool_process() {
+    // Chapter Deckhand — `[applications] enabled = true` adds the aivyx-apps
+    // tool process, unsandboxed (GUI control needs the host display).
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[applications]\nenabled = true\n",
+        "deckhand-on",
+    );
+    let app = cfg
+        .tool_processes
+        .iter()
+        .find(|t| t.name == "applications")
+        .expect("applications tool process synthesized");
+    assert_eq!(app.command, "aivyx-apps");
+    assert!(app.enabled);
+    assert!(app.disable_sandbox, "GUI control must run unsandboxed");
+
+    // Absent / disabled → nothing synthesized (byte-identical).
+    let off = load_with_toml("\n[applications]\nenabled = false\n", "deckhand-off");
+    assert!(!off.tool_processes.iter().any(|t| t.name == "applications"));
+    let absent = load_with_toml("\n", "deckhand-absent");
+    assert!(!absent.tool_processes.iter().any(|t| t.name == "applications"));
+    drop(env);
+}
+
+#[test]
+fn deckhand_applications_binary_path_override() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[applications]\nenabled = true\nbinary_path = \"/opt/aivyx-apps\"\n",
+        "deckhand-path",
+    );
+    let app = cfg
+        .tool_processes
+        .iter()
+        .find(|t| t.name == "applications")
+        .expect("synthesized");
+    assert_eq!(app.command, "/opt/aivyx-apps");
+    drop(env);
+}
+
+#[test]
 fn tool_process_disabled_entries_filtered() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-disabled");
