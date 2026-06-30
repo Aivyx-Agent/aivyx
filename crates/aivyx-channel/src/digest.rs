@@ -23,8 +23,9 @@ use crate::persona_proposal::{PersistentPersonaProposalLog, ProposalStatusFilter
 /// Topics excluded from the digest: the pruned-context archives (machine
 /// bookkeeping, not "activity") and the digest topic itself (so a digest never
 /// summarizes its own prior entries — the exact loop that let the old LLM
-/// digest regenerate its own fabrications).
-const EXCLUDE_PREFIX: &str = "context:pruned:";
+/// digest regenerate its own fabrications). Shares the one internal-topic
+/// definition with operator-facing listings (#11).
+use crate::prune_sink::INTERNAL_TOPIC_PREFIX as EXCLUDE_PREFIX;
 /// The memory topic the digest is written to.
 pub const DIGEST_TOPIC: &str = "weekly-digest";
 /// Per-entry snippet cap so one long memory can't blow up the digest.

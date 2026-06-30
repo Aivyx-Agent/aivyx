@@ -4214,7 +4214,17 @@ async fn handle_query(
                 };
             };
             match mem.list_topics().await {
-                Ok(topics) => QueryResponsePayload::ListMemoryTopics { topics },
+                // #11 — hide internal/machine topics (the per-session
+                // `context:pruned:*` archives) from operator-facing listings:
+                // this one IPC backs both `aivyx memory list` and the Studio
+                // Memory browser. The entries stay reachable by exact
+                // `memory show <topic>`; only the cluttered listing is filtered.
+                Ok(topics) => QueryResponsePayload::ListMemoryTopics {
+                    topics: topics
+                        .into_iter()
+                        .filter(|t| !crate::prune_sink::is_internal_topic(t))
+                        .collect(),
+                },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "memory_list_failed".into(),
                     message: e.to_string(),
