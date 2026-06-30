@@ -31,6 +31,7 @@
 #![allow(dead_code)]
 
 pub mod agent;
+pub mod claim_check;
 pub mod gate_policy;
 pub mod llm_planner;
 pub mod planner;

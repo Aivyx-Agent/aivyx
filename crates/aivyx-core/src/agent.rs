@@ -637,11 +637,29 @@ impl Agent for ConcreteAgent {
 
         let duration = start.elapsed();
         let outcome = match loop_outcome {
-            LoopOutcome::Completed => TurnOutcome::Completed {
-                final_message,
-                tool_calls_made,
-                duration,
-            },
+            LoopOutcome::Completed => {
+                // Chapter Candor (#12) — append an honest note if the message
+                // claimed a concrete action whose tool was never called this
+                // turn. Tool names resolved from the turn's observations via the
+                // registry; conservative + non-blocking.
+                let called_tools: Vec<String> = observed
+                    .iter()
+                    .filter_map(|o| self.tools.get(o.tool_id).map(|t| t.name().to_string()))
+                    .collect();
+                for note in
+                    crate::claim_check::detect_unfulfilled_claims(&final_message, &called_tools)
+                {
+                    if !final_message.ends_with('\n') {
+                        final_message.push('\n');
+                    }
+                    final_message.push_str(&format!("\n⚠ {note}"));
+                }
+                TurnOutcome::Completed {
+                    final_message,
+                    tool_calls_made,
+                    duration,
+                }
+            }
             LoopOutcome::Cancelled => TurnOutcome::Cancelled { tool_calls_made },
             LoopOutcome::TimedOut => TurnOutcome::TimedOut {
                 tool_calls_made,
