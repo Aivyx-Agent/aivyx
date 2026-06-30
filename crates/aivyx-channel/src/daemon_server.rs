@@ -5321,7 +5321,17 @@ async fn build_memory_graph(
 > {
     // Node entry-count cap — a node's size is a rough heat, not an exact tally.
     const NODE_COUNT_CAP: usize = 200;
-    let topics = mem.list_topics().await.map_err(|e| e.to_string())?;
+    // #11/#D — drop internal `context:pruned:*` topics so the MG topic
+    // cloud shows the user's knowledge, not the daemon's prune bookkeeping
+    // (the #11 filter covered `memory list` + the wiki/Lattice graph, but
+    // this co-occurrence graph read its own raw `list_topics`).
+    let topics: Vec<String> = mem
+        .list_topics()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|t| !crate::prune_sink::is_internal_topic(t))
+        .collect();
     let mut nodes = Vec::with_capacity(topics.len());
     for topic in &topics {
         let entry_count = mem
@@ -5345,7 +5355,14 @@ async fn build_memory_graph(
             .top_affinities(now_secs, capped)
             .await
             .map(|p| p.top_pairs)
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            // Drop any edge touching an internal topic on either end.
+            .filter(|p| {
+                !crate::prune_sink::is_internal_topic(&p.a)
+                    && !crate::prune_sink::is_internal_topic(&p.b)
+            })
+            .collect(),
         None => Vec::new(),
     };
     Ok((nodes, edges))
@@ -6931,6 +6948,10 @@ mod tests {
         mem.put("rust", "borrow checker note").await.unwrap();
         mem.put("rust", "lifetimes note").await.unwrap();
         mem.put("ops", "deploy runbook").await.unwrap();
+        // #D — an internal prune-bookkeeping topic must not appear as a node.
+        mem.put("context:pruned:abc-123", "23 messages pruned")
+            .await
+            .unwrap();
 
         let (nodes, edges) = build_memory_graph(&mem, None, 40).await.unwrap();
         assert!(edges.is_empty(), "no ledger ⇒ a topic cloud (no edges)");
@@ -6938,6 +6959,10 @@ mod tests {
         assert_eq!(rust.entry_count, 2);
         let ops = nodes.iter().find(|n| n.topic == "ops").expect("ops node");
         assert_eq!(ops.entry_count, 1);
+        assert!(
+            !nodes.iter().any(|n| n.topic.starts_with("context:pruned:")),
+            "internal prune topics must be filtered from the graph cloud"
+        );
     }
 
     #[test]
