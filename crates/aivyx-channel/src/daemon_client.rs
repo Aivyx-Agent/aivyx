@@ -1663,6 +1663,32 @@ async fn send_query(
     loop {
         match decode_frame::<DaemonEnvelope>(&buf) {
             Ok((DaemonEnvelope::QueryResponse { payload, .. }, _)) => return Ok(payload),
+            // The daemon delivers a take-once `RecoveryNotice` to the first
+            // frontend that connects after an unclean restart — it arrives
+            // between `DaemonReady` and our `QueryResponse` (this one-shot
+            // query connection skips the session handshake, so unlike the
+            // session path it meets the notice here). It is informational:
+            // skip past it and keep reading. Without this arm the *first*
+            // query after any daemon restart fails (observed live as the
+            // "memory list/wiki transient flakiness").
+            Ok((
+                DaemonEnvelope::RecoveryNotice {
+                    lost_sessions,
+                    lost_turns,
+                    ..
+                },
+                consumed,
+            )) => {
+                buf.drain(..consumed);
+                if !lost_sessions.is_empty() || !lost_turns.is_empty() {
+                    eprintln!(
+                        "aivyx: daemon recovered from an unclean shutdown — \
+                         {} session(s) and {} in-flight turn(s) were lost.",
+                        lost_sessions.len(),
+                        lost_turns.len(),
+                    );
+                }
+            }
             Ok((other, consumed)) => {
                 buf.drain(..consumed);
                 return Err(DaemonError::Protocol(format!(
@@ -1841,6 +1867,58 @@ mod tests {
         assert_eq!(session.daemon_version.as_deref(), Some("0.1"));
 
         let _ = session.disconnect().await;
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// A fake daemon that emits the take-once `RecoveryNotice` between
+    /// `DaemonReady` and the `QueryResponse` — what a real daemon sends
+    /// to the first frontend after an unclean restart. `send_query` must
+    /// skip it and still return the response (the one-shot query path
+    /// skips the session handshake, so it meets the notice here — the
+    /// observed `aivyx memory wiki`/`list` post-restart failure).
+    #[tokio::test]
+    async fn send_query_skips_recovery_notice_before_the_response() {
+        use aivyx_ipc::protocol::QueryResponsePayload;
+
+        let sock = std::env::temp_dir()
+            .join(format!("aivyx-qrecov-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&sock).expect("bind fake daemon");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let ready = encode_frame(&DaemonEnvelope::DaemonReady {
+                version: "0.1".into(),
+            })
+            .expect("encode ready");
+            let notice = encode_frame(&DaemonEnvelope::RecoveryNotice {
+                lost_sessions: vec![],
+                lost_turns: vec![],
+                stale_since: 7,
+            })
+            .expect("encode notice");
+            stream.write_all(&ready).await.expect("write ready");
+            stream.write_all(&notice).await.expect("write notice");
+            // Read the client's Query frame, then answer it.
+            let mut tmp = [0u8; 2048];
+            let _ = stream.read(&mut tmp).await;
+            let resp = encode_frame(&DaemonEnvelope::QueryResponse {
+                id: "q1".into(),
+                payload: QueryResponsePayload::ListWikiPages { pages: vec![] },
+            })
+            .expect("encode resp");
+            stream.write_all(&resp).await.expect("write resp");
+            let _ = stream.read(&mut tmp).await;
+        });
+
+        let payload = send_query(&sock, "q1", QueryPayload::ListWikiPages)
+            .await
+            .expect("send_query must skip the RecoveryNotice and return");
+        assert!(matches!(
+            payload,
+            QueryResponsePayload::ListWikiPages { .. }
+        ));
+
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
     }

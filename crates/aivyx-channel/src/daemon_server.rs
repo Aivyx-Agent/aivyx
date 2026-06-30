@@ -4311,7 +4311,20 @@ async fn handle_query(
             const GRAPH_QUERY_MAX_LIMIT: u32 = 500;
             let cap = limit.clamp(1, GRAPH_QUERY_MAX_LIMIT) as usize;
             match (store.entities().await, store.all_triples().await) {
-                (Ok(entities), Ok(mut edges)) => {
+                (Ok(mut entities), Ok(mut edges)) => {
+                    // #B — hide conversation-mechanics noise (chat/messages/
+                    // tool bookkeeping) the extractor learned to skip only
+                    // recently, so triples synthesized before the fix vanish
+                    // from the CLI + Studio without a store migration.
+                    use crate::knowledge_graph::{
+                        is_mechanical_entity, is_mechanical_predicate,
+                    };
+                    edges.retain(|e| {
+                        !is_mechanical_entity(&e.subject)
+                            && !is_mechanical_entity(&e.object)
+                            && !is_mechanical_predicate(&e.predicate)
+                    });
+                    entities.retain(|e| !is_mechanical_entity(&e.name));
                     // Strongest relations first; cap the edge set.
                     edges.sort_by(|a, b| {
                         b.mentions

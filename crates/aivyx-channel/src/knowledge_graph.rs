@@ -402,6 +402,47 @@ pub fn traverse(
     out
 }
 
+/// Whether a canonicalized (lowercased) entity is *conversation
+/// mechanics* rather than domain knowledge. Small local models routinely
+/// "extract" triples about the chat itself — `conversation history
+/// --[contains]--> messages`, `assistant --[tool_call]--> web_search`,
+/// `1 messages --[pruned-from]--> conversation history` — which is pure
+/// noise in a knowledge graph about the user and their world. We drop any
+/// triple touching such an entity on either end. Observed live on the
+/// dogfood rig; the substrings cover the recurring offenders without
+/// catching real noun phrases (a PA's notes rarely name "the
+/// conversation" as a subject of fact).
+pub(crate) fn is_mechanical_entity(e: &str) -> bool {
+    const MECH_SUBSTR: &[&str] =
+        &["conversation", "message", "pruned", "assistant"];
+    if MECH_SUBSTR.iter().any(|m| e.contains(m)) {
+        return true;
+    }
+    const MECH_EXACT: &[&str] = &[
+        "memory",
+        "relevant context",
+        "context",
+        "note",
+        "notes",
+        "chat",
+        "chat history",
+        "tool",
+        "tools",
+        "tool call",
+        "web_search",
+    ];
+    MECH_EXACT.contains(&e)
+}
+
+/// Whether a canonicalized predicate describes a *mechanics* relation
+/// (the bookkeeping of pruning / tool dispatch) rather than a fact.
+pub(crate) fn is_mechanical_predicate(p: &str) -> bool {
+    p.contains("prune")
+        || p.contains("recall")
+        || p == "tool_call"
+        || p == "tool-call"
+}
+
 // ---------------------------------------------------------------------------
 // GraphExtractor — Chapter Lattice (LT.2)
 // ---------------------------------------------------------------------------
@@ -512,7 +553,11 @@ impl GraphExtractor {
          replaces, owns, precedes, follows. If none fits, use a short \
          relation label of your own. Extract ONLY relations the notes \
          actually state — do not invent, infer beyond the text, or add \
-         commentary. Use concise noun-phrase entities. If the notes state \
+         commentary. Extract DOMAIN knowledge about the user and the world \
+         the notes describe — NEVER facts about the conversation itself, \
+         messages, the assistant, memory, or which tools were called; ignore \
+         any note that merely records that messages were pruned or which \
+         tool ran. Use concise noun-phrase entities. If the notes state \
          no clear relations, output `[]`. No prose, no markdown fences."
     }
 
@@ -590,6 +635,15 @@ impl GraphExtractor {
             // Reject empties and self-loops (an entity related to itself
             // by the same name is noise).
             if s.is_empty() || p.is_empty() || o.is_empty() || s == o {
+                continue;
+            }
+            // #B — drop conversation-mechanics triples (chat/messages/tool
+            // bookkeeping) the small model extracts about the session
+            // itself rather than the user's domain.
+            if is_mechanical_entity(&s)
+                || is_mechanical_entity(&o)
+                || is_mechanical_predicate(&p)
+            {
                 continue;
             }
             *counts.entry((s, p, o)).or_insert(0) += 1;
@@ -743,6 +797,40 @@ pub async fn run_graph_sweep_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mechanical_entities_and_predicates_are_rejected() {
+        // The exact noise observed on the dogfood rig's graph.
+        for noise in [
+            "conversation history",
+            "messages",
+            "1 messages",
+            "2 messages",
+            "assistant",
+            "assistant memory",
+            "assistant's memory",
+            "relevant context",
+            "notes",
+            "web_search",
+        ] {
+            assert!(is_mechanical_entity(noise), "{noise} should be mechanical");
+        }
+        // Real domain entities must survive.
+        for keep in [
+            "flat white",
+            "home airport",
+            "ethiopian single-origin beans",
+            "sydney",
+            "ashwagandha",
+        ] {
+            assert!(!is_mechanical_entity(keep), "{keep} should be kept");
+        }
+        assert!(is_mechanical_predicate("pruned-from"));
+        assert!(is_mechanical_predicate("recalled-from"));
+        assert!(is_mechanical_predicate("tool_call"));
+        assert!(!is_mechanical_predicate("located-in"));
+        assert!(!is_mechanical_predicate("uses"));
+    }
     use std::sync::Arc;
 
     async fn store() -> PersistentGraphStore {
