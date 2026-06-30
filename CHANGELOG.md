@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.19] — 2026-06-30
+
+### Changed
+
+- **The release pipeline retries transient crates.io network failures.** A
+  `.cargo/config.toml` with `[net] retry = 10` plus a step-level retry around
+  `cargo install` in the desktop build stop the recurring "curl failed / HTTP2
+  framing layer" flakes that needed a manual rerun each release.
+- **The loop's completion judge logs its verdict.** When `[loop]
+  verify_completion` is on, the daemon now logs each ACCEPT/REJECT decision (and
+  the reason) instead of gating silently — so an operator can see why a story was
+  held back or accepted.
+
 ## [0.7.18] — 2026-06-30
 
 ### Added
