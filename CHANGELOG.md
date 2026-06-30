@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.18] — 2026-06-30
+
+### Added
+
+- **The agent owns up when it claims an action it didn't take (Chapter Candor).**
+  After a turn, Aivyx compares what its reply claims against the tools it actually
+  called, and appends an honest note if it said it did something (e.g. "saved to
+  memory", "scheduled a routine", "sent a notification") without the matching tool
+  call. Non-blocking — it annotates, never breaks the turn — and upholds the
+  agent's honesty contract instead of quietly papering over a dropped step.
+
 ## [0.7.17] — 2026-06-30
 
 ### Fixed
