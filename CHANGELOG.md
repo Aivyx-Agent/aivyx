@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.20] — 2026-07-01
+
+### Fixed
+
+- **Auto-delegated team missions no longer fail and retry (and can no longer skip
+  a doable story).** The autonomous loop's `delegate_above` path could hand a
+  story to the team, have the mission error out, retry, and eventually skip the
+  story — wasting work. The cause was a case-sensitive specialist lookup: the
+  planner names a specialist "Researcher" but the roster is "researcher", so the
+  mission errored with "no specialist". Specialist matching is now
+  case-insensitive. (Unattended decompositions also no longer emit approval gates
+  that can't be satisfied without an operator.)
+
 ## [0.7.19] — 2026-06-30
 
 ### Changed
