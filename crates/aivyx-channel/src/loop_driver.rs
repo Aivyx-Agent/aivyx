@@ -178,6 +178,63 @@ async fn write_progress_note(
     }
 }
 
+/// Chapter Foreman follow-up — how many times a single story may fail
+/// auto-delegation in a run before it is skipped. After this, re-running a full
+/// (slow, costly) team mission every iteration is clearly not productive, so the
+/// story is marked `Skipped` and the loop moves on to other work.
+const MAX_DELEGATION_ATTEMPTS: u32 = 2;
+
+/// Record a failed auto-delegation of `story_id`: bump its per-run attempt
+/// count, and once it reaches [`MAX_DELEGATION_ATTEMPTS`] mark the story
+/// `Skipped` (a resolution → progress) instead of leaving it to be re-delegated.
+/// Returns whether the iteration made progress (a skip resolves the story; an
+/// under-cap failure does not, so repeated failures still feed the stall
+/// breaker as a backstop).
+async fn record_failed_delegation(
+    backlog: &PersistentLoopBacklog,
+    memory: Option<&Arc<dyn aivyx_memory::Memory>>,
+    attempts: &mut std::collections::HashMap<String, u32>,
+    story_id: &str,
+    story_title: &str,
+    detail: &str,
+) -> bool {
+    let n = {
+        let c = attempts.entry(story_id.to_string()).or_insert(0);
+        *c += 1;
+        *c
+    };
+    if n >= MAX_DELEGATION_ATTEMPTS {
+        let _ = backlog
+            .mark_skipped(
+                story_id.to_string(),
+                now_unix_ms(),
+                Some(format!(
+                    "auto-delegation {detail}; skipped after {n} failed attempt(s)"
+                )),
+            )
+            .await;
+        write_progress_note(
+            memory,
+            &format!(
+                "skipped story '{story_title}' — delegation {detail} ({n} attempts)"
+            ),
+        )
+        .await;
+        attempts.remove(story_id);
+        true
+    } else {
+        write_progress_note(
+            memory,
+            &format!(
+                "delegation of '{story_title}' {detail}; left pending \
+                 (attempt {n}/{MAX_DELEGATION_ATTEMPTS})"
+            ),
+        )
+        .await;
+        false
+    }
+}
+
 /// Chapter Circuit (CI.1) — the cross-iteration stall breaker.
 ///
 /// The driver fires a fresh-context iteration and — unlike Bridle's
@@ -727,6 +784,13 @@ pub async fn run_loop_driver(
         // of idle slack.
         let mut stall = StallTracker::new(max_idle_iterations);
 
+        // Chapter Foreman follow-up — per-run count of *failed* auto-delegations
+        // per story. After `MAX_DELEGATION_ATTEMPTS`, a story is skipped (it
+        // clearly isn't team-decomposable) instead of re-running a full mission
+        // every iteration. Reset per run, like the stall breaker.
+        let mut delegation_attempts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+
         // Chapter Circuit (CI.4) — arm the wedge guard for this run.
         // On a clean end we disarm it (the stop path owns `active`);
         // on a panic it clears `active` so the loop isn't wedged.
@@ -819,31 +883,35 @@ pub async fn run_loop_driver(
                                     ),
                                 )
                                 .await;
+                                delegation_attempts.remove(&story.id);
                                 true
                             }
+                            // A non-Done mission or an error is a failed
+                            // delegation: count it, and after MAX_DELEGATION_-
+                            // ATTEMPTS skip the story (terminal) rather than
+                            // re-running another full, costly mission each
+                            // iteration until the stall breaker trips.
                             Ok((mid, phase)) => {
-                                write_progress_note(
+                                record_failed_delegation(
+                                    &backlog,
                                     memory.as_ref(),
-                                    &format!(
-                                        "delegated story '{}' → mission {mid} ended \
-                                         {phase:?}; left pending for review",
-                                        story.title
-                                    ),
+                                    &mut delegation_attempts,
+                                    &story.id,
+                                    &story.title,
+                                    &format!("mission {mid} ended {phase:?}"),
                                 )
-                                .await;
-                                false
+                                .await
                             }
                             Err(e) => {
-                                write_progress_note(
+                                record_failed_delegation(
+                                    &backlog,
                                     memory.as_ref(),
-                                    &format!(
-                                        "delegation of story '{}' failed: {e}; left \
-                                         pending",
-                                        story.title
-                                    ),
+                                    &mut delegation_attempts,
+                                    &story.id,
+                                    &story.title,
+                                    &format!("failed: {e}"),
                                 )
-                                .await;
-                                false
+                                .await
                             }
                         };
                         // Stall accounting mirrors the solo path: a completed
@@ -1598,5 +1666,54 @@ mod tests {
         let state = SharedLoopState::new();
         state.persist_run_marker(true).await;
         assert!(!state.persisted_run_active().await);
+    }
+
+    /// Chapter Foreman follow-up — a story that fails delegation repeatedly is
+    /// skipped after `MAX_DELEGATION_ATTEMPTS`, not re-delegated forever.
+    #[tokio::test]
+    async fn foreman_skips_a_story_after_repeated_failed_delegations() {
+        use crate::loop_backlog::{PersistentLoopBacklog, StoryStatus};
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-foreman-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("s.redb")),
+            MasterKey::from_raw([4u8; 32]),
+        )
+        .await
+        .unwrap();
+        let bl = PersistentLoopBacklog::open(
+            store.domain(KeyDomain::LoopBacklog),
+            b"k".to_vec(),
+        )
+        .await
+        .unwrap();
+        bl.add_story("s".into(), 1, 1, "complex".into(), "body".into())
+            .await
+            .unwrap();
+
+        let mut attempts = std::collections::HashMap::new();
+        // 1st failure (under the cap of 2): not progress; story stays pending.
+        let p1 = record_failed_delegation(
+            &bl, None, &mut attempts, "s", "complex", "mission ended Rejected",
+        )
+        .await;
+        assert!(!p1, "an under-cap failure is not progress");
+        assert!(matches!(bl.get("s").unwrap().status, StoryStatus::Pending));
+        assert_eq!(bl.remaining_count(), 1);
+
+        // 2nd failure hits the cap → skipped (a resolution → progress).
+        let p2 = record_failed_delegation(
+            &bl, None, &mut attempts, "s", "complex", "mission ended Rejected",
+        )
+        .await;
+        assert!(p2, "skipping resolves the story → progress");
+        assert!(matches!(bl.get("s").unwrap().status, StoryStatus::Skipped { .. }));
+        assert_eq!(bl.remaining_count(), 0, "skipped story is no longer pending");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
