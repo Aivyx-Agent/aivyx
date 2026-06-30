@@ -655,6 +655,12 @@ impl GraphExtractor {
             if report.extracted >= max_topics {
                 break;
             }
+            // #11 — skip internal/machine topics (the per-session
+            // `context:pruned:*` archives): extracting triples from "N messages
+            // were pruned from conversation history" pollutes the knowledge graph.
+            if crate::prune_sink::is_internal_topic(&topic) {
+                continue;
+            }
             report.scanned += 1;
             match self.regenerate(&topic, now_secs).await {
                 GraphRegenOutcome::Wrote(n) => {

@@ -375,6 +375,12 @@ impl WikiSynthesizer {
             if report.wrote >= max_pages {
                 break;
             }
+            // #11 — never synthesize wiki pages from internal/machine topics
+            // (the per-session `context:pruned:*` archives): they're bookkeeping,
+            // not knowledge, and would pollute the knowledge base.
+            if crate::prune_sink::is_internal_topic(&topic) {
+                continue;
+            }
             report.scanned += 1;
             match self.regenerate(&topic, now_secs).await {
                 RegenOutcome::Wrote(_) => report.wrote += 1,
@@ -703,6 +709,25 @@ mod tests {
 
         // Both pages exist.
         assert_eq!(store.list_summaries().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn sweep_skips_internal_context_pruned_topics() {
+        // #11 — the wiki sweep must not synthesize pages from the per-session
+        // `context:pruned:*` archives (machine bookkeeping, not knowledge).
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("aviation", "VFR means visual flight rules").await.unwrap();
+        mem.put("context:pruned:abc-123", "5 messages were pruned").await.unwrap();
+        let store = Arc::new(store().await);
+        let s = synth(Arc::clone(&mem), Arc::clone(&store), "summary", false);
+
+        let r = s.sweep(100, 50).await;
+        assert_eq!(r.scanned, 1, "only the real topic is scanned");
+        assert_eq!(r.wrote, 1);
+        let pages = store.list_summaries().await.unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].topic, "aviation");
+        assert!(!pages.iter().any(|p| p.topic.starts_with("context:pruned:")));
     }
 
     #[tokio::test]

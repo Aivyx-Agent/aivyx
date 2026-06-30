@@ -4269,7 +4269,15 @@ async fn handle_query(
                 return QueryResponsePayload::ListWikiPages { pages: Vec::new() };
             };
             match store.list_summaries().await {
-                Ok(pages) => QueryResponsePayload::ListWikiPages { pages },
+                // #11 — hide internal `context:pruned:*` pages (machine
+                // bookkeeping) from operator listings, incl. any synthesized
+                // before the sweep learned to skip them.
+                Ok(pages) => QueryResponsePayload::ListWikiPages {
+                    pages: pages
+                        .into_iter()
+                        .filter(|p| !crate::prune_sink::is_internal_topic(&p.topic))
+                        .collect(),
+                },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "wiki_list_failed".into(),
                     message: e.to_string(),
