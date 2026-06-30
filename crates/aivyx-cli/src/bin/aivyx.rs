@@ -816,6 +816,12 @@ fn run() -> Result<(), String> {
                 MemorySubcommand::Evict { topic, yes } => {
                     memory::run_memory_evict(&topic, yes).await
                 }
+                MemorySubcommand::Wiki { topic } => {
+                    memory::run_memory_wiki(topic).await
+                }
+                MemorySubcommand::Graph { entity } => {
+                    memory::run_memory_graph(entity).await
+                }
             }
         });
     }
@@ -1992,6 +1998,12 @@ enum MemorySubcommand {
     /// `aivyx memory evict <topic> [--yes]` — delete every
     /// entry under a topic. `--yes` skips the confirm prompt.
     Evict { topic: String, yes: bool },
+    /// `aivyx memory wiki [topic]` — list the agent's synthesized
+    /// knowledge-wiki pages, or show one topic's consolidated page.
+    Wiki { topic: Option<String> },
+    /// `aivyx memory graph [entity]` — show the typed knowledge graph
+    /// (entity → predicate → entity), optionally filtered to one entity.
+    Graph { entity: Option<String> },
 }
 
 /// Phase 66 — `aivyx init` variant discriminator.
@@ -2729,10 +2741,16 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     yes,
                 }
             }
+            "wiki" => MemorySubcommand::Wiki {
+                topic: args.get(2).cloned(),
+            },
+            "graph" => MemorySubcommand::Graph {
+                entity: args.get(2).cloned(),
+            },
             other => {
                 return Err(format!(
                     "unrecognized `aivyx memory` subcommand: `{other}`. \
-                     Supported: list, show, search, evict"
+                     Supported: list, show, search, evict, wiki, graph"
                 ));
             }
         };

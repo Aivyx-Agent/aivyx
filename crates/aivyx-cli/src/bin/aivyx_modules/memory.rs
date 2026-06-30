@@ -10,9 +10,11 @@ use std::io::Write;
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, evict_memory_topic, get_memory_topic_entries,
-    list_memory_topics, search_memory,
+    daemon_is_running, evict_memory_topic, get_knowledge_graph, get_memory_topic_entries,
+    get_wiki_page, list_memory_topics, list_wiki_pages, search_memory,
 };
+use aivyx_channel::knowledge_graph::{GraphEntity, GraphTriple};
+use aivyx_channel::knowledge_wiki::{WikiPage, WikiPageSummary};
 use aivyx_channel::daemon_ipc::{default_socket_path, MemoryEntrySummary};
 
 /// `aivyx memory list`
@@ -94,6 +96,41 @@ pub async fn run_memory_evict(topic: &str, yes: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// `aivyx memory wiki [topic]` — list synthesized knowledge-wiki pages, or show
+/// one topic's consolidated page (summary + backlinks). CLI parity with the
+/// Studio Wiki screen.
+pub async fn run_memory_wiki(topic: Option<String>) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    match topic {
+        None => {
+            let pages = list_wiki_pages(&socket_path)
+                .await
+                .map_err(|e| format!("failed to list wiki pages: {e}"))?;
+            print!("{}", render_wiki_list(&pages));
+        }
+        Some(t) => {
+            let page = get_wiki_page(&socket_path, t.clone())
+                .await
+                .map_err(|e| format!("failed to get wiki page: {e}"))?;
+            print!("{}", render_wiki_page(&t, page.as_ref()));
+        }
+    }
+    Ok(())
+}
+
+/// `aivyx memory graph [entity]` — show the typed knowledge graph (entity →
+/// predicate → entity), optionally filtered to triples touching `entity`.
+pub async fn run_memory_graph(entity: Option<String>) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let (entities, triples) = get_knowledge_graph(&socket_path, 200)
+        .await
+        .map_err(|e| format!("failed to get knowledge graph: {e}"))?;
+    print!("{}", render_graph(&entities, &triples, entity.as_deref()));
+    Ok(())
+}
+
 async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
     if daemon_is_running(socket_path).await {
         return Ok(());
@@ -116,6 +153,100 @@ fn render_topics(topics: &[String]) -> String {
         out.push_str(&format!("  {t}\n"));
     }
     out.push_str(&format!("\n({} topic(s))\n", topics.len()));
+    out
+}
+
+fn render_wiki_list(pages: &[WikiPageSummary]) -> String {
+    let mut out = String::from("Knowledge wiki pages\n====================\n\n");
+    if pages.is_empty() {
+        out.push_str(
+            "No wiki pages yet. The agent consolidates a topic into a page when \
+             `[memory] profile = \"smart\"` (or `[wiki] enabled = true`).\n",
+        );
+        return out;
+    }
+    for p in pages {
+        out.push_str(&format!(
+            "  {}  ({} entr{})\n    {}\n",
+            p.topic,
+            p.entry_count,
+            if p.entry_count == 1 { "y" } else { "ies" },
+            p.snippet.trim(),
+        ));
+    }
+    out.push_str(&format!("\n({} page(s)) — `aivyx memory wiki <topic>` for the full page\n", pages.len()));
+    out
+}
+
+fn render_wiki_page(topic: &str, page: Option<&WikiPage>) -> String {
+    let mut out = format!("Wiki page: {topic}\n");
+    out.push_str(&"=".repeat(11 + topic.len()));
+    out.push_str("\n\n");
+    match page {
+        None => {
+            out.push_str(&format!(
+                "No wiki page for `{topic}` yet (no entries consolidated, or the \
+                 wiki sweep hasn't run).\n"
+            ));
+        }
+        Some(p) => {
+            out.push_str(p.summary.trim());
+            out.push_str("\n\n");
+            if !p.backlinks.is_empty() {
+                out.push_str("Related topics:\n");
+                for b in &p.backlinks {
+                    out.push_str(&format!("  → {} (affinity {:.2})\n", b.topic, b.affinity));
+                }
+                out.push('\n');
+            }
+            out.push_str(&format!("(consolidated from {} entr{})\n",
+                p.entry_count, if p.entry_count == 1 { "y" } else { "ies" }));
+        }
+    }
+    out
+}
+
+fn render_graph(
+    entities: &[GraphEntity],
+    triples: &[GraphTriple],
+    filter: Option<&str>,
+) -> String {
+    let mut out = String::from("Knowledge graph\n===============\n\n");
+    if entities.is_empty() && triples.is_empty() {
+        out.push_str(
+            "No knowledge graph yet. The agent extracts entity relations when \
+             `[memory] profile = \"smart\"` (or `[graph] enabled = true`).\n",
+        );
+        return out;
+    }
+    let shown: Vec<&GraphTriple> = triples
+        .iter()
+        .filter(|t| {
+            filter.is_none_or(|f| {
+                t.subject.eq_ignore_ascii_case(f) || t.object.eq_ignore_ascii_case(f)
+            })
+        })
+        .collect();
+    if let Some(f) = filter {
+        out.push_str(&format!("Relations touching `{f}`:\n"));
+    }
+    if shown.is_empty() {
+        out.push_str("  (no matching relations)\n");
+    } else {
+        for t in &shown {
+            out.push_str(&format!(
+                "  {} --[{}]--> {}  ({}\u{00d7})\n",
+                t.subject, t.predicate, t.object, t.mentions,
+            ));
+        }
+    }
+    out.push_str(&format!(
+        "\n({} entit{}, {} relation(s){})\n",
+        entities.len(),
+        if entities.len() == 1 { "y" } else { "ies" },
+        shown.len(),
+        if filter.is_some() { format!(" of {}", triples.len()) } else { String::new() },
+    ));
     out
 }
 
@@ -204,5 +335,78 @@ mod tests {
         );
         assert!(s.contains("last_read=1715000500s"));
         assert!(s.contains("Memory: search \"foo\""));
+    }
+
+    #[test]
+    fn render_wiki_list_empty_and_populated() {
+        assert!(render_wiki_list(&[]).contains("No wiki pages yet"));
+        let pages = vec![WikiPageSummary {
+            topic: "aviation".into(),
+            snippet: "VFR means visual flight rules".into(),
+            entry_count: 3,
+            updated_at: 1,
+        }];
+        let s = render_wiki_list(&pages);
+        assert!(s.contains("aviation"));
+        assert!(s.contains("3 entries"));
+        assert!(s.contains("VFR means visual flight rules"));
+    }
+
+    #[test]
+    fn render_wiki_page_none_and_full() {
+        assert!(render_wiki_page("ghost", None).contains("No wiki page for `ghost`"));
+        let page = WikiPage {
+            topic: "aviation".into(),
+            summary: "A consolidated summary of aviation notes.".into(),
+            source_seqs: vec![1, 2],
+            entry_count: 2,
+            backlinks: vec![aivyx_channel::knowledge_wiki::WikiBacklink {
+                topic: "coffee".into(),
+                affinity: 0.42,
+                hops: 1,
+            }],
+            updated_at: 1,
+            source_fingerprint: 9,
+        };
+        let s = render_wiki_page("aviation", Some(&page));
+        assert!(s.contains("consolidated summary of aviation"));
+        assert!(s.contains("→ coffee (affinity 0.42)"));
+        assert!(s.contains("consolidated from 2 entries"));
+    }
+
+    #[test]
+    fn render_graph_empty_full_and_filtered() {
+        assert!(render_graph(&[], &[], None).contains("No knowledge graph yet"));
+        let entities = vec![
+            GraphEntity { name: "aviation".into(), degree: 2, kind: String::new() },
+            GraphEntity { name: "YPPH".into(), degree: 1, kind: "airport".into() },
+        ];
+        let triples = vec![
+            GraphTriple {
+                subject: "aviation".into(),
+                predicate: "relates-to".into(),
+                object: "YPPH".into(),
+                source_seqs: vec![1],
+                mentions: 2,
+                updated_at: 1,
+            },
+            GraphTriple {
+                subject: "coffee".into(),
+                predicate: "is-a".into(),
+                object: "beverage".into(),
+                source_seqs: vec![2],
+                mentions: 1,
+                updated_at: 1,
+            },
+        ];
+        let all = render_graph(&entities, &triples, None);
+        assert!(all.contains("aviation --[relates-to]--> YPPH"));
+        assert!(all.contains("coffee --[is-a]--> beverage"));
+        assert!(all.contains("2 entities, 2 relation(s)"));
+        // Filter to one entity (case-insensitive).
+        let filtered = render_graph(&entities, &triples, Some("AVIATION"));
+        assert!(filtered.contains("aviation --[relates-to]--> YPPH"));
+        assert!(!filtered.contains("coffee --[is-a]--> beverage"));
+        assert!(filtered.contains("1 relation(s) of 2"));
     }
 }

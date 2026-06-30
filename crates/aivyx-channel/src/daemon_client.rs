@@ -508,6 +508,69 @@ pub async fn list_memory_topics(
     }
 }
 
+/// Chapter Codex — list the synthesized knowledge-wiki pages (compact rows).
+pub async fn list_wiki_pages(
+    socket_path: &Path,
+) -> Result<Vec<aivyx_ipc::wiki::WikiPageSummary>, DaemonError> {
+    let payload =
+        send_query(socket_path, "m-wiki-list", QueryPayload::ListWikiPages).await?;
+    match payload {
+        QueryResponsePayload::ListWikiPages { pages } => Ok(pages),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ListWikiPages, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter Codex — fetch one topic's full knowledge-wiki page (`None` if absent).
+pub async fn get_wiki_page(
+    socket_path: &Path,
+    topic: String,
+) -> Result<Option<aivyx_ipc::wiki::WikiPage>, DaemonError> {
+    let payload =
+        send_query(socket_path, "m-wiki-get", QueryPayload::GetWikiPage { topic })
+            .await?;
+    match payload {
+        QueryResponsePayload::GetWikiPage { page } => Ok(page),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected GetWikiPage, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter Lattice — fetch the typed knowledge graph (entities + triples).
+pub async fn get_knowledge_graph(
+    socket_path: &Path,
+    limit: u32,
+) -> Result<
+    (Vec<aivyx_ipc::graph::GraphEntity>, Vec<aivyx_ipc::graph::GraphTriple>),
+    DaemonError,
+> {
+    let payload = send_query(
+        socket_path,
+        "m-kgraph",
+        QueryPayload::GetKnowledgeGraph { limit },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::GetKnowledgeGraph { entities, edges } => {
+            Ok((entities, edges))
+        }
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected GetKnowledgeGraph, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — fetch up to `limit` entries for one topic.
 pub async fn get_memory_topic_entries(
     socket_path: &Path,
