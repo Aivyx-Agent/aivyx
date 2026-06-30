@@ -855,6 +855,14 @@ impl ContextProvider for SemanticMemoryContext {
                 .filter(|(_, score)| *score >= self.rag_min_similarity)
                 .collect()
         };
+        // #F — never inject internal `context:pruned:*` bookkeeping entries
+        // into the agent's recall context (they would feed pruned-message
+        // noise back into the prompt). Covers semantic/lexical/graph-fused
+        // primaries; the Phase-84 sibling path is guarded separately below.
+        let kept: Vec<(MemoryEntry, f32)> = kept
+            .into_iter()
+            .filter(|(e, _)| !crate::prune_sink::is_internal_topic(&e.topic))
+            .collect();
         if kept.is_empty() {
             return None;
         }
@@ -904,6 +912,10 @@ impl ContextProvider for SemanticMemoryContext {
                             break 'outer;
                         }
                         if !seen.insert(sib.b.clone()) {
+                            continue;
+                        }
+                        // #F — skip internal prune-bookkeeping siblings.
+                        if crate::prune_sink::is_internal_topic(&sib.b) {
                             continue;
                         }
                         if let Ok(mut es) = self
@@ -1564,6 +1576,31 @@ mod tests {
         memory.put("notes", "unembedded").await.unwrap();
         let out = ctx(memory, false, 0.0).recall("query", sid()).await;
         assert!(out.is_none());
+    }
+
+    #[tokio::test]
+    async fn recall_skips_internal_context_pruned_entries() {
+        // #F — an internal prune-bookkeeping entry, even a perfect vector
+        // match, must never feed back into the agent's recall context.
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let s = memory
+            .put(
+                "context:pruned:abc-123",
+                "23 messages pruned from the conversation",
+            )
+            .await
+            .unwrap();
+        memory
+            .put_vector("context:pruned:abc-123", s, vec![1.0, 1.0])
+            .await
+            .unwrap();
+        let out = ctx(memory, false, 0.0)
+            .recall("what was pruned from the conversation", sid())
+            .await;
+        assert!(
+            out.is_none(),
+            "internal prune topic must be filtered out of recall"
+        );
     }
 
     #[test]

@@ -4469,6 +4469,11 @@ async fn handle_query(
                         Ok(matches) => QueryResponsePayload::SearchMemory {
                             matches: matches
                                 .into_iter()
+                                .filter(|m| {
+                                    !crate::prune_sink::is_internal_topic(
+                                        &m.topic,
+                                    )
+                                })
                                 .map(memory_entry_summary)
                                 .collect(),
                             fell_back_to_keyword: false,
@@ -4500,6 +4505,9 @@ async fn handle_query(
                 Ok(matches) => QueryResponsePayload::SearchMemory {
                     matches: matches
                         .into_iter()
+                        .filter(|m| {
+                            !crate::prune_sink::is_internal_topic(&m.topic)
+                        })
                         .map(memory_entry_summary)
                         .collect(),
                     fell_back_to_keyword: false,
