@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.21] — 2026-07-01
+
+### Changed
+
+- **Acceptance verification now covers auto-delegated work too.** When `[loop]
+  verify_completion` is on, a story the loop auto-delegates to the agent team is
+  judged against its acceptance criteria — the team mission's result must pass
+  the same LLM acceptance check a solo `loop.complete` gets — before it's marked
+  done; otherwise it's retried (then skipped). Previously a delegated mission was
+  accepted on completion alone, skipping the check solo work received.
+
 ## [0.7.20] — 2026-07-01
 
 ### Fixed
