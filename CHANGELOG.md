@@ -5,6 +5,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.17] — 2026-06-30
+
+### Fixed
+
+- **`aivyx memory list` (and the Studio Memory browser) no longer shows internal
+  topics.** The per-session `context:pruned:*` context-pruning archives — machine
+  bookkeeping, not operator knowledge — are hidden from topic listings (they were
+  swamping the real topics). They remain reachable by exact `aivyx memory show
+  <topic>`; only the cluttered enumeration is filtered.
+
+### Changed
+
+- **The autonomous loop skips a story after repeated failed auto-delegations.**
+  When `[loop] delegate_above` is set, a story whose delegated mission keeps
+  ending non-Done is marked skipped after a couple of attempts instead of
+  re-running a full team mission every iteration.
+
 ## [0.7.16] — 2026-06-30
 
 ### Added
