@@ -41,7 +41,16 @@ jobs:
             libayatana-appindicator3-dev \
             libxdo-dev
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-bundle --locked
+      - name: Install cargo-bundle (retry on transient network failures, #13)
+        run: |
+          n=0
+          until cargo install cargo-bundle --locked; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "cargo install cargo-bundle failed after $n attempts"; exit 1
+            fi
+            echo "attempt $n hit a transient failure; retrying in 15s..."; sleep 15
+          done
       - name: Bundle (.deb)
         working-directory: crates/aivyx-desktop
         run: cargo bundle --release --format deb
@@ -80,7 +89,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - run: cargo install cargo-bundle --locked
+      - name: Install cargo-bundle (retry on transient network failures, #13)
+        run: |
+          n=0
+          until cargo install cargo-bundle --locked; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "cargo install cargo-bundle failed after $n attempts"; exit 1
+            fi
+            echo "attempt $n hit a transient failure; retrying in 15s..."; sleep 15
+          done
       - name: Bundle (.app)
         working-directory: crates/aivyx-desktop
         run: cargo bundle --release --format osx --target ${{ matrix.target }}

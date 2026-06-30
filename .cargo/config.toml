@@ -1,0 +1,16 @@
+# Network resilience for the release pipeline (backlog #13).
+#
+# The CI release jobs intermittently fail on transient crates.io network blips:
+#   - `cargo metadata` inside dist's `build-global-artifacts` step
+#     (v0.7.17: "download of dom_smoothie failed / curl [16] HTTP2 framing layer")
+#   - `cargo install cargo-bundle` in desktop-release's macOS leg
+#     (v0.7.18: "download of config.json failed / curl failed")
+#
+# cargo classes these curl/HTTP2 errors as *spurious* and retries them, but the
+# default of 3 attempts wasn't enough during a sustained blip. Bump it well up so
+# these self-heal instead of failing the release and needing a manual rerun.
+# Applies to every cargo invocation here — including the cargo-dist *generated*
+# release.yml's internal `cargo metadata`, which we can't wrap directly — and is
+# harmless for local builds (extra retries only ever fire on a real network flake).
+[net]
+retry = 10
