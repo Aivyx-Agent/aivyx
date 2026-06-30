@@ -436,6 +436,16 @@ impl TeamMissionService {
         self.state.snapshot(id)
     }
 
+    /// Verdict for delegated stories — a completion judge over this service's own
+    /// provider + model, so the loop driver can hold an auto-delegated mission's
+    /// result to the same acceptance bar as a solo `loop.complete`.
+    pub fn completion_judge(&self) -> crate::completion_judge::CompletionJudge {
+        crate::completion_judge::CompletionJudge::new(
+            Arc::clone(&self.deps.provider),
+            self.deps.model.clone(),
+        )
+    }
+
     /// Every known mission (the poll feed).
     pub fn list(&self) -> Vec<TeamMissionRecord> {
         self.state.list()

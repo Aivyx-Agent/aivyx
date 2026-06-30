@@ -885,6 +885,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // Verdict for delegated stories — when `[loop] verify_completion` is on,
+            // give the driver a judge so an auto-delegated mission's result is
+            // gated against the story's acceptance criteria (parity with solo
+            // `loop.complete`). Built from the team service's own provider/model.
+            let ld_judge = match (
+                loop_config.as_ref().map(|c| c.verify_completion).unwrap_or(false),
+                &team_missions,
+            ) {
+                (true, Some(svc)) => Some(std::sync::Arc::new(svc.completion_judge())),
+                _ => None,
+            };
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -901,6 +912,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_max_idle,
                     ld_shutdown,
                     ld_delegate,
+                    ld_judge,
                 )
                 .await;
             }))

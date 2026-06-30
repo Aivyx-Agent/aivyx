@@ -727,6 +727,11 @@ pub async fn run_loop_driver(
     // story; one scoring `>= threshold` is handed to the team (headless) instead
     // of the model. `None` ⇒ off (byte-identical to pre-Foreman).
     delegate: Option<(Arc<crate::team_mission_driver::TeamMissionService>, u32)>,
+    // Verdict for delegated stories — `Some` when `[loop] verify_completion` is on:
+    // an auto-delegated mission's *result* is judged against the story's acceptance
+    // criteria before it's marked done, the same check solo `loop.complete` gets.
+    // `None` ⇒ a completed delegation is accepted on mission-Done alone.
+    delegation_judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
 ) {
     // Chapter K — the dollar cap prices LlmCost events with the rate table the
     // daemon built (built-in defaults + any `[pricing.<model>]` overrides, K.5).
@@ -872,19 +877,61 @@ pub async fn run_loop_driver(
                             .await
                         {
                             Ok((mid, crate::team_mission::TeamMissionPhase::Done)) => {
-                                let _ = backlog
-                                    .mark_done(story.id.clone(), now_unix_ms())
+                                // Verdict for delegated stories — judge the
+                                // mission's result against the story's acceptance
+                                // criteria before accepting it (the same gate solo
+                                // `loop.complete` gets). A rejection is treated as
+                                // a failed delegation (retry/skip), not a done.
+                                let verdict = if let Some(j) = &delegation_judge {
+                                    let result = svc
+                                        .snapshot(&mid)
+                                        .map(|r| {
+                                            r.outputs
+                                                .values()
+                                                .cloned()
+                                                .collect::<Vec<_>>()
+                                                .join("\n\n")
+                                        })
+                                        .unwrap_or_default();
+                                    let v = j.verify(&story.title, &story.body, &result).await;
+                                    eprintln!(
+                                        "aivyx loop: delegated completion verdict for '{}' — {}: {}",
+                                        story.title,
+                                        if v.passed { "ACCEPTED" } else { "REJECTED" },
+                                        v.reason,
+                                    );
+                                    v.passed
+                                } else {
+                                    true
+                                };
+                                if verdict {
+                                    let _ = backlog
+                                        .mark_done(story.id.clone(), now_unix_ms())
+                                        .await;
+                                    write_progress_note(
+                                        memory.as_ref(),
+                                        &format!(
+                                            "delegated story '{}' to team mission {mid} → done",
+                                            story.title
+                                        ),
+                                    )
                                     .await;
-                                write_progress_note(
-                                    memory.as_ref(),
-                                    &format!(
-                                        "delegated story '{}' to team mission {mid} → done",
-                                        story.title
-                                    ),
-                                )
-                                .await;
-                                delegation_attempts.remove(&story.id);
-                                true
+                                    delegation_attempts.remove(&story.id);
+                                    true
+                                } else {
+                                    record_failed_delegation(
+                                        &backlog,
+                                        memory.as_ref(),
+                                        &mut delegation_attempts,
+                                        &story.id,
+                                        &story.title,
+                                        &format!(
+                                            "mission {mid} completed but its result did \
+                                             not meet the story's acceptance criteria"
+                                        ),
+                                    )
+                                    .await
+                                }
                             }
                             // A non-Done mission or an error is a failed
                             // delegation: count it, and after MAX_DELEGATION_-
