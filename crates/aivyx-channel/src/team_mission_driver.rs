@@ -479,6 +479,8 @@ impl TeamMissionService {
             goal,
             config.as_ref().unwrap_or(&self.config),
             &cancel,
+            // Interactive `team.run`: the operator can approve human gates.
+            true,
         )
         .await?;
         self.start(plan, config).await
@@ -503,6 +505,10 @@ impl TeamMissionService {
             goal,
             config.as_ref().unwrap_or(&self.config),
             &cancel,
+            // #15 — a headless drive forbids ALL gates in the plan: no operator
+            // to approve a human gate, and a failed auto-gate would abort the
+            // whole mission → retry → a doable story gets skipped (work lost).
+            !policy.is_headless(),
         )
         .await?;
         let id = register_mission(
@@ -513,8 +519,18 @@ impl TeamMissionService {
         )
         .await?;
         let default_config = config.unwrap_or_else(|| self.config.clone());
-        let phase =
-            drive_registered(&self.state, &self.deps, default_config, &id, policy).await?;
+        let phase = match drive_registered(&self.state, &self.deps, default_config, &id, policy)
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("aivyx loop: delegated mission {id} drive ERRORED: {e}");
+                return Err(e);
+            }
+        };
+        // Operator-visible: the terminal phase of a loop-delegated mission (so a
+        // watcher sees whether auto-delegation completed or was halted/rejected).
+        eprintln!("aivyx loop: delegated mission {id} → phase {phase:?}");
         Ok((id, phase))
     }
 

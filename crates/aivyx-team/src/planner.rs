@@ -30,12 +30,20 @@ pub async fn decompose_goal(
     goal: &str,
     config: &TeamConfig,
     cancel: &CancellationToken,
+    // #15 — `false` for an UNATTENDED (headless / loop-delegated) run: the prompt
+    // forbids ALL gates. A `human` gate has no operator to approve it
+    // (auto-rejects), and an `auto` gate that its reviewer FAILs aborts the whole
+    // mission → Foreman retries and can ultimately *skip* a doable story (work
+    // lost). An unattended mission should run its steps straight through. `true`
+    // for interactive `team.run`, where the operator approves human gates and an
+    // auto-gate reject is recoverable.
+    allow_gates: bool,
 ) -> Result<MissionPlan, TeamError> {
     let goal = goal.trim();
     if goal.is_empty() {
         return Err(TeamError::Config("mission goal is empty".into()));
     }
-    let system = planner_system_prompt(config);
+    let system = planner_system_prompt(config, allow_gates);
     let user = format!("Mission goal:\n{goal}\n\nReturn the plan as JSON now.");
     let messages = vec![LlmMessage::user_text(user)];
     let request = LlmRequest {
@@ -93,7 +101,7 @@ fn soul_blurb(soul: &str) -> String {
 
 /// Build the planning system prompt: the team's specialists + the exact JSON
 /// spec the parser accepts.
-fn planner_system_prompt(config: &TeamConfig) -> String {
+fn planner_system_prompt(config: &TeamConfig, allow_gates: bool) -> String {
     let mut roster = String::new();
     for m in config.specialists() {
         roster.push_str(&format!("- {} ({}): {}\n", m.name, m.role, soul_blurb(&m.soul)));
@@ -101,6 +109,17 @@ fn planner_system_prompt(config: &TeamConfig) -> String {
     if roster.is_empty() {
         roster.push_str("- (none)\n");
     }
+    // #15 — gate guidance depends on whether an operator is present. Unattended
+    // missions forbid ALL gates (a human gate auto-rejects; an auto gate that
+    // fails aborts the whole mission → retry → a doable story can be skipped).
+    let gate_rule = if allow_gates {
+        "  - Use a \"human\" gate before irreversible or high-stakes work the operator should \
+approve; an \"auto\" gate when a reviewer specialist should check quality first.\n"
+    } else {
+        "  - This mission runs UNATTENDED (no operator). Do NOT include ANY gate steps — \
+no \"human\" gates (nothing can approve them) and no \"auto\" gates (a failed review would \
+abort the whole mission). Use delegate steps only.\n"
+    };
     format!(
         "You are the planning lead of a multi-agent team. Decompose the operator's \
 mission into a DAG of steps and return ONLY a JSON object — no prose, no markdown \
@@ -114,8 +133,7 @@ Rules:\n\
   - ids are unique and match [a-zA-Z0-9_-].\n\
   - `deps` lists step ids that must finish first; omit or use [] for none.\n\
   - Steps with disjoint deps run concurrently — exploit that.\n\
-  - Use a \"human\" gate before irreversible or high-stakes work the operator should \
-approve; an \"auto\" gate when a reviewer specialist should check quality first.\n\
+{gate_rule}\
   - Keep the plan minimal: only the steps the goal actually needs."
     )
 }
@@ -142,6 +160,26 @@ mod tests {
         ]}"#
     }
 
+    #[test]
+    fn headless_planner_prompt_forbids_all_gates() {
+        // #15 — an unattended (loop-delegated) decomposition must not emit ANY
+        // gates: a human gate auto-rejects, and a failed auto gate aborts the
+        // whole mission → retry → a doable story can be skipped (work lost).
+        let cfg = default_nonagon();
+        let interactive = planner_system_prompt(&cfg, true);
+        let headless = planner_system_prompt(&cfg, false);
+        assert!(interactive.contains("\"human\" gate"), "interactive keeps gates");
+        assert!(headless.contains("UNATTENDED"));
+        assert!(
+            headless.contains("Do NOT include ANY gate"),
+            "headless must forbid all gates"
+        );
+        assert!(
+            !headless.contains("Use a \"human\" gate"),
+            "headless must not encourage gates"
+        );
+    }
+
     #[tokio::test]
     async fn decomposes_a_goal_into_a_validated_plan() {
         let provider = FakeProvider::says(plan_json());
@@ -151,6 +189,7 @@ mod tests {
             "close the kitchen",
             &default_nonagon(),
             &CancellationToken::new(),
+            true,
         )
         .await
         .expect("plan decodes");
@@ -171,6 +210,7 @@ mod tests {
             "close the kitchen",
             &default_nonagon(),
             &CancellationToken::new(),
+            true,
         )
         .await
         .expect("plan decodes despite the wrapping");
@@ -191,6 +231,7 @@ mod tests {
             "close the kitchen",
             &default_nonagon(),
             &CancellationToken::new(),
+            true,
         )
         .await
         .unwrap();
@@ -206,6 +247,7 @@ mod tests {
             "goal",
             &default_nonagon(),
             &CancellationToken::new(),
+            true,
         )
         .await
         .expect_err("no JSON → error");
@@ -226,6 +268,7 @@ mod tests {
             "goal",
             &default_nonagon(),
             &CancellationToken::new(),
+            true,
         )
         .await
         .is_err());
@@ -240,6 +283,7 @@ mod tests {
             "   ",
             &default_nonagon(),
             &CancellationToken::new(),
+            true,
         )
         .await
         .is_err());

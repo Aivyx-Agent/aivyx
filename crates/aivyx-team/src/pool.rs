@@ -90,8 +90,14 @@ impl SpecialistPool {
     }
 
     /// Resolve a specialist by name — must be a member, and not the lead.
+    ///
+    /// #15 — matching is **case-insensitive**: the LLM planner emits specialist
+    /// names with inconsistent casing ("Researcher" vs the roster's "researcher"),
+    /// which previously errored ("no specialist") → the mission failed → the
+    /// loop's auto-delegation retried and could skip a doable story. Names are
+    /// roster ids (`a-zA-Z0-9_-`), so ASCII-case-insensitive matching is safe.
     fn resolve(&self, specialist: &str) -> Result<&TeamMember, TeamError> {
-        if specialist == self.config.lead {
+        if specialist.eq_ignore_ascii_case(&self.config.lead) {
             return Err(TeamError::Config(format!(
                 "{specialist:?} is the lead, not a delegable specialist"
             )));
@@ -99,7 +105,7 @@ impl SpecialistPool {
         self.config
             .members
             .iter()
-            .find(|m| m.name == specialist)
+            .find(|m| m.name.eq_ignore_ascii_case(specialist))
             .ok_or_else(|| {
                 TeamError::Config(format!(
                     "no specialist {specialist:?} in team {:?}",
@@ -323,6 +329,25 @@ mod tests {
         let lead_ch = FakeLeadChannel::at(TrustTier::SemiTrusted);
         let ch = p.specialist_channel(p.resolve("spec").unwrap(), &lead_ch);
         assert_eq!(ch.trust_tier(), TrustTier::SemiTrusted);
+    }
+
+    #[test]
+    fn resolve_matches_specialist_names_case_insensitively() {
+        // #15 — the planner emits "Researcher"/"RESEARCHER"; the roster is
+        // "researcher". All must resolve to the member (else the mission errors).
+        let p = pool(
+            FakeProvider::says("x"),
+            vec![
+                member("lead", &[], TrustTier::Trusted),
+                member("researcher", &["fs.read"], TrustTier::Trusted),
+            ],
+            "lead",
+        );
+        assert_eq!(p.resolve("researcher").unwrap().name, "researcher");
+        assert_eq!(p.resolve("Researcher").unwrap().name, "researcher");
+        assert_eq!(p.resolve("RESEARCHER").unwrap().name, "researcher");
+        // The lead guard is case-insensitive too.
+        assert!(p.resolve("Lead").is_err());
     }
 
     #[test]
