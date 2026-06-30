@@ -308,6 +308,15 @@ impl Tool for LoopCompleteTool {
                 .trim()
                 .to_string();
             let verdict = judge.verify(&story.title, &story.body, &summary).await;
+            // Operator-visible signal: the judge otherwise gates silently (the
+            // rejection only goes back to the agent). Log every verdict so a
+            // watcher sees *why* a completion was accepted or held.
+            eprintln!(
+                "aivyx loop: completion verdict for '{}' — {}: {}",
+                story.title,
+                if verdict.passed { "ACCEPTED" } else { "REJECTED" },
+                verdict.reason,
+            );
             if !verdict.passed {
                 return ToolOutcome::Completed {
                     output: json!({
