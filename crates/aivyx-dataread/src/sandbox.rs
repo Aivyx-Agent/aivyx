@@ -47,6 +47,10 @@ pub fn cap_cell(s: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct ReaderSandbox {
     root: Arc<Path>,
+    /// Chapter Ward — the sensitive-path read guard, shared with `fs.read`.
+    /// Disabled by default (byte-identical) until the binary wires the
+    /// operator's policy in.
+    sensitive: Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
 }
 
 /// A file that passed both fences, with its bytes read (capped).
@@ -75,7 +79,22 @@ impl ReaderSandbox {
                 "dataread sandbox root {canonical:?} is not a directory"
             )));
         }
-        Ok(Self { root: Arc::from(canonical) })
+        Ok(Self {
+            root: Arc::from(canonical),
+            sensitive: Arc::new(
+                aivyx_core::sensitive_paths::SensitivePolicy::disabled(),
+            ),
+        })
+    }
+
+    /// Chapter Ward — install the sensitive-path read guard so the data
+    /// readers refuse the same secret set `fs.read` does.
+    pub fn with_sensitive_policy(
+        mut self,
+        policy: Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
+    ) -> Self {
+        self.sensitive = policy;
+        self
     }
 
     /// The canonicalized sandbox root.
@@ -130,6 +149,19 @@ impl ReaderSandbox {
                 format!(
                     "path {canonical:?} escapes sandbox root {:?} after symlink resolution",
                     self.root
+                ),
+            ));
+        }
+
+        // Chapter Ward — refuse a secret location even inside the sandbox,
+        // matching the `fs.read` guard so readers aren't an exfil bypass.
+        if let Some(reason) = self.sensitive.classify(&canonical) {
+            return Err(fail(
+                tool,
+                format!(
+                    "refusing to read {} — {reason}. Add it to `[access] \
+                     allow_sensitive_paths` to permit it.",
+                    canonical.display()
                 ),
             ));
         }
@@ -213,6 +245,25 @@ mod tests {
         // And read_guarded refuses it too.
         let err = sb.read_guarded(&json!({"path": "../../../etc/passwd"}), ToolId::new());
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn ward_guard_refuses_a_sensitive_file() {
+        use aivyx_core::sensitive_paths::SensitivePolicy;
+        let root = scratch_root();
+        std::fs::write(root.join(".env"), b"API_KEY=secret").unwrap();
+        std::fs::write(root.join("data.csv"), b"a,b\n1,2\n").unwrap();
+        let sb = ReaderSandbox::new(&root)
+            .unwrap()
+            .with_sensitive_policy(Arc::new(SensitivePolicy::new(vec![], vec![])));
+        // A reader cannot slurp a secret even inside the sandbox…
+        assert!(sb
+            .read_guarded(&json!({"path": ".env"}), ToolId::new())
+            .is_err());
+        // …ordinary data still reads.
+        assert!(sb
+            .read_guarded(&json!({"path": "data.csv"}), ToolId::new())
+            .is_ok());
     }
 
     #[test]

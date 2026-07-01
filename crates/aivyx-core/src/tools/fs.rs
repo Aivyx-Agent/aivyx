@@ -82,13 +82,28 @@ pub const MAX_READ_BYTES: usize = 256 * 1024;
 /// infallible to construct (holding a pre-canonicalized absolute path).
 pub struct FsReadToolConfig {
     sandbox_root: PathBuf,
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsReadToolConfig {
     pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
         FsReadToolConfig {
             sandbox_root: sandbox_root.into(),
+            // Default disabled ⇒ byte-identical to pre-Ward behavior until the
+            // binary wires in the operator's policy.
+            sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
         }
+    }
+
+    /// Chapter Ward — install the sensitive-path read guard. When enabled, a
+    /// canonical path matching the built-in secret set (minus the operator's
+    /// allow-list) is refused even if it's inside the sandbox root.
+    pub fn with_sensitive_policy(
+        mut self,
+        policy: Arc<crate::sensitive_paths::SensitivePolicy>,
+    ) -> Self {
+        self.sensitive = policy;
+        self
     }
 
     /// Canonicalize the sandbox root and return a ready-to-register
@@ -111,6 +126,7 @@ impl FsReadToolConfig {
             id: ToolId::new(),
             sandbox_root: Arc::from(canonical),
             schema: read_input_schema_value(),
+            sensitive: self.sensitive,
         })
     }
 }
@@ -127,6 +143,8 @@ pub struct FsReadTool {
     /// cheaper than cloning a `PathBuf` per call.
     sandbox_root: Arc<Path>,
     schema: Value,
+    /// Chapter Ward — the sensitive-path read guard (disabled by default).
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsReadTool {
@@ -299,6 +317,24 @@ impl Tool for FsReadTool {
                     "path {canonical:?} escapes sandbox root {:?} after \
                      symlink resolution",
                     self.sandbox_root
+                ),
+            });
+        }
+
+        // ---- Chapter Ward — sensitive-path guard -------------------
+        //
+        // Checked on the CANONICAL path (symlinks resolved), so a symlink
+        // pointing at a secret is refused too. Independent of the sandbox
+        // root: even at `full` reach, credential stores stay off-limits
+        // unless the operator allow-lists them.
+        if let Some(reason) = self.sensitive.classify(&canonical) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to read {} — {reason}. This is a protected \
+                     location; add it to `[access] allow_sensitive_paths` if \
+                     you intend the agent to read it.",
+                    canonical.display()
                 ),
             });
         }
@@ -1800,6 +1836,60 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    fn build_guarded_tool(
+        sandbox: &SandboxDir,
+        policy: crate::sensitive_paths::SensitivePolicy,
+    ) -> FsReadTool {
+        FsReadToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(policy))
+            .build()
+            .expect("sandbox root canonicalizable")
+    }
+
+    #[test]
+    fn ward_refuses_a_sensitive_file_inside_the_sandbox() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new();
+        // A secret and an ordinary file, both inside the sandbox root.
+        sandbox.write_file(".env", b"API_KEY=super-secret\n");
+        sandbox.write_file("notes.md", b"hello\n");
+        let tool = build_guarded_tool(&sandbox, SensitivePolicy::new(vec![], vec![]));
+
+        // The secret is refused even though it's inside the sandbox…
+        match run_execute(&tool, json!({ "path": ".env" })) {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("protected"), "reason: {detail}");
+                assert!(
+                    !detail.contains("super-secret"),
+                    "refusal must not leak contents: {detail}"
+                );
+            }
+            other => panic!("expected Failed for .env, got {other:?}"),
+        }
+        // …while an ordinary file reads fine.
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": "notes.md" })),
+            ToolOutcome::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn ward_allowlist_permits_a_named_secret() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new();
+        sandbox.write_file(".env", b"API_KEY=ok-to-read\n");
+        // Allow-list the sandbox root → its .env is readable again.
+        let policy = SensitivePolicy::new(
+            vec![sandbox.root.canonicalize().unwrap()],
+            vec![],
+        );
+        let tool = build_guarded_tool(&sandbox, policy);
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": ".env" })),
+            ToolOutcome::Completed { .. }
+        ));
     }
 
     #[test]

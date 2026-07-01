@@ -202,11 +202,20 @@ security failure:
   irreversible actions. This configuration is *possible* and is precisely
   the "open-ended autonomy" scenario. It should be a deliberate, eyes-open
   choice — see §8.
-- **Read-anything is still read-anything.** Confirm-first gates *writes*,
-  not *reads*. At `full` access the agent can `fs.read` `~/.aws/credentials`,
-  `.env` files, SSH keys — and exfiltrate them over `net.post`. Secret
-  exposure is the sharpest risk at broad access, and it is **not** mitigated
-  by `confirm_destructive`.
+- **Read-anything — now guarded at the source (Chapter Ward).** Confirm-first
+  gates *writes*, not *reads*, so historically at `full` access the agent could
+  `fs.read` `~/.aws/credentials`, `.env` files, SSH keys — and exfiltrate them.
+  The **sensitive-path read guard** now refuses reads of a curated secret set
+  (`~/.ssh`, `~/.aws`, `~/.gnupg`, cloud/k8s/docker creds, browser profiles,
+  `.env`, private keys, **and Aivyx's own encrypted store + `daemon.env`
+  passphrase**) by default at every reach level, independent of `fs_root` — the
+  read tools (`fs.read`, the data readers) refuse on the *canonical* path, so a
+  symlink to a secret is caught too. The operator opts specific paths back in
+  with `[access] allow_sensitive_paths` (or disables the guard with
+  `guard_sensitive_paths = false`). **Residual:** this guards the fs-read path,
+  not `shell.exec` — a `cat ~/.ssh/id_rsa` via shell is still possible, so at
+  broad reach isolate credentials at the OS level (see §8). You cannot exfil
+  what the read tools won't hand over, but a shell can still reach the disk.
 - **Capability ≠ competence (and the breakers prove it).** The ceiling is
   gated by the provider's reasoning quality. Small local models hallucinate
   and loop — the cycle breakers exist *because* they run away. Serious

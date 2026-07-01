@@ -4775,6 +4775,10 @@ async fn run_async(
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
         confirm_destructive,
+        // Chapter Ward — the sensitive-path read guard, applied to fs.read +
+        // the data readers below.
+        guard_sensitive_paths,
+        allow_sensitive_paths,
         // Chapter Reins — the autonomy dial. RN.5 consumes the resolved
         // posture's loop-arming dimension below (the level can arm the
         // capped loop without an explicit `[loop] enabled`). The gate
@@ -5486,7 +5490,21 @@ async fn run_async(
     // canonicalizes the sandbox root once, so the pre-canonicalized
     // form is what flows into the scope check later — that's the
     // anchor for the `fs.read:<canonical>/**` capability below.
+    // Chapter Ward — the sensitive-path read guard (privacy-by-default). Built
+    // once and shared by every read surface (fs.read, the data readers, the
+    // Documents browser) so a credential store is off-limits everywhere.
+    let sensitive_policy = std::sync::Arc::new(
+        if guard_sensitive_paths.value {
+            aivyx_core::sensitive_paths::SensitivePolicy::new(
+                allow_sensitive_paths.clone(),
+                Vec::new(),
+            )
+        } else {
+            aivyx_core::sensitive_paths::SensitivePolicy::disabled()
+        },
+    );
     let fs_read = FsReadToolConfig::new(fs_root.clone())
+        .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy))
         .build()
         .map_err(|e| format!("failed to build fs.read tool: {e}"))?;
     // Chapter N — confirm-first posture (overwrites need `confirmed: true`).
@@ -6157,7 +6175,10 @@ async fn run_async(
     // like `fs.read`/`fs.metadata`; the ceiling strips `fs.read` for
     // SemiTrusted channels at dispatch, gating these identically.
     let reader_sandbox = ReaderSandbox::new(canonical_root.clone())
-        .map_err(|e| format!("failed to build structured-data reader sandbox: {e}"))?;
+        .map_err(|e| format!("failed to build structured-data reader sandbox: {e}"))?
+        // Chapter Ward — same secret-guard as fs.read, so the data readers
+        // aren't an exfiltration bypass.
+        .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy));
     let data_csv = DataCsvTool::new(reader_sandbox.clone());
     let data_xlsx = DataXlsxTool::new(reader_sandbox.clone());
     let data_pdf = DataPdfTool::new(reader_sandbox);

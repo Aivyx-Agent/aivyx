@@ -37,6 +37,7 @@ pub mod llm_planner;
 pub mod planner;
 pub mod relevance;
 pub mod schema;
+pub mod sensitive_paths;
 pub mod skill_proposer;
 pub mod textual_tool_call;
 pub mod tools;

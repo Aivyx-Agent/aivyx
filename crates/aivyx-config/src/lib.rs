@@ -820,6 +820,15 @@ pub struct AivyxConfig {
     /// gate for an operator confirmation (N.5). Defaults on for any level
     /// other than `sandbox`; `[access] confirm_destructive` overrides.
     pub confirm_destructive: Sourced<bool>,
+    /// Chapter Ward — whether the sensitive-path read guard is active. Default
+    /// `true` (privacy-by-default): even at broad reach, `fs.read` refuses
+    /// known secret locations (SSH/cloud creds, `.env`, private keys, Aivyx's
+    /// own store/passphrase) unless allow-listed. `[access]
+    /// guard_sensitive_paths = false` disables it.
+    pub guard_sensitive_paths: Sourced<bool>,
+    /// Chapter Ward — absolute (`~`-expanded) path prefixes the operator allows
+    /// the agent to read despite the built-in secret set.
+    pub allow_sensitive_paths: Vec<PathBuf>,
     /// Chapter Reins (RN.2) — the autonomy dial. Default [`AutonomyLevel::Assisted`]
     /// (absent `[autonomy]` ⇒ today's behavior). Read via [`AivyxConfig::effective_autonomy`];
     /// the daemon consumes the resolved posture in RN.3+.
@@ -4319,6 +4328,14 @@ struct RawAccess {
     root: Option<PathBuf>,
     #[serde(default)]
     confirm_destructive: Option<bool>,
+    /// Chapter Ward — master switch for the sensitive-path read guard.
+    /// Absent ⇒ on (privacy-by-default).
+    #[serde(default)]
+    guard_sensitive_paths: Option<bool>,
+    /// Chapter Ward — paths the operator allows the agent to read despite the
+    /// built-in secret set (e.g. a project's own `.env`). `~` is expanded.
+    #[serde(default)]
+    allow_sensitive_paths: Vec<String>,
 }
 
 /// `[autonomy]` section. Chapter Reins — the autonomy dial. `level` is the one
@@ -5481,6 +5498,30 @@ impl AivyxConfig {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(access_level.value.is_expanded(), FieldSource::Default),
         };
+
+        // --- sensitive-path read guard (Chapter Ward) ---------------
+        // Privacy-by-default: on unless explicitly disabled. The allow-list is
+        // `~`-expanded and canonicalized (when the path exists) so its prefixes
+        // match the canonical path the guard classifies at read time.
+        let guard_sensitive_paths = match toml.access.guard_sensitive_paths {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(true, FieldSource::Default),
+        };
+        let allow_sensitive_paths: Vec<PathBuf> = toml
+            .access
+            .allow_sensitive_paths
+            .iter()
+            .map(|s| {
+                let expanded = match s.strip_prefix("~/") {
+                    Some(rest) => match env_path(ENV_HOME) {
+                        Some(h) => h.join(rest),
+                        None => PathBuf::from(s),
+                    },
+                    None => PathBuf::from(s),
+                };
+                std::fs::canonicalize(&expanded).unwrap_or(expanded)
+            })
+            .collect();
 
         // --- autonomy dial (Chapter Reins, RN.2) --------------------
         // Parse + expose only: the resolved posture is read via
@@ -7066,6 +7107,8 @@ impl AivyxConfig {
             fs_root,
             access_level,
             confirm_destructive,
+            guard_sensitive_paths,
+            allow_sensitive_paths,
             autonomy_level,
             autonomy_overrides,
             autonomy_auto_approve,

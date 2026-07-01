@@ -1,0 +1,229 @@
+//! Chapter Ward — a default-on guard against reading known-secret files.
+//!
+//! The [security posture](../../docs/SECURITY_POSTURE.md) names its own
+//! sharpest edge: confirm-first gates *writes*, not *reads*, so at `home`/
+//! `full` reach the agent can `fs.read` `~/.ssh/id_rsa`, `~/.aws/credentials`,
+//! `.env` files — or Aivyx's own encrypted store and the `daemon.env` that
+//! holds the master passphrase — and exfiltrate them. For a privacy-first
+//! agent that's the gap that most contradicts the promise, and it is **not**
+//! mitigated by `confirm_destructive`.
+//!
+//! This closes it at the source — you cannot exfiltrate what you cannot read.
+//! A curated set of secret locations is refused by default (even at `full`),
+//! independent of the access-level sandbox root; the operator opts specific
+//! paths back in with `[access] allow_sensitive_paths`.
+//!
+//! ## Matching is location-independent
+//!
+//! We classify the **canonical** (symlink-resolved) path, so a symlink *to* a
+//! secret is caught too. Directory secrets match by path *component* (any
+//! path passing through a `.ssh` / `.aws` / … directory), so we don't need to
+//! know the user's home dir and it works the same on every host. File secrets
+//! match by exact basename (`.env`, `id_rsa`) or extension (`.pem`, `.key`,
+//! `.redb`).
+//!
+//! ## Honest scope
+//!
+//! This guards **read tools** (`fs.read` and everything that reuses its
+//! sandbox — the data readers and the Documents browser). It is
+//! defense-in-depth, not a sandbox: `shell.exec` (a separate high-trust tool
+//! gated by the access level) can still `cat` a secret. As the posture doc
+//! says, the capability model contains the *agent*; OS-level isolation
+//! contains the *host*. Blocking the fs-read path removes the largest and most
+//! accidental exfiltration surface.
+
+use std::path::{Path, PathBuf};
+
+/// Directory names that make any path passing through them secret by default
+/// (SSH/GPG keys, cloud + k8s + docker credentials, browser profiles holding
+/// cookies/logins, password managers, OS keyrings).
+const SENSITIVE_DIR_SEGMENTS: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
+    "gcloud",
+    ".azure",
+    ".mozilla",
+    ".password-store",
+    "keyrings",
+    "Keychains",
+];
+
+/// Exact basenames that are secret by default (dotfiles holding tokens/keys,
+/// well-known credential files, and — critically — Aivyx's own passphrase
+/// env-file).
+const SENSITIVE_BASENAMES: &[&str] = &[
+    ".env",
+    ".netrc",
+    ".pgpass",
+    ".git-credentials",
+    ".npmrc",
+    ".dockercfg",
+    "credentials",
+    "credentials.json",
+    "daemon.env",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+];
+
+/// Extensions that are secret by default: private keys / key stores, and the
+/// `.redb` extension of Aivyx's own encrypted substrate.
+const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "redb"];
+
+/// The read-guard policy: the built-in secret set above, minus operator
+/// allow-listed prefixes, plus any operator-added deny prefixes. Cheap to
+/// clone (a couple of `Vec<PathBuf>`); the fs tools hold it behind an `Arc`.
+#[derive(Debug, Clone, Default)]
+pub struct SensitivePolicy {
+    /// When false the guard is a no-op (byte-identical to pre-Ward behavior).
+    enabled: bool,
+    /// Canonical path prefixes the operator explicitly allows despite matching
+    /// the built-in set (e.g. a project's own `.env`).
+    allow: Vec<PathBuf>,
+    /// Extra path prefixes the operator marks secret beyond the built-ins.
+    extra_deny: Vec<PathBuf>,
+}
+
+impl SensitivePolicy {
+    /// The guard, enabled, with operator allow / extra-deny prefixes. The
+    /// prefixes should already be absolute (the caller canonicalizes/expands
+    /// `~` at config load).
+    pub fn new(allow: Vec<PathBuf>, extra_deny: Vec<PathBuf>) -> Self {
+        SensitivePolicy { enabled: true, allow, extra_deny }
+    }
+
+    /// A disabled guard — every path is allowed. Used when the operator sets
+    /// `[access] guard_sensitive_paths = false`, and as the `Default`.
+    pub fn disabled() -> Self {
+        SensitivePolicy { enabled: false, allow: Vec::new(), extra_deny: Vec::new() }
+    }
+
+    /// Classify a **canonical** path. `Some(reason)` ⇒ the read must be
+    /// refused; `None` ⇒ allowed. The reason is a short operator-facing string
+    /// (no secret contents, just why it was blocked).
+    pub fn classify(&self, canonical: &Path) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        // Operator allow-list wins over every built-in / extra-deny rule.
+        if self.allow.iter().any(|a| canonical.starts_with(a)) {
+            return None;
+        }
+        if let Some(hit) = self.extra_deny.iter().find(|d| canonical.starts_with(d)) {
+            return Some(format!(
+                "operator-marked sensitive path ({})",
+                hit.display()
+            ));
+        }
+        // Directory-segment match (location-independent).
+        for comp in canonical.components() {
+            if let Some(seg) = comp.as_os_str().to_str() {
+                if SENSITIVE_DIR_SEGMENTS.contains(&seg) {
+                    return Some(format!("under a sensitive directory ({seg})"));
+                }
+            }
+        }
+        // Basename + extension match.
+        if let Some(name) = canonical.file_name().and_then(|n| n.to_str()) {
+            if SENSITIVE_BASENAMES.contains(&name) {
+                return Some(format!("a sensitive file ({name})"));
+            }
+        }
+        if let Some(ext) = canonical.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_ascii_lowercase();
+            if SENSITIVE_EXTENSIONS.contains(&ext_lower.as_str()) {
+                return Some(format!("a sensitive file type (.{ext_lower})"));
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn guard() -> SensitivePolicy {
+        SensitivePolicy::new(Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn blocks_the_canonical_secret_locations() {
+        let g = guard();
+        for p in [
+            "/home/alice/.ssh/id_rsa",
+            "/home/alice/.ssh/id_ed25519",
+            "/home/alice/.aws/credentials",
+            "/home/alice/.gnupg/secring.gpg",
+            "/home/alice/.config/gcloud/access_tokens.db",
+            "/home/alice/project/.env",
+            "/home/alice/.netrc",
+            "/home/alice/certs/server.pem",
+            "/home/alice/certs/tls.key",
+            // Aivyx's own crown jewels:
+            "/home/alice/.config/aivyx/daemon.env",
+            "/home/alice/.local/share/aivyx/store.redb",
+        ] {
+            assert!(g.classify(Path::new(p)).is_some(), "should block {p}");
+        }
+    }
+
+    #[test]
+    fn allows_ordinary_files() {
+        let g = guard();
+        for p in [
+            "/home/alice/project/src/main.rs",
+            "/home/alice/notes/todo.md",
+            "/home/alice/data/report.csv",
+            "/home/alice/.config/app/settings.toml",
+            "/home/alice/keys.txt", // "key" in the name, but not a .key file
+        ] {
+            assert!(g.classify(Path::new(p)).is_none(), "should allow {p}");
+        }
+    }
+
+    #[test]
+    fn blocks_the_whole_ssh_dir_not_just_private_keys() {
+        // The `.ssh` directory is sensitive wholesale — the agent has no
+        // business reading even known_hosts/config/*.pub there by default.
+        let g = guard();
+        assert!(g.classify(Path::new("/home/alice/.ssh/id_rsa.pub")).is_some());
+        assert!(g.classify(Path::new("/home/alice/.ssh/known_hosts")).is_some());
+        assert!(g.classify(Path::new("/home/alice/.ssh/config")).is_some());
+    }
+
+    #[test]
+    fn operator_allowlist_overrides_builtins() {
+        let g = SensitivePolicy::new(
+            vec![PathBuf::from("/home/alice/project")],
+            Vec::new(),
+        );
+        // The project's own .env is allowed back in…
+        assert!(g.classify(Path::new("/home/alice/project/.env")).is_none());
+        // …but a secret outside the allowed prefix is still blocked.
+        assert!(g.classify(Path::new("/home/alice/.ssh/id_rsa")).is_some());
+    }
+
+    #[test]
+    fn operator_extra_deny_adds_prefixes() {
+        let g = SensitivePolicy::new(
+            Vec::new(),
+            vec![PathBuf::from("/home/alice/secret-vault")],
+        );
+        assert!(g.classify(Path::new("/home/alice/secret-vault/notes.md")).is_some());
+        assert!(g.classify(Path::new("/home/alice/other/notes.md")).is_none());
+    }
+
+    #[test]
+    fn disabled_guard_is_a_noop() {
+        let g = SensitivePolicy::disabled();
+        assert!(g.classify(Path::new("/home/alice/.ssh/id_rsa")).is_none());
+        assert!(SensitivePolicy::default()
+            .classify(Path::new("/home/alice/.aws/credentials"))
+            .is_none());
+    }
+}
