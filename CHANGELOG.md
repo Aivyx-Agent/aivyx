@@ -5,6 +5,40 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.22] — 2026-07-01
+
+### Added
+
+- **`aivyx memory conflicts` / `resolve` / `dismiss` — contradiction detection
+  for stored memory (Chapter Concord).** The agent stored whatever it was told,
+  so contradictory facts coexisted silently ("home airport is YPPH/Perth" *and*
+  "...Sydney/YSSY"). An on-demand LLM pass now flags pairs of entries that assert
+  incompatible facts about the same subject — within one topic **or across two
+  topics** — and the operator resolves each by keeping one (`resolve <topic>
+  --archive <seq>` deletes the other) or dismissing a false positive
+  (`dismiss <id>`, durably suppressed). No background cost: detection only runs
+  when asked. New `Memory::delete_entry` substrate primitive + a 26th encrypted
+  storage domain for dismissals.
+- **`aivyx memory wiki` / `graph` — CLI knowledge-base inspection.** The agent's
+  synthesized wiki pages and typed knowledge graph, previously Studio-only, are
+  now viewable from the terminal.
+
+### Fixed
+
+- **Internal `context:pruned:*` bookkeeping no longer leaks into the knowledge
+  base or the agent's context.** The earlier internal-topic filter covered only
+  `memory list`; the same machine-state archives still surfaced through six more
+  paths — the wiki + graph sweeps, both graph queries, memory search, the agent's
+  RAG auto-recall, and its wildcard `memory.read`. All are now filtered from one
+  shared definition in the memory substrate.
+- **The typed knowledge graph no longer fills with conversation-mechanics
+  noise** ("conversation history → messages", "assistant → tool_call →
+  web_search"): the extractor drops triples about the session itself and keeps
+  domain knowledge.
+- **The first daemon query after a restart no longer fails** with a spurious
+  `RecoveryNotice` protocol error (the long-standing "memory list transient
+  flakiness").
+
 ## [0.7.21] — 2026-07-01
 
 ### Changed
