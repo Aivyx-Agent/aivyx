@@ -124,10 +124,23 @@ fn host_of(url: &str) -> Option<String> {
     }
 }
 
+/// Filter resolved socket addresses down to those safe to connect to,
+/// dropping any that land on a blocked (private/loopback/link-local) IP.
+/// This is the TOCTOU-safe half of the SSRF guard: a custom reqwest DNS
+/// resolver (in `tools::web_fetch`) runs every hostname through this, so a
+/// public name that *resolves* to `127.0.0.1` / `169.254.169.254` / an
+/// RFC-1918 address (DNS rebinding) is never connected to — reqwest only ever
+/// sees the vetted addresses. Pure + testable.
+pub(crate) fn filter_public_addrs(
+    addrs: impl Iterator<Item = std::net::SocketAddr>,
+) -> Vec<std::net::SocketAddr> {
+    addrs.filter(|a| !is_blocked_ip(&a.ip())).collect()
+}
+
 /// Whether an IP is one the egress guard blocks by default: loopback,
 /// link-local (incl. the `169.254.169.254` cloud-metadata IP), private, or
 /// IPv6 unique-local (`fc00::/7`).
-fn is_blocked_ip(ip: &IpAddr) -> bool {
+pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()
@@ -207,6 +220,24 @@ mod tests {
         assert!(p.classify("https://evilgithub.com/x").is_some());
         // Allow-list still layered under the SSRF guard.
         assert!(p.classify("http://127.0.0.1/").is_some());
+    }
+
+    #[test]
+    fn filter_public_addrs_drops_private_and_keeps_public() {
+        use std::net::SocketAddr;
+        let addrs: Vec<SocketAddr> = [
+            "127.0.0.1:80",
+            "169.254.169.254:80",
+            "10.0.0.5:80",
+            "93.184.216.34:80", // public
+            "[::1]:80",
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+        let kept = filter_public_addrs(addrs.into_iter());
+        assert_eq!(kept.len(), 1, "only the public address survives");
+        assert_eq!(kept[0].ip().to_string(), "93.184.216.34");
     }
 
     #[test]

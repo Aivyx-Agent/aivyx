@@ -235,11 +235,13 @@ security failure:
   cannot reach `169.254.169.254` (cloud-metadata → credential theft) or
   `localhost:7843` (the daemon itself) / LAN services. `[access]
   allow_private_egress = true` re-enables localhost/LAN; `allow_egress_hosts`
-  hard-restricts egress to named hosts. **Residual:** this guards *where* by
-  host literal — it does not stop exfil to a *public* host (a secret in a URL
-  to `attacker.com`) unless you set an allow-list, and a public name that
-  *resolves* to a private IP (DNS rebinding) needs connect-time IP re-checking
-  (a follow-on). Combine with the host allow-list for a hard egress boundary.
+  hard-restricts egress to named hosts. **DNS rebinding is covered:** a custom
+  resolver drops private/loopback/link-local addresses at *resolution* time, so
+  a public hostname that resolves to `127.0.0.1` / `169.254.169.254` / an
+  RFC-1918 address is never connected to (TOCTOU-safe — reqwest only ever sees
+  the vetted IPs). **Residual:** it does not stop exfil to a *public* host (a
+  secret in a URL to `attacker.com`) unless you set the allow-list — combine
+  with `allow_egress_hosts` for a hard egress boundary.
 - **Prompt injection — defended, not solved (Chapter Bulwark).** Content the
   agent ingests (web pages, extracted articles, parsed files, third-party MCP
   outputs) can carry instructions aimed at the *agent* ("ignore your rules and

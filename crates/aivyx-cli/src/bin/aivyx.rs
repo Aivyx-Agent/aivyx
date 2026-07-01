@@ -384,8 +384,10 @@ fn build_fs_delete_for_channel(
 /// grants are decided by `aivyx-config` based on role.
 fn build_web_fetch_for_channel(
     _channel_kind: ChannelKind,
+    block_private: bool,
 ) -> Result<Arc<WebFetchTool>, String> {
     let tool = WebFetchToolConfig::new()
+        .with_block_private(block_private)
         .build()
         .map_err(|e| format!("failed to build web.fetch tool: {e}"))?;
     Ok(Arc::new(tool))
@@ -400,8 +402,10 @@ fn build_web_fetch_for_channel(
 /// and to give a future tier-gate hook point if needed.
 fn build_web_post_for_channel(
     _channel_kind: ChannelKind,
+    block_private: bool,
 ) -> Result<Arc<WebPostTool>, String> {
     let tool = WebPostToolConfig::new()
+        .with_block_private(block_private)
         .build()
         .map_err(|e| format!("failed to build web.post tool: {e}"))?;
     Ok(Arc::new(tool))
@@ -415,8 +419,10 @@ fn build_web_post_for_channel(
 /// Telegram-attached researcher that can fetch a URL can also read it.
 fn build_web_extract_for_channel(
     _channel_kind: ChannelKind,
+    block_private: bool,
 ) -> Result<Arc<WebExtractTool>, String> {
     let tool = WebExtractToolConfig::new()
+        .with_block_private(block_private)
         .build()
         .map_err(|e| format!("failed to build web.extract tool: {e}"))?;
     Ok(Arc::new(tool))
@@ -6260,15 +6266,21 @@ async fn run_async(
     // `aivyx-config` decide which URLs a given role may fetch,
     // and the broad `net.fetch` held by the Local CLI
     // (granted below) covers the Trusted-tier catch-all.
-    let web_fetch_tool: Arc<WebFetchTool> = build_web_fetch_for_channel(channel_kind)?;
+    // Chapter Rampart (DNS-rebinding) — block private resolves unless the
+    // operator opted into localhost/LAN egress.
+    let block_private_dns = !allow_private_egress.value;
+    let web_fetch_tool: Arc<WebFetchTool> =
+        build_web_fetch_for_channel(channel_kind, block_private_dns)?;
     tool_list.push(Arc::clone(&web_fetch_tool) as Arc<dyn Tool>);
-    let web_post_tool: Arc<WebPostTool> = build_web_post_for_channel(channel_kind)?;
+    let web_post_tool: Arc<WebPostTool> =
+        build_web_post_for_channel(channel_kind, block_private_dns)?;
     tool_list.push(Arc::clone(&web_post_tool) as Arc<dyn Tool>);
     // Chapter Forge (FG.4) — `web.extract` registers alongside
     // `web.fetch` for all channel kinds (it reuses the `net.fetch`
     // scope, which the SemiTrusted ceiling holds). "Read a page",
     // not just "fetch a page".
-    let web_extract_tool: Arc<WebExtractTool> = build_web_extract_for_channel(channel_kind)?;
+    let web_extract_tool: Arc<WebExtractTool> =
+        build_web_extract_for_channel(channel_kind, block_private_dns)?;
     tool_list.push(Arc::clone(&web_extract_tool) as Arc<dyn Tool>);
 
     // Phase 109 — `net.dns` registers unconditionally (no
@@ -9724,7 +9736,7 @@ mod tests {
 
     #[test]
     fn channel_local_receives_web_fetch() {
-        let tool = build_web_fetch_for_channel(ChannelKind::Local)
+        let tool = build_web_fetch_for_channel(ChannelKind::Local, false)
             .expect("local branch must build web.fetch cleanly");
         assert_eq!(tool.name(), "web.fetch");
     }
@@ -9739,7 +9751,7 @@ mod tests {
         // accidentally restricted to Trusted-only — which
         // would silently regress the Phase 12 "Telegram
         // researcher can fetch" goal.
-        let tool = build_web_fetch_for_channel(ChannelKind::Telegram)
+        let tool = build_web_fetch_for_channel(ChannelKind::Telegram, false)
             .expect("telegram branch must build web.fetch cleanly");
         assert_eq!(tool.name(), "web.fetch");
     }
@@ -9751,7 +9763,7 @@ mod tests {
         // `web.fetch`. If this regresses to Trusted-only, a Telegram
         // researcher that can fetch a page could no longer read it.
         for kind in [ChannelKind::Local, ChannelKind::Telegram] {
-            let tool = build_web_extract_for_channel(kind)
+            let tool = build_web_extract_for_channel(kind, false)
                 .expect("web.extract must build for both channel kinds");
             assert_eq!(tool.name(), "web.extract");
         }
@@ -9769,14 +9781,14 @@ mod tests {
 
     #[test]
     fn channel_local_receives_web_post() {
-        let tool = build_web_post_for_channel(ChannelKind::Local)
+        let tool = build_web_post_for_channel(ChannelKind::Local, false)
             .expect("local branch must build web.post cleanly");
         assert_eq!(tool.name(), "web.post");
     }
 
     #[test]
     fn channel_telegram_receives_web_post() {
-        let tool = build_web_post_for_channel(ChannelKind::Telegram)
+        let tool = build_web_post_for_channel(ChannelKind::Telegram, false)
             .expect("telegram branch must build web.post cleanly");
         assert_eq!(tool.name(), "web.post");
     }

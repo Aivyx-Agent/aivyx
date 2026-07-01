@@ -123,22 +123,76 @@ pub const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 /// scope gate is re-checked per hop by the caller; a short connect timeout keeps
 /// a dead host from eating the whole per-call budget. `label` names the tool in
 /// the error so a startup misconfig is attributable.
-fn build_redirect_free_client(label: &str) -> Result<reqwest::Client, AivyxError> {
-    reqwest::Client::builder()
+fn build_redirect_free_client(
+    label: &str,
+    block_private: bool,
+) -> Result<reqwest::Client, AivyxError> {
+    let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(10));
+    // Chapter Rampart (DNS-rebinding) — when the SSRF guard is on, install a
+    // custom resolver that drops private/loopback/link-local IPs, so a public
+    // hostname that *resolves* to `127.0.0.1` / `169.254.169.254` / RFC-1918
+    // is never connected to. This is TOCTOU-safe (reqwest connects to exactly
+    // the addresses the resolver returns), closing the gap the host-literal
+    // check can't.
+    if block_private {
+        builder = builder
+            .dns_resolver(std::sync::Arc::new(PrivateFilterResolver));
+    }
+    builder
         .build()
         .map_err(|e| AivyxError::Config(format!("{label} reqwest client build failed: {e}")))
+}
+
+/// A reqwest DNS resolver that resolves via the system, then filters out
+/// private/loopback/link-local addresses (Chapter Rampart DNS-rebinding
+/// defense). If a host resolves *only* to blocked addresses, resolution
+/// fails — the connection is refused rather than reaching a private target.
+#[derive(Debug)]
+struct PrivateFilterResolver;
+
+impl reqwest::dns::Resolve for PrivateFilterResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            // Port 0 is a placeholder; reqwest applies the URL's real port to
+            // the addresses we return.
+            let host = name.as_str().to_string();
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let kept = crate::egress::filter_public_addrs(resolved);
+            if kept.is_empty() {
+                let err: Box<dyn std::error::Error + Send + Sync> = format!(
+                    "{host} resolves only to private/loopback/link-local \
+                     addresses (blocked to prevent SSRF / DNS-rebinding)"
+                )
+                .into();
+                return Err(err);
+            }
+            let addrs: reqwest::dns::Addrs = Box::new(kept.into_iter());
+            Ok(addrs)
+        })
+    }
 }
 
 /// Construction inputs for [`WebFetchTool`]. Splits the
 /// fallible client build from the infallible tool construction,
 /// matching `shell.exec`'s config→build split.
-pub struct WebFetchToolConfig;
+#[derive(Default)]
+pub struct WebFetchToolConfig {
+    /// Chapter Rampart (DNS-rebinding) — filter private IPs at resolve time.
+    /// Default false (byte-identical); the binary sets it from `[access]`.
+    block_private: bool,
+}
 
 impl WebFetchToolConfig {
     pub fn new() -> Self {
-        WebFetchToolConfig
+        WebFetchToolConfig::default()
+    }
+
+    /// Install the DNS-rebinding filter (drop private/loopback resolves).
+    pub fn with_block_private(mut self, block: bool) -> Self {
+        self.block_private = block;
+        self
     }
 
     /// Build a ready-to-register [`WebFetchTool`] with a
@@ -147,7 +201,7 @@ impl WebFetchToolConfig {
     /// would be a startup configuration error the operator
     /// needs to see immediately, not at tool-call time.
     pub fn build(self) -> Result<WebFetchTool, AivyxError> {
-        let client = build_redirect_free_client("web.fetch")?;
+        let client = build_redirect_free_client("web.fetch", self.block_private)?;
         Ok(WebFetchTool {
             id: ToolId::new(),
             client: Arc::new(client),
@@ -158,11 +212,6 @@ impl WebFetchToolConfig {
     }
 }
 
-impl Default for WebFetchToolConfig {
-    fn default() -> Self {
-        WebFetchToolConfig::new()
-    }
-}
 
 /// Maximum number of redirect hops before the loop gives up.
 const MAX_REDIRECT_HOPS: usize = 10;
@@ -628,11 +677,20 @@ impl Tool for WebFetchTool {
 // ---------------------------------------------------------------------------
 
 /// Construction inputs for [`WebExtractTool`].
-pub struct WebExtractToolConfig;
+#[derive(Default)]
+pub struct WebExtractToolConfig {
+    block_private: bool,
+}
 
 impl WebExtractToolConfig {
     pub fn new() -> Self {
-        WebExtractToolConfig
+        WebExtractToolConfig::default()
+    }
+
+    /// Install the DNS-rebinding filter (drop private/loopback resolves).
+    pub fn with_block_private(mut self, block: bool) -> Self {
+        self.block_private = block;
+        self
     }
 
     /// Build a ready-to-register [`WebExtractTool`] sharing `web.fetch`'s
@@ -640,16 +698,13 @@ impl WebExtractToolConfig {
     pub fn build(self) -> Result<WebExtractTool, AivyxError> {
         Ok(WebExtractTool {
             id: ToolId::new(),
-            client: Arc::new(build_redirect_free_client("web.extract")?),
+            client: Arc::new(build_redirect_free_client(
+                "web.extract",
+                self.block_private,
+            )?),
             schema: web_extract_input_schema_value(),
             egress: OnceLock::new(),
         })
-    }
-}
-
-impl Default for WebExtractToolConfig {
-    fn default() -> Self {
-        WebExtractToolConfig::new()
     }
 }
 
@@ -856,23 +911,25 @@ impl Tool for WebExtractTool {
 // ---------------------------------------------------------------------------
 
 /// Construction inputs for [`WebPostTool`].
-pub struct WebPostToolConfig;
+#[derive(Default)]
+pub struct WebPostToolConfig {
+    block_private: bool,
+}
 
 impl WebPostToolConfig {
     pub fn new() -> Self {
-        WebPostToolConfig
+        WebPostToolConfig::default()
+    }
+
+    /// Install the DNS-rebinding filter (drop private/loopback resolves).
+    pub fn with_block_private(mut self, block: bool) -> Self {
+        self.block_private = block;
+        self
     }
 
     pub fn build(self) -> Result<WebPostTool, AivyxError> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| {
-                AivyxError::Config(format!(
-                    "web.post reqwest client build failed: {e}"
-                ))
-            })?;
+        // Shares web.fetch's client posture, incl. the Rampart DNS filter.
+        let client = build_redirect_free_client("web.post", self.block_private)?;
         Ok(WebPostTool {
             id: ToolId::new(),
             client: Arc::new(client),
@@ -883,11 +940,6 @@ impl WebPostToolConfig {
     }
 }
 
-impl Default for WebPostToolConfig {
-    fn default() -> Self {
-        WebPostToolConfig::new()
-    }
-}
 
 impl WebPostTool {
     /// Chapter Rampart — install the egress policy (unset ⇒ permissive).
