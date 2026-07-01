@@ -10,9 +10,11 @@ use std::io::Write;
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, evict_memory_topic, get_knowledge_graph, get_memory_topic_entries,
-    get_wiki_page, list_memory_topics, list_wiki_pages, search_memory,
+    daemon_is_running, evict_memory_topic, get_knowledge_graph, get_memory_conflicts,
+    get_memory_topic_entries, get_wiki_page, list_memory_topics, list_wiki_pages,
+    resolve_memory_conflict, search_memory,
 };
+use aivyx_channel::contradiction::MemoryConflict;
 use aivyx_channel::knowledge_graph::{GraphEntity, GraphTriple};
 use aivyx_channel::knowledge_wiki::{WikiPage, WikiPageSummary};
 use aivyx_channel::daemon_ipc::{default_socket_path, MemoryEntrySummary};
@@ -131,6 +133,35 @@ pub async fn run_memory_graph(entity: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// `aivyx memory conflicts` — run the on-demand contradiction pass.
+pub async fn run_memory_conflicts() -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let conflicts = get_memory_conflicts(&socket_path)
+        .await
+        .map_err(|e| format!("failed to detect memory conflicts: {e}"))?;
+    print!("{}", render_conflicts(&conflicts));
+    Ok(())
+}
+
+/// `aivyx memory resolve <topic> --archive <seq>`
+pub async fn run_memory_resolve(topic: &str, archive_seq: u64) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let removed = resolve_memory_conflict(&socket_path, topic, archive_seq)
+        .await
+        .map_err(|e| format!("failed to resolve conflict: {e}"))?;
+    if removed {
+        println!("Resolved: archived entry seq {archive_seq} under `{topic}`.");
+    } else {
+        println!(
+            "No entry seq {archive_seq} under `{topic}` — nothing to archive \
+             (already resolved?)."
+        );
+    }
+    Ok(())
+}
+
 async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
     if daemon_is_running(socket_path).await {
         return Ok(());
@@ -153,6 +184,43 @@ fn render_topics(topics: &[String]) -> String {
         out.push_str(&format!("  {t}\n"));
     }
     out.push_str(&format!("\n({} topic(s))\n", topics.len()));
+    out
+}
+
+fn render_conflicts(conflicts: &[MemoryConflict]) -> String {
+    let mut out = String::from("Memory conflicts\n================\n\n");
+    if conflicts.is_empty() {
+        out.push_str(
+            "No contradictions detected. (Detection is an on-demand LLM pass; \
+             it needs a configured model and at least two entries under a topic.)\n",
+        );
+        return out;
+    }
+    for c in conflicts {
+        out.push_str(&format!("⚠ {}  —  {}\n", c.topic, c.reason.trim()));
+        out.push_str(&format!(
+            "  [a] {}      (older, seq {})\n",
+            c.a.body.trim().replace('\n', " "),
+            c.a.seq,
+        ));
+        out.push_str(&format!(
+            "  [b] {}      (newer, seq {})\n",
+            c.b.body.trim().replace('\n', " "),
+            c.b.seq,
+        ));
+        out.push_str(&format!(
+            "  keep b: aivyx memory resolve {} --archive {}\n",
+            c.topic, c.a.seq,
+        ));
+        out.push_str(&format!(
+            "  keep a: aivyx memory resolve {} --archive {}\n\n",
+            c.topic, c.b.seq,
+        ));
+    }
+    out.push_str(&format!(
+        "({} conflict(s)) — `resolve` deletes the entry you DON'T keep\n",
+        conflicts.len()
+    ));
     out
 }
 
@@ -294,6 +362,38 @@ mod tests {
     fn render_topics_empty_explains_no_topics() {
         let s = render_topics(&[]);
         assert!(s.contains("No memory topics yet."));
+    }
+
+    #[test]
+    fn render_conflicts_empty_and_populated() {
+        use aivyx_channel::contradiction::{ConflictSide, MemoryConflict};
+        let empty = render_conflicts(&[]);
+        assert!(empty.contains("No contradictions detected"));
+
+        let c = MemoryConflict {
+            id: MemoryConflict::make_id("operator-note", 3, 7),
+            topic: "operator-note".into(),
+            a: ConflictSide {
+                seq: 3,
+                body: "Home airport: YPPH (Perth)".into(),
+                created_at_secs: 100,
+            },
+            b: ConflictSide {
+                seq: 7,
+                body: "Home airport: Sydney, YSSY".into(),
+                created_at_secs: 200,
+            },
+            reason: "two different home airports".into(),
+        };
+        let s = render_conflicts(std::slice::from_ref(&c));
+        assert!(s.contains("operator-note"));
+        assert!(s.contains("two different home airports"));
+        assert!(s.contains("Perth"));
+        assert!(s.contains("Sydney"));
+        // keep-b archives the older (seq 3); keep-a archives the newer (seq 7).
+        assert!(s.contains("keep b: aivyx memory resolve operator-note --archive 3"));
+        assert!(s.contains("keep a: aivyx memory resolve operator-note --archive 7"));
+        assert!(s.contains("(1 conflict(s))"));
     }
 
     #[test]

@@ -29,6 +29,10 @@ pub mod wiki;
 /// `GraphEntity` / `GraphPath`) shared by the daemon, IPC, the
 /// `graph.query` tool, and the Studio graph view.
 pub mod graph;
+/// Chapter Concord — memory-conflict DTOs (`MemoryConflict` /
+/// `ConflictSide`) shared by the daemon, IPC, and the CLI/Studio for
+/// surfacing contradictory stored facts to the operator for resolution.
+pub mod conflict;
 /// Chapter Passport — the federation relay protocol verbs (`RelayRequest` /
 /// `RelayResponse`), the wasm-clean wire shape both the local Nonagon bus and a
 /// future cross-operator relay carry (docs/FEDERATION.md §5). Crypto + the

@@ -822,6 +822,12 @@ fn run() -> Result<(), String> {
                 MemorySubcommand::Graph { entity } => {
                     memory::run_memory_graph(entity).await
                 }
+                MemorySubcommand::Conflicts => {
+                    memory::run_memory_conflicts().await
+                }
+                MemorySubcommand::Resolve { topic, archive } => {
+                    memory::run_memory_resolve(&topic, archive).await
+                }
             }
         });
     }
@@ -2004,6 +2010,12 @@ enum MemorySubcommand {
     /// `aivyx memory graph [entity]` — show the typed knowledge graph
     /// (entity → predicate → entity), optionally filtered to one entity.
     Graph { entity: Option<String> },
+    /// `aivyx memory conflicts` — run the on-demand contradiction
+    /// detection pass and list contradictory stored facts to resolve.
+    Conflicts,
+    /// `aivyx memory resolve <topic> --archive <seq>` — resolve a
+    /// conflict by deleting the losing entry (the one NOT true).
+    Resolve { topic: String, archive: u64 },
 }
 
 /// Phase 66 — `aivyx init` variant discriminator.
@@ -2747,10 +2759,48 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "graph" => MemorySubcommand::Graph {
                 entity: args.get(2).cloned(),
             },
+            "conflicts" => MemorySubcommand::Conflicts,
+            "resolve" => {
+                let topic = args.get(2).filter(|t| !t.is_empty()).ok_or_else(|| {
+                    "`aivyx memory resolve` needs a <topic> and `--archive <seq>`"
+                        .to_string()
+                })?;
+                let mut archive: Option<u64> = None;
+                let mut idx = 3;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--archive" => {
+                            let v = args.get(idx + 1).ok_or_else(|| {
+                                "`--archive` requires a seq value".to_string()
+                            })?;
+                            archive = Some(v.parse().map_err(|_| {
+                                format!("`--archive` expects an integer seq, got `{v}`")
+                            })?);
+                            idx += 2;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx memory \
+                                 resolve`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                let archive = archive.ok_or_else(|| {
+                    "`aivyx memory resolve` requires `--archive <seq>` (the entry \
+                     to delete)"
+                        .to_string()
+                })?;
+                MemorySubcommand::Resolve {
+                    topic: topic.clone(),
+                    archive,
+                }
+            }
             other => {
                 return Err(format!(
                     "unrecognized `aivyx memory` subcommand: `{other}`. \
-                     Supported: list, show, search, evict, wiki, graph"
+                     Supported: list, show, search, evict, wiki, graph, \
+                     conflicts, resolve"
                 ));
             }
         };

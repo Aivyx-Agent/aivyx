@@ -250,6 +250,12 @@ pub enum QueryPayload {
     GetKnowledgeGraph {
         limit: u32,
     },
+    /// Chapter Concord — detect contradictions in stored memory: an
+    /// on-demand LLM pass that returns pairs of entries under one topic
+    /// asserting incompatible facts, for the operator to resolve. Read-
+    /// only (detection performs no mutation). Responds with
+    /// [`QueryResponsePayload::MemoryConflicts`].
+    GetMemoryConflicts,
     /// Chapter Repertoire — the Studio Skills library: every `LearnedSkill`
     /// in the effective persona, joined with its WH.2 effectiveness
     /// (decayed EWMA + samples), plus the count of pending skill proposals.
@@ -795,6 +801,12 @@ pub enum QueryResponsePayload {
     GetKnowledgeGraph {
         entities: Vec<crate::graph::GraphEntity>,
         edges: Vec<crate::graph::GraphTriple>,
+    },
+    /// Chapter Concord — response to [`QueryPayload::GetMemoryConflicts`]:
+    /// the detected contradictions (each a `(topic, older, newer, reason)`
+    /// tuple), empty when none are found. Transient — recomputed each call.
+    MemoryConflicts {
+        conflicts: Vec<crate::conflict::MemoryConflict>,
     },
     /// Chapter Repertoire — response to [`QueryPayload::GetSkills`]: the
     /// skill inventory (each `LearnedSkill` + its effectiveness) and the
@@ -1778,6 +1790,16 @@ pub enum FrontendMessage {
         id: String,
         topic: String,
     },
+    /// Chapter Concord — operator resolves a detected contradiction by
+    /// choosing which fact is true: the *other* entry (`archive_seq`
+    /// under `topic`) is deleted from active memory. Replies with
+    /// [`DaemonMessage::MemoryConflictResolved`] carrying whether an
+    /// entry was removed.
+    ResolveMemoryConflict {
+        id: String,
+        topic: String,
+        archive_seq: u64,
+    },
     /// Chapter Repertoire — operator forgets a learned skill by name from
     /// the Studio Skills screen. Appends a `RemoveList` persona delta
     /// (operator-authoritative); responds with [`DaemonMessage::SkillForgotten`].
@@ -1993,6 +2015,16 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         deleted: Option<u64>,
+        error: Option<String>,
+    },
+    /// Chapter Concord — ack for [`FrontendMessage::ResolveMemoryConflict`].
+    /// `ok = true` with `removed` = whether the archived entry existed
+    /// (idempotent no-op → `false`); `ok = false` + `error` on substrate
+    /// rejection (empty topic, storage error).
+    MemoryConflictResolved {
+        id: String,
+        ok: bool,
+        removed: bool,
         error: Option<String>,
     },
     /// Chapter Repertoire — ack for [`FrontendMessage::ForgetSkill`].
@@ -2339,6 +2371,13 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         deleted: Option<u64>,
+        error: Option<String>,
+    },
+    /// Chapter Concord — memory-conflict resolution result.
+    MemoryConflictResolved {
+        id: String,
+        ok: bool,
+        removed: bool,
         error: Option<String>,
     },
     /// Chapter Repertoire — ack for `ForgetSkill`.

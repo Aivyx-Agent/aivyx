@@ -571,6 +571,83 @@ pub async fn get_knowledge_graph(
     }
 }
 
+/// Chapter Concord — run the on-demand contradiction detection pass and
+/// return the conflicts (empty when none, or when the daemon has no LLM /
+/// memory).
+pub async fn get_memory_conflicts(
+    socket_path: &Path,
+) -> Result<Vec<aivyx_ipc::conflict::MemoryConflict>, DaemonError> {
+    let payload =
+        send_query(socket_path, "m-conflicts", QueryPayload::GetMemoryConflicts).await?;
+    match payload {
+        QueryResponsePayload::MemoryConflicts { conflicts } => Ok(conflicts),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected MemoryConflicts, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter Concord — resolve a conflict by deleting the losing entry
+/// (`archive_seq` under `topic`). Returns whether an entry was removed
+/// (`false` = it was already gone, an idempotent no-op).
+pub async fn resolve_memory_conflict(
+    socket_path: &Path,
+    topic: &str,
+    archive_seq: u64,
+) -> Result<bool, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(1024);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let req = FrontendMessage::ResolveMemoryConflict {
+        id: "m-resolve".into(),
+        topic: topic.to_string(),
+        archive_seq,
+    };
+    writer.write_all(&encode_frame(&req)?).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::MemoryConflictResolved {
+                    ok, removed, error, ..
+                },
+                _,
+            )) => {
+                return if ok {
+                    Ok(removed)
+                } else {
+                    Err(DaemonError::Protocol(
+                        error.unwrap_or_else(|| "resolve failed".into()),
+                    ))
+                };
+            }
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected MemoryConflictResolved, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// Phase 74 — fetch up to `limit` entries for one topic.
 pub async fn get_memory_topic_entries(
     socket_path: &Path,

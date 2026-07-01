@@ -259,6 +259,45 @@ pub trait Memory: Send + Sync {
     /// Fails fast on empty topic.
     async fn forget(&self, topic: &str) -> Result<usize, MemoryError>;
 
+    /// Delete a single entry — the `seq`th under `topic` — plus its
+    /// embedding vector if one exists (dropped in lockstep, same as
+    /// `forget`/eviction). Returns `true` if an entry was removed,
+    /// `false` if no entry with that `(topic, seq)` existed (an
+    /// idempotent no-op, not an error). Fails fast on empty topic.
+    ///
+    /// Unlike `forget` (whole topic) and eviction (oldest/LRU by
+    /// policy), this removes one caller-named entry. It backs Chapter
+    /// Concord's contradiction resolution: when the operator picks
+    /// which of two conflicting facts is true, the other is deleted
+    /// here. The default impl below is a safe fallback for substrates
+    /// that predate this method (rebuild the topic without the target),
+    /// but the real substrates override it with a direct key delete.
+    async fn delete_entry(
+        &self,
+        topic: &str,
+        seq: u64,
+    ) -> Result<bool, MemoryError> {
+        // Fallback: read the topic, and if the target seq is present,
+        // there's no generic single-key delete on the trait, so the
+        // concrete substrates MUST override. Returning an error here
+        // would mask a missing override, so we signal "not found" only
+        // when the seq truly isn't present, else surface a clear error.
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let present = self
+            .get_recent(topic, usize::MAX)
+            .await?
+            .iter()
+            .any(|e| e.seq == seq);
+        if !present {
+            return Ok(false);
+        }
+        Err(MemoryError::Backend(
+            "delete_entry not supported by this memory substrate".into(),
+        ))
+    }
+
     /// Walk every topic whose literal-byte name starts with
     /// `topic_prefix`, returning one `(topic, entries)` pair per
     /// matching topic. `entries` is sorted newest-first per topic
@@ -772,6 +811,35 @@ impl Memory for InMemoryMemory {
         Ok(state.topics.remove(topic).map(|v| v.len()).unwrap_or(0))
     }
 
+    async fn delete_entry(
+        &self,
+        topic: &str,
+        seq: u64,
+    ) -> Result<bool, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+        let mut state = self.state.lock().unwrap();
+        let Some(entries) = state.topics.get_mut(topic) else {
+            return Ok(false);
+        };
+        let before = entries.len();
+        entries.retain(|e| e.seq != seq);
+        let removed = entries.len() != before;
+        // An emptied topic drops out entirely, matching `forget`'s
+        // "no orphan topics" shape.
+        if entries.is_empty() {
+            state.topics.remove(topic);
+        }
+        if removed {
+            // Drop the entry's vector in lockstep (Phase 75 invariant).
+            state
+                .vectors
+                .retain(|(t, s, _)| !(t == topic && *s == seq));
+        }
+        Ok(removed)
+    }
+
     async fn scan_prefix(
         &self,
         topic_prefix: &str,
@@ -1086,6 +1154,36 @@ mod tests {
         assert_eq!(entries[0].seq, 2);
         assert_eq!(entries[1].seq, 1);
         assert_eq!(entries[2].seq, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_entry_removes_one_entry_and_keeps_the_rest() {
+        let mem = InMemoryMemory::new();
+        let s0 = mem.put("notes", "first").await.unwrap();
+        let s1 = mem.put("notes", "second").await.unwrap();
+        let s2 = mem.put("notes", "third").await.unwrap();
+
+        // Delete the middle entry.
+        assert!(mem.delete_entry("notes", s1).await.unwrap());
+        let bodies: Vec<String> = mem
+            .get_recent("notes", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.body)
+            .collect();
+        assert_eq!(bodies, vec!["third", "first"], "only s1 removed");
+
+        // Idempotent: deleting the same seq again is a no-op false.
+        assert!(!mem.delete_entry("notes", s1).await.unwrap());
+        // A never-written seq is a no-op false, not an error.
+        assert!(!mem.delete_entry("notes", 999).await.unwrap());
+        // Deleting the last two empties the topic (no orphan topic).
+        assert!(mem.delete_entry("notes", s0).await.unwrap());
+        assert!(mem.delete_entry("notes", s2).await.unwrap());
+        assert!(!mem.list_topics().await.unwrap().contains(&"notes".to_string()));
+        // Empty topic errors.
+        assert!(mem.delete_entry("", 0).await.is_err());
     }
 
     #[tokio::test]

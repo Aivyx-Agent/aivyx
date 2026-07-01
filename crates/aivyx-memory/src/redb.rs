@@ -422,6 +422,46 @@ impl Memory for RedbMemory {
         Ok(deleted)
     }
 
+    async fn delete_entry(
+        &self,
+        topic: &str,
+        seq: u64,
+    ) -> Result<bool, MemoryError> {
+        if topic.is_empty() {
+            return Err(MemoryError::EmptyTopic);
+        }
+
+        let key = Self::entry_key(topic, seq);
+        let existed = self
+            .handle
+            .get(&key)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?
+            .is_some();
+        if !existed {
+            return Ok(false);
+        }
+        self.handle
+            .delete(&key)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+
+        // Drop the entry's vector in lockstep — from the table AND the
+        // in-memory cosine index — exactly as `forget` does per topic.
+        // next_seq is untouched: deleting one entry must never let a
+        // future write reuse a seq.
+        self.vectors_handle
+            .delete(&Self::vector_key(topic, seq))
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        self.vector_index
+            .lock()
+            .await
+            .retain(|(t, s, _)| !(t == topic && *s == seq));
+
+        Ok(true)
+    }
+
     async fn gc_topic(
         &self,
         topic: &str,
@@ -1146,6 +1186,48 @@ mod tests {
         let todos = mem.get_recent("todos", 10).await.unwrap();
         assert!(notes.is_empty());
         assert_eq!(todos.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_entry_drops_one_entry_and_its_vector() {
+        let scratch = Scratch::new();
+        let mem = open_mem(&scratch, 9).await;
+
+        let s0 = mem.put("notes", "keep me").await.unwrap();
+        let s1 = mem.put("notes", "delete me").await.unwrap();
+        mem.put_vector("notes", s1, vec![0.5, 0.5]).await.unwrap();
+        mem.put_vector("notes", s0, vec![0.1, 0.9]).await.unwrap();
+
+        assert!(mem.delete_entry("notes", s1).await.unwrap());
+
+        // Entry gone, sibling kept.
+        let bodies: Vec<String> = mem
+            .get_recent("notes", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.body)
+            .collect();
+        assert_eq!(bodies, vec!["keep me"]);
+
+        // Vector for the deleted entry is gone from the table + index;
+        // the sibling's vector survives.
+        let vecs = mem.load_all_vectors().await.unwrap();
+        assert!(vecs.iter().any(|(t, s, _)| t == "notes" && *s == s0));
+        assert!(!vecs.iter().any(|(t, s, _)| t == "notes" && *s == s1));
+
+        // Idempotent + survives reopen.
+        assert!(!mem.delete_entry("notes", s1).await.unwrap());
+        drop(mem);
+        let mem2 = open_mem(&scratch, 9).await;
+        let bodies2: Vec<String> = mem2
+            .get_recent("notes", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.body)
+            .collect();
+        assert_eq!(bodies2, vec!["keep me"], "deletion is durable");
     }
 
     #[tokio::test]

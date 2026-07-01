@@ -2560,6 +2560,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 config_toml_path.as_deref(),
                                 team_config_write_path.as_deref(),
                                 &document_roots,
+                                seed_draft_llm.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2833,6 +2834,51 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                         }
                                     }
                                 },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::ResolveMemoryConflict {
+                            id,
+                            topic,
+                            archive_seq,
+                        } => {
+                            // Chapter Concord — the operator picked which of
+                            // two conflicting facts is true; delete the other
+                            // (`archive_seq`) from active memory. Mirrors the
+                            // operator-initiated EvictMemoryTopic shape, but
+                            // removes one caller-named entry, not the topic.
+                            let resp = match memory.as_ref() {
+                                None => DaemonMessage::MemoryConflictResolved {
+                                    id,
+                                    ok: false,
+                                    removed: false,
+                                    error: Some(
+                                        "daemon has no memory substrate \
+                                         configured"
+                                            .into(),
+                                    ),
+                                },
+                                Some(mem) => {
+                                    match mem.delete_entry(&topic, archive_seq).await {
+                                        Ok(removed) => {
+                                            DaemonMessage::MemoryConflictResolved {
+                                                id,
+                                                ok: true,
+                                                removed,
+                                                error: None,
+                                            }
+                                        }
+                                        Err(e) => {
+                                            DaemonMessage::MemoryConflictResolved {
+                                                id,
+                                                ok: false,
+                                                removed: false,
+                                                error: Some(e.to_string()),
+                                            }
+                                        }
+                                    }
+                                }
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
@@ -3444,6 +3490,11 @@ async fn handle_query(
     team_config_write_path: Option<&Path>,
     // Chapter Z — the canonical roots for the Documents browser handlers.
     document_roots: &DocumentRoots,
+    // Chapter Concord — the daemon's one-shot LLM handle (the same
+    // provider + model the agent's turns use) for the on-demand
+    // `GetMemoryConflicts` detection pass. `None` ⇒ no provider, so
+    // detection returns an empty set (needs an LLM to judge).
+    contradiction_llm: Option<&SeedDraftLlm>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -4341,6 +4392,22 @@ async fn handle_query(
                     message: e.to_string(),
                 },
             }
+        }
+        QueryPayload::GetMemoryConflicts => {
+            // Chapter Concord — on-demand contradiction detection. Needs
+            // both a memory substrate and an LLM; either missing ⇒ an
+            // empty set (not an error — nothing to resolve).
+            let (Some(mem), Some(llm)) = (memory, contradiction_llm) else {
+                return QueryResponsePayload::MemoryConflicts {
+                    conflicts: Vec::new(),
+                };
+            };
+            let detector = crate::contradiction::ContradictionDetector::new(
+                Arc::clone(&llm.provider),
+                llm.model.clone(),
+            );
+            let conflicts = detector.detect(mem.as_ref()).await;
+            QueryResponsePayload::MemoryConflicts { conflicts }
         }
         QueryPayload::GetSkills => {
             // Chapter Repertoire — the effective persona's learned skills
