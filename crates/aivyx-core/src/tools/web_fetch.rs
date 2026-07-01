@@ -453,6 +453,11 @@ impl Tool for WebFetchTool {
         "web.fetch"
     }
 
+    // Chapter Bulwark — fetched web content is untrusted.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch an HTTP or HTTPS URL via GET and return its \
          status code and body. UTF-8 bodies are streamed to \
@@ -723,6 +728,11 @@ impl Tool for WebExtractTool {
         "web.extract"
     }
 
+    // Chapter Bulwark — extracted article text is untrusted.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch a web page and return its readable article text (title + clean body), \
          not raw HTML. Use this to *read* a page; use web.fetch for raw bytes. \
@@ -990,6 +1000,11 @@ impl Tool for WebPostTool {
 
     fn name(&self) -> &str {
         "web.post"
+    }
+
+    // Chapter Bulwark — a POST response body is untrusted external content.
+    fn output_is_untrusted(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {

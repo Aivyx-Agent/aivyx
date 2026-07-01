@@ -54,6 +54,10 @@ impl Tool for DataPdfTool {
     fn name(&self) -> &str {
         "data.pdf"
     }
+    // Chapter Bulwark — parsed file content is untrusted external content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Extract the text layer from a PDF under the agent's sandbox \
          root. Input: `{path: string (required), max_chars: number \

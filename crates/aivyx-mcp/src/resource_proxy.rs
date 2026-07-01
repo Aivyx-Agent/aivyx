@@ -111,6 +111,11 @@ impl Tool for McpResourceProxy {
         &self.name
     }
 
+    // Chapter Bulwark — MCP resource content is untrusted external content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         match self.kind {
             ResourceTool::List => {

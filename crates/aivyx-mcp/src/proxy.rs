@@ -53,6 +53,11 @@ impl Tool for McpToolProxy {
         &self.def.name
     }
 
+    // Chapter Bulwark — a third-party MCP server's output is untrusted content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         self.def
             .description

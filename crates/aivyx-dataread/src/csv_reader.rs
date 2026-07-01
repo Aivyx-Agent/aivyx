@@ -52,6 +52,10 @@ impl Tool for DataCsvTool {
     fn name(&self) -> &str {
         "data.csv"
     }
+    // Chapter Bulwark — parsed file content is untrusted external content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Read a CSV / delimited-text file from under the agent's \
          sandbox root into structured rows. Input: `{path: string \

@@ -116,6 +116,11 @@ impl Tool for McpPromptProxy {
         &self.name
     }
 
+    // Chapter Bulwark — MCP prompt content is untrusted external content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         match self.kind {
             PromptTool::List => {
