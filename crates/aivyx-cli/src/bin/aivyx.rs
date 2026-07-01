@@ -6433,7 +6433,11 @@ async fn run_async(
             aivyx_channel::completion_judge::CompletionJudge::new(
                 Arc::clone(&provider),
                 model.clone(),
-            ),
+            )
+            // #17b — ground verdicts on the real artifact: the judge sees the
+            // recent memory the agent wrote, so a terse summary over genuine
+            // work is no longer false-rejected.
+            .with_memory(Arc::clone(&memory)),
         );
         let _ = loop_complete_tool.set_judge(judge);
         eprintln!(
