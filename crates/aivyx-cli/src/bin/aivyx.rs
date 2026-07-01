@@ -4779,6 +4779,9 @@ async fn run_async(
         // the data readers below.
         guard_sensitive_paths,
         allow_sensitive_paths,
+        // Chapter Rampart — the network egress guard, applied to the web tools.
+        allow_private_egress,
+        allow_egress_hosts,
         // Chapter Reins — the autonomy dial. RN.5 consumes the resolved
         // posture's loop-arming dimension below (the level can arm the
         // capped loop without an explicit `[loop] enabled`). The gate
@@ -5507,6 +5510,14 @@ async fn run_async(
         .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy))
         .build()
         .map_err(|e| format!("failed to build fs.read tool: {e}"))?;
+    // Chapter Rampart — the network egress guard (SSRF / private-network block
+    // on by default + opt-in host allow-list), shared by the web tools.
+    let egress_policy = std::sync::Arc::new(
+        aivyx_core::egress::EgressPolicy::new(
+            !allow_private_egress.value,
+            allow_egress_hosts.clone(),
+        ),
+    );
     // Chapter N — confirm-first posture (overwrites need `confirmed: true`).
     let confirm_destructive = confirm_destructive.value;
     let fs_write = FsWriteToolConfig::new(fs_root.clone())
@@ -7321,6 +7332,10 @@ async fn run_async(
     //      redirect hop in their execute() loop.
     let _ = web_fetch_tool.set_effective_capabilities(capabilities.clone());
     let _ = web_post_tool.set_effective_capabilities(capabilities.clone());
+    // Chapter Rampart — install the egress guard on all three network tools.
+    let _ = web_fetch_tool.set_egress_policy(std::sync::Arc::clone(&egress_policy));
+    let _ = web_extract_tool.set_egress_policy(std::sync::Arc::clone(&egress_policy));
+    let _ = web_post_tool.set_egress_policy(std::sync::Arc::clone(&egress_policy));
 
     // ---- Phase 14 Task 3 — wire the role.switch child factory --------
     //

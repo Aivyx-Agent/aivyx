@@ -220,6 +220,18 @@ security failure:
   gated by the provider's reasoning quality. Small local models hallucinate
   and loop — the cycle breakers exist *because* they run away. Serious
   unattended work realistically needs a strong provider.
+- **Network egress — SSRF/metadata guarded, public exfil is not (Chapter
+  Rampart).** The network tools (`web.fetch` / `web.extract` / `web.post`)
+  refuse loopback / link-local / private / unique-local targets by default —
+  on the initial URL *and* every redirect hop — so a (possibly injected) agent
+  cannot reach `169.254.169.254` (cloud-metadata → credential theft) or
+  `localhost:7843` (the daemon itself) / LAN services. `[access]
+  allow_private_egress = true` re-enables localhost/LAN; `allow_egress_hosts`
+  hard-restricts egress to named hosts. **Residual:** this guards *where* by
+  host literal — it does not stop exfil to a *public* host (a secret in a URL
+  to `attacker.com`) unless you set an allow-list, and a public name that
+  *resolves* to a private IP (DNS rebinding) needs connect-time IP re-checking
+  (a follow-on). Combine with the host allow-list for a hard egress boundary.
 - **The supply chain it drives.** `shell.exec` + `net.fetch` means the
   agent can `curl | sh` or pull arbitrary packages. The sandbox bounds
   *where* it runs, not *what* it downloads.

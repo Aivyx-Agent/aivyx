@@ -35,6 +35,7 @@ pub mod claim_check;
 pub mod gate_policy;
 pub mod llm_planner;
 pub mod planner;
+pub mod egress;
 pub mod relevance;
 pub mod schema;
 pub mod sensitive_paths;

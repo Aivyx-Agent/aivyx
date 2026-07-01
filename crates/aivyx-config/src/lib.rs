@@ -829,6 +829,13 @@ pub struct AivyxConfig {
     /// Chapter Ward — absolute (`~`-expanded) path prefixes the operator allows
     /// the agent to read despite the built-in secret set.
     pub allow_sensitive_paths: Vec<PathBuf>,
+    /// Chapter Rampart — allow the network tools to reach loopback / private /
+    /// link-local addresses. Default `false` ⇒ the SSRF / cloud-metadata guard
+    /// is on (public-web research unaffected).
+    pub allow_private_egress: Sourced<bool>,
+    /// Chapter Rampart — when non-empty, the network tools may reach ONLY these
+    /// hosts (exact or dot-suffix subdomain). Empty ⇒ any public host.
+    pub allow_egress_hosts: Vec<String>,
     /// Chapter Reins (RN.2) — the autonomy dial. Default [`AutonomyLevel::Assisted`]
     /// (absent `[autonomy]` ⇒ today's behavior). Read via [`AivyxConfig::effective_autonomy`];
     /// the daemon consumes the resolved posture in RN.3+.
@@ -4336,6 +4343,14 @@ struct RawAccess {
     /// built-in secret set (e.g. a project's own `.env`). `~` is expanded.
     #[serde(default)]
     allow_sensitive_paths: Vec<String>,
+    /// Chapter Rampart — allow the network tools to reach loopback / private /
+    /// link-local addresses. Absent ⇒ false (SSRF guard on).
+    #[serde(default)]
+    allow_private_egress: Option<bool>,
+    /// Chapter Rampart — when non-empty, the network tools may ONLY reach these
+    /// hosts (exact or dot-suffix subdomain). Empty ⇒ any public host.
+    #[serde(default)]
+    allow_egress_hosts: Vec<String>,
 }
 
 /// `[autonomy]` section. Chapter Reins — the autonomy dial. `level` is the one
@@ -5522,6 +5537,13 @@ impl AivyxConfig {
                 std::fs::canonicalize(&expanded).unwrap_or(expanded)
             })
             .collect();
+
+        // --- egress guard (Chapter Rampart) -------------------------
+        let allow_private_egress = match toml.access.allow_private_egress {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(false, FieldSource::Default),
+        };
+        let allow_egress_hosts = toml.access.allow_egress_hosts.clone();
 
         // --- autonomy dial (Chapter Reins, RN.2) --------------------
         // Parse + expose only: the resolved posture is read via
@@ -7109,6 +7131,8 @@ impl AivyxConfig {
             confirm_destructive,
             guard_sensitive_paths,
             allow_sensitive_paths,
+            allow_private_egress,
+            allow_egress_hosts,
             autonomy_level,
             autonomy_overrides,
             autonomy_auto_approve,

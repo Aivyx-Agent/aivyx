@@ -83,9 +83,26 @@ use serde_json::{json, Value};
 
 use aivyx_capability::{CapabilitySet, Scope};
 
+use crate::egress::EgressPolicy;
 use crate::{
     AivyxError, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, Verification,
 };
+
+/// Chapter Rampart — refuse a URL the egress policy blocks (SSRF /
+/// private-network guard + opt-in host allow-list). Shared by all three
+/// network tools; checked on the initial URL AND every redirect hop. An
+/// unset policy (`OnceLock` empty, e.g. in tests) is permissive.
+fn egress_refusal(
+    tool: ToolId,
+    egress: &OnceLock<Arc<EgressPolicy>>,
+    url: &str,
+) -> Option<ToolOutcome> {
+    let reason = egress.get()?.classify(url)?;
+    Some(ToolOutcome::Failed(AivyxError::Tool {
+        tool,
+        detail: format!("refusing to reach {url} — {reason}."),
+    }))
+}
 
 /// Default wall-clock timeout for a single `web.fetch` invocation.
 /// 30 seconds matches `shell.exec` and is generous enough for
@@ -136,6 +153,7 @@ impl WebFetchToolConfig {
             client: Arc::new(client),
             schema: web_fetch_input_schema_value(),
             effective_caps: OnceLock::new(),
+            egress: OnceLock::new(),
         })
     }
 }
@@ -160,6 +178,8 @@ pub struct WebFetchTool {
     /// Set once at startup via `set_effective_capabilities`.
     /// When absent, redirects are always denied (safe default).
     effective_caps: OnceLock<CapabilitySet>,
+    /// Chapter Rampart — egress policy (unset ⇒ permissive; the binary sets it).
+    egress: OnceLock<Arc<EgressPolicy>>,
 }
 
 impl std::fmt::Debug for WebFetchTool {
@@ -182,7 +202,17 @@ impl WebFetchTool {
             client: Arc::new(client),
             schema: web_fetch_input_schema_value(),
             effective_caps: OnceLock::new(),
+            egress: OnceLock::new(),
         }
+    }
+
+    /// Chapter Rampart — install the egress policy (SSRF guard + host
+    /// allow-list). Called once at startup; unset ⇒ permissive.
+    pub fn set_egress_policy(
+        &self,
+        policy: Arc<EgressPolicy>,
+    ) -> Result<(), Arc<EgressPolicy>> {
+        self.egress.set(policy)
     }
 
     /// Install the effective capability set for per-hop redirect
@@ -487,6 +517,11 @@ impl Tool for WebFetchTool {
         let mut hops: usize = 0;
 
         let response = loop {
+            // Chapter Rampart — SSRF / egress guard on the initial URL and
+            // every redirect hop (a public URL can 3xx to 169.254.169.254).
+            if let Some(o) = egress_refusal(self.id, &self.egress, &current_url) {
+                return o;
+            }
             let request = self
                 .client
                 .get(&current_url)
@@ -602,6 +637,7 @@ impl WebExtractToolConfig {
             id: ToolId::new(),
             client: Arc::new(build_redirect_free_client("web.extract")?),
             schema: web_extract_input_schema_value(),
+            egress: OnceLock::new(),
         })
     }
 }
@@ -641,6 +677,8 @@ pub struct WebExtractTool {
     id: ToolId,
     client: Arc<reqwest::Client>,
     schema: Value,
+    /// Chapter Rampart — egress policy (unset ⇒ permissive).
+    egress: OnceLock<Arc<EgressPolicy>>,
 }
 
 impl std::fmt::Debug for WebExtractTool {
@@ -650,6 +688,14 @@ impl std::fmt::Debug for WebExtractTool {
 }
 
 impl WebExtractTool {
+    /// Chapter Rampart — install the egress policy (unset ⇒ permissive).
+    pub fn set_egress_policy(
+        &self,
+        policy: Arc<EgressPolicy>,
+    ) -> Result<(), Arc<EgressPolicy>> {
+        self.egress.set(policy)
+    }
+
     /// Pure readability pass over an HTML string. Split out so it is directly
     /// unit-testable without the network. Returns `(title, byline, text)`.
     pub(crate) fn extract_html(
@@ -712,6 +758,10 @@ impl Tool for WebExtractTool {
                 tool: self.id,
                 detail: format!("url must start with http:// or https:// (got {url:?})"),
             });
+        }
+        // Chapter Rampart — SSRF / egress guard.
+        if let Some(o) = egress_refusal(self.id, &self.egress, &url) {
+            return o;
         }
         let timeout_ms = input_timeout_ms(&input);
 
@@ -818,6 +868,7 @@ impl WebPostToolConfig {
             client: Arc::new(client),
             schema: web_post_input_schema_value(),
             effective_caps: OnceLock::new(),
+            egress: OnceLock::new(),
         })
     }
 }
@@ -829,6 +880,14 @@ impl Default for WebPostToolConfig {
 }
 
 impl WebPostTool {
+    /// Chapter Rampart — install the egress policy (unset ⇒ permissive).
+    pub fn set_egress_policy(
+        &self,
+        policy: Arc<EgressPolicy>,
+    ) -> Result<(), Arc<EgressPolicy>> {
+        self.egress.set(policy)
+    }
+
     /// Install the effective capability set for per-hop redirect
     /// scope checks. Same pattern as `WebFetchTool`.
     pub fn set_effective_capabilities(
@@ -854,6 +913,8 @@ pub struct WebPostTool {
     schema: Value,
     /// Effective capabilities for per-hop redirect scope checks.
     effective_caps: OnceLock<CapabilitySet>,
+    /// Chapter Rampart — egress policy (unset ⇒ permissive).
+    egress: OnceLock<Arc<EgressPolicy>>,
 }
 
 impl std::fmt::Debug for WebPostTool {
@@ -978,6 +1039,11 @@ impl Tool for WebPostTool {
                 detail: format!("url must start with http:// or https:// (got {url:?})"),
             });
         }
+        // Chapter Rampart — SSRF / egress guard (outbound POST to a private
+        // address is the exfil case this most protects against).
+        if let Some(o) = egress_refusal(self.id, &self.egress, &url) {
+            return o;
+        }
 
         let method_str = input
             .get("method")
@@ -1089,6 +1155,11 @@ impl Tool for WebPostTool {
             }
 
             current_url = location;
+
+            // Chapter Rampart — egress guard on the redirect target too.
+            if let Some(o) = egress_refusal(self.id, &self.egress, &current_url) {
+                return o;
+            }
 
             // Redirect hops always use GET (POST-redirect-GET per
             // HTTP 303 semantics; we apply this uniformly).
@@ -1421,6 +1492,31 @@ mod tests {
                 );
             }
             other => panic!("expected Failed Tool error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_egress_guard_refuses_metadata_and_localhost() {
+        // The guard short-circuits before any network call, so this needs no
+        // server. Covers the cloud-metadata + localhost SSRF cases.
+        let tool = build_tool();
+        let _ = tool.set_egress_policy(std::sync::Arc::new(
+            crate::egress::EgressPolicy::default(),
+        ));
+        let channel = CapturingChannel::new();
+        let audit = NullAuditHook;
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://localhost:7843/api",
+            "http://127.0.0.1/",
+        ] {
+            let ctx = make_ctx(&channel, &audit);
+            match tool.execute(json!({ "url": url }), &ctx).await {
+                ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                    assert!(detail.contains("refusing to reach"), "url {url}: {detail}");
+                }
+                other => panic!("expected egress refusal for {url}, got {other:?}"),
+            }
         }
     }
 
