@@ -5,6 +5,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.23] — 2026-07-01
+
+### Fixed
+
+Autonomous-loop hardening, all surfaced by a live dogfood run (gpt-oss:20b):
+
+- **Auto-delegated stories no longer skip on a specialist name/role mismatch.**
+  The planner refers to a team specialist by its role label ("Operations"), but
+  resolution matched only the roster id ("ops") → the mission errored `no
+  specialist "Operations"` → retried → skipped a doable story. Resolution now
+  matches the name **or** the role, case-insensitively (extends the earlier
+  case-only fix, which never covered genuine name↔role differences).
+- **Completion verification now judges the real artifact, not just the summary.**
+  With `[loop] verify_completion`, the acceptance judge was rejecting
+  genuinely-complete research/memory stories because the agent's summary was
+  terse — even though the note was in memory. The judge is now shown a snapshot
+  of the recent memory the agent wrote and passes when that evidence satisfies
+  the criteria (solo `loop.complete` path).
+- **A malformed tool call from a local model no longer hard-fails the turn.**
+  Ollama returns a bare HTTP 500 when a model emits unparseable tool-call JSON;
+  the provider now retries once (resampling almost always parses), while genuine
+  500s still surface immediately.
+
 ## [0.7.22] — 2026-07-01
 
 ### Added
