@@ -71,6 +71,21 @@ pub const AUTO_NUM_CTX_CAP: u32 = 16_384;
 /// and offers to pull it; `aivyx doctor` checks for a usable model against it.
 pub const RECOMMENDED_LOCAL_MODEL: &str = "qwen3:8b";
 
+/// #17c — how many times to resample after Ollama rejects the model's
+/// malformed tool-call JSON with an HTTP 500. One retry recovers the common
+/// transient case without turning a persistent bad-output loop into a spend
+/// sink.
+const MAX_TOOL_PARSE_RETRIES: usize = 1;
+
+/// Whether an Ollama error body is its "the model emitted unparseable
+/// tool-call JSON" failure (`error parsing tool call: raw='…'`), as opposed
+/// to a genuine server fault we must surface. Matching Ollama's message text
+/// is the only signal available (it returns a plain 500). Pure + tested.
+fn is_ollama_tool_parse_error(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("parsing tool call") || m.contains("parse tool call")
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -462,10 +477,34 @@ impl crate::LlmProvider for OllamaProvider {
         }
 
         let endpoint = self.endpoint();
-        let byte_stream = self
-            .transport
-            .post_sse(&endpoint, &headers, body_bytes, cancellation)
-            .await?;
+        let mut attempt = 0usize;
+        // #17c — Ollama returns HTTP 500 "error parsing tool call" when the
+        // model emits malformed tool-call JSON (a transient small-model output
+        // glitch, not a server fault). It hard-fails the whole turn; but a fresh
+        // sample almost always parses, so retry once before giving up. A plain
+        // re-POST resamples (generation has no server-side side effects, and the
+        // cancellation token is honored each attempt).
+        let byte_stream = loop {
+            match self
+                .transport
+                .post_sse(&endpoint, &headers, body_bytes.clone(), cancellation)
+                .await
+            {
+                Ok(s) => break s,
+                Err(LlmError::Api { status: 500, message })
+                    if attempt < MAX_TOOL_PARSE_RETRIES
+                        && is_ollama_tool_parse_error(&message) =>
+                {
+                    attempt += 1;
+                    eprintln!(
+                        "aivyx ollama: model emitted a malformed tool call; \
+                         resampling (retry {attempt}/{MAX_TOOL_PARSE_RETRIES})"
+                    );
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        };
 
         // Phase 120 Task 3 — snapshot the canonical tool-name
         // set so the stream's terminal-build step can flag any
@@ -1182,6 +1221,103 @@ mod tests {
         // separate test below for the URL assertion via a
         // capturing transport variant.
         let _ = captured_handle;
+    }
+
+    #[test]
+    fn detects_ollama_tool_parse_error_body() {
+        assert!(is_ollama_tool_parse_error(
+            "error parsing tool call: raw='{\"story...\"}', err=invalid character"
+        ));
+        assert!(is_ollama_tool_parse_error("Error Parsing Tool Call")); // case-insensitive
+        // A genuine server fault must NOT be treated as retryable tool noise.
+        assert!(!is_ollama_tool_parse_error("out of memory"));
+        assert!(!is_ollama_tool_parse_error("model not found"));
+    }
+
+    /// #17c — fails the first `post_sse` with Ollama's tool-parse 500, then
+    /// succeeds, so we can assert `chat_stream` retries and recovers.
+    struct FailOnceOllamaTransport {
+        calls: std::sync::atomic::AtomicUsize,
+        canned_jsonl: Vec<u8>,
+    }
+    #[async_trait]
+    impl HttpTransport for FailOnceOllamaTransport {
+        async fn post_sse(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            let n = self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                return Err(LlmError::Api {
+                    status: 500,
+                    message: "error parsing tool call: raw='{\"story...\"}', \
+                              err=invalid character '}' after object key"
+                        .into(),
+                });
+            }
+            let chunk = Bytes::from(self.canned_jsonl.clone());
+            Ok(Pin::from(Box::new(stream::once(async move { Ok(chunk) })))
+                as Pin<Box<dyn futures_util::Stream<Item = _> + Send>>)
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_stream_retries_once_on_malformed_tool_call_500() {
+        let jsonl = "{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"done\":true,\"prompt_eval_count\":1,\"eval_count\":1}\n";
+        let transport = std::sync::Arc::new(FailOnceOllamaTransport {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            canned_jsonl: jsonl.as_bytes().to_vec(),
+        });
+        let provider = OllamaProvider::with_transport(
+            OllamaConfig::default_local(),
+            Box::new(ArcTransport(std::sync::Arc::clone(&transport))),
+        );
+        let msgs = vec![LlmMessage::user_text("hi")];
+        let req = LlmRequest {
+            model: "qwen3.6:27b",
+            system: None,
+            messages: &msgs,
+            tools: &[],
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let cancel = CancellationToken::new();
+        // Would be Err without the retry; the second attempt succeeds.
+        let mut stream = provider
+            .chat_stream(req, &cancel)
+            .await
+            .expect("retry recovers the malformed-tool-call 500");
+        while stream.next_event().await.unwrap().is_some() {}
+        assert!(matches!(
+            stream.finish().await.unwrap(),
+            LlmStepEnd::FinalMessage { .. }
+        ));
+        assert_eq!(
+            transport.calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "post_sse called twice: initial failure + one retry"
+        );
+    }
+
+    /// Adapts an `Arc<T: HttpTransport>` into a `Box<dyn HttpTransport>` so a
+    /// test can hold a handle to the transport after moving it into a provider.
+    struct ArcTransport<T: HttpTransport>(std::sync::Arc<T>);
+    #[async_trait]
+    impl<T: HttpTransport> HttpTransport for ArcTransport<T> {
+        async fn post_sse(
+            &self,
+            url: &str,
+            headers: &[(&str, &str)],
+            body: Vec<u8>,
+            cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            self.0.post_sse(url, headers, body, cancellation).await
+        }
     }
 
     /// Helper: build a provider with a transport whose captured
