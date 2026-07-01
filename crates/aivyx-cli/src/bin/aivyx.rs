@@ -5522,6 +5522,9 @@ async fn run_async(
     let confirm_destructive = confirm_destructive.value;
     let fs_write = FsWriteToolConfig::new(fs_root.clone())
         .with_confirm_destructive(confirm_destructive)
+        // Chapter Portcullis — same guard as fs.read, on the write path:
+        // refuse writes to secret + persistence locations.
+        .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy))
         .build()
         .map_err(|e| format!("failed to build fs.write tool: {e}"))?;
     // Phase 100 — fs.metadata is read-only; like fs.read / fs.write

@@ -74,6 +74,35 @@ const SENSITIVE_BASENAMES: &[&str] = &[
 /// `.redb` extension of Aivyx's own encrypted substrate.
 const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "redb"];
 
+/// Directory names a *write* into which plants code that runs later
+/// (auto-start, service units, scheduled jobs, git hooks). Chapter Portcullis.
+const PERSISTENCE_DIR_SEGMENTS: &[&str] = &[
+    "autostart",   // ~/.config/autostart/*.desktop
+    "systemd",     // ~/.config/systemd/user, /etc/systemd
+    "cron.d",
+    "cron.daily",
+    "cron.hourly",
+    "init.d",
+    "hooks",       // .git/hooks/*
+    "LaunchAgents",
+    "LaunchDaemons",
+];
+
+/// Exact basenames a *write* to which hijacks a login shell / SSH / cron.
+const PERSISTENCE_BASENAMES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zshenv",
+    ".zlogin",
+    "authorized_keys",
+    "crontab",
+    ".xprofile",
+];
+
 /// The read-guard policy: the built-in secret set above, minus operator
 /// allow-listed prefixes, plus any operator-added deny prefixes. Cheap to
 /// clone (a couple of `Vec<PathBuf>`); the fs tools hold it behind an `Arc`.
@@ -102,10 +131,32 @@ impl SensitivePolicy {
         SensitivePolicy { enabled: false, allow: Vec::new(), extra_deny: Vec::new() }
     }
 
-    /// Classify a **canonical** path. `Some(reason)` ⇒ the read must be
-    /// refused; `None` ⇒ allowed. The reason is a short operator-facing string
-    /// (no secret contents, just why it was blocked).
+    /// Classify a **canonical** path for READING. `Some(reason)` ⇒ refuse;
+    /// `None` ⇒ allowed. The reason is a short operator-facing string (no
+    /// secret contents, just why it was blocked).
     pub fn classify(&self, canonical: &Path) -> Option<String> {
+        self.gated(canonical, read_sensitive_reason)
+    }
+
+    /// Classify a **canonical** path for WRITING (Chapter Portcullis). Refuses
+    /// the read-sensitive set (overwriting a credential is as bad as reading
+    /// it) AND persistence/exec locations — shell rc files, autostart, systemd
+    /// units, cron, `.ssh/authorized_keys`, git hooks — which are how a
+    /// (possibly injected) agent would plant a backdoor even when it has no
+    /// interest in reading them. Same enabled/allow-list gating as reads.
+    pub fn classify_write(&self, canonical: &Path) -> Option<String> {
+        self.gated(canonical, |c| {
+            read_sensitive_reason(c).or_else(|| persistence_reason(c))
+        })
+    }
+
+    /// Shared gate: honor `enabled` + the operator allow-list + extra-deny,
+    /// then defer to a matcher for the built-in rules.
+    fn gated(
+        &self,
+        canonical: &Path,
+        matcher: impl Fn(&Path) -> Option<String>,
+    ) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -119,35 +170,59 @@ impl SensitivePolicy {
                 hit.display()
             ));
         }
-        // Directory-segment match (location-independent).
-        for comp in canonical.components() {
-            if let Some(seg) = comp.as_os_str().to_str() {
-                if SENSITIVE_DIR_SEGMENTS.contains(&seg) {
-                    return Some(format!("under a sensitive directory ({seg})"));
-                }
-            }
-        }
-        // Basename + extension match.
-        if let Some(name) = canonical.file_name().and_then(|n| n.to_str()) {
-            if SENSITIVE_BASENAMES.contains(&name) {
-                return Some(format!("a sensitive file ({name})"));
-            }
-            // dotenv family beyond the bare `.env`: `.env.local`,
-            // `.env.production`, `app.env`, `prod.env` — all commonly hold
-            // secrets. (`.env` itself has no Rust "extension", so it's caught
-            // above; these variants are caught here.)
-            if name.starts_with(".env.") || name.ends_with(".env") {
-                return Some(format!("a dotenv file ({name})"));
-            }
-        }
-        if let Some(ext) = canonical.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_ascii_lowercase();
-            if SENSITIVE_EXTENSIONS.contains(&ext_lower.as_str()) {
-                return Some(format!("a sensitive file type (.{ext_lower})"));
-            }
-        }
-        None
+        matcher(canonical)
     }
+}
+
+/// The read-sensitive built-in match (secrets). Location-independent.
+fn read_sensitive_reason(canonical: &Path) -> Option<String> {
+    for comp in canonical.components() {
+        if let Some(seg) = comp.as_os_str().to_str() {
+            if SENSITIVE_DIR_SEGMENTS.contains(&seg) {
+                return Some(format!("under a sensitive directory ({seg})"));
+            }
+        }
+    }
+    if let Some(name) = canonical.file_name().and_then(|n| n.to_str()) {
+        if SENSITIVE_BASENAMES.contains(&name) {
+            return Some(format!("a sensitive file ({name})"));
+        }
+        // dotenv family beyond the bare `.env`: `.env.local`, `app.env`, …
+        if name.starts_with(".env.") || name.ends_with(".env") {
+            return Some(format!("a dotenv file ({name})"));
+        }
+    }
+    if let Some(ext) = canonical.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        if SENSITIVE_EXTENSIONS.contains(&ext_lower.as_str()) {
+            return Some(format!("a sensitive file type (.{ext_lower})"));
+        }
+    }
+    None
+}
+
+/// The write-only persistence/exec match: locations where a *write* plants
+/// startup code, an SSH backdoor, a scheduled job, or a service.
+fn persistence_reason(canonical: &Path) -> Option<String> {
+    for comp in canonical.components() {
+        if let Some(seg) = comp.as_os_str().to_str() {
+            if PERSISTENCE_DIR_SEGMENTS.contains(&seg) {
+                return Some(format!(
+                    "a persistence/startup location ({seg}) — writing here can \
+                     plant code that runs later"
+                ));
+            }
+        }
+    }
+    if let Some(name) = canonical.file_name().and_then(|n| n.to_str()) {
+        if PERSISTENCE_BASENAMES.contains(&name) {
+            return Some(format!(
+                "a startup/persistence file ({name}) — writing here can plant \
+                 code that runs later"
+            ));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -227,6 +302,31 @@ mod tests {
         );
         assert!(g.classify(Path::new("/home/alice/secret-vault/notes.md")).is_some());
         assert!(g.classify(Path::new("/home/alice/other/notes.md")).is_none());
+    }
+
+    #[test]
+    fn classify_write_blocks_persistence_and_secrets() {
+        let g = guard();
+        // Persistence / exec locations (write-only concerns).
+        for p in [
+            "/home/alice/.bashrc",
+            "/home/alice/.zshrc",
+            "/home/alice/.ssh/authorized_keys",
+            "/home/alice/.config/autostart/eve.desktop",
+            "/home/alice/.config/systemd/user/x.service",
+            "/etc/cron.d/job",
+            "/home/alice/project/.git/hooks/pre-commit",
+        ] {
+            assert!(g.classify_write(Path::new(p)).is_some(), "write should block {p}");
+        }
+        // Secrets are blocked for writes too (overwrite a credential).
+        assert!(g.classify_write(Path::new("/home/alice/.aws/credentials")).is_some());
+        // Ordinary writes are fine.
+        assert!(g.classify_write(Path::new("/home/alice/project/notes.md")).is_none());
+        assert!(g.classify_write(Path::new("/home/alice/project/src/main.rs")).is_none());
+        // Persistence names are a WRITE concern only — reads of them are allowed
+        // (e.g. the agent inspecting your .bashrc is fine; rewriting it isn't).
+        assert!(g.classify(Path::new("/home/alice/.bashrc")).is_none());
     }
 
     #[test]

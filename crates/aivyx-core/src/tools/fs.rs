@@ -546,6 +546,7 @@ pub const MAX_WRITE_BYTES: usize = 256 * 1024;
 pub struct FsWriteToolConfig {
     sandbox_root: PathBuf,
     confirm_destructive: bool,
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsWriteToolConfig {
@@ -553,6 +554,7 @@ impl FsWriteToolConfig {
         FsWriteToolConfig {
             sandbox_root: sandbox_root.into(),
             confirm_destructive: false,
+            sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
         }
     }
 
@@ -560,6 +562,17 @@ impl FsWriteToolConfig {
     /// (a fresh write to a new path never gates). Off by default.
     pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
         self.confirm_destructive = confirm;
+        self
+    }
+
+    /// Chapter Portcullis — install the sensitive-path guard so writes to
+    /// secret + persistence locations (shell rc, authorized_keys, systemd/
+    /// autostart/cron, git hooks) are refused. `classify_write` is used.
+    pub fn with_sensitive_policy(
+        mut self,
+        policy: Arc<crate::sensitive_paths::SensitivePolicy>,
+    ) -> Self {
+        self.sensitive = policy;
         self
     }
 
@@ -584,6 +597,7 @@ impl FsWriteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: write_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
+            sensitive: self.sensitive,
         })
     }
 }
@@ -601,6 +615,8 @@ pub struct FsWriteTool {
     /// Chapter N — when true, overwriting an existing file needs
     /// `confirmed: true`.
     confirm_destructive: bool,
+    /// Chapter Portcullis — write guard for secret + persistence paths.
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsWriteTool {
@@ -778,6 +794,24 @@ impl Tool for FsWriteTool {
             });
         }
         let canonical_target = canonical_parent.join(&file_name);
+
+        // ---- Chapter Portcullis — sensitive-write guard -----------
+        //
+        // Refuse writes to secret + persistence locations (shell rc files,
+        // ~/.ssh/authorized_keys, systemd/autostart/cron, git hooks, and the
+        // read-sensitive set) even inside the sandbox — the persistence /
+        // backdoor vector `confirm_destructive` only soft-gates. Checked on
+        // the resolved parent + name (the file itself may not exist yet).
+        if let Some(reason) = self.sensitive.classify_write(&canonical_target) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to write {} — {reason}. Add it to `[access] \
+                     allow_sensitive_paths` if you intend the agent to write it.",
+                    canonical_target.display()
+                ),
+            });
+        }
 
         // If the target already exists as a symlink (not a regular
         // file), we must also canonicalize it and verify the resolved
@@ -1976,6 +2010,35 @@ mod tests {
         FsWriteToolConfig::new(sandbox.root.clone())
             .build()
             .expect("sandbox root must be canonicalizable for write tests")
+    }
+
+    #[test]
+    fn portcullis_refuses_writes_to_persistence_and_secret_paths() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new();
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(SensitivePolicy::new(vec![], vec![])))
+            .build()
+            .expect("build guarded write tool");
+
+        // A persistence write (shell rc) inside the sandbox is refused…
+        match run_execute(&tool, json!({ "path": ".bashrc", "content": "evil() { :; }" })) {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("refusing to write"), "{detail}");
+                assert!(detail.contains("persistence") || detail.contains("startup"), "{detail}");
+            }
+            other => panic!("expected refusal for .bashrc, got {other:?}"),
+        }
+        // …and a secret write too.
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": ".netrc", "content": "machine x" })),
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+        // An ordinary write succeeds.
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": "notes.md", "content": "hello" })),
+            ToolOutcome::Completed { .. }
+        ));
     }
 
     // ---- FsWriteTool: construction + config -----------------------

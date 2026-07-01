@@ -216,6 +216,14 @@ security failure:
   not `shell.exec` — a `cat ~/.ssh/id_rsa` via shell is still possible, so at
   broad reach isolate credentials at the OS level (see §8). You cannot exfil
   what the read tools won't hand over, but a shell can still reach the disk.
+- **Write-to-persist — guarded (Chapter Portcullis).** `fs.write` now hard-
+  refuses writes to secret + *persistence* locations — shell rc files
+  (`.bashrc`/`.zshrc`/`.profile`), `~/.ssh/authorized_keys`, `~/.config/
+  autostart` & `systemd`, `cron.*`, git hooks — even inside the sandbox and
+  even at `full`. This closes the backdoor/persistence vector that
+  `confirm_destructive` only *soft*-gated (the confirm is model-cooperative and
+  self-confirmable; this is a hard refusal). Same `[access]
+  allow_sensitive_paths` opt-in. Residual: `shell.exec` can still write these.
 - **Capability ≠ competence (and the breakers prove it).** The ceiling is
   gated by the provider's reasoning quality. Small local models hallucinate
   and loop — the cycle breakers exist *because* they run away. Serious
