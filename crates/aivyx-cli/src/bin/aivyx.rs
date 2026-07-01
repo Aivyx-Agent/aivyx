@@ -7923,6 +7923,9 @@ async fn run_async(
                 } else {
                     None
                 },
+                // #17d — let the delegated completion judge ground its verdict
+                // on the memory the team actually wrote.
+                memory: Some(Arc::clone(&memory)),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`

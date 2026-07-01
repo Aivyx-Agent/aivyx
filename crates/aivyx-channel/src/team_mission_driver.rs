@@ -99,6 +99,11 @@ pub struct TeamRunDeps {
     /// the shared provider; per-role `model` still applies). The binary supplies
     /// it because provider construction lives there.
     pub member_provider_builder: Option<MemberProviderBuilder>,
+    /// #17d — the memory substrate, so the delegated completion judge can
+    /// ground its verdict on the artifact the team actually wrote (symmetric
+    /// with the solo `loop.complete` path). `None` ⇒ the judge is summary-only,
+    /// as before.
+    pub memory: Option<Arc<dyn aivyx_memory::Memory>>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -440,10 +445,18 @@ impl TeamMissionService {
     /// provider + model, so the loop driver can hold an auto-delegated mission's
     /// result to the same acceptance bar as a solo `loop.complete`.
     pub fn completion_judge(&self) -> crate::completion_judge::CompletionJudge {
-        crate::completion_judge::CompletionJudge::new(
+        let judge = crate::completion_judge::CompletionJudge::new(
             Arc::clone(&self.deps.provider),
             self.deps.model.clone(),
-        )
+        );
+        // #17d — ground the delegated verdict on the real memory artifact the
+        // team wrote, so a mission that only *claims* completion (terse synth
+        // over genuine work OR a hollow "Done" with nothing produced) is judged
+        // against what's actually in memory — same bar as solo loop.complete.
+        match &self.deps.memory {
+            Some(m) => judge.with_memory(Arc::clone(m)),
+            None => judge,
+        }
     }
 
     /// Every known mission (the poll feed).
@@ -1024,7 +1037,8 @@ mod tests {
     use aivyx_core::NullAuditHook;
     use aivyx_crypto::MasterKey;
     use aivyx_llm::{
-        LlmError, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+        LlmError, LlmMessage, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
+        LlmUsage,
     };
     use aivyx_capability::TrustTier;
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
@@ -1099,6 +1113,7 @@ mod tests {
             // Unbounded by default — the metering hook + halt check are skipped.
             mission_budget: aivyx_cost::MissionBudget::default(),
             member_provider_builder: None,
+            memory: None,
         }
     }
 
@@ -1126,7 +1141,72 @@ mod tests {
             pricing: Arc::new(aivyx_cost::Pricing::default()),
             mission_budget: aivyx_cost::MissionBudget::default(),
             member_provider_builder: None,
+            memory: None,
         }
+    }
+
+    /// #17d — a provider that records the prompt it was handed, so a test can
+    /// assert the delegated completion judge actually SAW the memory artifact.
+    struct CapturingProvider {
+        reply: String,
+        seen: Arc<std::sync::Mutex<String>>,
+    }
+    #[async_trait]
+    impl LlmProvider for CapturingProvider {
+        async fn chat_stream(
+            &self,
+            req: LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            if let Some(LlmMessage::User { content }) = req.messages.first() {
+                let text: String = content
+                    .iter()
+                    .filter_map(|b| match b {
+                        aivyx_llm::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                *self.seen.lock().unwrap() = text;
+            }
+            Ok(Box::new(FakeStream {
+                events: vec![].into_iter(),
+                terminal: Some(LlmStepEnd::FinalMessage {
+                    text: self.reply.clone(),
+                    usage: LlmUsage::default(),
+                }),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn delegated_completion_judge_grounds_on_deps_memory() {
+        use aivyx_memory::{InMemoryMemory, Memory};
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        mem.put("sleep-notes", "Melatonin 1–3 mg shortens sleep onset; CBT-I is durable.")
+            .await
+            .unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(String::new()));
+        let mut deps = deps("unused");
+        deps.provider = Arc::new(CapturingProvider {
+            reply: "PASS — memory shows the required note.".into(),
+            seen: Arc::clone(&seen),
+        });
+        deps.memory = Some(Arc::clone(&mem));
+        let service = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps,
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        // A terse mission result still PASSES because the judge sees the artifact.
+        let v = service
+            .completion_judge()
+            .verify("Note sleep tips", "memory has a sleep note", "did it")
+            .await;
+        assert!(v.passed, "delegated verdict grounded on memory: {v:?}");
+        let prompt = seen.lock().unwrap().clone();
+        assert!(prompt.contains("ground-truth evidence"), "evidence block present");
+        assert!(prompt.contains("Melatonin"), "artifact reached the delegated judge");
     }
 
     /// research → [human gate] → write.
