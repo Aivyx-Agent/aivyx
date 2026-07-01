@@ -124,7 +124,8 @@ abort the whole mission). Use delegate steps only.\n"
         "You are the planning lead of a multi-agent team. Decompose the operator's \
 mission into a DAG of steps and return ONLY a JSON object — no prose, no markdown \
 fences, nothing before or after the object.\n\n\
-Delegate work only to these specialists (use their exact names):\n{roster}\n\
+Delegate work only to these specialists (refer to each by its name or role, \
+exactly as listed):\n{roster}\n\
 JSON shape: {{\"goal\": string, \"steps\": [step, ...]}}\n\
 Each step is one of:\n\
   - delegate: {{\"id\": string, \"specialist\": <name>, \"prompt\": string, \"deps\": [id, ...]}}\n\

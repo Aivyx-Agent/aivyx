@@ -89,29 +89,39 @@ impl SpecialistPool {
         }
     }
 
-    /// Resolve a specialist by name — must be a member, and not the lead.
+    /// Resolve a specialist reference — must be a member, and not the lead.
     ///
-    /// #15 — matching is **case-insensitive**: the LLM planner emits specialist
-    /// names with inconsistent casing ("Researcher" vs the roster's "researcher"),
-    /// which previously errored ("no specialist") → the mission failed → the
-    /// loop's auto-delegation retried and could skip a doable story. Names are
-    /// roster ids (`a-zA-Z0-9_-`), so ASCII-case-insensitive matching is safe.
+    /// Matching is **case-insensitive** and accepts EITHER the roster `name`
+    /// id (`ops`) OR the human-readable `role` label (`Operations`). The LLM
+    /// planner refers to specialists by the role labels it's shown, not the
+    /// internal ids, so a name-only match errored ("no specialist
+    /// \"Operations\"") → the mission failed → the loop's auto-delegation
+    /// retried and skipped a doable story. #15 first made this
+    /// case-insensitive (fixing "Researcher" vs "researcher", where name and
+    /// role differ only in case); this extends it to name↔role mismatches
+    /// (`ops`/`Operations`, `coordinator`/`Lead`) which case-folding alone
+    /// never covered. Both fields are short ASCII, so case-insensitive
+    /// matching is safe.
     fn resolve(&self, specialist: &str) -> Result<&TeamMember, TeamError> {
-        if specialist.eq_ignore_ascii_case(&self.config.lead) {
-            return Err(TeamError::Config(format!(
-                "{specialist:?} is the lead, not a delegable specialist"
-            )));
+        let matched = self.config.members.iter().find(|m| {
+            m.name.eq_ignore_ascii_case(specialist)
+                || m.role.eq_ignore_ascii_case(specialist)
+        });
+        match matched {
+            // The lead is identified by its roster id in `config.lead`; a
+            // reference resolving to that member (by name or role) is the
+            // lead, not a delegable specialist.
+            Some(m) if m.name.eq_ignore_ascii_case(&self.config.lead) => {
+                Err(TeamError::Config(format!(
+                    "{specialist:?} is the lead, not a delegable specialist"
+                )))
+            }
+            Some(m) => Ok(m),
+            None => Err(TeamError::Config(format!(
+                "no specialist {specialist:?} in team {:?}",
+                self.config.name
+            ))),
         }
-        self.config
-            .members
-            .iter()
-            .find(|m| m.name.eq_ignore_ascii_case(specialist))
-            .ok_or_else(|| {
-                TeamError::Config(format!(
-                    "no specialist {specialist:?} in team {:?}",
-                    self.config.name
-                ))
-            })
     }
 
     /// Build the derived channel for a specialist sub-turn — trust floored
@@ -348,6 +358,34 @@ mod tests {
         assert_eq!(p.resolve("RESEARCHER").unwrap().name, "researcher");
         // The lead guard is case-insensitive too.
         assert!(p.resolve("Lead").is_err());
+    }
+
+    #[test]
+    fn resolve_matches_by_role_label_not_just_name() {
+        // The planner refers to specialists by their ROLE label ("Operations"),
+        // but the roster id is "ops" — a real dogfood failure where the mission
+        // errored "no specialist \"Operations\"" and the loop skipped a doable
+        // story. Both the role AND the id must resolve.
+        let mut ops = member("ops", &["shell.exec"], TrustTier::Trusted);
+        ops.role = "Operations".into();
+        let mut lead = member("coordinator", &[], TrustTier::Trusted);
+        lead.role = "Lead".into();
+        let p = pool(FakeProvider::says("x"), vec![lead, ops], "coordinator");
+
+        // By role label (what the planner emits):
+        assert_eq!(p.resolve("Operations").unwrap().name, "ops");
+        assert_eq!(p.resolve("operations").unwrap().name, "ops");
+        // By roster id still works:
+        assert_eq!(p.resolve("ops").unwrap().name, "ops");
+        // The lead is rejected whether referenced by id OR role label:
+        assert!(matches!(
+            p.resolve("coordinator"),
+            Err(TeamError::Config(m)) if m.contains("is the lead")
+        ));
+        assert!(matches!(
+            p.resolve("Lead"),
+            Err(TeamError::Config(m)) if m.contains("is the lead")
+        ));
     }
 
     #[test]
