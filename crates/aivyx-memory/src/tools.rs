@@ -587,6 +587,13 @@ impl Tool for MemoryReadTool {
                     } else {
                         physical_topic.clone()
                     };
+                    // #G — a wildcard recall enumerates every topic; keep
+                    // the daemon's internal bookkeeping archives
+                    // (`context:pruned:*`) out of the agent's own tool
+                    // results. An explicit single-topic read still resolves.
+                    if crate::is_internal_topic(&logical_topic) {
+                        continue;
+                    }
                     for entry in entries.iter_mut() {
                         entry.topic = logical_topic.clone();
                     }
@@ -2139,6 +2146,55 @@ mod tests {
             }
             other => panic!("wildcard read should Complete, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn wildcard_read_hides_internal_pruned_topics() {
+        // #G — a wildcard recall must not surface the daemon's internal
+        // `context:pruned:*` bookkeeping archives (no session → empty scan
+        // prefix → "every topic", the prune-sink's single-partition case).
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let reader = MemoryReadTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let ctx = make_ctx(&chan, &audit);
+        let _ = writer
+            .execute(json!({"topic": "notes", "body": "purple"}), &ctx)
+            .await;
+        // The prune sink writes this topic directly (no session).
+        mem.put("context:pruned:sess-1", "42 messages pruned")
+            .await
+            .unwrap();
+
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader.execute(json!({"topics": "*"}), &ctx).await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                let names: Vec<&str> = output["topics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| t["topic"].as_str().unwrap())
+                    .collect();
+                assert!(names.contains(&"notes"), "real topic present: {names:?}");
+                assert!(
+                    !names.iter().any(|n| n.starts_with("context:pruned:")),
+                    "internal prune topic must be hidden: {names:?}"
+                );
+            }
+            other => panic!("wildcard read should Complete, got {other:?}"),
+        }
+        // But it is still reachable by an explicit single-topic read.
+        let ctx = make_ctx(&chan, &audit);
+        let out = reader
+            .execute(json!({"topic": "context:pruned:sess-1"}), &ctx)
+            .await;
+        assert!(
+            matches!(out, ToolOutcome::Completed { .. }),
+            "explicit single-topic read of an internal topic still resolves"
+        );
     }
 
     #[tokio::test]

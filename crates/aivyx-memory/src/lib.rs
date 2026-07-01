@@ -134,6 +134,23 @@ pub mod bm25;
 /// HKDF salt in `aivyx-crypto` (`"aivyx-v1-storage"` →
 /// `"aivyx-v2-storage"`) and let the old values become cleanly
 /// unreadable, exactly as noted in Phase 5's roadmap handoff.
+/// Reserved topic prefix for the daemon's own bookkeeping archives —
+/// today the context-prune sink (`context:pruned:<session_id>`). These
+/// are machine state, not the user's knowledge, so every enumerating
+/// surface (memory list, wildcard recall, search, the wiki/graph sweeps,
+/// and RAG recall) hides them. Defined here in the substrate crate so the
+/// writer (`aivyx_channel::prune_sink`) and the lowest reader
+/// (`memory.read` wildcard) share one source of truth; higher crates
+/// re-export it. Explicit single-topic reads still resolve, so nothing is
+/// truly hidden — just kept out of "show me everything" views.
+pub const INTERNAL_TOPIC_PREFIX: &str = "context:pruned:";
+
+/// Whether `topic` is a reserved internal-bookkeeping topic (see
+/// [`INTERNAL_TOPIC_PREFIX`]).
+pub fn is_internal_topic(topic: &str) -> bool {
+    topic.starts_with(INTERNAL_TOPIC_PREFIX)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryEntry {
     /// Non-empty UTF-8 topic chosen by the agent when writing. Used as

@@ -15,16 +15,12 @@ use aivyx_memory::Memory;
 
 /// The reserved prefix for **internal** memory topics that are machine state,
 /// not operator-authored knowledge — currently the per-session pruned-context
-/// archives. The single source of truth: the digest excludes it, and
-/// operator-facing topic listings (`aivyx memory list`, the Studio Memory
-/// browser) hide it via [`is_internal_topic`].
-pub const INTERNAL_TOPIC_PREFIX: &str = "context:pruned:";
-
-/// Whether `topic` is an internal/machine topic that operator-facing views
-/// should hide. (The entries are still reachable by exact `memory show <topic>`.)
-pub fn is_internal_topic(topic: &str) -> bool {
-    topic.starts_with(INTERNAL_TOPIC_PREFIX)
-}
+/// archives. The single source of truth now lives in the substrate crate
+/// (`aivyx_memory`) so the lowest reader (`memory.read` wildcard) can share it;
+/// re-exported here so this crate's ~dozen call sites keep the same path. Every
+/// enumerating surface (digest, `aivyx memory list`, wildcard recall, search,
+/// wiki/graph sweeps, RAG recall) hides it via [`is_internal_topic`].
+pub use aivyx_memory::{is_internal_topic, INTERNAL_TOPIC_PREFIX};
 
 /// Persists pruned-context summaries to memory under a per-session
 /// topic. The topic format is `context:pruned:<session_id>`.
