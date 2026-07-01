@@ -5,6 +5,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.25] — 2026-07-02
+
+### Security
+
+Continuing the privacy-first hardening pass — two more layers, both
+live-verified on the dogfood rig:
+
+- **Sensitive-path write guard (Portcullis).** The symmetric completion of
+  Ward: `fs.write` now hard-refuses writes to secret *and* persistence
+  locations — `~/.ssh/authorized_keys`, shell rc files
+  (`.bashrc`/`.zshrc`/`.profile`), `~/.config/autostart` & `systemd`, `cron.*`,
+  git hooks — even inside the sandbox and even at `full`. This closes the
+  backdoor/persistence vector `confirm_destructive` only *soft*-gated (it's
+  self-confirmable; this is a hard refusal). Same `[access]
+  allow_sensitive_paths` opt-in. Reads of these files are still allowed; only
+  writes are blocked.
+- **DNS-rebinding defense (Rampart).** The network egress guard now filters
+  private/loopback/link-local addresses at DNS-*resolution* time via a custom
+  resolver, so a public hostname that resolves to `127.0.0.1` /
+  `169.254.169.254` / an RFC-1918 address is never connected to (TOCTOU-safe).
+  Failed requests now also surface the full error cause chain, so a blocked
+  request reports why.
+
 ## [0.7.24] — 2026-07-02
 
 ### Security
