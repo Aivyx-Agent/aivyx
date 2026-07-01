@@ -828,6 +828,9 @@ fn run() -> Result<(), String> {
                 MemorySubcommand::Resolve { topic, archive } => {
                     memory::run_memory_resolve(&topic, archive).await
                 }
+                MemorySubcommand::Dismiss { id } => {
+                    memory::run_memory_dismiss(&id).await
+                }
             }
         });
     }
@@ -2016,6 +2019,9 @@ enum MemorySubcommand {
     /// `aivyx memory resolve <topic> --archive <seq>` — resolve a
     /// conflict by deleting the losing entry (the one NOT true).
     Resolve { topic: String, archive: u64 },
+    /// `aivyx memory dismiss <id>` — mark a detected conflict a false
+    /// positive so it isn't flagged again (both entries kept).
+    Dismiss { id: String },
 }
 
 /// Phase 66 — `aivyx init` variant discriminator.
@@ -2760,6 +2766,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 entity: args.get(2).cloned(),
             },
             "conflicts" => MemorySubcommand::Conflicts,
+            "dismiss" => {
+                let id = args.get(2).filter(|s| !s.is_empty()).ok_or_else(|| {
+                    "`aivyx memory dismiss` needs a conflict <id> \
+                     (from `aivyx memory conflicts`)"
+                        .to_string()
+                })?;
+                MemorySubcommand::Dismiss { id: id.clone() }
+            }
             "resolve" => {
                 let topic = args.get(2).filter(|t| !t.is_empty()).ok_or_else(|| {
                     "`aivyx memory resolve` needs a <topic> and `--archive <seq>`"
@@ -2800,7 +2814,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 return Err(format!(
                     "unrecognized `aivyx memory` subcommand: `{other}`. \
                      Supported: list, show, search, evict, wiki, graph, \
-                     conflicts, resolve"
+                     conflicts, resolve, dismiss"
                 ));
             }
         };
@@ -5662,6 +5676,14 @@ async fn run_async(
             storage.domain(KeyDomain::KnowledgeGraph),
         ),
     );
+    // Chapter Concord — the dismissed-conflict set (built whenever storage
+    // is available; `memory conflicts` filters these, `memory dismiss`
+    // records them).
+    let conflict_dismissals = Arc::new(
+        aivyx_channel::conflict_dismissals::PersistentConflictDismissals::new(
+            storage.domain(KeyDomain::ConflictDismissals),
+        ),
+    );
     // LT.3 — the extraction sweep, armed only when `[graph].enabled`:
     // building a relation graph with the LLM has a cost the operator opts
     // into. Reuses the same store, LLM provider, and memory.
@@ -8299,6 +8321,7 @@ async fn run_async(
             wiki_store: Some(Arc::clone(&wiki_store)),
             graph_sweep,
             graph_store: Some(Arc::clone(&graph_store)),
+            conflict_dismissals: Some(Arc::clone(&conflict_dismissals)),
             // Phase 172 — durable correction ledger; folded by
             // the same recall-feedback pass.
             correction_ledger: correction_ledger.clone(),

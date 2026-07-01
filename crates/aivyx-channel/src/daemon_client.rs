@@ -648,6 +648,60 @@ pub async fn resolve_memory_conflict(
     }
 }
 
+/// Chapter Concord — dismiss a conflict as a false positive ("keep
+/// both"): the daemon records `conflict_id` so future detection passes
+/// suppress that pair. Nothing is deleted.
+pub async fn dismiss_memory_conflict(
+    socket_path: &Path,
+    conflict_id: &str,
+) -> Result<(), DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(1024);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let req = FrontendMessage::DismissMemoryConflict {
+        id: "m-dismiss".into(),
+        conflict_id: conflict_id.to_string(),
+    };
+    writer.write_all(&encode_frame(&req)?).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::MemoryConflictDismissed { ok, error, .. },
+                _,
+            )) => {
+                return if ok {
+                    Ok(())
+                } else {
+                    Err(DaemonError::Protocol(
+                        error.unwrap_or_else(|| "dismiss failed".into()),
+                    ))
+                };
+            }
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected MemoryConflictDismissed, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// Phase 74 — fetch up to `limit` entries for one topic.
 pub async fn get_memory_topic_entries(
     socket_path: &Path,

@@ -10,9 +10,9 @@ use std::io::Write;
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, evict_memory_topic, get_knowledge_graph, get_memory_conflicts,
-    get_memory_topic_entries, get_wiki_page, list_memory_topics, list_wiki_pages,
-    resolve_memory_conflict, search_memory,
+    daemon_is_running, dismiss_memory_conflict, evict_memory_topic, get_knowledge_graph,
+    get_memory_conflicts, get_memory_topic_entries, get_wiki_page, list_memory_topics,
+    list_wiki_pages, resolve_memory_conflict, search_memory,
 };
 use aivyx_channel::contradiction::MemoryConflict;
 use aivyx_channel::knowledge_graph::{GraphEntity, GraphTriple};
@@ -162,6 +162,19 @@ pub async fn run_memory_resolve(topic: &str, archive_seq: u64) -> Result<(), Str
     Ok(())
 }
 
+/// `aivyx memory dismiss <id>` — mark a detected conflict a false positive.
+pub async fn run_memory_dismiss(id: &str) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    dismiss_memory_conflict(&socket_path, id)
+        .await
+        .map_err(|e| format!("failed to dismiss conflict: {e}"))?;
+    println!(
+        "Dismissed conflict {id} — it won't be flagged again (both entries kept)."
+    );
+    Ok(())
+}
+
 async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
     if daemon_is_running(socket_path).await {
         return Ok(());
@@ -203,7 +216,7 @@ fn render_conflicts(conflicts: &[MemoryConflict]) -> String {
         } else {
             c.a.topic.clone()
         };
-        out.push_str(&format!("⚠ {}  —  {}\n", scope, c.reason.trim()));
+        out.push_str(&format!("⚠ [{}] {}  —  {}\n", c.id, scope, c.reason.trim()));
         out.push_str(&format!(
             "  [a] {}      (older, {} seq {})\n",
             c.a.body.trim().replace('\n', " "),
@@ -223,12 +236,17 @@ fn render_conflicts(conflicts: &[MemoryConflict]) -> String {
             c.a.topic, c.a.seq,
         ));
         out.push_str(&format!(
-            "  keep a: aivyx memory resolve {} --archive {}\n\n",
+            "  keep a: aivyx memory resolve {} --archive {}\n",
             c.b.topic, c.b.seq,
+        ));
+        out.push_str(&format!(
+            "  keep both (not a conflict): aivyx memory dismiss {}\n\n",
+            c.id,
         ));
     }
     out.push_str(&format!(
-        "({} conflict(s)) — `resolve` deletes the entry you DON'T keep\n",
+        "({} conflict(s)) — `resolve` deletes the entry you DON'T keep; \
+         `dismiss` suppresses a false positive\n",
         conflicts.len()
     ));
     out
@@ -404,6 +422,9 @@ mod tests {
         // keep-b archives the older (seq 3); keep-a archives the newer (seq 7).
         assert!(s.contains("keep b: aivyx memory resolve operator-note --archive 3"));
         assert!(s.contains("keep a: aivyx memory resolve operator-note --archive 7"));
+        // The conflict id + a dismiss command are shown for false positives.
+        assert!(s.contains(&format!("[{}]", c.id)), "id shown: {s}");
+        assert!(s.contains(&format!("aivyx memory dismiss {}", c.id)));
         assert!(s.contains("(1 conflict(s))"));
     }
 

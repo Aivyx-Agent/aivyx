@@ -277,6 +277,12 @@ pub struct DaemonConfig {
     /// Built whenever storage is available (independent of `[graph]`
     /// .enabled — reads return an empty graph until a sweep populates it).
     pub graph_store: Option<Arc<crate::knowledge_graph::PersistentGraphStore>>,
+    /// Chapter Concord — the durable dismissed-conflict set for the
+    /// `GetMemoryConflicts` filter + `DismissMemoryConflict` handler. Built
+    /// whenever storage is available; `None` ⇒ dismissal is a no-op and
+    /// nothing is filtered.
+    pub conflict_dismissals:
+        Option<Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
     /// Phase 172 — the durable correction ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
@@ -649,6 +655,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         wiki_store,
         graph_sweep,
         graph_store,
+        conflict_dismissals,
     } = config;
     // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
     // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
@@ -1543,6 +1550,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             cooccurrence_ledger: cooccurrence_ledger.clone(),
             wiki_store: wiki_store.clone(),
             graph_store: graph_store.clone(),
+            conflict_dismissals: conflict_dismissals.clone(),
             correction_ledger: correction_ledger.clone(),
             persona_selection_stat: persona_selection_stat.clone(),
             recall_cluster_stat: recall_cluster_stat.clone(),
@@ -1661,6 +1669,10 @@ struct ConnectionContext {
     /// Chapter Lattice (LT.5) — read handle on the typed-graph store for
     /// the `GetKnowledgeGraph` read-only IPC.
     graph_store: Option<Arc<crate::knowledge_graph::PersistentGraphStore>>,
+    /// Chapter Concord — dismissed-conflict set for the `GetMemoryConflicts`
+    /// filter + `DismissMemoryConflict` handler.
+    conflict_dismissals:
+        Option<Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
     /// Phase 172 — durable correction ledger for the read-only
     /// `GetLearningInsights` accumulated-corrections view.
     /// `None` = no auto-recall configured.
@@ -1787,6 +1799,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         cooccurrence_ledger,
         wiki_store,
         graph_store,
+        conflict_dismissals,
         correction_ledger,
         persona_selection_stat,
         recall_cluster_stat,
@@ -2539,6 +2552,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 cooccurrence_ledger.as_ref(),
                                 wiki_store.as_ref(),
                                 graph_store.as_ref(),
+                                conflict_dismissals.as_ref(),
                                 skill_effectiveness_ledger.as_ref(),
                                 correction_ledger.as_ref(),
                                 persona_selection_stat.as_ref(),
@@ -2883,6 +2897,49 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::DismissMemoryConflict {
+                            id,
+                            conflict_id,
+                        } => {
+                            // Chapter Concord — "keep both": record the
+                            // conflict id so future detection passes suppress
+                            // this pair. Nothing is deleted.
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            let resp = match conflict_dismissals.as_ref() {
+                                None => DaemonMessage::MemoryConflictDismissed {
+                                    id,
+                                    ok: false,
+                                    error: Some(
+                                        "daemon has no storage configured for \
+                                         conflict dismissals"
+                                            .into(),
+                                    ),
+                                },
+                                Some(store) => {
+                                    match store.dismiss(&conflict_id, now).await {
+                                        Ok(()) => {
+                                            DaemonMessage::MemoryConflictDismissed {
+                                                id,
+                                                ok: true,
+                                                error: None,
+                                            }
+                                        }
+                                        Err(e) => {
+                                            DaemonMessage::MemoryConflictDismissed {
+                                                id,
+                                                ok: false,
+                                                error: Some(e.to_string()),
+                                            }
+                                        }
+                                    }
+                                }
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ForgetSkill { id, name } => {
                             // Chapter Repertoire — operator forgets a learned
                             // skill from the Skills screen (appends a
@@ -3146,6 +3203,7 @@ async fn run_single_connection_daemon(
         cooccurrence_ledger: None,
         wiki_store: None,
         graph_store: None,
+        conflict_dismissals: None,
         correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
@@ -3217,6 +3275,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         cooccurrence_ledger: None,
         wiki_store: None,
         graph_store: None,
+        conflict_dismissals: None,
         correction_ledger: None,
         persona_selection_stat: None,
         recall_cluster_stat: None,
@@ -3442,6 +3501,9 @@ async fn handle_query(
     >,
     wiki_store: Option<&Arc<crate::knowledge_wiki::PersistentWikiStore>>,
     graph_store: Option<&Arc<crate::knowledge_graph::PersistentGraphStore>>,
+    conflict_dismissals: Option<
+        &Arc<crate::conflict_dismissals::PersistentConflictDismissals>,
+    >,
     skill_effectiveness_ledger: Option<
         &Arc<crate::skill_effectiveness::SkillEffectivenessLedger>,
     >,
@@ -4407,6 +4469,12 @@ async fn handle_query(
                 llm.model.clone(),
             );
             let conflicts = detector.detect(mem.as_ref()).await;
+            // Chapter Concord — drop pairs the operator has dismissed
+            // ("keep both") so a false positive isn't re-flagged forever.
+            let conflicts = match conflict_dismissals {
+                Some(d) => d.retain_undismissed(conflicts).await,
+                None => conflicts,
+            };
             QueryResponsePayload::MemoryConflicts { conflicts }
         }
         QueryPayload::GetSkills => {

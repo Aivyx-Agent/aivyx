@@ -1800,6 +1800,14 @@ pub enum FrontendMessage {
         topic: String,
         archive_seq: u64,
     },
+    /// Chapter Concord — operator dismisses a detected contradiction as a
+    /// false positive ("keep both"): `conflict_id` is recorded so future
+    /// detection passes suppress that pair (nothing is deleted). Replies
+    /// with [`DaemonMessage::MemoryConflictDismissed`].
+    DismissMemoryConflict {
+        id: String,
+        conflict_id: String,
+    },
     /// Chapter Repertoire — operator forgets a learned skill by name from
     /// the Studio Skills screen. Appends a `RemoveList` persona delta
     /// (operator-authoritative); responds with [`DaemonMessage::SkillForgotten`].
@@ -2025,6 +2033,13 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         removed: bool,
+        error: Option<String>,
+    },
+    /// Chapter Concord — ack for [`FrontendMessage::DismissMemoryConflict`].
+    /// `ok = true` on success; `ok = false` + `error` on storage failure.
+    MemoryConflictDismissed {
+        id: String,
+        ok: bool,
         error: Option<String>,
     },
     /// Chapter Repertoire — ack for [`FrontendMessage::ForgetSkill`].
@@ -2378,6 +2393,12 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         removed: bool,
+        error: Option<String>,
+    },
+    /// Chapter Concord — memory-conflict dismissal result.
+    MemoryConflictDismissed {
+        id: String,
+        ok: bool,
         error: Option<String>,
     },
     /// Chapter Repertoire — ack for `ForgetSkill`.

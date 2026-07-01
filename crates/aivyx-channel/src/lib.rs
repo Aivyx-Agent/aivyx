@@ -64,6 +64,7 @@ pub mod budget_gate;
 pub mod rate_gate;
 pub mod cooccurrence_ledger;
 pub mod graph_query_tool;
+pub mod conflict_dismissals;
 pub mod contradiction;
 pub mod knowledge_graph;
 pub mod knowledge_wiki;
