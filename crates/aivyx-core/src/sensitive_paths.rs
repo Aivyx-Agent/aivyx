@@ -132,6 +132,13 @@ impl SensitivePolicy {
             if SENSITIVE_BASENAMES.contains(&name) {
                 return Some(format!("a sensitive file ({name})"));
             }
+            // dotenv family beyond the bare `.env`: `.env.local`,
+            // `.env.production`, `app.env`, `prod.env` — all commonly hold
+            // secrets. (`.env` itself has no Rust "extension", so it's caught
+            // above; these variants are caught here.)
+            if name.starts_with(".env.") || name.ends_with(".env") {
+                return Some(format!("a dotenv file ({name})"));
+            }
         }
         if let Some(ext) = canonical.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_ascii_lowercase();
@@ -161,6 +168,10 @@ mod tests {
             "/home/alice/.gnupg/secring.gpg",
             "/home/alice/.config/gcloud/access_tokens.db",
             "/home/alice/project/.env",
+            "/home/alice/project/.env.local",
+            "/home/alice/project/.env.production",
+            "/home/alice/project/app.env",
+            "/home/alice/project/prod.env",
             "/home/alice/.netrc",
             "/home/alice/certs/server.pem",
             "/home/alice/certs/tls.key",
