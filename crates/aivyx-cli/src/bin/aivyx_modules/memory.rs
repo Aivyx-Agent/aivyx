@@ -197,24 +197,34 @@ fn render_conflicts(conflicts: &[MemoryConflict]) -> String {
         return out;
     }
     for c in conflicts {
-        out.push_str(&format!("⚠ {}  —  {}\n", c.topic, c.reason.trim()));
+        let cross = c.a.topic != c.b.topic;
+        let scope = if cross {
+            format!("{} ✕ {}", c.a.topic, c.b.topic)
+        } else {
+            c.a.topic.clone()
+        };
+        out.push_str(&format!("⚠ {}  —  {}\n", scope, c.reason.trim()));
         out.push_str(&format!(
-            "  [a] {}      (older, seq {})\n",
+            "  [a] {}      (older, {} seq {})\n",
             c.a.body.trim().replace('\n', " "),
+            c.a.topic,
             c.a.seq,
         ));
         out.push_str(&format!(
-            "  [b] {}      (newer, seq {})\n",
+            "  [b] {}      (newer, {} seq {})\n",
             c.b.body.trim().replace('\n', " "),
+            c.b.topic,
             c.b.seq,
         ));
+        // keep-b archives side a; keep-a archives side b (each under its
+        // own topic — matters for cross-topic conflicts).
         out.push_str(&format!(
             "  keep b: aivyx memory resolve {} --archive {}\n",
-            c.topic, c.a.seq,
+            c.a.topic, c.a.seq,
         ));
         out.push_str(&format!(
             "  keep a: aivyx memory resolve {} --archive {}\n\n",
-            c.topic, c.b.seq,
+            c.b.topic, c.b.seq,
         ));
     }
     out.push_str(&format!(
@@ -371,14 +381,15 @@ mod tests {
         assert!(empty.contains("No contradictions detected"));
 
         let c = MemoryConflict {
-            id: MemoryConflict::make_id("operator-note", 3, 7),
-            topic: "operator-note".into(),
+            id: MemoryConflict::make_id("operator-note", 3, "operator-note", 7),
             a: ConflictSide {
+                topic: "operator-note".into(),
                 seq: 3,
                 body: "Home airport: YPPH (Perth)".into(),
                 created_at_secs: 100,
             },
             b: ConflictSide {
+                topic: "operator-note".into(),
                 seq: 7,
                 body: "Home airport: Sydney, YSSY".into(),
                 created_at_secs: 200,
@@ -394,6 +405,33 @@ mod tests {
         assert!(s.contains("keep b: aivyx memory resolve operator-note --archive 3"));
         assert!(s.contains("keep a: aivyx memory resolve operator-note --archive 7"));
         assert!(s.contains("(1 conflict(s))"));
+    }
+
+    #[test]
+    fn render_conflicts_shows_both_topics_when_cross_topic() {
+        use aivyx_channel::contradiction::{ConflictSide, MemoryConflict};
+        let c = MemoryConflict {
+            id: MemoryConflict::make_id("home-airport", 2, "operator-notes", 5),
+            a: ConflictSide {
+                topic: "home-airport".into(),
+                seq: 2,
+                body: "YPPH is my home airport (Perth)".into(),
+                created_at_secs: 100,
+            },
+            b: ConflictSide {
+                topic: "operator-notes".into(),
+                seq: 5,
+                body: "home airport is Sydney YSSY".into(),
+                created_at_secs: 300,
+            },
+            reason: "two different home airports".into(),
+        };
+        let s = render_conflicts(std::slice::from_ref(&c));
+        // Cross-topic scope header names both.
+        assert!(s.contains("home-airport ✕ operator-notes"), "{s}");
+        // Each resolve command targets the right topic.
+        assert!(s.contains("keep b: aivyx memory resolve home-airport --archive 2"));
+        assert!(s.contains("keep a: aivyx memory resolve operator-notes --archive 5"));
     }
 
     #[test]

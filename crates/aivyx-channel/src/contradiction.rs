@@ -57,11 +57,13 @@ impl Default for ContradictionConfig {
     }
 }
 
-/// What the model returns per conflict, before validation.
+/// What the model returns per conflict, before validation. Each side
+/// names its own `(topic, seq)` so a conflict can span two topics.
 #[derive(Debug, Deserialize)]
 struct RawConflict {
-    topic: String,
+    topic_a: String,
     seq_a: u64,
+    topic_b: String,
     seq_b: u64,
     #[serde(default)]
     reason: String,
@@ -94,14 +96,18 @@ impl ContradictionDetector {
          state remembered facts. Find pairs of entries that assert \
          INCOMPATIBLE facts about the SAME subject — where at most one can \
          be true (e.g. two different home airports, two different \
-         birthdays, \"prefers tea\" vs \"prefers coffee\"). Output ONLY a \
-         JSON array of `{\"topic\":\"...\",\"seq_a\":N,\"seq_b\":M,\
-         \"reason\":\"...\"}`. Both seqs MUST be entries listed under that \
-         exact topic, and seq_a must differ from seq_b. `reason` is one \
-         short clause naming the incompatibility. Report ONLY genuine \
-         contradictions — NOT entries that merely differ, elaborate, \
-         update a plan, or describe different subjects. If there are no \
-         contradictions, output `[]`. No prose, no markdown fences."
+         birthdays, \"prefers tea\" vs \"prefers coffee\"). The two entries \
+         may be under the SAME topic OR under two DIFFERENT topics — check \
+         across topics too. Output ONLY a JSON array of `{\"topic_a\":\
+         \"...\",\"seq_a\":N,\"topic_b\":\"...\",\"seq_b\":M,\"reason\":\
+         \"...\"}`, where side A is entry `seq_a` under `topic_a` and side \
+         B is entry `seq_b` under `topic_b` (repeat the same topic name on \
+         both when they share one). Each `(topic, seq)` MUST be an entry \
+         actually listed above, and the two sides must be different \
+         entries. `reason` is one short clause naming the incompatibility. \
+         Report ONLY genuine contradictions — NOT entries that merely \
+         differ, elaborate, update a plan, or describe different subjects. \
+         If there are none, output `[]`. No prose, no markdown fences."
     }
 
     /// Render topics+entries into the user prompt. Pure + testable.
@@ -170,41 +176,50 @@ impl ContradictionDetector {
         cap: usize,
     ) -> Vec<MemoryConflict> {
         use std::collections::HashSet;
+        // Look up an entry by (topic, seq) across all candidate topics.
+        let find = |topic: &str, seq: u64| -> Option<&MemoryEntry> {
+            candidates
+                .iter()
+                .find(|(t, _)| t == topic)
+                .and_then(|(_, es)| es.iter().find(|e| e.seq == seq))
+        };
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<MemoryConflict> = Vec::new();
         for rc in raws {
-            if rc.seq_a == rc.seq_b {
+            // Reject a side paired with itself (same topic AND seq).
+            if rc.topic_a == rc.topic_b && rc.seq_a == rc.seq_b {
                 continue;
             }
-            let Some((_, entries)) = candidates.iter().find(|(t, _)| *t == rc.topic) else {
+            let Some(ea) = find(&rc.topic_a, rc.seq_a) else {
                 continue;
             };
-            let Some(ea) = entries.iter().find(|e| e.seq == rc.seq_a) else {
+            let Some(eb) = find(&rc.topic_b, rc.seq_b) else {
                 continue;
             };
-            let Some(eb) = entries.iter().find(|e| e.seq == rc.seq_b) else {
-                continue;
-            };
-            // Order older → newer (by created_at, then seq) so `b` is the
-            // newest-wins pick.
-            let (older, newer) = if (ea.created_at_secs, ea.seq) <= (eb.created_at_secs, eb.seq) {
-                (ea, eb)
-            } else {
-                (eb, ea)
-            };
-            let id = MemoryConflict::make_id(&rc.topic, older.seq, newer.seq);
+            // Order older → newer (by created_at, then topic, then seq) so
+            // `b` is the newest-wins pick and the id is order-stable.
+            let ka = (ea.created_at_secs, ea.topic.as_str(), ea.seq);
+            let kb = (eb.created_at_secs, eb.topic.as_str(), eb.seq);
+            let (older, newer) = if ka <= kb { (ea, eb) } else { (eb, ea) };
+            let id = MemoryConflict::make_id(
+                &older.topic,
+                older.seq,
+                &newer.topic,
+                newer.seq,
+            );
             if !seen.insert(id.clone()) {
                 continue;
             }
             out.push(MemoryConflict {
                 id,
-                topic: rc.topic.clone(),
                 a: ConflictSide {
+                    topic: older.topic.clone(),
                     seq: older.seq,
                     body: older.body.clone(),
                     created_at_secs: older.created_at_secs,
                 },
                 b: ConflictSide {
+                    topic: newer.topic.clone(),
                     seq: newer.seq,
                     body: newer.body.clone(),
                     created_at_secs: newer.created_at_secs,
@@ -266,11 +281,12 @@ mod tests {
 
     #[test]
     fn parse_tolerates_prose_and_fences() {
-        let raw = "Here you go:\n```json\n[{\"topic\":\"t\",\"seq_a\":1,\"seq_b\":2,\
-                   \"reason\":\"two airports\"}]\n``` done";
+        let raw = "Here you go:\n```json\n[{\"topic_a\":\"t\",\"seq_a\":1,\
+                   \"topic_b\":\"t\",\"seq_b\":2,\"reason\":\"two airports\"}]\n``` done";
         let got = ContradictionDetector::parse(raw);
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].topic, "t");
+        assert_eq!(got[0].topic_a, "t");
+        assert_eq!(got[0].topic_b, "t");
         assert_eq!((got[0].seq_a, got[0].seq_b), (1, 2));
     }
 
@@ -292,36 +308,41 @@ mod tests {
         let raws = vec![
             // newer listed first — validate must order older→newer.
             RawConflict {
-                topic: "operator-note".into(),
+                topic_a: "operator-note".into(),
                 seq_a: 7,
+                topic_b: "operator-note".into(),
                 seq_b: 3,
                 reason: "two home airports".into(),
             },
             // duplicate (same pair, other order) — deduped by id.
             RawConflict {
-                topic: "operator-note".into(),
+                topic_a: "operator-note".into(),
                 seq_a: 3,
+                topic_b: "operator-note".into(),
                 seq_b: 7,
                 reason: "dup".into(),
             },
             // bogus seq — dropped.
             RawConflict {
-                topic: "operator-note".into(),
+                topic_a: "operator-note".into(),
                 seq_a: 3,
+                topic_b: "operator-note".into(),
                 seq_b: 99,
                 reason: "nope".into(),
             },
             // unknown topic — dropped.
             RawConflict {
-                topic: "ghost".into(),
+                topic_a: "ghost".into(),
                 seq_a: 1,
+                topic_b: "ghost".into(),
                 seq_b: 2,
                 reason: "nope".into(),
             },
             // self-pair — dropped.
             RawConflict {
-                topic: "operator-note".into(),
+                topic_a: "operator-note".into(),
                 seq_a: 3,
+                topic_b: "operator-note".into(),
                 seq_b: 3,
                 reason: "nope".into(),
             },
@@ -334,6 +355,36 @@ mod tests {
         assert!(c.a.body.contains("Perth"));
         assert!(c.b.body.contains("Sydney"));
         assert_eq!(c.reason, "two home airports");
+    }
+
+    #[test]
+    fn validate_detects_cross_topic_conflicts() {
+        // The real-world case: the fact lives in two DIFFERENT topics.
+        let cands = vec![
+            (
+                "home-airport".to_string(),
+                vec![entry("home-airport", 2, "YPPH is my home airport (Perth)", 100)],
+            ),
+            (
+                "operator-notes".to_string(),
+                vec![entry("operator-notes", 5, "home airport is Sydney YSSY", 300)],
+            ),
+        ];
+        let raws = vec![RawConflict {
+            topic_a: "operator-notes".into(),
+            seq_a: 5,
+            topic_b: "home-airport".into(),
+            seq_b: 2,
+            reason: "two different home airports across topics".into(),
+        }];
+        let got = ContradictionDetector::validate(&cands, raws, 50);
+        assert_eq!(got.len(), 1);
+        let c = &got[0];
+        // Older side (created 100, home-airport) is a; newer (300) is b.
+        assert_eq!((c.a.topic.as_str(), c.a.seq), ("home-airport", 2));
+        assert_eq!((c.b.topic.as_str(), c.b.seq), ("operator-notes", 5));
+        assert!(c.a.body.contains("Perth"));
+        assert!(c.b.body.contains("Sydney"));
     }
 
     #[tokio::test]
