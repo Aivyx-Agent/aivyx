@@ -5,6 +5,36 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.24] — 2026-07-02
+
+### Security
+
+A privacy-first hardening pass — three composing, default-on layers, each
+live-verified on the dogfood rig:
+
+- **Sensitive-path read guard (Ward).** The agent can no longer read known
+  secret locations — `~/.ssh`, `~/.aws`, `~/.gnupg`, cloud/k8s/docker creds,
+  `.env` files, private keys, **and Aivyx's own encrypted store + passphrase** —
+  at any access level, on the canonical (symlink-resolved) path, across
+  `fs.read` and the data readers. Opt specific paths back in with `[access]
+  allow_sensitive_paths`; disable with `guard_sensitive_paths = false`.
+- **Network egress guard (Rampart).** The web tools refuse loopback /
+  link-local / private / unique-local targets by default — on the initial URL
+  and every redirect hop — blocking SSRF and cloud-metadata theft
+  (`169.254.169.254`) and local-service pivots. `[access] allow_private_egress`
+  re-enables localhost/LAN; `allow_egress_hosts` hard-restricts to named hosts.
+- **Prompt-injection resistance (Bulwark).** Content the agent ingests (web
+  pages, extracted articles, parsed files, third-party MCP outputs) is fenced
+  as untrusted DATA — never instructions — via a demarcation envelope plus a
+  standing charter rule. Defense-in-depth, composing with the layers above.
+
+### Fixed
+
+- **Auto-delegated stories are held to the real artifact.** Completion
+  verification for a loop-delegated team mission is now grounded on the memory
+  the team actually wrote (matching the solo `loop.complete` path), so a terse
+  mission result over genuine work is no longer false-rejected.
+
 ## [0.7.23] — 2026-07-01
 
 ### Fixed
