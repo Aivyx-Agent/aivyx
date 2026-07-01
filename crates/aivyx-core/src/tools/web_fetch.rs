@@ -145,6 +145,26 @@ fn build_redirect_free_client(
         .map_err(|e| AivyxError::Config(format!("{label} reqwest client build failed: {e}")))
 }
 
+/// Format a reqwest send error with its full source chain. reqwest's
+/// top-level message ("error sending request for url") hides the root cause —
+/// including Chapter Rampart's DNS-filter refusal ("resolves only to
+/// private/loopback/link-local …") — so we walk `source()` and append each
+/// layer, giving the operator (and the agent) the real reason a request was
+/// blocked or failed.
+fn describe_send_error(e: &reqwest::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(inner) = src {
+        let s = inner.to_string();
+        if !out.contains(&s) {
+            out.push_str(": ");
+            out.push_str(&s);
+        }
+        src = inner.source();
+    }
+    out
+}
+
 /// A reqwest DNS resolver that resolves via the system, then filters out
 /// private/loopback/link-local addresses (Chapter Rampart DNS-rebinding
 /// defense). If a host resolves *only* to blocked addresses, resolution
@@ -586,7 +606,7 @@ impl Tool for WebFetchTool {
                 Err(e) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
                         tool: self.id,
-                        detail: format!("GET {current_url} failed: {e}"),
+                        detail: format!("GET {current_url} failed: {}", describe_send_error(&e)),
                     });
                 }
             };
@@ -841,7 +861,7 @@ impl Tool for WebExtractTool {
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: format!("GET {url} failed: {e}"),
+                    detail: format!("GET {url} failed: {}", describe_send_error(&e)),
                 });
             }
         };
@@ -1180,7 +1200,7 @@ impl Tool for WebPostTool {
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: format!("{method_upper} {url} failed: {e}"),
+                    detail: format!("{method_upper} {url} failed: {}", describe_send_error(&e)),
                 });
             }
         };
@@ -1240,7 +1260,7 @@ impl Tool for WebPostTool {
                 Err(e) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
                         tool: self.id,
-                        detail: format!("GET {current_url} (redirect hop) failed: {e}"),
+                        detail: format!("GET {current_url} (redirect hop) failed: {}", describe_send_error(&e)),
                     });
                 }
             };
