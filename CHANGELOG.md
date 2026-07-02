@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.30] — 2026-07-02
+
 ### Security
 
 - **The web UI can now require an auth token (Chapter Postern).** The Studio's
