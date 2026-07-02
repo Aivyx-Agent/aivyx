@@ -230,6 +230,13 @@ impl Tool for FsReadTool {
         "fs.read"
     }
 
+    // Chapter Bulwark — a file's contents are untrusted: it may be attacker-
+    // supplied (downloaded, shared, or in a broad-access location) and carry a
+    // prompt-injection payload. Fence it as data, not instructions.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Read a UTF-8 (or binary) file from under the agent's sandbox root. \
          Input is a JSON object with a `path` field (relative paths are \
@@ -1880,6 +1887,13 @@ mod tests {
             .with_sensitive_policy(Arc::new(policy))
             .build()
             .expect("sandbox root canonicalizable")
+    }
+
+    #[test]
+    fn fs_read_output_is_untrusted_for_bulwark() {
+        // A file's contents are fenced as untrusted (prompt-injection defense).
+        let sandbox = SandboxDir::new();
+        assert!(build_tool(&sandbox).output_is_untrusted());
     }
 
     #[test]

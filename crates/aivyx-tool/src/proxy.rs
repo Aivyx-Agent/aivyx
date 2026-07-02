@@ -111,6 +111,16 @@ impl Tool for ToolProxy {
         self.required_scope.clone()
     }
 
+    // Chapter Bulwark — a tool-process tool is a third-party integration
+    // (Gmail, Calendar, Contacts, Drive, Obsidian, the web-search toolkit, …).
+    // Its output is external content the operator did not author, so it can
+    // carry a prompt-injection payload (a hostile email, a poisoned search
+    // result). Fence all of it as DATA, not instructions. (Harmless for the
+    // handful of pure-compute toolkit tools — the agent still reads the value.)
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, context: &ToolContext<'_>) -> ToolOutcome {
         // The turn loop has already enforced the capability check
         // and the role allowlist before we get here. Our job is to
