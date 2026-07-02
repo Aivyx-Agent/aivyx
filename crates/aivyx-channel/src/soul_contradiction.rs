@@ -264,11 +264,15 @@ mod tests {
     use super::*;
 
     fn persona() -> EffectivePersona {
-        let mut p = EffectivePersona::default();
-        p.character_traits = vec!["communicate concisely".into(), "warm and effusive".into()];
-        p.behavioral_preferences = vec!["give thorough, detailed explanations".into()];
-        p.behavioral_constraints = vec!["never flatter me, be candid".into()];
-        p
+        EffectivePersona {
+            character_traits: vec![
+                "communicate concisely".into(),
+                "warm and effusive".into(),
+            ],
+            behavioral_preferences: vec!["give thorough, detailed explanations".into()],
+            behavioral_constraints: vec!["never flatter me, be candid".into()],
+            ..Default::default()
+        }
     }
 
     // Item layout for persona(): [0] character_traits "communicate concisely",
