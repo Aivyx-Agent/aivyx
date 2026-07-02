@@ -277,6 +277,7 @@ fn rooted_glob(root: &std::path::Path) -> String {
 fn build_shell_exec_for_channel(
     channel_kind: ChannelKind,
     fs_root: &std::path::Path,
+    sensitive: std::sync::Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice runs in-process on the
@@ -286,7 +287,11 @@ fn build_shell_exec_for_channel(
         ChannelKind::Local | ChannelKind::Voice => {
             let shell = ShellExecToolConfig::new(fs_root.to_path_buf())
                 .build()
-                .map_err(|e| format!("failed to build shell.exec tool: {e}"))?;
+                .map_err(|e| format!("failed to build shell.exec tool: {e}"))?
+                // Chapters Ward/Portcullis on shell.exec — refuse commands
+                // that reference protected locations, closing the residual
+                // where a shell routes around the fs-tool guards.
+                .with_sensitive_policy(sensitive);
             let canonical_cwd_root = shell.cwd_root().to_path_buf();
             let scope = Scope::parse(&format!(
                 "shell.exec:cwd:{}",
@@ -6326,7 +6331,11 @@ async fn run_async(
         Arc::new(memory_gc) as Arc<dyn Tool>,
     ];
     let shell_exec_scope: Option<Scope> =
-        match build_shell_exec_for_channel(channel_kind, &fs_root)? {
+        match build_shell_exec_for_channel(
+            channel_kind,
+            &fs_root,
+            std::sync::Arc::clone(&sensitive_policy),
+        )? {
             Some((shell, scope)) => {
                 tool_list.push(shell);
                 Some(scope)
@@ -9383,8 +9392,12 @@ mod tests {
     #[test]
     fn channel_local_receives_shell_exec() {
         let scratch = Scratch::new();
-        let result = build_shell_exec_for_channel(ChannelKind::Local, &scratch.dir)
-            .expect("local branch must build shell.exec cleanly");
+        let result = build_shell_exec_for_channel(
+            ChannelKind::Local,
+            &scratch.dir,
+            std::sync::Arc::new(aivyx_core::sensitive_paths::SensitivePolicy::disabled()),
+        )
+        .expect("local branch must build shell.exec cleanly");
         let (tool, scope) = result.expect("local must receive shell.exec");
         assert_eq!(tool.name(), "shell.exec");
         assert_eq!(scope.base(), "shell.exec");
@@ -9519,8 +9532,12 @@ mod tests {
         // would bypass the strictness Phase 11 Task 3 requires
         // (no mention in audit chains, not even as denials).
         let scratch = Scratch::new();
-        let result = build_shell_exec_for_channel(ChannelKind::Telegram, &scratch.dir)
-            .expect("telegram branch must not error — it's a no-op");
+        let result = build_shell_exec_for_channel(
+            ChannelKind::Telegram,
+            &scratch.dir,
+            std::sync::Arc::new(aivyx_core::sensitive_paths::SensitivePolicy::disabled()),
+        )
+        .expect("telegram branch must not error — it's a no-op");
         assert!(
             result.is_none(),
             "Telegram channel must NOT receive shell.exec; \

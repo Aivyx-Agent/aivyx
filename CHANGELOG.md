@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **`shell.exec` now honors the sensitive-path guards (Ward/Portcullis).**
+  Previously the sensitive-read and persistence-write guards protected only the
+  `fs.*` tools, so a shell command routed around them — `cat ~/.ssh/id_rsa`,
+  `echo … >> ~/.bashrc`. `shell.exec` now scans the command text and refuses a
+  command that references a protected location (secret dirs/files, cloud creds,
+  or persistence targets like `.bashrc` / `authorized_keys` / `crontab`) before
+  `sh` runs. Uses the same `[access] allow_sensitive_paths` opt-in. Best-effort
+  by nature (obfuscated paths can still slip through — the docs continue to
+  point to OS-level isolation for hard guarantees); disabled-by-default so
+  behavior is byte-identical until the guard is configured on.
+
 ## [0.7.28] — 2026-07-02
 
 ### Changed

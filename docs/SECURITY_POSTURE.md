@@ -212,10 +212,14 @@ security failure:
   read tools (`fs.read`, the data readers) refuse on the *canonical* path, so a
   symlink to a secret is caught too. The operator opts specific paths back in
   with `[access] allow_sensitive_paths` (or disables the guard with
-  `guard_sensitive_paths = false`). **Residual:** this guards the fs-read path,
-  not `shell.exec` — a `cat ~/.ssh/id_rsa` via shell is still possible, so at
-  broad reach isolate credentials at the OS level (see §8). You cannot exfil
-  what the read tools won't hand over, but a shell can still reach the disk.
+  `guard_sensitive_paths = false`). **`shell.exec` is now covered too:** the
+  same policy scans the command text and refuses a command that references a
+  protected location (`cat ~/.ssh/id_rsa`, `cp ~/.aws/credentials …`) before
+  `sh` runs. **Residual:** the shell scan is best-effort — it matches path
+  tokens, so obfuscation (base64, `$(printf …)`, hex escapes, a copied-then-
+  renamed file) can still slip through. At broad reach, isolate credentials at
+  the OS level (see §8) for a hard guarantee; the guard raises the bar on the
+  obvious cases.
 - **Write-to-persist — guarded (Chapter Portcullis).** `fs.write` now hard-
   refuses writes to secret + *persistence* locations — shell rc files
   (`.bashrc`/`.zshrc`/`.profile`), `~/.ssh/authorized_keys`, `~/.config/
@@ -223,7 +227,9 @@ security failure:
   even at `full`. This closes the backdoor/persistence vector that
   `confirm_destructive` only *soft*-gated (the confirm is model-cooperative and
   self-confirmable; this is a hard refusal). Same `[access]
-  allow_sensitive_paths` opt-in. Residual: `shell.exec` can still write these.
+  allow_sensitive_paths` opt-in. **`shell.exec` is now covered too** — the same
+  scan refuses `echo … >> ~/.bashrc` / writes to `authorized_keys` / `crontab`
+  before `sh` runs (best-effort, same obfuscation residual as the read guard).
 - **Capability ≠ competence (and the breakers prove it).** The ceiling is
   gated by the provider's reasoning quality. Small local models hallucinate
   and loop — the cycle breakers exist *because* they run away. Serious

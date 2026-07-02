@@ -45,6 +45,15 @@
 //!    traversal (`/repo/escape -> /etc`) that the lexical layer
 //!    cannot see.
 //!
+//! 3. **Sensitive-path guard (Chapters Ward/Portcullis).** Before
+//!    spawning `sh`, the command text is scanned for references to
+//!    protected locations (`~/.ssh`, `.env`, cloud creds, and
+//!    persistence targets like `.bashrc`/`authorized_keys`/`crontab`).
+//!    A hit is refused, closing the residual that `cat ~/.ssh/id_rsa`
+//!    and `echo >> ~/.bashrc` route around the fs-tool guards. Disabled
+//!    by default; best-effort (obfuscated paths are out of scope — see
+//!    `sensitive_command_hit`).
+//!
 //! ## Trust-tier gate
 //!
 //! `shell.exec` is **not** in the SemiTrusted ceiling — see
@@ -138,6 +147,9 @@ impl ShellExecToolConfig {
             id: ToolId::new(),
             cwd_root: Arc::from(canonical),
             schema: shell_exec_input_schema_value(),
+            // Default disabled ⇒ byte-identical to pre-guard behavior until the
+            // binary installs a real policy (mirrors `fs.read`/`fs.write`).
+            sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
         })
     }
 }
@@ -153,6 +165,11 @@ pub struct ShellExecTool {
     /// ownership across concurrent turn tasks.
     cwd_root: Arc<Path>,
     schema: Value,
+    /// Chapters Ward/Portcullis, extended to `shell.exec` — the
+    /// sensitive-path guard (disabled by default). The fs tools guard
+    /// their own path; a shell command bypasses them entirely, so this
+    /// scans the command string for references to protected locations.
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl ShellExecTool {
@@ -161,6 +178,64 @@ impl ShellExecTool {
     pub fn cwd_root(&self) -> &Path {
         &self.cwd_root
     }
+
+    /// Install the sensitive-path guard. When enabled, a command whose
+    /// text references a protected location (`~/.ssh`, `.env`, cloud
+    /// creds, or a persistence target like `.bashrc` / `authorized_keys`
+    /// / `crontab`) is refused before `sh -c` ever runs — closing the
+    /// documented residual that `cat ~/.ssh/id_rsa` and `echo >> ~/.bashrc`
+    /// route around Ward/Portcullis. Best-effort by nature (a shell can
+    /// obfuscate paths); it raises the bar on the obvious cases and the
+    /// docs still point to OS-level isolation for hard guarantees.
+    pub fn with_sensitive_policy(
+        mut self,
+        policy: Arc<crate::sensitive_paths::SensitivePolicy>,
+    ) -> Self {
+        self.sensitive = policy;
+        self
+    }
+}
+
+/// Best-effort scan of a shell command string for a reference to a
+/// protected location. Returns `Some((token, reason))` for the first hit.
+///
+/// This is deliberately conservative-but-simple: it splits the command on
+/// shell word/redirect/pipe separators, unquotes each token, expands a
+/// leading `~` and `$HOME`/`${HOME}` against the real home dir, and runs
+/// every candidate through [`SensitivePolicy::classify_write`] — the
+/// *superset* check (read-sensitive ∪ persistence), because a shell command
+/// can both read and write and we cannot tell which from the text. The
+/// classifier matches on path *components*, so `~/.ssh/id_rsa`, an absolute
+/// `/home/u/.aws/credentials`, and a bare `id_rsa` all trip the same rules
+/// the fs tools enforce. Obfuscation (base64, `$(printf …)`, hex escapes) is
+/// out of scope by design — see the tool doc-comment.
+fn sensitive_command_hit(
+    cmd: &str,
+    policy: &crate::sensitive_paths::SensitivePolicy,
+) -> Option<(String, String)> {
+    let home = std::env::var("HOME").ok();
+    for raw in cmd.split(|c: char| {
+        c.is_whitespace() || matches!(c, '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '"' | '\'' | '=')
+    }) {
+        if raw.is_empty() {
+            continue;
+        }
+        // Expand a leading `~` and any `$HOME` / `${HOME}` so allow-listed
+        // absolute paths are honored and matching lands on an absolute path.
+        let mut tok = raw.to_string();
+        if let Some(h) = &home {
+            if let Some(rest) = tok.strip_prefix("~/") {
+                tok = format!("{h}/{rest}");
+            } else if tok == "~" {
+                tok = h.clone();
+            }
+            tok = tok.replace("${HOME}", h).replace("$HOME", h);
+        }
+        if let Some(reason) = policy.classify_write(Path::new(&tok)) {
+            return Some((raw.to_string(), reason));
+        }
+    }
+    None
 }
 
 /// Lexically resolve `input_cwd` against `cwd_root`. Mirrors
@@ -364,6 +439,25 @@ impl Tool for ShellExecTool {
             }
         };
         let timeout_ms = input_timeout_ms(&input);
+
+        // ---- Chapters Ward/Portcullis — sensitive-path guard ------
+        //
+        // The fs tools guard their own path, but a shell command can `cat`
+        // a secret or `>>` a persistence file directly, bypassing them. Scan
+        // the command text (best-effort) and refuse before spawning `sh`.
+        // Disabled-by-default policy ⇒ this is a no-op until the binary
+        // installs a real one, keeping pre-guard behavior byte-identical.
+        if let Some((token, reason)) = sensitive_command_hit(&cmd, &self.sensitive) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to run this command — it references {token}, a \
+                     protected location ({reason}). shell.exec will not read \
+                     secrets or write persistence targets; add the path to \
+                     `[access] allow_sensitive_paths` if you intend it."
+                ),
+            });
+        }
 
         // ---- Lexical + canonical cwd resolve ----------------------
         //
@@ -1080,6 +1174,101 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    // ---- Sensitive-path guard (Ward/Portcullis on shell.exec) ------
+
+    fn guarded_tool(root: &Path) -> ShellExecTool {
+        build_tool(root).with_sensitive_policy(Arc::new(
+            crate::sensitive_paths::SensitivePolicy::new(vec![], vec![]),
+        ))
+    }
+
+    #[tokio::test]
+    async fn guard_refuses_reading_ssh_key_via_shell() {
+        let scratch = Scratch::new();
+        let tool = guarded_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        for cmd in [
+            "cat ~/.ssh/id_rsa",
+            "cat /home/someone/.aws/credentials",
+            "cp ~/.gnupg/secring.gpg /tmp/x",
+            "cat app.env",
+        ] {
+            let out = tool.execute(json!({ "cmd": cmd }), &ctx).await;
+            match out {
+                ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                    assert!(
+                        detail.contains("protected location"),
+                        "cmd {cmd:?} should be refused; got: {detail}"
+                    );
+                }
+                other => panic!("cmd {cmd:?} expected refusal, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn guard_refuses_persistence_write_via_shell() {
+        let scratch = Scratch::new();
+        let tool = guarded_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        for cmd in [
+            "echo evil >> ~/.bashrc",
+            "echo key >> ~/.ssh/authorized_keys",
+            "crontab -l",
+        ] {
+            let out = tool.execute(json!({ "cmd": cmd }), &ctx).await;
+            match out {
+                ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                    assert!(detail.contains("protected location"), "{detail}");
+                }
+                other => panic!("cmd {cmd:?} expected refusal, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn guard_allows_ordinary_commands() {
+        let scratch = Scratch::new();
+        std::fs::write(scratch.dir.join("notes.txt"), "hello").unwrap();
+        let tool = guarded_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        for cmd in ["echo hi", "ls -la", "cat notes.txt"] {
+            let out = tool.execute(json!({ "cmd": cmd }), &ctx).await;
+            assert!(
+                matches!(out, ToolOutcome::Completed { .. }),
+                "cmd {cmd:?} should run; got {out:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_policy_is_byte_identical_no_op() {
+        // The default (no policy installed) must NOT block a command that
+        // merely mentions a secret-shaped token — pre-guard behavior.
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir); // no with_sensitive_policy
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(json!({ "cmd": "echo ~/.ssh/id_rsa" }), &ctx)
+            .await;
+        assert!(
+            matches!(out, ToolOutcome::Completed { .. }),
+            "disabled policy must not block; got {out:?}"
+        );
     }
 
     #[tokio::test]
