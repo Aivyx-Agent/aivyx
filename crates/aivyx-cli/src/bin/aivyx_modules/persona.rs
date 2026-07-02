@@ -16,9 +16,11 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, get_effective_persona, get_persona_proposal, list_persona_deltas,
-    list_persona_proposals, resolve_persona_proposal, revert_persona_delta,
+    daemon_is_running, get_effective_persona, get_persona_proposal, get_soul_conflicts,
+    list_persona_deltas, list_persona_proposals, resolve_persona_proposal,
+    resolve_soul_conflict, revert_persona_delta,
 };
+use aivyx_channel::soul_contradiction::SoulConflict;
 use aivyx_channel::daemon_ipc::{
     default_socket_path, EffectivePersonaSummary, PersonaDeltaSummary,
     PersonaProposalResolution, PersonaProposalSummary,
@@ -137,6 +139,106 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
          start the daemon first with `aivyx daemon run` (or just `aivyx`)",
         socket_path.display(),
     ))
+}
+
+/// `aivyx persona conflicts` — Chapter Accord on-demand contradiction pass over
+/// the Soul (and against operator Profile constraints).
+pub async fn run_persona_conflicts() -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let conflicts = get_soul_conflicts(&socket_path)
+        .await
+        .map_err(|e| format!("failed to detect persona conflicts: {e}"))?;
+    print!("{}", render_soul_conflicts(&conflicts));
+    Ok(())
+}
+
+/// `aivyx persona resolve <id> --remove <a|b>` — remove the chosen facet of a
+/// detected contradiction. Re-runs detection to map the stable id + side to the
+/// concrete `(category, value)`, then appends a `RemoveList` persona delta.
+pub async fn run_persona_resolve(id: &str, remove_side: char) -> Result<(), String> {
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    let conflicts = get_soul_conflicts(&socket_path)
+        .await
+        .map_err(|e| format!("failed to detect persona conflicts: {e}"))?;
+    let conflict = conflicts
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("no current conflict with id `{id}` (re-run `aivyx persona conflicts`)"))?;
+    let facet = match remove_side {
+        'a' | 'A' => &conflict.a,
+        'b' | 'B' => &conflict.b,
+        other => return Err(format!("--remove must be `a` or `b`, got `{other}`")),
+    };
+    if facet.is_profile_constraint() {
+        return Err(
+            "that side is an operator Profile constraint (immutable). Remove the \
+             other side (the learned facet), or edit the constraint in your Profile."
+                .to_string(),
+        );
+    }
+    let seq = resolve_soul_conflict(&socket_path, &facet.category, &facet.value)
+        .await
+        .map_err(|e| format!("failed to resolve conflict: {e}"))?;
+    println!(
+        "Resolved: removed {} facet {:?} (persona chain seq {seq}). Reversible via \
+         `aivyx persona revert`.",
+        facet.category, facet.value,
+    );
+    Ok(())
+}
+
+/// Render Accord conflicts for the CLI. Pure — split out for tests.
+fn render_soul_conflicts(conflicts: &[SoulConflict]) -> String {
+    let mut out = String::from("Persona conflicts\n=================\n\n");
+    if conflicts.is_empty() {
+        out.push_str(
+            "No Soul contradictions detected. (An on-demand LLM pass; it needs a \
+             configured model and at least two learned facets or a facet plus a \
+             Profile constraint.)\n",
+        );
+        return out;
+    }
+    for c in conflicts {
+        let tag = if c.cross_layer { " (drifts from your Profile)" } else { "" };
+        out.push_str(&format!("⚠ [{}]{}  —  {}\n", c.id, tag, c.reason.trim()));
+        out.push_str(&format!("  [a] {} | {}\n", c.a.category, c.a.value.trim()));
+        let b_note = if c.b.is_profile_constraint() { "  (immutable)" } else { "" };
+        out.push_str(&format!("  [b] {} | {}{}\n", c.b.category, c.b.value.trim(), b_note));
+        out.push_str(&format!(
+            "  resolve: aivyx persona resolve {} --remove <a|b>\n\n",
+            c.id
+        ));
+    }
+    out.push_str(&format!("({} conflict(s))\n", conflicts.len()));
+    out
+}
+
+#[cfg(test)]
+mod accord_tests {
+    use super::*;
+    use aivyx_channel::soul_contradiction::SoulFacet;
+
+    #[test]
+    fn render_empty_and_populated() {
+        assert!(render_soul_conflicts(&[]).contains("No Soul contradictions"));
+        let c = SoulConflict {
+            id: "abc123".into(),
+            a: SoulFacet { category: "character_traits".into(), value: "concise".into() },
+            b: SoulFacet {
+                category: SoulFacet::PROFILE_CONSTRAINT.into(),
+                value: "never flatter me".into(),
+            },
+            reason: "flattery vs candor".into(),
+            cross_layer: true,
+        };
+        let s = render_soul_conflicts(std::slice::from_ref(&c));
+        assert!(s.contains("abc123"));
+        assert!(s.contains("drifts from your Profile"));
+        assert!(s.contains("(immutable)"));
+        assert!(s.contains("--remove <a|b>"));
+    }
 }
 
 /// Render the effective Persona for `show`. Pure function — split

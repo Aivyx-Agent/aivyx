@@ -33,6 +33,10 @@ pub mod graph;
 /// `ConflictSide`) shared by the daemon, IPC, and the CLI/Studio for
 /// surfacing contradictory stored facts to the operator for resolution.
 pub mod conflict;
+/// Chapter Accord — the wasm-clean Soul-contradiction result type
+/// (`SoulConflict` / `SoulFacet`) shared by the daemon, IPC, and CLI/Studio
+/// for surfacing self-contradictory or profile-drifting persona facets.
+pub mod soul_conflict;
 /// Chapter Passport — the federation relay protocol verbs (`RelayRequest` /
 /// `RelayResponse`), the wasm-clean wire shape both the local Nonagon bus and a
 /// future cross-operator relay carry (docs/FEDERATION.md §5). Crypto + the

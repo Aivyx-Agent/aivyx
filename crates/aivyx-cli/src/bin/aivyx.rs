@@ -756,6 +756,10 @@ fn run() -> Result<(), String> {
                         .await
                     }
                 },
+                PersonaSubcommand::Conflicts => persona::run_persona_conflicts().await,
+                PersonaSubcommand::Resolve { id, remove } => {
+                    persona::run_persona_resolve(&id, remove).await
+                }
             }
         });
     }
@@ -2119,6 +2123,13 @@ enum PersonaSubcommand {
     /// `aivyx persona proposals <sub>` — Phase 70 review surface
     /// for the reflection auto-loop's pending Persona proposals.
     Proposals(ProposalsSubcommand),
+    /// `aivyx persona conflicts` — Chapter Accord: on-demand detection of
+    /// self-contradicting Soul facets (and facets that drift from operator
+    /// Profile constraints).
+    Conflicts,
+    /// `aivyx persona resolve <id> --remove <a|b>` — remove the chosen facet
+    /// of a detected contradiction (a `RemoveList` persona delta; reversible).
+    Resolve { id: String, remove: char },
 }
 
 /// Chapter Tutor — subcommand discriminator under [`CliMode::Skills`]. The
@@ -3970,11 +3981,59 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 };
                 PersonaSubcommand::Proposals(proposals_sub)
             }
+            "conflicts" => {
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`aivyx persona conflicts` takes no arguments. Got: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                PersonaSubcommand::Conflicts
+            }
+            "resolve" => {
+                let id = args.get(2).ok_or_else(|| {
+                    "`aivyx persona resolve` requires a conflict id. Usage: \
+                     `aivyx persona resolve <id> --remove <a|b>`"
+                        .to_string()
+                })?;
+                let mut remove: Option<char> = None;
+                let mut idx = 3;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--remove" => {
+                            idx += 1;
+                            let v = args.get(idx).ok_or_else(|| {
+                                "`--remove` requires a value (`a` or `b`)".to_string()
+                            })?;
+                            let c = v.chars().next().unwrap_or(' ').to_ascii_lowercase();
+                            if c != 'a' && c != 'b' {
+                                return Err(format!(
+                                    "`--remove` must be `a` or `b`, got `{v}`"
+                                ));
+                            }
+                            remove = Some(c);
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx persona resolve`: `{other}`"
+                            ));
+                        }
+                    }
+                    idx += 1;
+                }
+                let remove = remove.ok_or_else(|| {
+                    "`aivyx persona resolve` requires `--remove <a|b>` to pick which \
+                     facet of the conflict to remove"
+                        .to_string()
+                })?;
+                PersonaSubcommand::Resolve { id: id.clone(), remove }
+            }
             other => {
                 return Err(format!(
                     "unrecognized persona subcommand: `{other}`. \
                      Supported: persona show, persona list, \
-                     persona revert <id>, persona proposals <sub>"
+                     persona revert <id>, persona proposals <sub>, \
+                     persona conflicts, persona resolve <id> --remove <a|b>"
                 ));
             }
         };

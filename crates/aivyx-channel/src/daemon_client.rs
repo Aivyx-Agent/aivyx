@@ -593,6 +593,78 @@ pub async fn get_memory_conflicts(
 /// Chapter Concord — resolve a conflict by deleting the losing entry
 /// (`archive_seq` under `topic`). Returns whether an entry was removed
 /// (`false` = it was already gone, an idempotent no-op).
+/// Chapter Accord — run the on-demand Persona contradiction pass.
+pub async fn get_soul_conflicts(
+    socket_path: &Path,
+) -> Result<Vec<aivyx_ipc::soul_conflict::SoulConflict>, DaemonError> {
+    let payload =
+        send_query(socket_path, "soul-conflicts", QueryPayload::GetSoulConflicts).await?;
+    match payload {
+        QueryResponsePayload::SoulConflicts { conflicts } => Ok(conflicts),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected SoulConflicts, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter Accord — resolve a Persona contradiction by removing the losing
+/// facet `(category, value)`. Returns the new chain seq.
+pub async fn resolve_soul_conflict(
+    socket_path: &Path,
+    category: &str,
+    value: &str,
+) -> Result<u64, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(1024);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let req = FrontendMessage::ResolveSoulConflict {
+        id: "soul-resolve".into(),
+        category: category.to_string(),
+        value: value.to_string(),
+    };
+    writer.write_all(&encode_frame(&req)?).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((
+                DaemonEnvelope::SoulConflictResolved { ok, seq, error, .. },
+                _,
+            )) => {
+                return if ok {
+                    Ok(seq.unwrap_or(0))
+                } else {
+                    Err(DaemonError::Protocol(
+                        error.unwrap_or_else(|| "resolve failed".into()),
+                    ))
+                };
+            }
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected SoulConflictResolved, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 pub async fn resolve_memory_conflict(
     socket_path: &Path,
     topic: &str,

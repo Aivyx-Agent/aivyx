@@ -2623,6 +2623,36 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::ResolveSoulConflict { id, category, value } => {
+                            // Chapter Accord — operator removes the losing
+                            // facet of a detected contradiction. Appends a
+                            // `RemoveList` persona delta (operator-authored,
+                            // revertible) + recomputes shared state. No gate:
+                            // the operator is the proposer (like RevertPersonaDelta).
+                            let resp = match resolve_soul_conflict(
+                                persona_log.as_deref(),
+                                &shared_persona,
+                                &category,
+                                &value,
+                            )
+                            .await
+                            {
+                                Ok(seq) => DaemonMessage::SoulConflictResolved {
+                                    id,
+                                    ok: true,
+                                    seq: Some(seq),
+                                    error: None,
+                                },
+                                Err(reason) => DaemonMessage::SoulConflictResolved {
+                                    id,
+                                    ok: false,
+                                    seq: None,
+                                    error: Some(reason),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::SeedPersona { id, seed } => {
                             // Chapter X — live persona seed (web onboarding).
                             // Plants the seed iff the chain is empty, via the
@@ -4485,6 +4515,24 @@ async fn handle_query(
             };
             QueryResponsePayload::MemoryConflicts { conflicts }
         }
+        QueryPayload::GetSoulConflicts => {
+            // Chapter Accord — on-demand Persona contradiction detection over
+            // the current effective persona snapshot. Needs an LLM; missing ⇒
+            // an empty set (not an error).
+            let Some(llm) = contradiction_llm else {
+                return QueryResponsePayload::SoulConflicts { conflicts: Vec::new() };
+            };
+            let snapshot = match shared_persona.read() {
+                Ok(p) => p.clone(),
+                Err(_) => return QueryResponsePayload::SoulConflicts { conflicts: Vec::new() },
+            };
+            let detector = crate::soul_contradiction::SoulContradictionDetector::new(
+                Arc::clone(&llm.provider),
+                llm.model.clone(),
+            );
+            let conflicts = detector.detect(&snapshot).await;
+            QueryResponsePayload::SoulConflicts { conflicts }
+        }
         QueryPayload::GetSkills => {
             // Chapter Repertoire — the effective persona's learned skills
             // joined with their WH.2 effectiveness, plus the count of
@@ -5730,6 +5778,68 @@ async fn resolve_persona_revert(
     };
     let seq = persona_log
         .append(revert)
+        .await
+        .map_err(|e| format!("persona chain append failed: {e}"))?;
+    let entries_after = persona_log.entries();
+    if !crate::persona::recompute_shared_from_entries(shared_persona, &entries_after) {
+        return Err("shared persona state lock poisoned during recompute".into());
+    }
+    Ok(seq)
+}
+
+/// Chapter Accord — resolve a detected Persona contradiction by removing the
+/// losing facet. Maps the wire `category` to one of the five removable
+/// soft-list categories (the operator `profile_constraint` and the scalar
+/// identity fields are immutable here), appends a `RemoveList` persona delta,
+/// and recomputes shared state so the next turn drops the facet. Returns the
+/// new chain seq.
+async fn resolve_soul_conflict(
+    persona_log: Option<&crate::persona::PersistentPersonaLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    category: &str,
+    value: &str,
+) -> Result<u64, String> {
+    use aivyx_ipc::persona::PersonaDeltaCategory as Cat;
+    let persona_log = persona_log
+        .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    // Only the five accreted soft-list categories are removable. The operator
+    // profile_constraint side of a cross-layer conflict is immutable, and the
+    // scalar identity fields are not list facets.
+    let cat = match category {
+        "character_traits" => Cat::CharacterTraits,
+        "communication_adaptations" => Cat::CommunicationAdaptations,
+        "behavioral_preferences" => Cat::BehavioralPreferences,
+        "learned_context" => Cat::LearnedContext,
+        "relationship_milestones" => Cat::RelationshipMilestones,
+        aivyx_ipc::soul_conflict::SoulFacet::PROFILE_CONSTRAINT => {
+            return Err(
+                "that side is an operator Profile constraint — it is immutable; \
+                 remove the conflicting learned facet instead, or edit the \
+                 constraint in your Profile"
+                    .to_string(),
+            );
+        }
+        other => return Err(format!("`{other}` is not a removable persona facet category")),
+    };
+    if value.trim().is_empty() {
+        return Err("no facet value to remove".to_string());
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let delta = crate::persona::PersonaDelta {
+        delta_id: format!("pd-accord-{now_ms}"),
+        proposed_at_unix_ms: now_ms,
+        approved_at_unix_ms: now_ms,
+        proposal_id: format!("op-accord-{now_ms}"),
+        category: cat,
+        op: crate::persona::PersonaDeltaOp::RemoveList {
+            value: value.to_string(),
+        },
+    };
+    let seq = persona_log
+        .append(delta)
         .await
         .map_err(|e| format!("persona chain append failed: {e}"))?;
     let entries_after = persona_log.entries();

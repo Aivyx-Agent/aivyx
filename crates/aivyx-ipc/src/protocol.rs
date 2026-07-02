@@ -256,6 +256,11 @@ pub enum QueryPayload {
     /// only (detection performs no mutation). Responds with
     /// [`QueryResponsePayload::MemoryConflicts`].
     GetMemoryConflicts,
+    /// Chapter Accord — on-demand detection of self-contradicting Persona
+    /// facets (and learned facets that drift against operator Profile
+    /// constraints), for the operator to resolve. Read-only. Responds with
+    /// [`QueryResponsePayload::SoulConflicts`].
+    GetSoulConflicts,
     /// Chapter Repertoire — the Studio Skills library: every `LearnedSkill`
     /// in the effective persona, joined with its WH.2 effectiveness
     /// (decayed EWMA + samples), plus the count of pending skill proposals.
@@ -807,6 +812,12 @@ pub enum QueryResponsePayload {
     /// tuple), empty when none are found. Transient — recomputed each call.
     MemoryConflicts {
         conflicts: Vec<crate::conflict::MemoryConflict>,
+    },
+    /// Chapter Accord — response to [`QueryPayload::GetSoulConflicts`]: the
+    /// detected Persona contradictions, empty when none. Transient —
+    /// recomputed each call.
+    SoulConflicts {
+        conflicts: Vec<crate::soul_conflict::SoulConflict>,
     },
     /// Chapter Repertoire — response to [`QueryPayload::GetSkills`]: the
     /// skill inventory (each `LearnedSkill` + its effectiveness) and the
@@ -1808,6 +1819,16 @@ pub enum FrontendMessage {
         id: String,
         conflict_id: String,
     },
+    /// Chapter Accord — operator resolves a detected Persona contradiction by
+    /// removing the losing facet: a `RemoveList` persona delta for
+    /// `(category, value)` is appended to the signed chain (operator-
+    /// authoritative, revertible). `profile_constraint` is immutable and
+    /// rejected. Replies with [`DaemonMessage::SoulConflictResolved`].
+    ResolveSoulConflict {
+        id: String,
+        category: String,
+        value: String,
+    },
     /// Chapter Repertoire — operator forgets a learned skill by name from
     /// the Studio Skills screen. Appends a `RemoveList` persona delta
     /// (operator-authoritative); responds with [`DaemonMessage::SkillForgotten`].
@@ -2033,6 +2054,16 @@ pub enum DaemonMessage {
         id: String,
         ok: bool,
         removed: bool,
+        error: Option<String>,
+    },
+    /// Chapter Accord — ack for [`FrontendMessage::ResolveSoulConflict`].
+    /// `ok = true` with the new chain `seq` when the losing facet was removed;
+    /// `ok = false` + `error` when the facet is immutable, unknown, or the
+    /// chain append fails.
+    SoulConflictResolved {
+        id: String,
+        ok: bool,
+        seq: Option<u64>,
         error: Option<String>,
     },
     /// Chapter Concord — ack for [`FrontendMessage::DismissMemoryConflict`].
@@ -2393,6 +2424,13 @@ pub enum DaemonEnvelope {
         id: String,
         ok: bool,
         removed: bool,
+        error: Option<String>,
+    },
+    /// Chapter Accord — Soul-conflict resolution result.
+    SoulConflictResolved {
+        id: String,
+        ok: bool,
+        seq: Option<u64>,
         error: Option<String>,
     },
     /// Chapter Concord — memory-conflict dismissal result.

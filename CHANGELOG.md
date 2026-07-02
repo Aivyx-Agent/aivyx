@@ -5,6 +5,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Soul-coherence: contradiction detection over the Persona (Chapter Accord).**
+  The identity-stack sibling of Chapter Concord (which does this for memory).
+  The Soul accretes reflection-learned facets; the lifecycle layer merges
+  near-*duplicates* and decays the *unreinforced*, but nothing flagged two
+  approved facets that flatly *contradict* — a seeded "communicate concisely"
+  living next to a later "give thorough, detailed explanations", both injected
+  every turn — nor a learned facet drifting against an operator Profile
+  constraint ("be candid, never flatter me" vs a learned "warm and effusive").
+  New `aivyx persona conflicts` runs an on-demand LLM detection pass (zero
+  background cost, no config) and `aivyx persona resolve <id> --remove <a|b>`
+  removes the losing facet via a `RemoveList` persona delta (operator-authored,
+  reversible via `aivyx persona revert`). Operator Profile constraints are
+  immutable — flagged, never removed. New wasm-clean `SoulConflict` IPC type +
+  `GetSoulConflicts` / `ResolveSoulConflict` verbs (Studio can consume later).
+
 ## [0.7.31] — 2026-07-02
 
 ### Changed
