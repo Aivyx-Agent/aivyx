@@ -34,10 +34,11 @@ csv = "1"
 calamine = "0.26"
 
 # PDF text extraction (Chapter Sheaf SH.3). MIT; brings `lopdf` (also
-# used directly for the page count). Text layer only — no OCR. The
-# chapter's licensing/robustness risk: gated on `cargo deny` clearing.
-pdf-extract = "0.7"
-lopdf = "0.34"
+# used directly for the page count). Text layer only — no OCR.
+# lopdf >= 0.42 fixes RUSTSEC-2026-0187 (unbounded-recursion stack-overflow
+# DoS on a crafted PDF); pdf-extract 0.9+ tracks the same lopdf line.
+pdf-extract = "0.12"
+lopdf = "0.42"
 
 [dev-dependencies]
 # SH.5 live-verify only: writes a real .xlsx fixture so the reader is

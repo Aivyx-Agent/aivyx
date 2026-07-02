@@ -128,6 +128,14 @@ ignore = [
     { id = "RUSTSEC-2024-0418", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
     { id = "RUSTSEC-2024-0419", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
     { id = "RUSTSEC-2024-0420", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
+
+    # ttf-parser — RUSTSEC-2026-0192 (unmaintained). Pulled via
+    #   ttf-parser → pdf-extract → aivyx-dataread (data.pdf reader).
+    # Arrived with the pdf-extract 0.9→0.12 upgrade that fixed the lopdf
+    # stack-overflow DoS (RUSTSEC-2026-0187). Font parsing for PDF text
+    # extraction; transitive, not a direct dep, and unmaintained (not
+    # vulnerable). Removable only when pdf-extract drops/replaces it.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained, not vulnerable; transitive under pdf-extract (data.pdf); arrived with the lopdf-DoS fix; awaiting upstream" },
     # NOTE: glib RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g, GitHub Dependabot
     # alert #6) — a `glib::VariantStrIter` Iterator/DoubleEndedIterator
     # *unsoundness*, same aivyx-desktop GTK3 root cause (glib 0.18, patched
