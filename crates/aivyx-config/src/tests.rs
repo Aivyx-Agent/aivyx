@@ -3763,6 +3763,57 @@ fn daemon_web_ui_allowed_origins_absent_is_empty() {
 }
 
 #[test]
+fn daemon_web_ui_auth_token_absent_is_none() {
+    // Chapter Postern — no token → no auth (byte-identical default).
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[daemon]\nweb_ui = true\n", "token-absent");
+    assert_eq!(cfg.web_ui_auth_token, None);
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_auth_token_is_read() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui = true\nweb_ui_auth_token = \"s3cret-TOKEN_9.~\"\n",
+        "token-set",
+    );
+    assert_eq!(cfg.web_ui_auth_token.as_deref(), Some("s3cret-TOKEN_9.~"));
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_auth_token_rejects_empty() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result(
+        "\n[daemon]\nweb_ui_auth_token = \"   \"\n",
+        "token-empty",
+    )
+    .expect_err("blank token must be rejected");
+    assert!(
+        err.to_string().contains("web_ui_auth_token"),
+        "error should name the field: {err}"
+    );
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_auth_token_rejects_unsafe_chars() {
+    // A token with cookie-breaking chars (space, `;`) is rejected up front.
+    let env = EnvScope::new();
+    let err = load_with_toml_result(
+        "\n[daemon]\nweb_ui_auth_token = \"bad token;drop\"\n",
+        "token-unsafe",
+    )
+    .expect_err("unsafe token must be rejected");
+    assert!(
+        err.to_string().contains("web_ui_auth_token"),
+        "error should name the field: {err}"
+    );
+    drop(env);
+}
+
+#[test]
 fn daemon_web_ui_allowed_origins_parses_bare_origins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(

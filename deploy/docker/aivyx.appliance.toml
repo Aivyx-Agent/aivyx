@@ -34,6 +34,13 @@ root = "/work"
 web_ui = true
 web_ui_host = "0.0.0.0"
 
+# STRONGLY RECOMMENDED when the Studio is reachable beyond host-localhost: a
+# shared-secret token gating the control plane (/ws). Without it, anyone who can
+# reach the published port drives the agent. Generate one with `openssl rand -hex
+# 32`. Browsers are prompted (HTTP Basic; the token is the password); non-browser
+# clients send `Authorization: Bearer <token>`. Not a TLS substitute.
+# web_ui_auth_token = "REPLACE-with-openssl-rand-hex-32"
+
 # The agent boots without a Profile/Persona on purpose: open the Studio and use
 # the **Create** screen (Chapter Genesis) to shape your assistant. A minimal
 # default role keeps it useful before you do. Named `default` so it is the

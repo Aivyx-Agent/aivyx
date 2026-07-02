@@ -161,6 +161,7 @@ pub async fn run_web_ui_server(
     host: Option<std::net::IpAddr>,
     port: u16,
     allowed_origins: Vec<String>,
+    auth_token: Option<String>,
     shutdown: CancellationToken,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
@@ -168,6 +169,7 @@ pub async fn run_web_ui_server(
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let addr = std::net::SocketAddr::new(host, port);
     let allowed_origins = Arc::new(allowed_origins);
+    let auth_token = Arc::new(auth_token);
 
     // Chapter Harbor F-4 — binding beyond loopback is a deliberate network
     // exposure. Warn once at startup so an operator who flips web_ui_host can't
@@ -175,10 +177,23 @@ pub async fn run_web_ui_server(
     if !host.is_loopback() {
         eprintln!(
             "aivyx web ui: WARNING — binding {host} (non-loopback). The Studio \
-             is exposed beyond this host. Put auth + TLS in front, and set \
+             is exposed beyond this host. Put TLS in front, and set \
              `[daemon] web_ui_allowed_origins` for the hostnames you serve. See \
              docs/DOCKER.md."
         );
+        // Chapter Postern — off-host with no token is an unauthenticated
+        // control plane. Escalate the warning; don't refuse (a reverse proxy
+        // may add auth), but make the exposure impossible to miss.
+        if auth_token.is_none() {
+            eprintln!(
+                "aivyx web ui: WARNING — no `[daemon] web_ui_auth_token` set \
+                 while bound off-host: ANYONE who can reach {addr} can drive \
+                 the agent, read memory, and change config. Set a token."
+            );
+        }
+    }
+    if auth_token.is_some() {
+        eprintln!("aivyx web ui: auth token required for the control plane (/ws)");
     }
     let listener = TcpListener::bind(addr)
         .await
@@ -208,6 +223,7 @@ pub async fn run_web_ui_server(
         let conn_socket_path = Arc::clone(&socket_path);
         let conn_broadcaster = web_ui_broadcaster.clone();
         let conn_allowed_origins = Arc::clone(&allowed_origins);
+        let conn_auth_token = Arc::clone(&auth_token);
 
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
@@ -215,6 +231,7 @@ pub async fn run_web_ui_server(
                 &conn_socket_path,
                 port,
                 &conn_allowed_origins,
+                conn_auth_token.as_deref(),
                 conn_broadcaster,
             )
             .await
@@ -225,6 +242,82 @@ pub async fn run_web_ui_server(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chapter Postern — web UI auth token
+// ---------------------------------------------------------------------------
+
+/// Cookie name the browser carries back on the `/ws` upgrade (it cannot set
+/// request headers on `new WebSocket()`, but same-origin cookies ARE sent on
+/// the handshake). Planted on the Basic-Auth'd page load.
+const AUTH_COOKIE: &str = "aivyx_web_token";
+
+/// Constant-time byte comparison — avoids leaking the token length/prefix via
+/// early-exit timing on a shared secret.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// First value of a header (case-insensitive name) from a peeked request head.
+fn header_value<'a>(request_head: &'a str, name: &str) -> Option<&'a str> {
+    request_head.split("\r\n").find_map(|line| {
+        line.split_once(':').and_then(|(n, v)| {
+            n.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+        })
+    })
+}
+
+/// `Authorization: Bearer <token>` (non-browser clients).
+fn bearer_token(request_head: &str) -> Option<&str> {
+    header_value(request_head, "authorization")?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+}
+
+/// The password half of `Authorization: Basic base64(user:pass)` — how a
+/// browser sends the token after the native Basic-Auth prompt.
+fn basic_password(request_head: &str) -> Option<String> {
+    use base64::Engine;
+    let b64 = header_value(request_head, "authorization")?.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .ok()?;
+    let creds = String::from_utf8(decoded).ok()?;
+    // user:pass — the token is the password (user is ignored).
+    creds.split_once(':').map(|(_, pass)| pass.to_string())
+}
+
+/// The [`AUTH_COOKIE`] value from the `Cookie` header, if present.
+fn cookie_token(request_head: &str) -> Option<String> {
+    let cookies = header_value(request_head, "cookie")?;
+    cookies.split(';').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k.trim() == AUTH_COOKIE).then(|| v.trim().to_string())
+    })
+}
+
+/// True when the request presents the valid token by ANY accepted means:
+/// a Bearer header, HTTP Basic password, or the auth cookie.
+fn request_carries_token(request_head: &str, token: &str) -> bool {
+    let tb = token.as_bytes();
+    if bearer_token(request_head).is_some_and(|t| ct_eq(t.as_bytes(), tb)) {
+        return true;
+    }
+    if basic_password(request_head).is_some_and(|p| ct_eq(p.as_bytes(), tb)) {
+        return true;
+    }
+    if cookie_token(request_head).is_some_and(|c| ct_eq(c.as_bytes(), tb)) {
+        return true;
+    }
+    false
+}
+
 /// Handle a single TCP connection. Peek at the first bytes to
 /// determine the HTTP path, then either serve HTML or upgrade to
 /// WebSocket.
@@ -233,6 +326,7 @@ async fn handle_connection(
     socket_path: &Path,
     port: u16,
     allowed_origins: &[String],
+    auth_token: Option<&str>,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     // Peek at the request head to determine the path *and* read the
@@ -245,6 +339,23 @@ async fn handle_connection(
     let request_head = String::from_utf8_lossy(&peek_buf[..n]);
 
     if request_head.starts_with("GET /ws") {
+        // Chapter Postern — the /ws upgrade IS the control plane (agent turns,
+        // config writes, memory reads all flow over it). When a token is set it
+        // is REQUIRED here, before the origin check even matters. A browser
+        // cannot set headers on `new WebSocket()`, so it authenticates via the
+        // cookie planted during the Basic-Auth'd page load; a non-browser
+        // client can send `Authorization: Bearer <token>` directly.
+        if let Some(token) = auth_token {
+            if !request_carries_token(&request_head, token) {
+                return serve_bytes(
+                    stream,
+                    "401 Unauthorized",
+                    "text/plain; charset=utf-8",
+                    b"unauthorized: web UI auth token required",
+                )
+                .await;
+            }
+        }
         // CSWSH / DNS-rebinding defense: a browser *always* sends `Origin` on a
         // WebSocket handshake, so a cross-site page trying to drive this
         // localhost daemon (which can write config + the filesystem) is
@@ -271,9 +382,29 @@ async fn handle_connection(
 
         handle_websocket(ws_stream, socket_path, web_ui_broadcaster).await
     } else {
+        // Chapter Postern — gate static routes too when a token is set: the
+        // browser gets a native Basic-Auth prompt, and a valid load plants the
+        // cookie the /ws upgrade needs. The bundle is inert, but this gives the
+        // login UX + cookie in one step.
+        let mut set_cookie: Option<String> = None;
+        if let Some(token) = auth_token {
+            if !request_carries_token(&request_head, token) {
+                return serve_bytes_ext(
+                    stream,
+                    "401 Unauthorized",
+                    "text/plain; charset=utf-8",
+                    "WWW-Authenticate: Basic realm=\"Aivyx Studio\"\r\n",
+                    b"unauthorized: web UI auth token required",
+                )
+                .await;
+            }
+            set_cookie = Some(format!(
+                "Set-Cookie: {AUTH_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/\r\n"
+            ));
+        }
         // Static HTTP: serve the embedded Dioxus bundle, falling back to the
         // legacy page at `/` while the bundle is unbuilt.
-        serve_static(stream, request_path(&request_head)).await
+        serve_static(stream, request_path(&request_head), set_cookie.as_deref()).await
     }
 }
 
@@ -335,24 +466,29 @@ fn request_path(request_line: &str) -> String {
 /// `/` → the bundle's `index.html` when built, else the legacy chat page (the
 /// fallback). Any other path is looked up in the embedded bundle and served
 /// with its content-type; a miss is a 404.
-async fn serve_static(stream: tokio::net::TcpStream, path: String) -> Result<(), DaemonError> {
+async fn serve_static(
+    stream: tokio::net::TcpStream,
+    path: String,
+    set_cookie: Option<&str>,
+) -> Result<(), DaemonError> {
+    let extra = set_cookie.unwrap_or("");
     // `/classic` always serves the legacy single-file inspection UI (audit /
     // memory / learning / proposals / notifications / sessions) — the panes the
     // Dioxus app hasn't ported yet (Chapter M ships Missions + Chat). The new
     // app links to it so building the bundle never loses a pane.
     if path == "/classic" {
-        return serve_bytes(stream, "200 OK", "text/html; charset=utf-8", HTML.as_bytes()).await;
+        return serve_bytes_ext(stream, "200 OK", "text/html; charset=utf-8", extra, HTML.as_bytes()).await;
     }
     if path == "/" || path == "/index.html" {
         return match bundle_index() {
-            Some((bytes, mime)) => serve_bytes(stream, "200 OK", mime, bytes).await,
+            Some((bytes, mime)) => serve_bytes_ext(stream, "200 OK", mime, extra, bytes).await,
             // No bundle built → the legacy page is the whole UI.
-            None => serve_bytes(stream, "200 OK", "text/html; charset=utf-8", HTML.as_bytes()).await,
+            None => serve_bytes_ext(stream, "200 OK", "text/html; charset=utf-8", extra, HTML.as_bytes()).await,
         };
     }
     match web_asset(&path) {
-        Some((bytes, mime)) => serve_bytes(stream, "200 OK", mime, bytes).await,
-        None => serve_bytes(stream, "404 Not Found", "text/plain", b"not found").await,
+        Some((bytes, mime)) => serve_bytes_ext(stream, "200 OK", mime, extra, bytes).await,
+        None => serve_bytes_ext(stream, "404 Not Found", "text/plain", extra, b"not found").await,
     }
 }
 
@@ -360,15 +496,29 @@ async fn serve_static(stream: tokio::net::TcpStream, path: String) -> Result<(),
 /// close`). `application/wasm` etc. flow through `content_type` so the browser
 /// streams + compiles the wasm correctly.
 async fn serve_bytes(
+    stream: tokio::net::TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(), DaemonError> {
+    serve_bytes_ext(stream, status, content_type, "", body).await
+}
+
+/// Like [`serve_bytes`], but with an `extra_headers` string of raw header
+/// lines (each terminated with `\r\n`, or empty) — used for `Set-Cookie` and
+/// `WWW-Authenticate` on the Chapter Postern auth paths.
+async fn serve_bytes_ext(
     mut stream: tokio::net::TcpStream,
     status: &str,
     content_type: &str,
+    extra_headers: &str,
     body: &[u8],
 ) -> Result<(), DaemonError> {
     let response = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: {content_type}\r\n\
          Content-Length: {}\r\n\
+         {extra_headers}\
          Connection: close\r\n\
          \r\n",
         body.len()
@@ -691,6 +841,52 @@ mod tests {
         );
         assert_eq!(request_path("GET /app.js?v=abc123 HTTP/1.1"), "/app.js");
         assert_eq!(request_path("garbage"), "/");
+    }
+
+    // ---- Chapter Postern — web UI auth token --------------------------
+
+    #[test]
+    fn ct_eq_matches_only_identical_bytes() {
+        assert!(ct_eq(b"secret", b"secret"));
+        assert!(!ct_eq(b"secret", b"secreT"));
+        assert!(!ct_eq(b"secret", b"secre")); // length differs
+        assert!(ct_eq(b"", b""));
+    }
+
+    #[test]
+    fn request_carries_token_via_bearer() {
+        let head = "GET /ws HTTP/1.1\r\nAuthorization: Bearer tok-123\r\n\r\n";
+        assert!(request_carries_token(head, "tok-123"));
+        assert!(!request_carries_token(head, "wrong"));
+    }
+
+    #[test]
+    fn request_carries_token_via_basic_password() {
+        use base64::Engine;
+        // Browser sends base64("user:token") — the password half is the token.
+        let creds = base64::engine::general_purpose::STANDARD.encode("anyuser:tok-123");
+        let head = format!("GET / HTTP/1.1\r\nAuthorization: Basic {creds}\r\n\r\n");
+        assert!(request_carries_token(&head, "tok-123"));
+        let bad = base64::engine::general_purpose::STANDARD.encode("anyuser:nope");
+        let head_bad = format!("GET / HTTP/1.1\r\nAuthorization: Basic {bad}\r\n\r\n");
+        assert!(!request_carries_token(&head_bad, "tok-123"));
+    }
+
+    #[test]
+    fn request_carries_token_via_cookie() {
+        // The /ws upgrade path: a browser can't set headers, but sends cookies.
+        let head =
+            "GET /ws HTTP/1.1\r\nCookie: other=1; aivyx_web_token=tok-123; x=y\r\n\r\n";
+        assert!(request_carries_token(head, "tok-123"));
+        let head_wrong =
+            "GET /ws HTTP/1.1\r\nCookie: aivyx_web_token=stale\r\n\r\n";
+        assert!(!request_carries_token(head_wrong, "tok-123"));
+    }
+
+    #[test]
+    fn no_credentials_is_rejected() {
+        let head = "GET /ws HTTP/1.1\r\nOrigin: http://127.0.0.1:7843\r\n\r\n";
+        assert!(!request_carries_token(head, "tok-123"));
     }
 
     #[test]
@@ -1077,5 +1273,86 @@ mod tests {
             HTML.contains("toast-stack"),
             "must include the toast stack container"
         );
+    }
+
+    // ---- Chapter Postern — end-to-end server auth over real TCP -------
+
+    /// Grab a free localhost port by binding then dropping a listener.
+    async fn free_port() -> u16 {
+        tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    async fn http_roundtrip(port: u16, request: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        s.write_all(request.as_bytes()).await.unwrap();
+        s.flush().await.unwrap();
+        let mut buf = Vec::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            s.read_to_end(&mut buf),
+        )
+        .await;
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    #[tokio::test]
+    async fn server_enforces_auth_token_end_to_end() {
+        let port = free_port().await;
+        let shutdown = CancellationToken::new();
+        let server_shutdown = shutdown.clone();
+        // socket_path is only touched AFTER auth passes (on a real /ws bridge),
+        // so a bogus path is fine for the rejection assertions here.
+        let handle = tokio::spawn(async move {
+            let _ = run_web_ui_server(
+                PathBuf::from("/nonexistent/aivyx-postern-test.sock"),
+                Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port,
+                Vec::new(),
+                Some("tok-abc123".to_string()),
+                server_shutdown,
+                None,
+            )
+            .await;
+        });
+        // Give the listener a moment to bind.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // (1) Static request with NO credentials → 401 + Basic challenge.
+        let resp = http_roundtrip(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(resp.starts_with("HTTP/1.1 401"), "no-auth static: {resp:.60}");
+        assert!(resp.contains("WWW-Authenticate: Basic"), "must challenge: {resp:.120}");
+
+        // (2) Static request WITH the Basic password → 200 + Set-Cookie.
+        use base64::Engine;
+        let creds = base64::engine::general_purpose::STANDARD.encode("u:tok-abc123");
+        let ok = http_roundtrip(
+            port,
+            &format!("GET / HTTP/1.1\r\nHost: x\r\nAuthorization: Basic {creds}\r\n\r\n"),
+        )
+        .await;
+        assert!(ok.starts_with("HTTP/1.1 200"), "authed static: {ok:.60}");
+        assert!(
+            ok.contains(&format!("Set-Cookie: {AUTH_COOKIE}=tok-abc123")),
+            "must plant the cookie for the /ws upgrade",
+        );
+
+        // (3) /ws upgrade with NO cookie/creds → 401 (control plane closed).
+        let ws = http_roundtrip(
+            port,
+            "GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: http://127.0.0.1\r\nUpgrade: websocket\r\n\r\n",
+        )
+        .await;
+        assert!(ws.starts_with("HTTP/1.1 401"), "unauth /ws must be 401: {ws:.60}");
+
+        shutdown.cancel();
+        let _ = handle.await;
     }
 }

@@ -1242,6 +1242,15 @@ pub struct AivyxConfig {
     /// to the scheme+host(+port) a remotely-exposed Studio is served at. Each
     /// entry must be a bare origin (scheme://host[:port], no path).
     pub web_ui_allowed_origins: Vec<String>,
+    /// Chapter Postern — shared-secret auth token for the web UI's control
+    /// plane. `None` (default) = no auth, the localhost-only posture every
+    /// native install keeps (byte-identical). When set (`[daemon]
+    /// web_ui_auth_token = "…"`), the Studio's `/ws` WebSocket — the channel
+    /// that drives the agent, reads memory, and writes config — requires the
+    /// token, and static routes prompt for it via HTTP Basic. This closes the
+    /// unauthenticated control plane when the Studio is exposed off-host
+    /// (`web_ui_host = "0.0.0.0"`); strongly recommended in that case.
+    pub web_ui_auth_token: Option<String>,
     /// Chapter Roster — the operator's team-config file. `[team] config_path`
     /// points at a `[team]`-rooted TOML document (the same shape packs like
     /// `kitchen-boh.toml` use, loaded via `aivyx_team::TeamConfig::load`). When
@@ -3812,6 +3821,7 @@ struct RawDaemon {
     web_ui_port: Option<u16>,
     web_ui_host: Option<String>,
     web_ui_allowed_origins: Option<Vec<String>>,
+    web_ui_auth_token: Option<String>,
 }
 
 /// `[team]` section. Chapter Roster — points the daemon at a `[team]`-rooted
@@ -7237,6 +7247,35 @@ impl AivyxConfig {
                     }
                 }
                 entries
+            },
+            web_ui_auth_token: match toml.daemon.web_ui_auth_token {
+                // A whitespace-only or empty token is a config error — it would
+                // silently read as "auth on" while trivially guessable.
+                Some(t) if t.trim().is_empty() => {
+                    return Err(ConfigError::Invalid {
+                        field: "daemon.web_ui_auth_token",
+                        reason: "must be a non-empty token; remove the field to \
+                                 leave the web UI unauthenticated"
+                            .to_string(),
+                    });
+                }
+                // The token is planted verbatim in a Set-Cookie value, so it
+                // must be cookie/URL-safe (unreserved chars). This also nudges
+                // operators toward opaque high-entropy tokens.
+                Some(t)
+                    if !t
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~')) =>
+                {
+                    return Err(ConfigError::Invalid {
+                        field: "daemon.web_ui_auth_token",
+                        reason: "must contain only URL-safe characters \
+                                 (A-Z a-z 0-9 - _ . ~); use an opaque token like \
+                                 `openssl rand -hex 32`"
+                            .to_string(),
+                    });
+                }
+                other => other,
             },
             // Chapter Roster — the operator's team-config file pointer. Stored
             // as-given (relative paths are resolved against the loaded

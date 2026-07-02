@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **The web UI can now require an auth token (Chapter Postern).** The Studio's
+  `/ws` WebSocket is its control plane — agent turns, config writes, and memory
+  reads all flow over it — and exposing it off-host (`web_ui_host = "0.0.0.0"`,
+  the Docker appliance) previously left it unauthenticated. Set `[daemon]
+  web_ui_auth_token = "<opaque>"` to require a shared secret: browsers are
+  prompted via HTTP Basic (the token is the password) and a cookie is planted
+  that gates the `/ws` upgrade; non-browser clients send `Authorization:
+  Bearer`. Default-off (localhost posture byte-identical), with a loud daemon
+  warning when bound off-host without a token. Not a TLS substitute — terminate
+  TLS at a proxy for remote access.
+
 ## [0.7.29] — 2026-07-02
 
 ### Security

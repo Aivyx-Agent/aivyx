@@ -98,7 +98,19 @@ spike needs *only* §4.1. But accessing from another machine
 **rejected**. Remote access therefore needs an opt-in allowlist
 (`[daemon] web_ui_allowed_origins = ["https://studio.mybox.lan"]`), empty by
 default (= localhost-only, today's behavior). Loosening it is a real exposure;
-the docs pair it with "put auth + TLS in front."
+pair it with the built-in auth token (below) and TLS terminated at a proxy.
+
+### 4.3 Web UI auth token (`[daemon] web_ui_auth_token`, Chapter Postern)
+
+The `/ws` WebSocket is the Studio's control plane (agent turns, config writes,
+memory reads). Binding off-host without auth leaves it open to anyone on the
+network. Set `[daemon] web_ui_auth_token = "<opaque>"` (e.g. `openssl rand -hex
+32`) to require it: the browser is prompted via HTTP Basic on first load (the
+token is the password; any username), a cookie is planted, and the `/ws`
+upgrade requires that cookie; non-browser clients send `Authorization: Bearer
+<token>`. Default-off (unchanged localhost posture); the daemon warns loudly if
+bound off-host with no token. This closes the open door, but is **not** a TLS
+substitute — still terminate TLS at a reverse proxy for remote access.
 
 > **Why this is in the contract.** Harbor is not just packaging — it touches the
 > daemon's network-exposure security posture. Locking these two opt-in knobs

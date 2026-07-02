@@ -262,6 +262,18 @@ security failure:
   still sway a weak model. It composes with the other layers: even a
   fully-injected agent still cannot read secrets (Ward), reach cloud metadata
   (Rampart), self-escalate, or take an irreversible/outbound action unattended.
+- **The exposed control plane — now gated (Chapter Postern).** The Studio's
+  `/ws` WebSocket *is* the control plane: agent turns, config writes, and
+  memory reads all flow over it. It binds `127.0.0.1` by default; exposing it
+  off-host (`web_ui_host = "0.0.0.0"`, for the Docker appliance) previously left
+  it unauthenticated — anyone who could reach the port drove the agent. Setting
+  `[daemon] web_ui_auth_token` now REQUIRES a shared-secret token on `/ws`
+  (browsers authenticate via a cookie planted during an HTTP-Basic page load;
+  non-browser clients send `Authorization: Bearer`). Default-off (localhost
+  posture unchanged); the daemon prints a loud warning if bound off-host with
+  no token. **Residual:** the token is a shared secret, not per-user identity,
+  and this is not a substitute for TLS — still terminate TLS at a proxy (or
+  tunnel) for a remotely-reachable Studio; the token stops the open door.
 - **The supply chain it drives.** `shell.exec` + `net.fetch` means the
   agent can `curl | sh` or pull arbitrary packages. The sandbox bounds
   *where* it runs, not *what* it downloads.
