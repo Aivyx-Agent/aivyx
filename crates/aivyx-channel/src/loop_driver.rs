@@ -178,6 +178,60 @@ async fn write_progress_note(
     }
 }
 
+/// Chapter Capstone — verify-and-close. When the agent did the work but never
+/// called `loop.complete` (small local models routinely forget the closing
+/// step, or report it in chat), the story is left pending and the run
+/// eventually stalls out on it. If `candidate` is still pending, judge it
+/// against its own acceptance criteria — the judge grounds on the memory /
+/// workspace artifacts the turn produced — and mark it `Done` iff the judge
+/// passes. Genuinely-incomplete work stays pending (the grounded judge rejects
+/// it). Returns whether the story was closed (⇒ the iteration made progress).
+async fn verify_and_close(
+    backlog: &Arc<PersistentLoopBacklog>,
+    judge: &crate::completion_judge::CompletionJudge,
+    candidate: &aivyx_ipc::backlog::Story,
+    memory: Option<&Arc<dyn aivyx_memory::Memory>>,
+) -> bool {
+    let still_pending = matches!(
+        backlog.get(&candidate.id).map(|s| s.status),
+        Some(aivyx_ipc::backlog::StoryStatus::Pending)
+    );
+    if !still_pending {
+        // The agent DID close it this turn (or it was skipped) — nothing to do.
+        return false;
+    }
+    let v = judge
+        .verify(
+            &candidate.title,
+            &candidate.body,
+            "(the agent did not call loop.complete this iteration — judge ONLY \
+             from the ground-truth artifacts below; if they satisfy the \
+             acceptance criteria, PASS)",
+        )
+        .await;
+    eprintln!(
+        "aivyx loop: verify-and-close for '{}' — {}: {}",
+        candidate.title,
+        if v.passed { "CLOSED" } else { "left pending" },
+        v.reason,
+    );
+    if v.passed {
+        let _ = backlog
+            .mark_done(candidate.id.clone(), now_unix_ms())
+            .await;
+        write_progress_note(
+            memory,
+            &format!(
+                "auto-closed '{}' — work verified against the acceptance \
+                 criteria (agent omitted loop.complete)",
+                candidate.title
+            ),
+        )
+        .await;
+    }
+    v.passed
+}
+
 /// Chapter Foreman follow-up — how many times a single story may fail
 /// auto-delegation in a run before it is skipped. After this, re-running a full
 /// (slow, costly) team mission every iteration is clearly not productive, so the
@@ -727,11 +781,13 @@ pub async fn run_loop_driver(
     // story; one scoring `>= threshold` is handed to the team (headless) instead
     // of the model. `None` ⇒ off (byte-identical to pre-Foreman).
     delegate: Option<(Arc<crate::team_mission_driver::TeamMissionService>, u32)>,
-    // Verdict for delegated stories — `Some` when `[loop] verify_completion` is on:
-    // an auto-delegated mission's *result* is judged against the story's acceptance
-    // criteria before it's marked done, the same check solo `loop.complete` gets.
-    // `None` ⇒ a completed delegation is accepted on mission-Done alone.
-    delegation_judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
+    // Verdict judge — `Some` when `[loop] verify_completion` is on. Serves TWO
+    // paths: (a) a delegated mission's *result* is judged against the story's
+    // acceptance criteria before it's marked done (parity with solo
+    // `loop.complete`); (b) Chapter Capstone — the solo verify-and-close below,
+    // which grounds on the artifact when the agent did the work but forgot to
+    // call `loop.complete`. `None` ⇒ neither runs (accept-on-Done / no close-out).
+    completion_judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
 ) {
     // Chapter K — the dollar cap prices LlmCost events with the rate table the
     // daemon built (built-in defaults + any `[pricing.<model>]` overrides, K.5).
@@ -882,7 +938,7 @@ pub async fn run_loop_driver(
                                 // criteria before accepting it (the same gate solo
                                 // `loop.complete` gets). A rejection is treated as
                                 // a failed delegation (retry/skip), not a done.
-                                let verdict = if let Some(j) = &delegation_judge {
+                                let verdict = if let Some(j) = &completion_judge {
                                     let result = svc
                                         .snapshot(&mid)
                                         .map(|r| {
@@ -1005,6 +1061,11 @@ pub async fn run_loop_driver(
             // BEFORE the iteration so we can tell afterwards whether
             // it advanced: the backlog count and the latest note.
             let note_before = recent_progress_note(memory.as_ref()).await;
+            // Chapter Capstone — snapshot the story `loop.next` will hand out
+            // (highest-priority pending) so that, after the turn, we can tell
+            // whether the agent closed it. If it's left pending but the work is
+            // actually done, the verify-and-close pass below finishes it.
+            let candidate_before = backlog.next_pending();
 
             // Fire a fresh-context loop turn. `wrap_mission =
             // false`: the loop's own backlog is the work tracker,
@@ -1034,6 +1095,22 @@ pub async fn run_loop_driver(
                     eprintln!("aivyx loop: run ended — {reason}");
                     break;
                 }
+            }
+
+            // Chapter Capstone — verify-and-close. A small local model often
+            // DOES the work but forgets to call `loop.complete` (or reports it
+            // in chat instead of the tool), leaving a genuinely-finished story
+            // pending until the stall breaker kills the run. If the story
+            // `loop.next` handed out this iteration is STILL pending, judge it
+            // against its own acceptance criteria — grounded on the memory /
+            // workspace artifacts the turn actually produced — and mark it done
+            // iff the judge passes. Genuinely-incomplete work stays pending (the
+            // grounded judge rejects it, e.g. "only 1 of 2 requested items").
+            // Only runs when `[loop] verify_completion` is on (judge is Some).
+            if let (Some(judge), Some(candidate)) =
+                (&completion_judge, &candidate_before)
+            {
+                verify_and_close(&backlog, judge, candidate, memory.as_ref()).await;
             }
 
             // Chapter Circuit (CI.1) — stall breaker. The iteration
@@ -1073,6 +1150,144 @@ pub async fn run_loop_driver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Chapter Capstone — verify-and-close test scaffolding ----------
+
+    /// A judge provider that returns a fixed verdict line, so `verify_and_close`
+    /// can be tested deterministically without a live model.
+    struct FixedVerdict(&'static str);
+    struct OneShot(Option<String>);
+    #[async_trait::async_trait]
+    impl aivyx_llm::LlmStream for OneShot {
+        async fn next_event(
+            &mut self,
+        ) -> Result<Option<aivyx_llm::LlmStreamEvent>, aivyx_llm::LlmError> {
+            Ok(None)
+        }
+        async fn finish(
+            self: Box<Self>,
+        ) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError> {
+            Ok(aivyx_llm::LlmStepEnd::FinalMessage {
+                text: self.0.unwrap_or_default(),
+                usage: aivyx_llm::LlmUsage::default(),
+            })
+        }
+    }
+    #[async_trait::async_trait]
+    impl aivyx_llm::LlmProvider for FixedVerdict {
+        async fn chat_stream(
+            &self,
+            _request: aivyx_llm::LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
+            Ok(Box::new(OneShot(Some(self.0.to_string()))))
+        }
+    }
+
+    fn judge_returning(
+        verdict: &'static str,
+    ) -> crate::completion_judge::CompletionJudge {
+        crate::completion_judge::CompletionJudge::new(Arc::new(FixedVerdict(verdict)), "test")
+    }
+
+    /// Guard that removes the scratch dir on drop (no `tempfile` dep here).
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn backlog_with_one_pending() -> (Arc<PersistentLoopBacklog>, String, Scratch) {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-capstone-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("s.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .unwrap();
+        let bl = PersistentLoopBacklog::open(
+            store.domain(KeyDomain::LoopBacklog),
+            b"k".to_vec(),
+        )
+        .await
+        .unwrap();
+        bl.add_story(
+            "s1".into(),
+            5,
+            1,
+            "Write brew-guide.md".into(),
+            "Acceptance: file exists with 3 steps.".into(),
+        )
+        .await
+        .unwrap();
+        (Arc::new(bl), "s1".to_string(), Scratch(dir))
+    }
+
+    #[tokio::test]
+    async fn verify_and_close_marks_done_when_judge_passes() {
+        let (bl, id, _dir) = backlog_with_one_pending().await;
+        let candidate = bl.next_pending().expect("one pending");
+        let closed = verify_and_close(
+            &bl,
+            &judge_returning("PASS — brew-guide.md exists with 3 steps."),
+            &candidate,
+            None,
+        )
+        .await;
+        assert!(closed, "a PASS verdict closes the story");
+        assert!(matches!(
+            bl.get(&id).unwrap().status,
+            aivyx_ipc::backlog::StoryStatus::Done { .. }
+        ));
+        assert_eq!(bl.remaining_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn verify_and_close_leaves_pending_when_judge_fails() {
+        // The focus-tips failure mode: work done partially → judge rejects →
+        // the story stays pending (NOT falsely closed).
+        let (bl, id, _dir) = backlog_with_one_pending().await;
+        let candidate = bl.next_pending().unwrap();
+        let closed = verify_and_close(
+            &bl,
+            &judge_returning("FAIL — only 1 of 2 required items present."),
+            &candidate,
+            None,
+        )
+        .await;
+        assert!(!closed, "a FAIL verdict must not close the story");
+        assert!(matches!(
+            bl.get(&id).unwrap().status,
+            aivyx_ipc::backlog::StoryStatus::Pending
+        ));
+        assert_eq!(bl.remaining_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn verify_and_close_is_noop_when_already_resolved() {
+        // The agent DID call loop.complete → the story is already Done → the
+        // close-out must not double-judge or error.
+        let (bl, id, _dir) = backlog_with_one_pending().await;
+        let candidate = bl.next_pending().unwrap();
+        bl.mark_done(id.clone(), now_unix_ms()).await.unwrap();
+        let closed = verify_and_close(
+            &bl,
+            &judge_returning("PASS — should not even be consulted."),
+            &candidate,
+            None,
+        )
+        .await;
+        assert!(!closed, "already-resolved story is a no-op for close-out");
+        assert!(matches!(
+            bl.get(&id).unwrap().status,
+            aivyx_ipc::backlog::StoryStatus::Done { .. }
+        ));
+    }
 
     #[test]
     fn decide_continue_when_active_under_cap_with_work() {

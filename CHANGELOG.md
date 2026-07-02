@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The autonomous loop now verifies-and-closes a finished story the agent
+  forgot to complete (Chapter Capstone).** A recurring dogfood finding: small
+  local models often do the work but never call `loop.complete` (or report it in
+  chat), so a genuinely-finished story stays pending until the stall breaker
+  ends the run. When `[loop] verify_completion` is on, at each iteration's end
+  the driver judges the still-pending story it handed out against its own
+  acceptance criteria — grounded on the memory/workspace artifacts the turn
+  produced — and marks it done iff the judge passes. Genuinely-incomplete work
+  is left pending (the grounded judge rejects it, e.g. "only 1 of 2 requested
+  items"). Reuses the existing completion judge; no new config.
+
 ## [0.7.30] — 2026-07-02
 
 ### Security
