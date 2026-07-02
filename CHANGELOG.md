@@ -5,6 +5,24 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.26] — 2026-07-02
+
+### Security
+
+- **Master passphrase in the OS keyring (Chapter Keyring).** For interactive /
+  desktop use, store the master passphrase in the OS credential store (Secret
+  Service / Keychain / Credential Manager) instead of the `AIVYX_PASSPHRASE`
+  env var or `[aivyx] passphrase` TOML (both plaintext). `aivyx keyring set` /
+  `clear` / `status`; the daemon reads it automatically (env/TOML still take
+  precedence; the keyring is tried before the interactive prompt; an
+  unavailable/locked keyring falls through). The headless systemd service keeps
+  using the `0600 daemon.env` file (no session Secret Service there).
+- **Fixed a PDF denial-of-service (RUSTSEC-2026-0187).** The `data.pdf` reader
+  pulled `lopdf 0.34`, where a crafted ~21 KB PDF with deeply nested arrays
+  triggers unbounded-recursion stack overflow (SIGABRT) — crashing the daemon
+  on any turn that reads an untrusted PDF. Upgraded `pdf-extract` → 0.12 and
+  `lopdf` → 0.42 (the patched line); reader behavior unchanged.
+
 ## [0.7.25] — 2026-07-02
 
 ### Security
