@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.32] — 2026-07-03
+
 ### Added
 
 - **Soul-coherence: contradiction detection over the Persona (Chapter Accord).**
