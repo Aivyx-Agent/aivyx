@@ -760,6 +760,9 @@ fn run() -> Result<(), String> {
                 PersonaSubcommand::Resolve { id, remove } => {
                     persona::run_persona_resolve(&id, remove).await
                 }
+                PersonaSubcommand::Dismiss { id } => {
+                    persona::run_persona_dismiss(&id).await
+                }
             }
         });
     }
@@ -2130,6 +2133,9 @@ enum PersonaSubcommand {
     /// `aivyx persona resolve <id> --remove <a|b>` — remove the chosen facet
     /// of a detected contradiction (a `RemoveList` persona delta; reversible).
     Resolve { id: String, remove: char },
+    /// `aivyx persona dismiss <id>` — Chapter Accord "keep both": mark a
+    /// detected contradiction a false positive so it isn't re-flagged.
+    Dismiss { id: String },
 }
 
 /// Chapter Tutor — subcommand discriminator under [`CliMode::Skills`]. The
@@ -4028,12 +4034,27 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 })?;
                 PersonaSubcommand::Resolve { id: id.clone(), remove }
             }
+            "dismiss" => {
+                let id = args.get(2).ok_or_else(|| {
+                    "`aivyx persona dismiss` requires a conflict id. Usage: \
+                     `aivyx persona dismiss <id>`"
+                        .to_string()
+                })?;
+                if args.len() > 3 {
+                    return Err(format!(
+                        "`aivyx persona dismiss` accepts exactly one conflict id. Got: `{}`",
+                        args[3..].join(" ")
+                    ));
+                }
+                PersonaSubcommand::Dismiss { id: id.clone() }
+            }
             other => {
                 return Err(format!(
                     "unrecognized persona subcommand: `{other}`. \
                      Supported: persona show, persona list, \
                      persona revert <id>, persona proposals <sub>, \
-                     persona conflicts, persona resolve <id> --remove <a|b>"
+                     persona conflicts, persona resolve <id> --remove <a|b>, \
+                     persona dismiss <id>"
                 ));
             }
         };

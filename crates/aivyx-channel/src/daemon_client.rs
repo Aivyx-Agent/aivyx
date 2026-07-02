@@ -723,6 +723,55 @@ pub async fn resolve_memory_conflict(
 /// Chapter Concord — dismiss a conflict as a false positive ("keep
 /// both"): the daemon records `conflict_id` so future detection passes
 /// suppress that pair. Nothing is deleted.
+/// Chapter Accord — dismiss a Soul contradiction as a false positive.
+pub async fn dismiss_soul_conflict(
+    socket_path: &Path,
+    conflict_id: &str,
+) -> Result<(), DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(1024);
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let req = FrontendMessage::DismissSoulConflict {
+        id: "soul-dismiss".into(),
+        conflict_id: conflict_id.to_string(),
+    };
+    writer.write_all(&encode_frame(&req)?).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SoulConflictDismissed { ok, error, .. }, _)) => {
+                return if ok {
+                    Ok(())
+                } else {
+                    Err(DaemonError::Protocol(
+                        error.unwrap_or_else(|| "dismiss failed".into()),
+                    ))
+                };
+            }
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected SoulConflictDismissed, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 pub async fn dismiss_memory_conflict(
     socket_path: &Path,
     conflict_id: &str,

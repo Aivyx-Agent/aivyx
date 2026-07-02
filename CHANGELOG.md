@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Accord "keep both": dismiss a Soul contradiction (false positive).** The
+  contradiction detector is a fuzzy LLM pass, so it can flag a *legitimate*
+  nuance ("concise by default" + "detailed when asked") — which `persona
+  conflicts` would otherwise re-surface every run. `aivyx persona dismiss <id>`
+  now records the pair's stable id (in the existing encrypted dismissals domain,
+  namespaced `soul:` so it can't collide with a memory dismissal) and future
+  detection passes suppress it; nothing is removed from the Soul. Mirrors
+  Chapter Concord's `memory dismiss`. New `DismissSoulConflict` IPC verb.
+
 ## [0.7.32] — 2026-07-03
 
 ### Added

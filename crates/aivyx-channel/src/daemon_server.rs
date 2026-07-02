@@ -2653,6 +2653,40 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::DismissSoulConflict { id, conflict_id } => {
+                            // Chapter Accord — "keep both": record the Soul-
+                            // conflict id so future detection passes suppress
+                            // this pair. Nothing is removed from the Soul.
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            let resp = match conflict_dismissals.as_ref() {
+                                None => DaemonMessage::SoulConflictDismissed {
+                                    id,
+                                    ok: false,
+                                    error: Some(
+                                        "daemon has no storage configured for \
+                                         conflict dismissals"
+                                            .into(),
+                                    ),
+                                },
+                                Some(store) => match store.dismiss_soul(&conflict_id, now).await {
+                                    Ok(()) => DaemonMessage::SoulConflictDismissed {
+                                        id,
+                                        ok: true,
+                                        error: None,
+                                    },
+                                    Err(e) => DaemonMessage::SoulConflictDismissed {
+                                        id,
+                                        ok: false,
+                                        error: Some(e.to_string()),
+                                    },
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::SeedPersona { id, seed } => {
                             // Chapter X — live persona seed (web onboarding).
                             // Plants the seed iff the chain is empty, via the
@@ -4531,6 +4565,12 @@ async fn handle_query(
                 llm.model.clone(),
             );
             let conflicts = detector.detect(&snapshot).await;
+            // Chapter Accord — drop pairs the operator dismissed ("keep both"),
+            // so a false positive from the fuzzy detector isn't re-flagged.
+            let conflicts = match conflict_dismissals {
+                Some(d) => d.retain_undismissed_soul(conflicts).await,
+                None => conflicts,
+            };
             QueryResponsePayload::SoulConflicts { conflicts }
         }
         QueryPayload::GetSkills => {

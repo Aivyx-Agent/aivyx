@@ -74,6 +74,35 @@ impl PersistentConflictDismissals {
         }
         kept
     }
+
+    // ---- Chapter Accord — Soul-conflict dismissals -----------------------
+    //
+    // Reuses this same domain (soul ids are namespace-distinct FNV hashes),
+    // but namespaces the key with `soul:` so a memory and a Soul id can never
+    // collide within the shared store.
+
+    /// Record that a Soul-conflict `id` was dismissed at `ts_secs`.
+    pub async fn dismiss_soul(
+        &self,
+        id: &str,
+        ts_secs: u64,
+    ) -> Result<(), ConflictDismissalError> {
+        self.dismiss(&format!("soul:{id}"), ts_secs).await
+    }
+
+    /// Filter a detected Soul-conflict list down to those NOT dismissed.
+    pub async fn retain_undismissed_soul(
+        &self,
+        conflicts: Vec<aivyx_ipc::soul_conflict::SoulConflict>,
+    ) -> Vec<aivyx_ipc::soul_conflict::SoulConflict> {
+        let mut kept = Vec::with_capacity(conflicts.len());
+        for c in conflicts {
+            if !self.is_dismissed(&format!("soul:{}", c.id)).await.unwrap_or(false) {
+                kept.push(c);
+            }
+        }
+        kept
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +177,38 @@ mod tests {
             .await;
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "xyz", "dismissed id filtered, other kept");
+    }
+
+    fn soul_conflict(id: &str) -> aivyx_ipc::soul_conflict::SoulConflict {
+        use aivyx_ipc::soul_conflict::{SoulConflict, SoulFacet};
+        SoulConflict {
+            id: id.into(),
+            a: SoulFacet { category: "character_traits".into(), value: "x".into() },
+            b: SoulFacet { category: "character_traits".into(), value: "y".into() },
+            reason: "r".into(),
+            cross_layer: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn soul_dismiss_is_namespaced_and_filtered() {
+        let scratch = Scratch::new();
+        let store = open(&scratch).await;
+
+        // Dismiss a Soul conflict id.
+        store.dismiss_soul("s1", 100).await.unwrap();
+        let kept = store
+            .retain_undismissed_soul(vec![soul_conflict("s1"), soul_conflict("s2")])
+            .await;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "s2", "dismissed soul id filtered, other kept");
+
+        // Namespacing: the SAME id dismissed on the memory side must NOT
+        // suppress the soul conflict (soul uses the `soul:` prefix).
+        let store2_scratch = Scratch::new();
+        let store2 = open(&store2_scratch).await;
+        store2.dismiss("s1", 100).await.unwrap(); // memory-side dismiss of "s1"
+        let kept2 = store2.retain_undismissed_soul(vec![soul_conflict("s1")]).await;
+        assert_eq!(kept2.len(), 1, "memory dismiss of same id must not hide the soul conflict");
     }
 }

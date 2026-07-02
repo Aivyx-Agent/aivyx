@@ -16,8 +16,8 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, get_effective_persona, get_persona_proposal, get_soul_conflicts,
-    list_persona_deltas, list_persona_proposals, resolve_persona_proposal,
+    daemon_is_running, dismiss_soul_conflict, get_effective_persona, get_persona_proposal,
+    get_soul_conflicts, list_persona_deltas, list_persona_proposals, resolve_persona_proposal,
     resolve_soul_conflict, revert_persona_delta,
 };
 use aivyx_channel::soul_contradiction::SoulConflict;
@@ -189,6 +189,21 @@ pub async fn run_persona_resolve(id: &str, remove_side: char) -> Result<(), Stri
     Ok(())
 }
 
+/// `aivyx persona dismiss <id>` — Chapter Accord "keep both": mark a detected
+/// contradiction a false positive so it isn't re-flagged (nothing is removed).
+pub async fn run_persona_dismiss(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("`aivyx persona dismiss` requires a conflict id".into());
+    }
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+    dismiss_soul_conflict(&socket_path, id)
+        .await
+        .map_err(|e| format!("failed to dismiss conflict: {e}"))?;
+    println!("Dismissed conflict {id} — it won't be flagged again (both facets kept).");
+    Ok(())
+}
+
 /// Render Accord conflicts for the CLI. Pure — split out for tests.
 fn render_soul_conflicts(conflicts: &[SoulConflict]) -> String {
     let mut out = String::from("Persona conflicts\n=================\n\n");
@@ -207,7 +222,8 @@ fn render_soul_conflicts(conflicts: &[SoulConflict]) -> String {
         let b_note = if c.b.is_profile_constraint() { "  (immutable)" } else { "" };
         out.push_str(&format!("  [b] {} | {}{}\n", c.b.category, c.b.value.trim(), b_note));
         out.push_str(&format!(
-            "  resolve: aivyx persona resolve {} --remove <a|b>\n\n",
+            "  resolve: aivyx persona resolve {0} --remove <a|b>   |   \
+             keep both: aivyx persona dismiss {0}\n\n",
             c.id
         ));
     }
