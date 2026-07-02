@@ -29,15 +29,16 @@ use aivyx_memory::{is_internal_topic, Memory, MemoryEntry};
 const JUDGE_SYSTEM: &str =
     "You are a strict, fair acceptance reviewer for an autonomous agent's work. \
      You are given a task (its title + acceptance criteria), the agent's own \
-     summary of what it did, and — when available — a snapshot of the recent \
-     memory the agent actually wrote. Decide whether the acceptance criteria are \
-     met. Treat the recent-memory snapshot as GROUND TRUTH: if it shows the work \
-     was done (e.g. the required note exists with the required content), PASS \
-     even when the agent's summary is terse or vague. Be skeptical only when \
-     NEITHER the summary NOR the evidence shows the criteria are satisfied — then \
-     FAIL. Reply with EXACTLY one line, starting with the single word PASS or \
-     FAIL, then ' — ' and a brief reason. Example: 'FAIL — neither the summary \
-     nor memory shows the required note was written.'";
+     summary of what it did, and — when available — snapshots of the recent \
+     memory the agent wrote AND the recent files in its workspace. Decide \
+     whether the acceptance criteria are met. Treat those snapshots as GROUND \
+     TRUTH: if the memory OR a file shows the work was done (e.g. the required \
+     note/file exists with the required content), PASS even when the agent's \
+     summary is terse or vague. Be skeptical only when NEITHER the summary NOR \
+     the evidence shows the criteria are satisfied — then FAIL. Reply with \
+     EXACTLY one line, starting with the single word PASS or FAIL, then ' — ' \
+     and a brief reason. Example: 'FAIL — neither the summary, memory, nor \
+     workspace files show the required file was written.'";
 
 const JUDGE_MAX_TOKENS: u32 = 256;
 
@@ -46,6 +47,16 @@ const JUDGE_MAX_TOKENS: u32 = 256;
 /// judge prompt stays small.
 const EVIDENCE_MAX_ENTRIES: usize = 12;
 const EVIDENCE_BODY_CHARS: usize = 400;
+
+/// File-artifact evidence bounds (the follow-on to #17b/#17d): the newest N
+/// files under the agent's workspace, each capped, so a story that produced a
+/// FILE ("save workspace-audit.md") is judged on what's on disk, not just the
+/// summary. Bounded so a big workspace can't bloat the judge prompt.
+const EVIDENCE_MAX_FILES: usize = 8;
+const EVIDENCE_FILE_CHARS: usize = 600;
+/// Cap on directory entries scanned, so a pathological workspace can't stall
+/// the verdict.
+const EVIDENCE_SCAN_CAP: usize = 2000;
 
 /// The judge's decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,11 +74,20 @@ pub struct CompletionJudge {
     /// memory the agent wrote and shows it to the judge as ground-truth
     /// evidence, so a terse summary over real work no longer false-fails.
     memory: Option<Arc<dyn Memory>>,
+    /// File-artifact grounding — the agent's workspace root. When set, `verify`
+    /// also snapshots the most-recently-written files there, so a story that
+    /// produced a FILE is judged on disk contents, not just the summary.
+    workspace_root: Option<std::path::PathBuf>,
 }
 
 impl CompletionJudge {
     pub fn new(provider: Arc<dyn LlmProvider>, model: impl Into<String>) -> Self {
-        CompletionJudge { provider, model: model.into(), memory: None }
+        CompletionJudge {
+            provider,
+            model: model.into(),
+            memory: None,
+            workspace_root: None,
+        }
     }
 
     /// Ground completion verdicts on the actual memory artifact (#17b): the
@@ -77,17 +97,28 @@ impl CompletionJudge {
         self
     }
 
+    /// Ground verdicts on FILE artifacts too: the judge is shown the
+    /// most-recently-written files under `root` (the agent's workspace).
+    pub fn with_workspace(mut self, root: std::path::PathBuf) -> Self {
+        self.workspace_root = Some(root);
+        self
+    }
+
     /// Judge whether `summary` satisfies the story's `title` + `criteria`.
     /// Fails **open**: an LLM error → `passed: true` (a judge outage must not
     /// wedge the loop), with the error noted in `reason`.
     pub async fn verify(&self, title: &str, criteria: &str, summary: &str) -> Verdict {
-        let evidence = self.gather_evidence().await;
-        let evidence_block = match &evidence {
-            Some(e) => format!(
+        let mut evidence_block = String::new();
+        if let Some(e) = self.gather_memory_evidence().await {
+            evidence_block.push_str(&format!(
                 "\n\n## Recent memory the agent wrote (ground-truth evidence)\n{e}"
-            ),
-            None => String::new(),
-        };
+            ));
+        }
+        if let Some(f) = self.gather_file_evidence() {
+            evidence_block.push_str(&format!(
+                "\n\n## Recent workspace files (ground-truth evidence)\n{f}"
+            ));
+        }
         let user = format!(
             "## Task\nTitle: {title}\nAcceptance criteria:\n{}\n\n## Agent's summary of what it did\n{}{evidence_block}\n\n\
              Are the acceptance criteria met (by the summary OR the evidence)? Reply PASS or FAIL with a brief reason.",
@@ -122,7 +153,7 @@ impl CompletionJudge {
     /// topics as ground-truth evidence for the judge. Best-effort: no memory
     /// handle, a store error, or an empty store ⇒ `None` (the judge falls
     /// back to summary-only). Newest-first, deduped nothing, bounded.
-    async fn gather_evidence(&self) -> Option<String> {
+    async fn gather_memory_evidence(&self) -> Option<String> {
         let memory = self.memory.as_ref()?;
         let topics = memory.list_topics().await.ok()?;
         let mut entries: Vec<MemoryEntry> = Vec::new();
@@ -156,6 +187,82 @@ impl CompletionJudge {
             out.push_str(&format!("- [{}] {}\n", e.topic, body.replace('\n', " ")));
         }
         Some(out)
+    }
+
+    /// Snapshot the most-recently-modified files under the workspace as
+    /// ground-truth evidence for file-producing stories. Best-effort: no
+    /// workspace configured, or an unreadable/empty tree ⇒ `None`. Bounded on
+    /// files scanned, files shown, and bytes per file; skips hidden/`.git`
+    /// dirs and non-UTF-8 (binary) content.
+    fn gather_file_evidence(&self) -> Option<String> {
+        let root = self.workspace_root.as_ref()?;
+        let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+        let mut stack = vec![root.clone()];
+        let mut scanned = 0usize;
+        while let Some(dir) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for entry in rd.flatten() {
+                if scanned >= EVIDENCE_SCAN_CAP {
+                    break;
+                }
+                scanned += 1;
+                let name = entry.file_name();
+                // Skip hidden entries (.git, dotfiles) — noise, and the write
+                // guard already keeps secrets out.
+                if name.to_str().map(|n| n.starts_with('.')).unwrap_or(true) {
+                    continue;
+                }
+                let path = entry.path();
+                let Ok(meta) = entry.metadata() else { continue };
+                if meta.is_dir() {
+                    stack.push(path);
+                } else if meta.is_file() {
+                    let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                    files.push((mtime, path));
+                }
+            }
+        }
+        if files.is_empty() {
+            return None;
+        }
+        files.sort_by_key(|f| std::cmp::Reverse(f.0)); // newest first
+        files.truncate(EVIDENCE_MAX_FILES);
+        let mut out = String::new();
+        for (_, path) in &files {
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            // Read a bounded prefix; skip binary (non-UTF-8) content.
+            let body = match std::fs::read(path) {
+                Ok(bytes) => {
+                    let capped =
+                        &bytes[..bytes.len().min(EVIDENCE_FILE_CHARS * 2)];
+                    // Salvage the valid UTF-8 prefix — a byte cap can split a
+                    // multibyte char, so `valid_up_to()` recovers text that a
+                    // naive `from_utf8` would reject. Only genuinely-binary
+                    // content (no valid prefix) is flagged.
+                    let valid = match std::str::from_utf8(capped) {
+                        Ok(s) => s,
+                        Err(e) if e.valid_up_to() > 0 => unsafe {
+                            std::str::from_utf8_unchecked(&capped[..e.valid_up_to()])
+                        },
+                        Err(_) => "",
+                    };
+                    if valid.is_empty() {
+                        "(binary file)".to_string()
+                    } else {
+                        let s: String =
+                            valid.chars().take(EVIDENCE_FILE_CHARS).collect();
+                        s.replace('\n', " ")
+                    }
+                }
+                Err(_) => continue,
+            };
+            out.push_str(&format!("- [{}] {}\n", rel.display(), body));
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 }
 
@@ -270,6 +377,46 @@ mod tests {
         assert!(prompt.contains("ground-truth evidence"), "evidence block present");
         assert!(prompt.contains("natural-therapies"), "topic in evidence");
         assert!(prompt.contains("Melatonin"), "artifact body in evidence");
+    }
+
+    #[tokio::test]
+    async fn verify_grounds_on_workspace_file_evidence() {
+        // A file-producing story: the artifact is on disk, summary is terse.
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-judge-fe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("workspace-audit.md"),
+            "# Workspace audit\n- projects/\n- 2 recommendations: tidy journal, archive old plans.\n",
+        )
+        .unwrap();
+        // A hidden file must be ignored (not shown as evidence).
+        std::fs::write(dir.join(".secret"), "TOKEN=nope").unwrap();
+
+        let seen = Arc::new(Mutex::new(String::new()));
+        let judge = CompletionJudge::new(
+            Arc::new(CapturingProvider {
+                reply: "PASS — the workspace file shows the audit.".into(),
+                seen: Arc::clone(&seen),
+            }),
+            "test-model",
+        )
+        .with_workspace(dir.clone());
+
+        let v = judge
+            .verify(
+                "Audit the workspace and write a report",
+                "workspace-audit.md exists with a tree summary + 2 recommendations",
+                "did the audit", // terse — would fail summary-only
+            )
+            .await;
+        assert!(v.passed, "verdict: {v:?}");
+        let prompt = seen.lock().unwrap().clone();
+        assert!(prompt.contains("workspace files"), "file evidence block present");
+        assert!(prompt.contains("workspace-audit.md"), "file name in evidence");
+        assert!(prompt.contains("recommendations"), "file body in evidence");
+        assert!(!prompt.contains(".secret"), "hidden files excluded");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

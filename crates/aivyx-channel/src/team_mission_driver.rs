@@ -104,6 +104,10 @@ pub struct TeamRunDeps {
     /// with the solo `loop.complete` path). `None` ⇒ the judge is summary-only,
     /// as before.
     pub memory: Option<Arc<dyn aivyx_memory::Memory>>,
+    /// #17d — the agent workspace root, so the delegated judge can also ground
+    /// on recent FILE artifacts the team wrote (symmetric with the solo path).
+    /// `None` ⇒ file evidence is skipped.
+    pub workspace_root: Option<std::path::PathBuf>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -453,8 +457,12 @@ impl TeamMissionService {
         // team wrote, so a mission that only *claims* completion (terse synth
         // over genuine work OR a hollow "Done" with nothing produced) is judged
         // against what's actually in memory — same bar as solo loop.complete.
-        match &self.deps.memory {
+        let judge = match &self.deps.memory {
             Some(m) => judge.with_memory(Arc::clone(m)),
+            None => judge,
+        };
+        match &self.deps.workspace_root {
+            Some(ws) => judge.with_workspace(ws.clone()),
             None => judge,
         }
     }
@@ -1114,6 +1122,7 @@ mod tests {
             mission_budget: aivyx_cost::MissionBudget::default(),
             member_provider_builder: None,
             memory: None,
+            workspace_root: None,
         }
     }
 
@@ -1142,6 +1151,7 @@ mod tests {
             mission_budget: aivyx_cost::MissionBudget::default(),
             member_provider_builder: None,
             memory: None,
+            workspace_root: None,
         }
     }
 

@@ -5,6 +5,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Loop completion verdicts now ground on FILE artifacts, not just memory.**
+  The acceptance judge that gates `loop.complete` (and delegated team missions)
+  reads a bounded snapshot of the most recent workspace files alongside recent
+  memory, and treats both as ground truth. A file-producing task is graded on
+  the file that actually exists rather than on how tersely the agent phrased its
+  summary — closing the documented #17b/#17d residual (previously memory-only).
+
 ## [0.7.27] — 2026-07-02
 
 ### Security

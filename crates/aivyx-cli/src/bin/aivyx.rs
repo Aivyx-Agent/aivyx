@@ -6591,16 +6591,21 @@ async fn run_async(
     // LLM acceptance judge (the daemon's provider/model) so loop.complete is
     // gated against each story's acceptance criteria instead of self-reported.
     if config_loop.as_ref().map(|c| c.verify_completion).unwrap_or(false) {
-        let judge = Arc::new(
-            aivyx_channel::completion_judge::CompletionJudge::new(
-                Arc::clone(&provider),
-                model.clone(),
-            )
-            // #17b — ground verdicts on the real artifact: the judge sees the
-            // recent memory the agent wrote, so a terse summary over genuine
-            // work is no longer false-rejected.
-            .with_memory(Arc::clone(&memory)),
-        );
+        let mut judge_builder = aivyx_channel::completion_judge::CompletionJudge::new(
+            Arc::clone(&provider),
+            model.clone(),
+        )
+        // #17b — ground verdicts on the real artifact: the judge sees the
+        // recent memory the agent wrote, so a terse summary over genuine
+        // work is no longer false-rejected.
+        .with_memory(Arc::clone(&memory));
+        // #17d — many stories land as FILES, not memory. Let the judge also
+        // read the recent workspace artifacts so a file-producing task is
+        // graded on the file that exists, not the summary's phrasing.
+        if let Some(ref ws) = workspace_root {
+            judge_builder = judge_builder.with_workspace(ws.clone());
+        }
+        let judge = Arc::new(judge_builder);
         let _ = loop_complete_tool.set_judge(judge);
         eprintln!(
             "aivyx loop: completion verification ON — an LLM judge gates loop.complete"
@@ -8090,8 +8095,9 @@ async fn run_async(
                     None
                 },
                 // #17d — let the delegated completion judge ground its verdict
-                // on the memory the team actually wrote.
+                // on the memory AND recent workspace files the team wrote.
                 memory: Some(Arc::clone(&memory)),
+                workspace_root: workspace_root.clone(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
