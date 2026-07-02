@@ -7,6 +7,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Accord skill-layer coherence: contradiction detection across learned
+  skills.** The contradiction pass now also considers the agent's learned
+  *skills* (shown to the judge as `skill "X": when <trigger> → <procedure>`), so
+  two skills that give opposite instructions for the same situation — or a skill
+  whose procedure contradicts a facet or operator constraint — are flagged by
+  `aivyx persona conflicts` alongside facet conflicts. Resolution removes the
+  losing skill BY NAME (reusing the Repertoire operator-forget primitive),
+  reversible via `aivyx persona revert`; dismiss ("keep both") works too.
+  Live-verified: seeded two opposite reply-style skills → detected → resolved.
 - **Accord prevent-at-write: the Soul can't accrete a contradiction (coherence
   gate at approval).** Beyond finding contradictions after the fact, approving a
   persona proposal now runs a targeted coherence check first: if the proposed

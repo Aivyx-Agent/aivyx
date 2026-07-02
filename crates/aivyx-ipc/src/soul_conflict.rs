@@ -36,10 +36,20 @@ impl SoulFacet {
     /// persona-delta category — it marks an immutable side.
     pub const PROFILE_CONSTRAINT: &'static str = "profile_constraint";
 
+    /// The sentinel category for a learned SKILL side of a conflict. The
+    /// facet `value` is the skill's *name*; resolution removes that skill
+    /// (by name), not a soft-list `RemoveList`.
+    pub const LEARNED_SKILL: &'static str = "learned_skill";
+
     /// Whether this side is the immutable operator Profile constraint
     /// (so a resolution may only remove the *other* side).
     pub fn is_profile_constraint(&self) -> bool {
         self.category == Self::PROFILE_CONSTRAINT
+    }
+
+    /// Whether this side is a learned skill (removed by name on resolve).
+    pub fn is_learned_skill(&self) -> bool {
+        self.category == Self::LEARNED_SKILL
     }
 }
 

@@ -5866,6 +5866,22 @@ async fn resolve_soul_conflict(
     use aivyx_ipc::persona::PersonaDeltaCategory as Cat;
     let persona_log = persona_log
         .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    if value.trim().is_empty() {
+        return Err("no facet value to remove".to_string());
+    }
+    // Chapter Accord (skill-layer) — a learned-skill side is removed BY NAME
+    // (its stored value is JSON, not a plain list string), reusing the same
+    // operator-forget primitive the Repertoire screen uses.
+    if category == aivyx_ipc::soul_conflict::SoulFacet::LEARNED_SKILL {
+        let removed = crate::skill_edit::operator_forget_skill(persona_log, shared_persona, value)
+            .await?;
+        if !removed {
+            return Err(format!("no learned skill named `{value}` to remove"));
+        }
+        // operator_forget_skill already recomputed shared state; report the
+        // chain tip as the seq.
+        return Ok(persona_log.len().saturating_sub(1) as u64);
+    }
     // Only the five accreted soft-list categories are removable. The operator
     // profile_constraint side of a cross-layer conflict is immutable, and the
     // scalar identity fields are not list facets.
@@ -5885,9 +5901,6 @@ async fn resolve_soul_conflict(
         }
         other => return Err(format!("`{other}` is not a removable persona facet category")),
     };
-    if value.trim().is_empty() {
-        return Err("no facet value to remove".to_string());
-    }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

@@ -87,17 +87,20 @@ struct RawConflict {
     reason: String,
 }
 
-/// One indexed item shown to the model: its display index, category, and value.
-/// `is_rule` marks the immutable operator profile_constraint side.
+/// One indexed item shown to the model: its display index, category, `value`
+/// (the resolution key — a facet's text, a constraint's text, or a SKILL's
+/// name), and `display` (what the prompt shows, richer for skills). `is_rule`
+/// marks the immutable operator profile_constraint side.
 struct Item {
     category: String,
     value: String,
+    display: String,
     is_rule: bool,
 }
 
 /// Flatten the persona snapshot into the indexed item list the prompt shows and
-/// `validate` maps back through. Learned soft-list facets first, then the
-/// operator's profile_constraint rules.
+/// `validate` maps back through. Learned soft-list facets, then learned SKILLS,
+/// then the operator's profile_constraint rules.
 fn items_of(p: &EffectivePersona) -> Vec<Item> {
     let mut items = Vec::new();
     for (label, values) in soft_lists(p) {
@@ -105,6 +108,20 @@ fn items_of(p: &EffectivePersona) -> Vec<Item> {
             items.push(Item {
                 category: label.to_string(),
                 value: v.clone(),
+                display: v.clone(),
+                is_rule: false,
+            });
+        }
+    }
+    // Chapter Accord (skill-layer) — each learned skill is an item whose value
+    // is its NAME (the resolution key), shown with its trigger + procedure so
+    // the judge can spot two skills giving incompatible guidance.
+    for raw in &p.learned_skills {
+        if let Some(s) = aivyx_ipc::persona::LearnedSkill::from_json_value(raw) {
+            items.push(Item {
+                category: SoulFacet::LEARNED_SKILL.to_string(),
+                value: s.name.clone(),
+                display: format!("skill \"{}\": when {} → {}", s.name, s.trigger, s.procedure),
                 is_rule: false,
             });
         }
@@ -113,6 +130,7 @@ fn items_of(p: &EffectivePersona) -> Vec<Item> {
         items.push(Item {
             category: SoulFacet::PROFILE_CONSTRAINT.to_string(),
             value: c.clone(),
+            display: c.clone(),
             is_rule: true,
         });
     }
@@ -143,12 +161,14 @@ impl SoulContradictionDetector {
     fn system_prompt() -> &'static str {
         "You audit an AI assistant's evolving PERSONA (its \"Soul\") for \
          CONTRADICTIONS. You are given a NUMBERED list of the assistant's \
-         standing guidance: learned facets, and the operator's FIXED rules \
-         (marked RULE). Find pairs that are genuinely INCOMPATIBLE as standing \
-         guidance — where following one means violating the other (e.g. \"be \
-         extremely concise\" vs \"always give long, detailed explanations\"; a \
-         learned \"warm and effusive\" vs a RULE \"never flatter me, be \
-         candid\"). Refer to each item by its number in brackets. Output ONLY a \
+         standing guidance: learned facets, learned SKILLS (shown as `skill \
+         \"X\": when … → …`), and the operator's FIXED rules (marked RULE). \
+         Find pairs that are genuinely INCOMPATIBLE as standing guidance — where \
+         following one means violating the other (e.g. \"be extremely concise\" \
+         vs \"always give long, detailed explanations\"; a learned \"warm and \
+         effusive\" vs a RULE \"never flatter me, be candid\"; two skills whose \
+         procedures give opposite instructions for the same situation). Refer to \
+         each item by its number in brackets. Output ONLY a \
          JSON array of `{\"a\":N,\"b\":M,\"reason\":\"...\"}`, where N and M are \
          the item numbers of the two incompatible items (different numbers). \
          `reason` is one short clause naming the incompatibility. Report ONLY \
@@ -173,7 +193,7 @@ impl SoulContradictionDetector {
         );
         for (i, it) in items.iter().enumerate() {
             let tag = if it.is_rule { "RULE" } else { &it.category };
-            s.push_str(&format!("[{i}] ({tag}) {}\n", clip(&it.value)));
+            s.push_str(&format!("[{i}] ({tag}) {}\n", clip(&it.display)));
         }
         s.push_str("\nOutput the JSON conflict array now.");
         s
@@ -418,6 +438,57 @@ mod tests {
             .detect_for_candidate(&persona(), Cat::CharacterTraits, "communicate concisely")
             .await
             .is_none());
+    }
+
+    fn skill_json(name: &str, trigger: &str, procedure: &str) -> String {
+        aivyx_ipc::persona::LearnedSkill {
+            name: name.into(),
+            trigger: trigger.into(),
+            procedure: procedure.into(),
+            ..Default::default()
+        }
+        .to_json_value()
+    }
+
+    #[test]
+    fn items_include_learned_skills_with_rich_display() {
+        let p = EffectivePersona {
+            learned_skills: vec![
+                skill_json("brevity", "when replying", "keep it to one line"),
+                skill_json("depth", "when replying", "write several detailed paragraphs"),
+            ],
+            ..Default::default()
+        };
+        let items = items_of(&p);
+        // Two skill items present, value = name (the resolution key).
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| i.category == SoulFacet::LEARNED_SKILL));
+        assert!(items.iter().any(|i| i.value == "brevity"));
+        // The prompt shows the rich skill form (trigger + procedure).
+        let prompt = SoulContradictionDetector::user_prompt(&items, 200);
+        assert!(prompt.contains("skill \"brevity\": when when replying → keep it to one line"));
+    }
+
+    #[test]
+    fn validate_builds_skill_vs_skill_conflict() {
+        let p = EffectivePersona {
+            learned_skills: vec![
+                skill_json("brevity", "when replying", "keep it to one line"),
+                skill_json("depth", "when replying", "write several detailed paragraphs"),
+            ],
+            ..Default::default()
+        };
+        let items = items_of(&p); // [0]=brevity, [1]=depth
+        let out = SoulContradictionDetector::validate(
+            &items,
+            vec![RawConflict { a: 0, b: 1, reason: "one line vs paragraphs".into() }],
+            30,
+        );
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].cross_layer);
+        assert!(out[0].a.is_learned_skill() && out[0].b.is_learned_skill());
+        // value is the skill NAME (what resolution removes by).
+        assert!(matches!(out[0].a.value.as_str(), "brevity" | "depth"));
     }
 
     #[test]
