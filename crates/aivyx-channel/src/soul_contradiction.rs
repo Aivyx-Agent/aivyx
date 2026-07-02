@@ -61,17 +61,48 @@ impl Default for SoulContradictionConfig {
     }
 }
 
-/// What the model returns per conflict, before validation. Each side names its
-/// own `(category, value)` so a conflict can span two categories or reference a
-/// profile constraint.
+/// What the model returns per conflict, before validation. Each side is the
+/// integer index `[N]` of a listed facet/rule — NOT its verbatim text, so a
+/// paraphrasing local model can still reference it reliably (the Concord
+/// `seq`-reference trick; requiring verbatim value text proved fragile live).
 #[derive(Debug, Deserialize)]
 struct RawConflict {
-    category_a: String,
-    value_a: String,
-    category_b: String,
-    value_b: String,
+    a: usize,
+    b: usize,
     #[serde(default)]
     reason: String,
+}
+
+/// One indexed item shown to the model: its display index, category, and value.
+/// `is_rule` marks the immutable operator profile_constraint side.
+struct Item {
+    category: String,
+    value: String,
+    is_rule: bool,
+}
+
+/// Flatten the persona snapshot into the indexed item list the prompt shows and
+/// `validate` maps back through. Learned soft-list facets first, then the
+/// operator's profile_constraint rules.
+fn items_of(p: &EffectivePersona) -> Vec<Item> {
+    let mut items = Vec::new();
+    for (label, values) in soft_lists(p) {
+        for v in values {
+            items.push(Item {
+                category: label.to_string(),
+                value: v.clone(),
+                is_rule: false,
+            });
+        }
+    }
+    for c in &p.behavioral_constraints {
+        items.push(Item {
+            category: SoulFacet::PROFILE_CONSTRAINT.to_string(),
+            value: c.clone(),
+            is_rule: true,
+        });
+    }
+    items
 }
 
 /// LLM-backed contradiction detector over an [`EffectivePersona`] snapshot.
@@ -97,27 +128,23 @@ impl SoulContradictionDetector {
 
     fn system_prompt() -> &'static str {
         "You audit an AI assistant's evolving PERSONA (its \"Soul\") for \
-         CONTRADICTIONS. You are given the assistant's learned facets, grouped \
-         by category, and — separately — the operator's declared \
-         profile_constraint rules (which are FIXED and authoritative). Find \
-         pairs that are genuinely INCOMPATIBLE as standing guidance for how the \
-         assistant should behave or what it believes about the operator — where \
-         following one means violating the other (e.g. \"communicate very \
-         concisely\" vs \"always give thorough, detailed explanations\"; a \
-         learned \"warm and effusive\" vs a profile_constraint \"never flatter \
-         me, be candid\"). Output ONLY a JSON array of `{\"category_a\":\"...\",\
-         \"value_a\":\"...\",\"category_b\":\"...\",\"value_b\":\"...\",\
-         \"reason\":\"...\"}`, where each `(category, value)` MUST be one of the \
-         facets or constraints listed below, copied VERBATIM, and the two sides \
-         must be different. When one side is an operator rule, use category \
-         \"profile_constraint\". `reason` is one short clause naming the \
-         incompatibility. Report ONLY real contradictions — NOT facets that \
-         merely differ, add nuance, or cover different situations. If there are \
-         none, output `[]`. No prose, no markdown fences."
+         CONTRADICTIONS. You are given a NUMBERED list of the assistant's \
+         standing guidance: learned facets, and the operator's FIXED rules \
+         (marked RULE). Find pairs that are genuinely INCOMPATIBLE as standing \
+         guidance — where following one means violating the other (e.g. \"be \
+         extremely concise\" vs \"always give long, detailed explanations\"; a \
+         learned \"warm and effusive\" vs a RULE \"never flatter me, be \
+         candid\"). Refer to each item by its number in brackets. Output ONLY a \
+         JSON array of `{\"a\":N,\"b\":M,\"reason\":\"...\"}`, where N and M are \
+         the item numbers of the two incompatible items (different numbers). \
+         `reason` is one short clause naming the incompatibility. Report ONLY \
+         real contradictions — NOT items that merely differ, add nuance, or \
+         cover different situations. If there are none, output `[]`. No prose, \
+         no markdown fences."
     }
 
-    /// Render the persona snapshot into the user prompt. Pure + testable.
-    fn user_prompt(p: &EffectivePersona, max_chars: usize) -> String {
+    /// Render the indexed item list into the user prompt. Pure + testable.
+    fn user_prompt(items: &[Item], max_chars: usize) -> String {
         let clip = |s: &str| -> String {
             let one = s.replace('\n', " ");
             if one.chars().count() > max_chars {
@@ -126,24 +153,13 @@ impl SoulContradictionDetector {
                 one
             }
         };
-        let mut s = String::from("Audit this Persona for contradictions.\n\n## learned facets\n");
-        let mut any = false;
-        for (label, values) in soft_lists(p) {
-            for v in values {
-                any = true;
-                s.push_str(&format!("- category={label} | {}\n", clip(v)));
-            }
-        }
-        if !any {
-            s.push_str("(none)\n");
-        }
-        s.push_str("\n## operator profile_constraint rules (fixed)\n");
-        if p.behavioral_constraints.is_empty() {
-            s.push_str("(none)\n");
-        } else {
-            for c in &p.behavioral_constraints {
-                s.push_str(&format!("- category=profile_constraint | {}\n", clip(c)));
-            }
+        let mut s = String::from(
+            "Audit this Persona for contradictions. Items (refer to each by its \
+             [number]):\n\n",
+        );
+        for (i, it) in items.iter().enumerate() {
+            let tag = if it.is_rule { "RULE" } else { &it.category };
+            s.push_str(&format!("[{i}] ({tag}) {}\n", clip(&it.value)));
         }
         s.push_str("\nOutput the JSON conflict array now.");
         s
@@ -161,86 +177,44 @@ impl SoulContradictionDetector {
         serde_json::from_str::<Vec<RawConflict>>(&raw[start..=end]).unwrap_or_default()
     }
 
-    /// Validate raw conflicts against the snapshot: each `(category, value)`
-    /// must be a real facet or constraint, the two sides distinct, ordered
-    /// canonically, and deduped by id. A `profile_constraint` side is always
-    /// placed as `b` (immutable) and marks the conflict `cross_layer`.
-    fn validate(
-        p: &EffectivePersona,
-        raws: Vec<RawConflict>,
-        cap: usize,
-    ) -> Vec<SoulConflict> {
+    /// Validate raw conflicts against the indexed item list: each index must be
+    /// in range, the two sides distinct, ordered canonically, and deduped by id.
+    /// A `profile_constraint` (rule) side is always placed as `b` (immutable)
+    /// and marks the conflict `cross_layer`; two rules are skipped (the
+    /// operator's to reconcile, not ours to remove).
+    fn validate(items: &[Item], raws: Vec<RawConflict>, cap: usize) -> Vec<SoulConflict> {
         use std::collections::HashSet;
-        let lists = soft_lists(p);
-        // Does `(category, value)` name a real learned facet?
-        let is_facet = |cat: &str, val: &str| -> bool {
-            lists
-                .iter()
-                .any(|(label, values)| *label == cat && values.iter().any(|v| v == val))
-        };
-        let is_constraint = |cat: &str, val: &str| -> bool {
-            cat == SoulFacet::PROFILE_CONSTRAINT
-                && p.behavioral_constraints.iter().any(|c| c == val)
-        };
-        let exists = |cat: &str, val: &str| is_facet(cat, val) || is_constraint(cat, val);
-
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<SoulConflict> = Vec::new();
         for rc in raws {
-            if rc.category_a == rc.category_b && rc.value_a == rc.value_b {
-                continue; // a side paired with itself
-            }
-            if !exists(&rc.category_a, &rc.value_a) || !exists(&rc.category_b, &rc.value_b) {
-                continue; // hallucinated facet — drop
-            }
-            let a_is_constraint = rc.category_a == SoulFacet::PROFILE_CONSTRAINT;
-            let b_is_constraint = rc.category_b == SoulFacet::PROFILE_CONSTRAINT;
-            // Two constraints contradicting each other are the operator's to
-            // reconcile, not ours to remove — skip.
-            if a_is_constraint && b_is_constraint {
+            if rc.a == rc.b {
                 continue;
             }
-            // Canonical order: the immutable profile_constraint (if any) is
-            // always side `b`; otherwise order by (category, value) for a
-            // stable id.
-            let ((cat_a, val_a), (cat_b, val_b), cross) = if a_is_constraint {
-                (
-                    (rc.category_b.clone(), rc.value_b.clone()),
-                    (rc.category_a.clone(), rc.value_a.clone()),
-                    true,
-                )
-            } else if b_is_constraint {
-                (
-                    (rc.category_a.clone(), rc.value_a.clone()),
-                    (rc.category_b.clone(), rc.value_b.clone()),
-                    true,
-                )
-            } else {
-                // both learned facets — order deterministically
-                let ka = (rc.category_a.as_str(), rc.value_a.as_str());
-                let kb = (rc.category_b.as_str(), rc.value_b.as_str());
-                if ka <= kb {
-                    (
-                        (rc.category_a.clone(), rc.value_a.clone()),
-                        (rc.category_b.clone(), rc.value_b.clone()),
-                        false,
-                    )
-                } else {
-                    (
-                        (rc.category_b.clone(), rc.value_b.clone()),
-                        (rc.category_a.clone(), rc.value_a.clone()),
-                        false,
-                    )
-                }
+            let (Some(ia), Some(ib)) = (items.get(rc.a), items.get(rc.b)) else {
+                continue; // out-of-range index — drop
             };
-            let id = SoulConflict::make_id(&cat_a, &val_a, &cat_b, &val_b);
+            if ia.is_rule && ib.is_rule {
+                continue;
+            }
+            // Canonical order: an immutable rule is always side `b`; otherwise
+            // order by (category, value) for a stable id.
+            let (fa, fb, cross) = if ia.is_rule {
+                (ib, ia, true)
+            } else if ib.is_rule {
+                (ia, ib, true)
+            } else {
+                let ka = (ia.category.as_str(), ia.value.as_str());
+                let kb = (ib.category.as_str(), ib.value.as_str());
+                if ka <= kb { (ia, ib, false) } else { (ib, ia, false) }
+            };
+            let id = SoulConflict::make_id(&fa.category, &fa.value, &fb.category, &fb.value);
             if !seen.insert(id.clone()) {
                 continue;
             }
             out.push(SoulConflict {
                 id,
-                a: SoulFacet { category: cat_a, value: val_a },
-                b: SoulFacet { category: cat_b, value: val_b },
+                a: SoulFacet { category: fa.category.clone(), value: fa.value.clone() },
+                b: SoulFacet { category: fb.category.clone(), value: fb.value.clone() },
                 reason: rc.reason.trim().to_string(),
                 cross_layer: cross,
             });
@@ -252,15 +226,13 @@ impl SoulContradictionDetector {
     }
 
     /// Run one detection pass over the snapshot. Best-effort: empty on any
-    /// LLM/parse failure, or when there are fewer than two facets to compare.
+    /// LLM/parse failure, or when there are fewer than two items to compare.
     pub async fn detect(&self, persona: &EffectivePersona) -> Vec<SoulConflict> {
-        let facet_count: usize = soft_lists(persona).iter().map(|(_, v)| v.len()).sum();
-        // Need at least two things that could conflict (two facets, or one
-        // facet + one constraint).
-        if facet_count == 0 || (facet_count < 2 && persona.behavioral_constraints.is_empty()) {
+        let items = items_of(persona);
+        if items.len() < 2 {
             return Vec::new();
         }
-        let user = Self::user_prompt(persona, self.config.max_facet_chars);
+        let user = Self::user_prompt(&items, self.config.max_facet_chars);
         let messages = vec![LlmMessage::User {
             content: vec![ContentBlock::Text { text: user }],
         }];
@@ -273,14 +245,17 @@ impl SoulContradictionDetector {
             temperature: Some(0.0),
         };
         let cancel = CancellationToken::new();
-        let raw = match self.provider.chat_stream(request, &cancel).await {
-            Ok(stream) => match stream.finish().await {
-                Ok(aivyx_llm::LlmStepEnd::FinalMessage { text, .. }) => text,
-                _ => return Vec::new(),
-            },
-            Err(_) => return Vec::new(),
+        let Ok(mut stream) = self.provider.chat_stream(request, &cancel).await else {
+            return Vec::new();
         };
-        Self::validate(persona, Self::parse(&raw), self.config.max_conflicts)
+        // The stream MUST be drained before `finish()` (the ollama provider
+        // errors otherwise) — mirrors Chapter Concord's consumption.
+        while stream.next_event().await.map(|e| e.is_some()).unwrap_or(false) {}
+        let raw = match stream.finish().await {
+            Ok(aivyx_llm::LlmStepEnd::FinalMessage { text, .. }) => text,
+            _ => return Vec::new(),
+        };
+        Self::validate(&items, Self::parse(&raw), self.config.max_conflicts)
     }
 }
 
@@ -296,71 +271,82 @@ mod tests {
         p
     }
 
+    // Item layout for persona(): [0] character_traits "communicate concisely",
+    // [1] character_traits "warm and effusive", [2] behavioral_preferences
+    // "give thorough, detailed explanations", [3] RULE "never flatter me…".
+
     #[test]
-    fn user_prompt_lists_facets_and_constraints() {
-        let s = SoulContradictionDetector::user_prompt(&persona(), 200);
-        assert!(s.contains("category=character_traits | communicate concisely"));
-        assert!(s.contains("category=behavioral_preferences | give thorough"));
-        assert!(s.contains("category=profile_constraint | never flatter me"));
+    fn user_prompt_numbers_facets_and_marks_rules() {
+        let s = SoulContradictionDetector::user_prompt(&items_of(&persona()), 200);
+        assert!(s.contains("[0] (character_traits) communicate concisely"));
+        assert!(s.contains("[2] (behavioral_preferences) give thorough"));
+        assert!(s.contains("[3] (RULE) never flatter me"), "rules are tagged RULE: {s}");
     }
 
     #[test]
     fn validate_keeps_facet_vs_facet_and_orders_canonically() {
-        let raws = vec![RawConflict {
-            category_a: "behavioral_preferences".into(),
-            value_a: "give thorough, detailed explanations".into(),
-            category_b: "character_traits".into(),
-            value_b: "communicate concisely".into(),
-            reason: "concise vs thorough".into(),
-        }];
-        let out = SoulContradictionDetector::validate(&persona(), raws, 30);
+        let items = items_of(&persona());
+        // model referenced items 2 and 0 (order-insensitive input)
+        let raws = vec![RawConflict { a: 2, b: 0, reason: "concise vs thorough".into() }];
+        let out = SoulContradictionDetector::validate(&items, raws, 30);
         assert_eq!(out.len(), 1);
         assert!(!out[0].cross_layer);
-        // canonical order: (category,value) ascending → behavioral_preferences
-        // sorts before character_traits.
+        // canonical order: behavioral_preferences sorts before character_traits.
         assert_eq!(out[0].a.category, "behavioral_preferences");
         assert_eq!(out[0].b.category, "character_traits");
     }
 
     #[test]
-    fn validate_flags_cross_layer_and_puts_constraint_as_b() {
-        let raws = vec![RawConflict {
-            category_a: "profile_constraint".into(),
-            value_a: "never flatter me, be candid".into(),
-            category_b: "character_traits".into(),
-            value_b: "warm and effusive".into(),
-            reason: "flattery vs candor".into(),
-        }];
-        let out = SoulContradictionDetector::validate(&persona(), raws, 30);
+    fn validate_flags_cross_layer_and_puts_rule_as_b() {
+        let items = items_of(&persona());
+        let raws = vec![RawConflict { a: 3, b: 1, reason: "flattery vs candor".into() }];
+        let out = SoulContradictionDetector::validate(&items, raws, 30);
         assert_eq!(out.len(), 1);
-        assert!(out[0].cross_layer, "constraint side ⇒ cross_layer");
+        assert!(out[0].cross_layer, "rule side ⇒ cross_layer");
         assert_eq!(out[0].a.category, "character_traits", "learned facet is removable side a");
-        assert!(out[0].b.is_profile_constraint(), "constraint is immutable side b");
+        assert!(out[0].b.is_profile_constraint(), "rule is immutable side b");
     }
 
     #[test]
-    fn validate_drops_hallucinated_facets() {
-        let raws = vec![RawConflict {
-            category_a: "character_traits".into(),
-            value_a: "a trait that was never learned".into(),
-            category_b: "character_traits".into(),
-            value_b: "communicate concisely".into(),
-            reason: "x".into(),
-        }];
-        assert!(SoulContradictionDetector::validate(&persona(), raws, 30).is_empty());
+    fn validate_drops_out_of_range_and_self_pairs() {
+        let items = items_of(&persona());
+        assert!(SoulContradictionDetector::validate(
+            &items,
+            vec![RawConflict { a: 99, b: 0, reason: "x".into() }],
+            30,
+        )
+        .is_empty());
+        assert!(SoulContradictionDetector::validate(
+            &items,
+            vec![RawConflict { a: 2, b: 2, reason: "self".into() }],
+            30,
+        )
+        .is_empty());
     }
 
     #[test]
-    fn validate_dedups_and_skips_constraint_vs_constraint() {
+    fn validate_dedups_same_pair() {
+        let items = items_of(&persona());
         let raws = vec![
-            RawConflict {
-                category_a: "profile_constraint".into(),
-                value_a: "never flatter me, be candid".into(),
-                category_b: "profile_constraint".into(),
-                value_b: "never flatter me, be candid".into(),
-                reason: "self".into(),
-            },
+            RawConflict { a: 0, b: 2, reason: "one".into() },
+            RawConflict { a: 2, b: 0, reason: "same pair, swapped".into() },
         ];
-        assert!(SoulContradictionDetector::validate(&persona(), raws, 30).is_empty());
+        assert_eq!(
+            SoulContradictionDetector::validate(&items, raws, 30).len(),
+            1,
+            "the same pair in either order dedups to one conflict"
+        );
+    }
+
+    #[test]
+    fn validate_skips_rule_vs_rule() {
+        let mut p = persona();
+        p.behavioral_constraints.push("always agree with me".into()); // 2nd rule → item[4]
+        let items = items_of(&p);
+        let raws = vec![RawConflict { a: 3, b: 4, reason: "two rules".into() }];
+        assert!(
+            SoulContradictionDetector::validate(&items, raws, 30).is_empty(),
+            "two operator rules are the operator's to reconcile, not removable"
+        );
     }
 }
