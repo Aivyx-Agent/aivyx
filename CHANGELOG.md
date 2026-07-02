@@ -5,6 +5,25 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.27] — 2026-07-02
+
+### Security
+
+Final hardening pass of the security thread — extending the existing guards to
+the last uncovered surfaces:
+
+- **Prompt-injection fencing now covers `fs.read` and every tool-process
+  integration (Bulwark extension).** A file's contents (attacker-supplied,
+  downloaded, or in a broad-access location) and the output of Gmail / Calendar
+  / Contacts / Drive / Obsidian / the web-search toolkit are fenced as untrusted
+  data — never instructions. Verified: the agent describes an injection in a
+  file rather than obeying it.
+- **`net.dns` honors the egress policy (closes a DNS-exfil channel).** A DNS
+  lookup is itself an exfiltration channel (`<secret>.attacker.com` leaks to the
+  attacker's nameserver); `net.dns` now applies the same
+  `[access] allow_egress_hosts` allow-list + private-host block as the web
+  tools, so an allow-listed deployment can't be DNS-tunneled.
+
 ## [0.7.26] — 2026-07-02
 
 ### Security
