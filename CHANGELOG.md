@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.28] — 2026-07-02
+
 ### Changed
 
 - **Loop completion verdicts now ground on FILE artifacts, not just memory.**
