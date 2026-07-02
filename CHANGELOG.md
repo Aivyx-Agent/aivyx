@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.29] — 2026-07-02
+
 ### Security
 
 - **`shell.exec` now honors the sensitive-path guards (Ward/Portcullis).**
