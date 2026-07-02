@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.31] — 2026-07-02
+
 ### Changed
 
 - **The autonomous loop now verifies-and-closes a finished story the agent
