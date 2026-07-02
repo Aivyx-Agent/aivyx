@@ -144,6 +144,7 @@ pub mod notify_tool;
 pub mod identity_export;
 mod daemon_session;
 mod local;
+pub mod keyring_store;
 pub mod passphrase;
 pub mod persona;
 pub mod persona_consolidation;

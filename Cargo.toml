@@ -151,6 +151,14 @@ hex = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 # Bearer token wrapper — prevents accidental Debug/logging of API keys
 secrecy = { version = "0.10", features = ["serde"] }
+# Chapter Keyring — OS credential store for the master passphrase. Pure-Rust
+# feature selection (sync-secret-service = zbus, crypto-rust = RustCrypto) so it
+# builds on musl-static without C libsecret/openssl; native backends on
+# macOS/Windows. `mock` provides an in-memory backend for tests.
+# `async-io` (not `tokio`) executor: keyring's sync Entry bridges to the async
+# zbus backend via async-io/smol, so it's safe to call from *inside* our tokio
+# runtime (a tokio bridge would nest-panic). Pure Rust ⇒ still musl-safe.
+keyring = { version = "3", default-features = false, features = ["async-secret-service", "crypto-rust", "async-io", "apple-native", "windows-native"] }
 # Byte stream utilities used by the SSE parser
 futures-util = "0.3"
 bytes = "1"

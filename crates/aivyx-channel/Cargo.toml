@@ -96,6 +96,8 @@ zeroize = "1.8"
 # echo-disable plus a line read; it has no transitive async deps.
 # Pinned to `^7` (today 7.4.0) to match the current stable line.
 rpassword = "7"
+# Chapter Keyring — OS credential store for the master passphrase.
+keyring = { workspace = true }
 
 # Phase 68 — SMTP transport for the email notify backend.
 # Workspace dep with `default-features = false` + explicit

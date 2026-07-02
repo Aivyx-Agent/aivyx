@@ -659,6 +659,12 @@ fn run() -> Result<(), String> {
         return runtime.block_on(doctor::run_doctor());
     }
 
+    // Chapter Keyring — manage the master passphrase in the OS credential
+    // store. Pure sync, no daemon / storage / tokio.
+    if let CliMode::Keyring(sub) = mode {
+        return run_keyring(sub);
+    }
+
     // ---- Phase 119 Task 5: role import (PRODUCT.md P9 + P13) ---------
     if let CliMode::Role(sub) = mode {
         return match sub {
@@ -1824,6 +1830,9 @@ enum CliMode {
     /// configured provider works (for local: Ollama reachable, model present,
     /// a real non-empty test reply) and prints actionable fixes. No daemon.
     Doctor,
+    /// Chapter Keyring — `aivyx keyring <set|clear|status>`: manage the master
+    /// passphrase in the OS credential store. No daemon / storage.
+    Keyring(KeyringSubcommand),
     /// `aivyx mcp <subcommand>`: Phase 106 curated-recipes
     /// catalog. Currently only `recipes [<name>]` — list or
     /// print MCP server recipes. Distinct from the
@@ -1867,6 +1876,17 @@ enum CliMode {
     /// `LlmCost` events, prices them, and prints a per-model breakdown.
     /// `--today` scopes to the last 24h.
     Cost { today: bool },
+}
+
+/// Chapter Keyring — `aivyx keyring <subcommand>`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum KeyringSubcommand {
+    /// Prompt for the master passphrase and store it in the OS keyring.
+    Set,
+    /// Remove the stored passphrase.
+    Clear,
+    /// Report whether a passphrase is stored (and if the keyring is reachable).
+    Status,
 }
 
 /// Chapter J — `aivyx team <subcommand>` variants. The optional
@@ -4227,6 +4247,31 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
+    // Chapter Keyring — `aivyx keyring <set|clear|status>`.
+    if !args.is_empty() && args[0] == "keyring" {
+        let sub = match args.get(1).map(String::as_str) {
+            Some("set") => KeyringSubcommand::Set,
+            Some("clear") => KeyringSubcommand::Clear,
+            Some("status") | None => KeyringSubcommand::Status,
+            Some(other) => {
+                return Err(format!(
+                    "unknown `aivyx keyring` subcommand: `{other}`. \
+                     Supported: set, clear, status"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Keyring(sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
     // Chapter P — `aivyx doctor` (no subcommands / args).
     if !args.is_empty() && args[0] == "doctor" {
         if args.len() > 1 {
@@ -4631,15 +4676,79 @@ fn select_passphrase_source(
             _ => Ok(PassphraseSource::FromConfig(secret.value.clone())),
         };
     }
+    // Chapter Keyring — no explicit env/TOML passphrase: prefer the OS keyring
+    // (encrypted at rest) over an interactive prompt. An unavailable/locked
+    // keyring is not fatal — fall through to the prompt.
+    match aivyx_channel::keyring_store::retrieve() {
+        Ok(Some(secret)) => return Ok(PassphraseSource::FromConfig(secret)),
+        Ok(None) => {}
+        Err(e) => eprintln!(
+            "aivyx: OS keyring not usable ({e}); trying other passphrase sources"
+        ),
+    }
     if io::stdin().is_terminal() {
         Ok(PassphraseSource::InteractivePrompt)
     } else {
         Err(format!(
             "no passphrase available: `{DEFAULT_ENV_VAR}` is not set, \
-             no `[aivyx] passphrase` in the TOML config, and stdin is \
-             not a terminal. Export the env var, set the TOML field, \
+             no `[aivyx] passphrase` in the TOML config, nothing in the OS \
+             keyring (`aivyx keyring set`), and stdin is not a terminal. \
+             Export the env var, set the TOML field, store it in the keyring, \
              or run aivyx from an interactive shell."
         ))
+    }
+}
+
+/// Chapter Keyring — `aivyx keyring <set|clear|status>`. Manages the master
+/// passphrase in the OS credential store; pure sync, no daemon/storage.
+fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
+    use aivyx_channel::keyring_store;
+    match sub {
+        KeyringSubcommand::Set => {
+            let pass = rpassword::prompt_password("New master passphrase (keyring): ")
+                .map_err(|e| format!("could not read passphrase: {e}"))?;
+            if pass.is_empty() {
+                return Err("passphrase must not be empty".to_string());
+            }
+            let confirm = rpassword::prompt_password("Confirm passphrase: ")
+                .map_err(|e| format!("could not read passphrase: {e}"))?;
+            if pass != confirm {
+                return Err("passphrases did not match".to_string());
+            }
+            keyring_store::store(&secrecy::SecretString::from(pass))
+                .map_err(|e| format!("could not store in the OS keyring: {e}"))?;
+            println!(
+                "Stored the master passphrase in the OS keyring. The daemon will \
+                 use it automatically (no `AIVYX_PASSPHRASE` / TOML plaintext \
+                 needed for interactive runs)."
+            );
+            Ok(())
+        }
+        KeyringSubcommand::Clear => {
+            keyring_store::clear()
+                .map_err(|e| format!("could not clear the OS keyring: {e}"))?;
+            println!("Removed the master passphrase from the OS keyring.");
+            Ok(())
+        }
+        KeyringSubcommand::Status => match keyring_store::is_stored() {
+            Ok(true) => {
+                println!("OS keyring: reachable — a master passphrase IS stored.");
+                Ok(())
+            }
+            Ok(false) => {
+                println!(
+                    "OS keyring: reachable — no master passphrase stored \
+                     (`aivyx keyring set` to store one)."
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // Not reachable here (headless / no Secret Service / locked).
+                // Informational, not a hard failure.
+                println!("OS keyring: not usable here — {e}");
+                Ok(())
+            }
+        },
     }
 }
 
