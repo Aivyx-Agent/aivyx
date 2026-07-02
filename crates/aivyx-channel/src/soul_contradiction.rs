@@ -33,6 +33,20 @@ use aivyx_core::CancellationToken;
 /// reference side for cross-layer conflicts). Each is `(wire_label, accessor)`.
 type Lists<'a> = [(&'static str, &'a [String]); 5];
 
+/// The wire label for a removable soft-list category, or `None` for a scalar /
+/// constraint / skill category (which the Accord gate does not check).
+fn soft_label(cat: aivyx_ipc::persona::PersonaDeltaCategory) -> Option<&'static str> {
+    use aivyx_ipc::persona::PersonaDeltaCategory as Cat;
+    match cat {
+        Cat::CharacterTraits => Some("character_traits"),
+        Cat::CommunicationAdaptations => Some("communication_adaptations"),
+        Cat::BehavioralPreferences => Some("behavioral_preferences"),
+        Cat::LearnedContext => Some("learned_context"),
+        Cat::RelationshipMilestones => Some("relationship_milestones"),
+        _ => None,
+    }
+}
+
 fn soft_lists(p: &EffectivePersona) -> Lists<'_> {
     [
         ("character_traits", &p.character_traits),
@@ -257,6 +271,40 @@ impl SoulContradictionDetector {
         };
         Self::validate(&items, Self::parse(&raw), self.config.max_conflicts)
     }
+
+    /// Chapter Accord prevent-at-write — would appending `value` under
+    /// `category` introduce a contradiction into `persona`? Runs detection over
+    /// the snapshot WITH the candidate added and returns the first conflict that
+    /// involves the candidate (else `None`). Only the five soft-list categories
+    /// are checked; a scalar / constraint / skill category returns `None`
+    /// (nothing to gate). Best-effort — an LLM failure yields `None`.
+    pub async fn detect_for_candidate(
+        &self,
+        persona: &EffectivePersona,
+        category: aivyx_ipc::persona::PersonaDeltaCategory,
+        value: &str,
+    ) -> Option<SoulConflict> {
+        use aivyx_ipc::persona::PersonaDeltaCategory as Cat;
+        let label = soft_label(category)?;
+        // Already present ⇒ no new contradiction the accretion introduces.
+        let mut snap = persona.clone();
+        let list = match category {
+            Cat::CharacterTraits => &mut snap.character_traits,
+            Cat::CommunicationAdaptations => &mut snap.communication_adaptations,
+            Cat::BehavioralPreferences => &mut snap.behavioral_preferences,
+            Cat::LearnedContext => &mut snap.learned_context,
+            Cat::RelationshipMilestones => &mut snap.relationship_milestones,
+            _ => return None,
+        };
+        if list.iter().any(|v| v == value) {
+            return None;
+        }
+        list.push(value.to_string());
+        self.detect(&snap).await.into_iter().find(|c| {
+            (c.a.category == label && c.a.value == value)
+                || (c.b.category == label && c.b.value == value)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -340,6 +388,36 @@ mod tests {
             1,
             "the same pair in either order dedups to one conflict"
         );
+    }
+
+    // A provider that panics if the LLM is ever called — proves the
+    // prevent-at-write gate short-circuits before spending a call.
+    struct PanicProvider;
+    #[async_trait::async_trait]
+    impl LlmProvider for PanicProvider {
+        async fn chat_stream(
+            &self,
+            _req: LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
+            panic!("LLM must not be called for a non-gated candidate");
+        }
+    }
+
+    #[tokio::test]
+    async fn detect_for_candidate_skips_scalar_and_present_without_llm() {
+        use aivyx_ipc::persona::PersonaDeltaCategory as Cat;
+        let det = SoulContradictionDetector::new(Arc::new(PanicProvider), "m");
+        // A scalar category is never a soft-list facet → None, no LLM call.
+        assert!(det
+            .detect_for_candidate(&persona(), Cat::AssistantName, "Jeeves")
+            .await
+            .is_none());
+        // A facet already present introduces no NEW contradiction → None, no call.
+        assert!(det
+            .detect_for_candidate(&persona(), Cat::CharacterTraits, "communicate concisely")
+            .await
+            .is_none());
     }
 
     #[test]

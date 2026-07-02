@@ -90,6 +90,11 @@ impl PersistentConflictDismissals {
         self.dismiss(&format!("soul:{id}"), ts_secs).await
     }
 
+    /// Is this Soul-conflict `id` dismissed? (Namespaced lookup.)
+    pub async fn is_soul_dismissed(&self, id: &str) -> Result<bool, ConflictDismissalError> {
+        self.is_dismissed(&format!("soul:{id}")).await
+    }
+
     /// Filter a detected Soul-conflict list down to those NOT dismissed.
     pub async fn retain_undismissed_soul(
         &self,

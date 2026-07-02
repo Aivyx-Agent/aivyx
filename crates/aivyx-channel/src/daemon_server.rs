@@ -2861,6 +2861,30 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // entry. The shared persona snapshot is
                             // recomputed on approve so the next turn
                             // sees the new state.
+                            //
+                            // Chapter Accord (prevent-at-write) — refuse to
+                            // approve a facet that would contradict the Soul,
+                            // unless the operator dismissed that pair. Keeps the
+                            // Soul from ever accreting a contradiction.
+                            if let Some(block) = persona_approve_coherence_block(
+                                persona_proposal_log.as_deref(),
+                                &shared_persona,
+                                seed_draft_llm.as_ref(),
+                                conflict_dismissals.as_deref(),
+                                &proposal_id,
+                                &resolution,
+                            )
+                            .await
+                            {
+                                let resp = DaemonMessage::PersonaProposalResolved {
+                                    id,
+                                    ok: false,
+                                    success: None,
+                                    error: Some(block),
+                                };
+                                writer.write_all(&encode_frame(&resp)?).await?;
+                                continue;
+                            }
                             let resp = match resolve_persona_proposal(
                                 persona_proposal_log.as_deref(),
                                 persona_log.as_deref(),
@@ -6272,6 +6296,62 @@ fn gate_state_label(state: mission::GateState) -> &'static str {
 /// an `Approved` entry to the proposal chain bound to the
 /// delta's seq, and recomputes the shared persona snapshot. On
 /// `Reject` it just appends a `Rejected` entry.
+/// Chapter Accord prevent-at-write — block approving a persona proposal whose
+/// NEW facet would contradict the current Soul, unless the operator dismissed
+/// that specific pair. Returns `Some(message)` to block, `None` to allow.
+/// Best-effort: no LLM, no proposal, not an `AppendList`, or an already-
+/// dismissed pair ⇒ `None` (allow). The dismiss set IS the override — reusing
+/// Accord's "keep both" so a false positive is never an unescapable lockout.
+async fn persona_approve_coherence_block(
+    proposal_log: Option<&crate::persona_proposal::PersistentPersonaProposalLog>,
+    shared_persona: &crate::persona::SharedEffectivePersona,
+    contradiction_llm: Option<&SeedDraftLlm>,
+    dismissals: Option<&crate::conflict_dismissals::PersistentConflictDismissals>,
+    proposal_id: &str,
+    resolution: &crate::daemon_ipc::PersonaProposalResolution,
+) -> Option<String> {
+    let llm = contradiction_llm?;
+    let dismissals = dismissals?;
+    // Only Approve / ApproveWithEdit reach the Soul; resolve the op to apply.
+    let op = match resolution {
+        crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit { edited_op } => {
+            edited_op.clone()
+        }
+        crate::daemon_ipc::PersonaProposalResolution::Approve => {
+            proposal_log?.get(proposal_id)?.proposed_op
+        }
+        _ => return None, // Reject
+    };
+    // Only a brand-new list facet can introduce a contradiction.
+    let value = match &op.op {
+        aivyx_ipc::persona::PersonaDeltaOp::AppendList { value } => value.clone(),
+        _ => return None,
+    };
+    let snapshot = shared_persona.read().ok()?.clone();
+    let detector = crate::soul_contradiction::SoulContradictionDetector::new(
+        Arc::clone(&llm.provider),
+        llm.model.clone(),
+    );
+    let conflict = detector
+        .detect_for_candidate(&snapshot, op.category, &value)
+        .await?;
+    // Operator already said "keep both" for this pair → allow.
+    if dismissals.is_soul_dismissed(&conflict.id).await.unwrap_or(false) {
+        return None;
+    }
+    // Name the EXISTING facet (the side that isn't the candidate).
+    let existing = if conflict.a.value == value { &conflict.b } else { &conflict.a };
+    Some(format!(
+        "coherence: approving \"{value}\" would contradict existing {} \"{}\" — {}. \
+         Reject it, resolve the existing facet (`aivyx persona resolve {id}`), or \
+         accept the tension with `aivyx persona dismiss {id}` then re-approve.",
+        existing.category,
+        existing.value.trim(),
+        conflict.reason.trim(),
+        id = conflict.id,
+    ))
+}
+
 async fn resolve_persona_proposal(
     persona_proposal_log: Option<
         &crate::persona_proposal::PersistentPersonaProposalLog,
@@ -6893,6 +6973,129 @@ mod tests {
         assert!(snap
             .behavioral_preferences
             .contains(&"prefer terse".to_string()));
+    }
+
+    // ---- Chapter Accord prevent-at-write — approve coherence gate ----------
+
+    struct AccordFakeStream(Option<String>);
+    #[async_trait::async_trait]
+    impl aivyx_llm::LlmStream for AccordFakeStream {
+        async fn next_event(
+            &mut self,
+        ) -> Result<Option<aivyx_llm::LlmStreamEvent>, aivyx_llm::LlmError> {
+            Ok(None)
+        }
+        async fn finish(
+            self: Box<Self>,
+        ) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError> {
+            Ok(aivyx_llm::LlmStepEnd::FinalMessage {
+                text: self.0.unwrap_or_default(),
+                usage: aivyx_llm::LlmUsage::default(),
+            })
+        }
+    }
+    struct AccordFakeProvider(&'static str);
+    #[async_trait::async_trait]
+    impl aivyx_llm::LlmProvider for AccordFakeProvider {
+        async fn chat_stream(
+            &self,
+            _req: aivyx_llm::LlmRequest<'_>,
+            _cancel: &aivyx_core::CancellationToken,
+        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
+            Ok(Box::new(AccordFakeStream(Some(self.0.to_string()))))
+        }
+    }
+
+    #[tokio::test]
+    async fn approve_gate_blocks_contradiction_then_dismiss_overrides() {
+        let (_persona_log, proposal_log, _shared) =
+            open_phase_70_test_logs("accord-gate").await;
+        // Existing Soul facet: "communicate concisely".
+        let shared = crate::persona::shared_effective_persona(
+            crate::persona::EffectivePersona {
+                character_traits: vec!["communicate concisely".into()],
+                ..Default::default()
+            },
+        );
+        // Pending proposal: append a contradicting facet.
+        let candidate = "always give long, elaborate explanations";
+        proposal_log
+            .append_pending(
+                "pp-x".into(),
+                1_000,
+                "ses".into(),
+                crate::persona::ProposedPersonaDelta {
+                    category: crate::persona::PersonaDeltaCategory::CharacterTraits,
+                    op: crate::persona::PersonaDeltaOp::AppendList {
+                        value: candidate.into(),
+                    },
+                    reason: None,
+                    supersedes_proposal_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        // Fake judge: items are [0]="communicate concisely", [1]=candidate.
+        let llm = SeedDraftLlm {
+            provider: Arc::new(AccordFakeProvider(
+                "[{\"a\":0,\"b\":1,\"reason\":\"concise vs elaborate\"}]",
+            )),
+            model: "test".into(),
+        };
+        // Dismissals store.
+        let dir = std::env::temp_dir().join(format!("aivyx-accord-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dstore: Arc<dyn aivyx_storage::Storage> = aivyx_storage::RedbStorage::open(
+            aivyx_storage::StorageConfig::new(dir.join("d.redb")),
+            aivyx_crypto::MasterKey::from_raw([9u8; 32]),
+        )
+        .await
+        .unwrap();
+        let dismissals = crate::conflict_dismissals::PersistentConflictDismissals::new(
+            dstore.domain(aivyx_storage::KeyDomain::ConflictDismissals),
+        );
+
+        // 1) The gate BLOCKS the contradicting approve.
+        let block = persona_approve_coherence_block(
+            Some(proposal_log.as_ref()),
+            &shared,
+            Some(&llm),
+            Some(&dismissals),
+            "pp-x",
+            &crate::daemon_ipc::PersonaProposalResolution::Approve,
+        )
+        .await;
+        let msg = block.expect("contradiction must block approval");
+        assert!(msg.contains("coherence"), "{msg}");
+        assert!(msg.contains("communicate concisely"), "names the existing facet: {msg}");
+
+        // 2) Dismiss that pair → the gate now ALLOWS (override via keep-both).
+        let snap_for_id = { shared.read().unwrap().clone() };
+        let conflict = crate::soul_contradiction::SoulContradictionDetector::new(
+            Arc::new(AccordFakeProvider(
+                "[{\"a\":0,\"b\":1,\"reason\":\"x\"}]",
+            )),
+            "test",
+        )
+        .detect_for_candidate(
+            &snap_for_id,
+            crate::persona::PersonaDeltaCategory::CharacterTraits,
+            candidate,
+        )
+        .await
+        .expect("detector finds the candidate conflict");
+        dismissals.dismiss_soul(&conflict.id, 1).await.unwrap();
+        let after = persona_approve_coherence_block(
+            Some(proposal_log.as_ref()),
+            &shared,
+            Some(&llm),
+            Some(&dismissals),
+            "pp-x",
+            &crate::daemon_ipc::PersonaProposalResolution::Approve,
+        )
+        .await;
+        assert!(after.is_none(), "a dismissed pair must not block re-approval");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

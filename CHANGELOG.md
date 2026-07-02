@@ -7,6 +7,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Accord prevent-at-write: the Soul can't accrete a contradiction (coherence
+  gate at approval).** Beyond finding contradictions after the fact, approving a
+  persona proposal now runs a targeted coherence check first: if the proposed
+  facet would contradict an existing facet (or an operator Profile constraint),
+  the approval is refused with the specific conflict named — so the operator
+  rejects it, resolves the existing facet, or accepts the tension. The override
+  reuses Accord's dismiss ("keep both"): `aivyx persona dismiss <id>` then
+  re-approve, so a fuzzy-detector false positive is never an unescapable
+  lockout. Best-effort (no LLM ⇒ no gate); only gates operator approvals of new
+  list facets. Reuses the live-verified detector; the dismiss set is the escape
+  hatch.
 - **Accord "keep both": dismiss a Soul contradiction (false positive).** The
   contradiction detector is a fuzzy LLM pass, so it can flag a *legitimate*
   nuance ("concise by default" + "detailed when asked") — which `persona
