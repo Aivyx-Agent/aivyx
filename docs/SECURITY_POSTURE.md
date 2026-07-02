@@ -239,9 +239,11 @@ security failure:
   resolver drops private/loopback/link-local addresses at *resolution* time, so
   a public hostname that resolves to `127.0.0.1` / `169.254.169.254` / an
   RFC-1918 address is never connected to (TOCTOU-safe — reqwest only ever sees
-  the vetted IPs). **Residual:** it does not stop exfil to a *public* host (a
-  secret in a URL to `attacker.com`) unless you set the allow-list — combine
-  with `allow_egress_hosts` for a hard egress boundary.
+  the vetted IPs). `net.dns` honors the same policy — an allow-list closes the
+  DNS-tunnel exfil channel (`<secret>.attacker.com` lookups). **Residual:** it
+  does not stop exfil to a *public* host (a secret in a URL to `attacker.com`)
+  unless you set the allow-list — combine with `allow_egress_hosts` for a hard
+  egress boundary.
 - **Prompt injection — defended, not solved (Chapter Bulwark).** Content the
   agent ingests (web pages, extracted articles, parsed files, third-party MCP
   outputs) can carry instructions aimed at the *agent* ("ignore your rules and

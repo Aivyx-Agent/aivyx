@@ -67,6 +67,14 @@ impl EgressPolicy {
     /// Classify a URL. `Some(reason)` ⇒ the request must be refused. Pure.
     pub fn classify(&self, url: &str) -> Option<String> {
         let host = host_of(url)?;
+        self.classify_host(&host)
+    }
+
+    /// Classify a bare host (no scheme/port) — the same block-private +
+    /// allow-list checks as [`Self::classify`], for callers that already have a
+    /// hostname rather than a URL (e.g. `net.dns`, whose lookup query is itself
+    /// a DNS-exfil channel the allow-list closes). Pure.
+    pub fn classify_host(&self, host: &str) -> Option<String> {
         let host_l = host.to_ascii_lowercase();
 
         if self.block_private {
@@ -238,6 +246,20 @@ mod tests {
         let kept = filter_public_addrs(addrs.into_iter());
         assert_eq!(kept.len(), 1, "only the public address survives");
         assert_eq!(kept[0].ip().to_string(), "93.184.216.34");
+    }
+
+    #[test]
+    fn classify_host_closes_dns_exfil_via_allowlist() {
+        // net.dns: with an allow-list, a hostname the agent tries to resolve
+        // must be on it — closing `<secret>.attacker.com` DNS tunneling.
+        let p = EgressPolicy::new(true, vec!["github.com".into()]);
+        assert!(p.classify_host("api.github.com").is_none()); // allowed subdomain
+        assert!(p.classify_host("secret-data.attacker.com").is_some()); // exfil host blocked
+        assert!(p.classify_host("localhost").is_some()); // private blocked too
+        // No allow-list ⇒ public hosts resolve (the documented inherent residual).
+        let open = EgressPolicy::default();
+        assert!(open.classify_host("anything.example.com").is_none());
+        assert!(open.classify_host("127.0.0.1").is_some());
     }
 
     #[test]

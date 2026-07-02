@@ -25,7 +25,7 @@
 //! exist? what IPs serve it?) that a code/ops agent benefits
 //! from without paying the HTTP cost.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -38,6 +38,11 @@ use aivyx_capability::Scope;
 pub struct NetDnsTool {
     id: ToolId,
     schema: Value,
+    /// Chapter Rampart — egress policy. A DNS lookup is itself an exfil channel
+    /// (`<secret>.attacker.com` leaks to the attacker's nameserver), so net.dns
+    /// honors the same allow-list / private-block as the web tools. Unset ⇒
+    /// permissive (byte-identical; the binary installs the policy).
+    egress: OnceLock<Arc<crate::egress::EgressPolicy>>,
 }
 
 impl Default for NetDnsTool {
@@ -51,7 +56,16 @@ impl NetDnsTool {
         NetDnsTool {
             id: ToolId::new(),
             schema: input_schema(),
+            egress: OnceLock::new(),
         }
+    }
+
+    /// Chapter Rampart — install the egress policy (unset ⇒ permissive).
+    pub fn set_egress_policy(
+        &self,
+        policy: Arc<crate::egress::EgressPolicy>,
+    ) -> Result<(), Arc<crate::egress::EgressPolicy>> {
+        self.egress.set(policy)
     }
 }
 
@@ -98,6 +112,18 @@ impl Tool for NetDnsTool {
                 });
             }
         };
+
+        // Chapter Rampart — refuse a lookup the egress policy blocks (an
+        // allow-listed deployment can't be DNS-tunneled; localhost/private
+        // hostnames are refused too).
+        if let Some(policy) = self.egress.get() {
+            if let Some(reason) = policy.classify_host(&host) {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("net.dns: refusing to resolve {host} — {reason}."),
+                });
+            }
+        }
 
         // tokio::net::lookup_host wants a `host:port` form. We
         // append `:0` because the port is irrelevant to the

@@ -6397,7 +6397,13 @@ async fn run_async(
     // from Phase 0). All three channel kinds get it — like
     // `web.fetch`, network reads are inside the SemiTrusted
     // ceiling so Telegram / Discord / Slack get it too.
-    tool_list.push(Arc::new(aivyx_core::NetDnsTool::new()) as Arc<dyn Tool>);
+    {
+        // Chapter Rampart — net.dns honors the same egress policy as the web
+        // tools (its lookup query is a DNS-exfil channel the allow-list closes).
+        let net_dns = aivyx_core::NetDnsTool::new();
+        let _ = net_dns.set_egress_policy(std::sync::Arc::clone(&egress_policy));
+        tool_list.push(Arc::new(net_dns) as Arc<dyn Tool>);
+    }
 
     // Phase 110 — Skills Auto-Creation tools. skills.list +
     // skills.invoke register unconditionally; both read the
