@@ -5,6 +5,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.37] — 2026-07-04
+
+### Added
+
+- **A WSL distribution now ships with each release (`Aivyx.wsl`).** Windows
+  users get a one-command-import WSL2 distro with the daemon and all tool
+  binaries pre-installed — no in-distro install step. It's the cheapest real
+  "Aivyx on Windows" path: it sidesteps the deferred native Windows port because
+  the daemon's Unix-domain-socket IPC and `0600` secret-at-rest posture both work
+  unchanged inside WSL2's real Linux kernel. Built by reusing the Harbor
+  appliance image (no duplicate compile): `Dockerfile.wsl` layers WSL config
+  (default user, `/etc/wsl.conf`, `/etc/wsl-distribution.conf`, a first-launch
+  OOBE script) and `.github/workflows/wsl-release.yml` exports the root
+  filesystem to the release. Install with `wsl --install --from-file Aivyx.wsl`
+  (WSL 2.4.4+) or `wsl --import`; see docs/INSTALL.md "Windows".
+
 ## [0.7.36] — 2026-07-04
 
 ### Added
