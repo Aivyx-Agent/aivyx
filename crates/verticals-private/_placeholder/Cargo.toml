@@ -1,0 +1,18 @@
+[package]
+# An intentionally-empty crate whose ONLY job is to keep the workspace member
+# glob `crates/verticals-private/*` resolving to at least one valid Cargo.toml
+# in every environment — including Dependabot's sparse update tree, which
+# fetches only manifest files and so leaves this directory otherwise empty.
+# Real private packs (git-ignored) auto-join the workspace alongside it.
+name = "aivyx-verticals-placeholder"
+description = "Empty placeholder that anchors the private-verticals workspace glob (see ../.gitignore). Ships nothing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]

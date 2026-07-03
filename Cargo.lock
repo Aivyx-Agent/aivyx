@@ -700,6 +700,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-verticals-placeholder"
+version = "0.7.36"
+
+[[package]]
 name = "aivyx-voice"
 version = "0.7.36"
 dependencies = [
