@@ -104,7 +104,13 @@ fn soul_blurb(soul: &str) -> String {
 fn planner_system_prompt(config: &TeamConfig, allow_gates: bool) -> String {
     let mut roster = String::new();
     for m in config.specialists() {
-        roster.push_str(&format!("- {} ({}): {}\n", m.name, m.role, soul_blurb(&m.soul)));
+        roster.push_str(&format!(
+            "- {} ({}){}: {}\n",
+            m.name,
+            m.role,
+            write_capability_hint(&m.capability_scopes),
+            soul_blurb(&m.soul)
+        ));
     }
     if roster.is_empty() {
         roster.push_str("- (none)\n");
@@ -135,8 +141,30 @@ Rules:\n\
   - `deps` lists step ids that must finish first; omit or use [] for none.\n\
   - Steps with disjoint deps run concurrently — exploit that.\n\
 {gate_rule}\
+  - CAPABILITY MATCH: a step that must CREATE or SAVE a file (or write a note to \
+memory) MUST be delegated to a specialist tagged `[writes files]` (or `[writes \
+memory]`). Never assign a persist/save/write step to a read-only specialist — \
+it cannot produce the deliverable. If the goal asks for a file at a path, the \
+LAST step should be a `[writes files]` specialist that writes exactly that file.\n\
   - Keep the plan minimal: only the steps the goal actually needs."
     )
+}
+
+/// Chapter Handoff — a compact capability tag for the planning roster so the
+/// lead routes persist/save steps to a specialist that can actually write the
+/// deliverable (the dogfood bug: a `save_file` step assigned to a read-only
+/// `Operations` role that has no `fs.write`). Empty when the specialist can't
+/// persist anything.
+fn write_capability_hint(scopes: &[String]) -> String {
+    let has = |base: &str| scopes.iter().any(|s| s == base || s.starts_with(&format!("{base}:")));
+    let files = has("fs.write") || has("workspace.write");
+    let memory = has("memory.write");
+    match (files, memory) {
+        (true, true) => " [writes files+memory]".to_string(),
+        (true, false) => " [writes files]".to_string(),
+        (false, true) => " [writes memory]".to_string(),
+        (false, false) => String::new(),
+    }
 }
 
 /// Extract the outermost `{...}` object from a model response that may be
@@ -179,6 +207,31 @@ mod tests {
             !headless.contains("Use a \"human\" gate"),
             "headless must not encourage gates"
         );
+    }
+
+    #[test]
+    fn write_capability_hint_tags_writers() {
+        assert_eq!(write_capability_hint(&["fs.write".into()]), " [writes files]");
+        assert_eq!(write_capability_hint(&["memory.write".into()]), " [writes memory]");
+        assert_eq!(
+            write_capability_hint(&["fs.write".into(), "memory.write".into()]),
+            " [writes files+memory]"
+        );
+        assert_eq!(write_capability_hint(&["fs.read".into(), "shell.exec".into()]), "");
+        // scoped form (base:qualifier) still counts
+        assert_eq!(write_capability_hint(&["workspace.write:foo".into()]), " [writes files]");
+    }
+
+    #[test]
+    fn planner_prompt_surfaces_write_capability_and_routing_rule() {
+        let p = planner_system_prompt(&default_nonagon(), true);
+        // Writer/Coder can write files; Operations (shell.exec, fs.read) cannot.
+        assert!(p.contains("writer (Writer) [writes files]"), "writer tagged: {p}");
+        assert!(
+            p.contains("ops (Operations):"),
+            "read-only Operations gets no write tag: {p}"
+        );
+        assert!(p.contains("CAPABILITY MATCH"), "routing rule present");
     }
 
     #[tokio::test]

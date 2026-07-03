@@ -171,15 +171,37 @@ impl SharedMissionState {
     }
 
     /// Reload-on-startup: hydrate the in-memory registry from the store.
-    /// Returns the number of missions loaded (doc §4). `AwaitingApproval`
-    /// missions are resumable; `Executing` ones interrupted by a crash are
-    /// re-drivable from their last checkpoint.
+    /// Returns the number of missions loaded (doc §4).
+    ///
+    /// Chapter Reckon — reconcile zombies. A mission left `Executing` when the
+    /// daemon stopped has no live drive task in this fresh process, so it would
+    /// otherwise sit `Executing` forever in `team list`. There is no resume
+    /// machinery for team missions (unlike Chapter Helm for the loop), so mark
+    /// each interrupted `Executing` mission `Halted` with a truthful reason and
+    /// persist that — the operator sees an honest terminal state (and can
+    /// re-run) instead of a permanent zombie. `AwaitingApproval` is a legitimate
+    /// pause (an operator gate) and is left untouched.
     pub async fn reload(&self) -> Result<usize, StorageError> {
         let records = list_team_missions(&self.store).await?;
-        let mut reg = self.registry.write().expect("mission registry lock");
-        reg.clear();
-        for r in &records {
-            reg.insert(r.id.clone(), r.clone());
+        let mut reconciled: Vec<TeamMissionRecord> = Vec::new();
+        {
+            let mut reg = self.registry.write().expect("mission registry lock");
+            reg.clear();
+            for r in &records {
+                let mut r = r.clone();
+                if r.phase == TeamMissionPhase::Executing {
+                    r.phase = TeamMissionPhase::Halted;
+                    r.pending_gate = None;
+                    r.halt_reason =
+                        Some("interrupted by a daemon restart (not resumed)".to_string());
+                    reconciled.push(r.clone());
+                }
+                reg.insert(r.id.clone(), r);
+            }
+        }
+        // Persist the reconciled terminal state so the store agrees with memory.
+        for r in reconciled {
+            let _ = save_team_mission(&self.store, &r).await;
         }
         Ok(records.len())
     }
@@ -1587,6 +1609,38 @@ mod tests {
         let got = reloaded.snapshot(&id).unwrap();
         assert_eq!(got.phase, TeamMissionPhase::AwaitingApproval);
         assert_eq!(got.pending_gate.as_deref(), Some("approve"));
+    }
+
+    #[tokio::test]
+    async fn reload_reconciles_an_executing_zombie_to_halted() {
+        // Chapter Reckon — a mission left `Executing` when the daemon stopped is
+        // reconciled to a truthful `Halted` on reload, not left a permanent
+        // zombie; and it stays that way (persisted).
+        let store = team_domain().await;
+        let shared = SharedMissionState::new(store.clone());
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "writer", "p")]);
+        register_mission(&shared, plan, "z1", Some(default_nonagon()))
+            .await
+            .unwrap();
+        let mut rec = shared.snapshot("z1").unwrap();
+        rec.phase = TeamMissionPhase::Executing; // simulate mid-flight
+        shared.put(rec).await.unwrap();
+
+        // A fresh process reloads → the zombie becomes Halted with a reason.
+        let reloaded = SharedMissionState::new(store.clone());
+        assert_eq!(reloaded.reload().await.unwrap(), 1);
+        let got = reloaded.snapshot("z1").unwrap();
+        assert_eq!(got.phase, TeamMissionPhase::Halted);
+        assert!(got
+            .halt_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("interrupted by a daemon restart"));
+
+        // Persisted: a second fresh reload still sees Halted (not re-zombied).
+        let again = SharedMissionState::new(store);
+        again.reload().await.unwrap();
+        assert_eq!(again.snapshot("z1").unwrap().phase, TeamMissionPhase::Halted);
     }
 
     #[tokio::test]

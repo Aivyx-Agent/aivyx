@@ -5,6 +5,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Team missions left `Executing` on a daemon restart no longer become
+  permanent zombies (Chapter Reckon).** There is no resume machinery for team
+  missions, so a mission interrupted mid-flight would sit `Executing` forever in
+  `team list`. On reload, an interrupted `Executing` mission is now reconciled to
+  `Halted` with a truthful reason ("interrupted by a daemon restart") and
+  persisted; `AwaitingApproval` (a real operator pause) is left untouched.
+- **The planner routes save/create-file steps to a specialist that can actually
+  write (Chapter Handoff).** The decomposition prompt hid specialist
+  capabilities, so the coordinator could assign a `save_file` step to a
+  read-only role (e.g. `Operations`, which has `shell.exec, fs.read` but no
+  `fs.write`) — a step that then cannot produce the deliverable. The planning
+  roster now tags each specialist `[writes files]` / `[writes memory]` from its
+  scopes, with a rule that persist steps must go to a write-capable specialist.
+
 ### Changed
 
 - **A team mission is `Done` only if its deliverable exists (Chapter
