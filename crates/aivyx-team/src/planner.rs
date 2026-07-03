@@ -225,11 +225,11 @@ mod tests {
     #[test]
     fn planner_prompt_surfaces_write_capability_and_routing_rule() {
         let p = planner_system_prompt(&default_nonagon(), true);
-        // Writer/Coder can write files; Operations (shell.exec, fs.read) cannot.
+        // Writer/Coder can write files; Verifier (shell.exec, fs.read, net.fetch) cannot.
         assert!(p.contains("writer (Writer) [writes files]"), "writer tagged: {p}");
         assert!(
-            p.contains("ops (Operations):"),
-            "read-only Operations gets no write tag: {p}"
+            p.contains("verifier (Verifier):"),
+            "read-only Verifier gets no write tag: {p}"
         );
         assert!(p.contains("CAPABILITY MATCH"), "routing rule present");
     }

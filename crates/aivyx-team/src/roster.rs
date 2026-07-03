@@ -60,9 +60,11 @@ pub fn default_nonagon() -> TeamConfig {
             "analyst",
             "Analyst",
             "You ingest data and code, surface patterns and anomalies, and produce clear \
-             quantified findings. You separate what the data shows from what you infer.",
-            &["fs.read", "web.search"],
-            &["fs.read", "web.search"],
+             quantified findings. You pull the raw data yourself — fetching datasets, APIs, \
+             and reference pages with web.fetch — and separate what the data shows from what \
+             you infer.",
+            &["web.fetch", "web.search", "fs.read"],
+            &["net.fetch", "web.search", "fs.read"],
         ),
         member(
             "coder",
@@ -103,12 +105,15 @@ pub fn default_nonagon() -> TeamConfig {
             &["memory.read", "memory.write"],
         ),
         member(
-            "ops",
-            "Operations",
-            "You handle execution-environment work — running commands, inspecting state — \
-             within a tightly bounded capability scope, reporting results precisely.",
-            &["shell.exec", "fs.read"],
-            &["shell.exec", "fs.read"],
+            "verifier",
+            "Verifier",
+            "You prove a deliverable actually works by EXECUTING it — running the tests, \
+             reproducing the claimed result, exercising the code or checking the data against \
+             its source — never by reading alone. You report a concrete PASS or FAIL with the \
+             evidence (command, output, what you observed), and you never modify the work you \
+             are validating.",
+            &["shell.exec", "fs.read", "web.fetch"],
+            &["shell.exec", "fs.read", "net.fetch"],
         ),
         member(
             "archivist",
@@ -166,7 +171,7 @@ mod tests {
             names,
             [
                 "coordinator", "researcher", "analyst", "coder", "writer", "reviewer",
-                "planner", "ops", "archivist"
+                "planner", "verifier", "archivist"
             ]
         );
     }
