@@ -5,6 +5,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **A team mission is `Done` only if its deliverable exists (Chapter
+  Keystone).** Live Nonagon dogfooding found the team subsystem's sharpest bug:
+  a mission ran every step to "done" — including a `create_file` step — and
+  reported `phase: done`, but the file existed nowhere. Steps completed when the
+  specialist *sub-turn returned*, with no grounding that the deliverable was
+  actually produced. Now, when a mission runs to completion, it is graded
+  against its goal — grounded on the workspace/memory artifacts it produced
+  (the same `CompletionJudge`) — and a mission that claims done but produced
+  nothing is flipped to `Rejected` with the verdict on the audit chain. Opt-in
+  via `TeamRunDeps.verify_missions` (the daemon enables it; default off ⇒
+  pre-Keystone behavior); best-effort and fails-open (no grounding / LLM error
+  ⇒ keeps `Done`). Covers both direct `team start` and loop/Foreman missions.
+
 ## [0.7.34] — 2026-07-03
 
 ### Changed

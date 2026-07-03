@@ -8188,6 +8188,9 @@ async fn run_async(
                 // on the memory AND recent workspace files the team wrote.
                 memory: Some(Arc::clone(&memory)),
                 workspace_root: workspace_root.clone(),
+                // Chapter Keystone — a team mission is `Done` only if its
+                // deliverable actually exists (artifact-grounded verdict).
+                verify_missions: true,
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`

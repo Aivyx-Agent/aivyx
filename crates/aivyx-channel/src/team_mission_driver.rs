@@ -108,6 +108,12 @@ pub struct TeamRunDeps {
     /// on recent FILE artifacts the team wrote (symmetric with the solo path).
     /// `None` ⇒ file evidence is skipped.
     pub workspace_root: Option<std::path::PathBuf>,
+    /// Chapter Keystone — when true, a mission that runs to completion is graded
+    /// against its goal, GROUNDED on the workspace/memory artifacts it produced,
+    /// before it reports `Done`; a mission that claims done but produced no
+    /// deliverable is flipped to `Rejected`. `false` (default) ⇒ a mission is
+    /// `Done` on step-completion alone (pre-Keystone behavior).
+    pub verify_missions: bool,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -290,7 +296,72 @@ pub async fn drive_registered(
         .unwrap_or(default_config);
     let (runtime, meter) = assemble_runtime(deps, config)?;
     let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
-    drive(shared, runtime, id, policy, &deps.audit, budget_guard).await
+    let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
+    // Chapter Keystone — mission-level artifact grounding. A mission is `Done`
+    // only if its deliverable actually exists: grade the completed mission
+    // against its goal, grounded on the workspace/memory artifacts, and flip a
+    // "done but produced nothing" mission to `Rejected`. Opt-in + best-effort.
+    if phase == TeamMissionPhase::Done && deps.verify_missions {
+        return Ok(verify_mission_artifact(shared, deps, id).await);
+    }
+    Ok(phase)
+}
+
+/// Chapter Keystone — grade a just-completed mission against its goal, grounded
+/// on the artifacts it produced. Returns the resulting phase: `Done` if the
+/// judge accepts (or can't run — best-effort fails open), `Rejected` if the
+/// deliverable isn't there. On a reject it updates the record (phase +
+/// halt_reason) and lands the verdict on the audit chain.
+async fn verify_mission_artifact(
+    shared: &SharedMissionState,
+    deps: &TeamRunDeps,
+    id: &str,
+) -> TeamMissionPhase {
+    // Need a snapshot + at least one grounding source; else keep `Done`.
+    let Some(record) = shared.snapshot(id) else {
+        return TeamMissionPhase::Done;
+    };
+    if deps.memory.is_none() && deps.workspace_root.is_none() {
+        return TeamMissionPhase::Done;
+    }
+    let mut judge = crate::completion_judge::CompletionJudge::new(
+        Arc::clone(&deps.provider),
+        deps.model.clone(),
+    );
+    if let Some(m) = &deps.memory {
+        judge = judge.with_memory(Arc::clone(m));
+    }
+    if let Some(ws) = &deps.workspace_root {
+        judge = judge.with_workspace(ws.clone());
+    }
+    // The synthesized result the mission produced (its step outputs).
+    let result = record
+        .outputs
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let verdict = judge.verify(&record.goal, &record.goal, &result).await;
+    eprintln!(
+        "aivyx team: mission {id} artifact verdict — {}: {}",
+        if verdict.passed { "ACCEPTED" } else { "REJECTED" },
+        verdict.reason,
+    );
+    if verdict.passed {
+        return TeamMissionPhase::Done;
+    }
+    // Flip to Rejected: the mission claimed done but the deliverable isn't there.
+    if let Some(mut rec) = shared.snapshot(id) {
+        rec.phase = TeamMissionPhase::Rejected;
+        rec.halt_reason = Some(format!("deliverable not verified: {}", verdict.reason));
+        let _ = shared.put(rec).await;
+    }
+    deps.audit.on_event(AuditTag::HeadlessRefusal {
+        run_id: id.to_string(),
+        step: "<artifact-gate>".to_string(),
+        reason: format!("team mission rejected — deliverable not verified: {}", verdict.reason),
+    });
+    TeamMissionPhase::Rejected
 }
 
 /// Resume (`approve`) or abort (`!approve`) a mission paused at a human gate.
@@ -1123,6 +1194,7 @@ mod tests {
             member_provider_builder: None,
             memory: None,
             workspace_root: None,
+            verify_missions: false,
         }
     }
 
@@ -1152,6 +1224,7 @@ mod tests {
             member_provider_builder: None,
             memory: None,
             workspace_root: None,
+            verify_missions: false,
         }
     }
 
@@ -1249,6 +1322,61 @@ mod tests {
         assert_eq!(rec.outputs["a"], "done-line");
         assert_eq!(rec.outputs["b"], "done-line");
         assert!(rec.pending_gate.is_none());
+    }
+
+    // ---- Chapter Keystone — mission-level artifact grounding ----------------
+
+    fn artifact_plan() -> MissionPlan {
+        MissionPlan::new(
+            "Write foo.md into the workspace",
+            vec![Step::delegate("write", "writer", "produce foo.md")],
+        )
+    }
+
+    #[tokio::test]
+    async fn keystone_rejects_a_mission_with_no_deliverable() {
+        // The dogfood bug: the mission runs to "done" but the deliverable isn't
+        // there. With verify_missions on and the judge returning FAIL, the
+        // mission is flipped to Rejected instead of Done.
+        let shared = SharedMissionState::new(team_domain().await);
+        let mut deps = deps("FAIL — the requested file was never produced.");
+        deps.verify_missions = true;
+        deps.workspace_root = Some(std::env::temp_dir()); // grounding present
+        let id = team_run(&shared, &deps, default_nonagon(), artifact_plan(), "m1")
+            .await
+            .unwrap();
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(rec.phase, TeamMissionPhase::Rejected);
+        assert!(rec
+            .halt_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("deliverable not verified"));
+    }
+
+    #[tokio::test]
+    async fn keystone_keeps_a_verified_mission_done() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let mut deps = deps("PASS — foo.md is present with the requested content.");
+        deps.verify_missions = true;
+        deps.workspace_root = Some(std::env::temp_dir());
+        let id = team_run(&shared, &deps, default_nonagon(), artifact_plan(), "m1")
+            .await
+            .unwrap();
+        assert_eq!(shared.snapshot(&id).unwrap().phase, TeamMissionPhase::Done);
+    }
+
+    #[tokio::test]
+    async fn keystone_off_is_byte_identical_done() {
+        // verify_missions default false ⇒ pre-Keystone behavior (Done on step
+        // completion), even with a FAIL-shaped provider line.
+        let shared = SharedMissionState::new(team_domain().await);
+        let deps = deps("FAIL — would reject if the gate ran");
+        assert!(!deps.verify_missions);
+        let id = team_run(&shared, &deps, default_nonagon(), artifact_plan(), "m1")
+            .await
+            .unwrap();
+        assert_eq!(shared.snapshot(&id).unwrap().phase, TeamMissionPhase::Done);
     }
 
     /// Chapter Ballast — a per-mission token cap halts a runaway mission at a
