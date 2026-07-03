@@ -7,6 +7,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **A team mission retries once when it produced nothing (Chapter Reprise).**
+  A specialist sometimes claims to have written the deliverable but doesn't
+  (model-ceiling variance — a fresh attempt often succeeds where the first
+  missed). When the artifact gate (Keystone) finds no deliverable, the mission
+  now re-drives once from a cleared checkpoint before giving up, converting many
+  such misses into real completions instead of honest-but-empty rejections.
+  Bounded (one retry) so a genuinely impossible mission can't loop; only when
+  verification is on.
 - **A reviewer gate no longer kills a whole team mission (Chapter Ombudsman).**
   An in-DAG *auto* gate would abort the entire mission on any reviewer `FAIL` —
   so a research→review→write plan died at the review step, before the writer

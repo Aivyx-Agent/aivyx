@@ -318,21 +318,56 @@ pub async fn drive_registered(
     id: &str,
     policy: GatePolicy,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
-    let config = shared
-        .snapshot(id)
-        .and_then(|r| r.config)
-        .unwrap_or(default_config);
-    let (runtime, meter) = assemble_runtime(deps, config)?;
-    let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
-    let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
-    // Chapter Keystone — mission-level artifact grounding. A mission is `Done`
-    // only if its deliverable actually exists: grade the completed mission
-    // against its goal, grounded on the workspace/memory artifacts, and flip a
-    // "done but produced nothing" mission to `Rejected`. Opt-in + best-effort.
-    if phase == TeamMissionPhase::Done && deps.verify_missions {
-        return Ok(verify_mission_artifact(shared, deps, id).await);
+    // Chapter Reprise — a bounded retry. When a mission runs to "done" but the
+    // artifact gate (Keystone) finds no deliverable — usually a specialist that
+    // CLAIMED to write but didn't (model-ceiling variance; a fresh attempt often
+    // succeeds where the first missed) — re-drive from a cleared checkpoint once
+    // before giving up. Only when verification is on; capped so a genuinely
+    // impossible mission can't loop.
+    const MAX_MISSION_ATTEMPTS: u32 = 2;
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        let config = shared
+            .snapshot(id)
+            .and_then(|r| r.config)
+            .unwrap_or_else(|| default_config.clone());
+        let (runtime, meter) = assemble_runtime(deps, config)?;
+        let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
+        let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
+        // Only a completed mission is artifact-graded; anything else is terminal.
+        if phase != TeamMissionPhase::Done || !deps.verify_missions {
+            return Ok(phase);
+        }
+        // Chapter Keystone — grade the deliverable against the goal.
+        let verified = verify_mission_artifact(shared, deps, id).await;
+        if verified == TeamMissionPhase::Done || attempt >= MAX_MISSION_ATTEMPTS {
+            return Ok(verified);
+        }
+        // Rejected + a retry remains — clear the checkpoint for a fresh run.
+        eprintln!(
+            "aivyx team: mission {id} produced no deliverable — retrying (attempt {}/{MAX_MISSION_ATTEMPTS})",
+            attempt + 1,
+        );
+        reset_mission_for_retry(shared, id).await?;
     }
-    Ok(phase)
+}
+
+/// Chapter Reprise — reset a Keystone-rejected mission for a fresh re-drive:
+/// clear the step checkpoint (so producing steps re-run) and the terminal
+/// markers. The plan + config are preserved.
+async fn reset_mission_for_retry(
+    shared: &SharedMissionState,
+    id: &str,
+) -> Result<(), MissionDriverError> {
+    if let Some(mut rec) = shared.snapshot(id) {
+        rec.outputs.clear();
+        rec.pending_gate = None;
+        rec.halt_reason = None;
+        rec.phase = TeamMissionPhase::Executing;
+        shared.put(rec).await?;
+    }
+    Ok(())
 }
 
 /// Chapter Keystone — grade a just-completed mission against its goal, grounded
@@ -1473,6 +1508,27 @@ mod tests {
             "Write foo.md into the workspace",
             vec![Step::delegate("write", "writer", "produce foo.md")],
         )
+    }
+
+    #[tokio::test]
+    async fn reset_mission_for_retry_clears_checkpoint_and_rearms() {
+        let shared = SharedMissionState::new(team_domain().await);
+        register_mission(&shared, artifact_plan(), "r1", Some(default_nonagon()))
+            .await
+            .unwrap();
+        // Simulate a Keystone-rejected mission with a stale checkpoint.
+        let mut rec = shared.snapshot("r1").unwrap();
+        rec.phase = TeamMissionPhase::Rejected;
+        rec.halt_reason = Some("deliverable not verified: nope".into());
+        rec.outputs.insert("write".into(), "claimed done".into());
+        shared.put(rec).await.unwrap();
+
+        reset_mission_for_retry(&shared, "r1").await.unwrap();
+        let after = shared.snapshot("r1").unwrap();
+        assert_eq!(after.phase, TeamMissionPhase::Executing, "re-armed for a fresh run");
+        assert!(after.outputs.is_empty(), "checkpoint cleared so steps re-run");
+        assert!(after.halt_reason.is_none());
+        assert!(!after.plan.steps.is_empty(), "plan preserved");
     }
 
     #[tokio::test]
