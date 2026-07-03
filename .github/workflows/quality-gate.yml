@@ -30,6 +30,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # `cargo test --workspace` builds every crate + every test/example binary
+      # for 40 crates; combined with the restored dep cache it overflowed the
+      # hosted runner's ~14 GB root disk ("No space left on device" mid-test,
+      # which also manifested as truncated/again-missing logs). Reclaim ~20 GB of
+      # preinstalled toolchains we never use before building. Dependency-free.
+      - name: Free disk space on the runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost /usr/local/lib/node_modules || true
+          df -h /
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
