@@ -318,7 +318,7 @@ mod tests {
         // Every role is listed.
         for name in [
             "coordinator", "researcher", "analyst", "coder", "writer", "reviewer", "planner",
-            "ops", "archivist",
+            "verifier", "archivist",
         ] {
             assert!(out.contains(name), "roster missing {name}");
         }
