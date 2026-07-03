@@ -5,6 +5,33 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.36] — 2026-07-04
+
+### Added
+
+- **Specialist tool calls are now traced in the mission journal (Chapter
+  Spyglass).** A Nonagon specialist's sub-turns previously emitted nothing, so
+  you could not see whether (say) the writer actually called `workspace.write` —
+  the exact blind spot that made the recent team capability bugs hard to
+  diagnose. Each specialist channel now logs its tool activity, labelled by
+  role: `aivyx team: [writer] → workspace.write` / `← workspace.write —
+  completed`. Pure observability (logging only; no behavioural change).
+
+### Changed
+
+- **The analyst can now fetch data itself.** The Analyst role gained `web.fetch`
+  (+ the `net.fetch` capability) alongside `web.search`, so it can pull
+  datasets, APIs, and reference pages directly rather than relying on search
+  snippets.
+- **The `ops` role is now a verify-by-execution `verifier` (Verifier/QA).** The
+  old Operations role (`shell.exec` + `fs.read`) was a strict capability subset
+  of the coder. It is recast as a Verifier that proves a deliverable works by
+  *executing* it — running the tests, reproducing the claim, checking data
+  against its source — and reports PASS/FAIL with evidence without modifying the
+  work (same `shell.exec` + `fs.read`, plus `net.fetch` to reproduce against
+  remote sources). This fills the gap left by the read-only reviewer (which
+  cannot run anything) while keeping the team a nine-role Nonagon.
+
 ## [0.7.35] — 2026-07-04
 
 ### Fixed
