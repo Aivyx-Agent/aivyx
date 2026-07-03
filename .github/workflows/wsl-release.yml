@@ -1,22 +1,29 @@
 # Build the Aivyx WSL distribution and attach it to the GitHub Release.
 #
-# Runs after a release is published (so the Docker Publish workflow has pushed
-# the appliance image it reuses as a base) and exports that image's root
-# filesystem to a `.wsl` distribution tarball for Windows/WSL2 users. See
-# docs/INSTALL.md "Windows" and Dockerfile.wsl.
+# Fires on the version tag (like docker-publish.yml + desktop-release.yml),
+# reuses the appliance image the Docker Publish workflow pushes for that tag as
+# its base, and exports that image's root filesystem to a `.wsl` distribution
+# tarball for Windows/WSL2 users. See docs/INSTALL.md "Windows" and
+# Dockerfile.wsl.
 #
-# Also `workflow_dispatch` so an existing release (e.g. one published before
-# this workflow existed) can be back-filled by tag.
+# NOTE: we do NOT trigger on `release: published` — cargo-dist's release.yml
+# publishes the release with GITHUB_TOKEN, and GitHub deliberately does not fire
+# `release` events to other workflows when the actor is GITHUB_TOKEN (recursion
+# guard). So, like desktop-release.yml, we run on the tag push and WAIT for both
+# the base image and the cargo-dist release to exist, then UPLOAD (never create).
+#
+# Also `workflow_dispatch` so an existing tag can be back-filled.
 
 name: WSL Distribution
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build + attach the .wsl artifact to (e.g. v0.7.36)"
+        description: "Release tag to build + attach the .wsl artifact to (e.g. v0.7.37)"
         required: true
 
 permissions:
@@ -24,7 +31,7 @@ permissions:
   packages: read    # pull the appliance base image from GHCR
 
 concurrency:
-  group: wsl-release-${{ github.event.release.tag_name || inputs.tag }}
+  group: wsl-release-${{ github.ref_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +45,7 @@ jobs:
         id: v
         run: |
           set -eu
-          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           if [ -z "$TAG" ]; then echo "no tag resolved"; exit 1; fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
@@ -97,6 +104,14 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           set -eu
+          # cargo-dist (release.yml) is the sole release CREATOR and runs on the
+          # same tag; wait for it to exist, then UPLOAD (never create) so we
+          # don't race its "Create GitHub Release" step. Mirrors desktop-release.
+          for i in $(seq 1 90); do
+            gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 && break
+            echo "waiting for cargo-dist to create release $TAG… ($i)"
+            sleep 20
+          done
           gh release upload "$TAG" \
             "Aivyx.wsl" \
             "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz" \
