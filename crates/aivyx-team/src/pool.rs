@@ -30,6 +30,9 @@ pub struct SpecialistChannel {
     trust_tier: TrustTier,
     platform: ChannelPlatform,
     cancellation: CancellationToken,
+    /// Chapter Spyglass — the specialist's name, so its tool calls are
+    /// legible in the journal (a mission's inner work used to be a black box).
+    label: String,
 }
 
 impl SpecialistChannel {
@@ -38,12 +41,14 @@ impl SpecialistChannel {
         trust_tier: TrustTier,
         platform: ChannelPlatform,
         cancellation: CancellationToken,
+        label: impl Into<String>,
     ) -> Self {
         SpecialistChannel {
             session_id,
             trust_tier,
             platform,
             cancellation,
+            label: label.into(),
         }
     }
 }
@@ -62,8 +67,23 @@ impl ChannelContext for SpecialistChannel {
     fn session_id(&self) -> SessionId {
         self.session_id
     }
-    async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
-        Ok(()) // specialist progress isn't relayed to the operator (J.7)
+    async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
+        // Chapter Spyglass — surface a specialist's TOOL activity in the journal
+        // so a mission's inner work is observable (previously a black box that
+        // made "reports done but produced nothing" hard to diagnose). Only the
+        // tool start/finish pair is logged; token text stays quiet. The live
+        // operator-facing Fleet panel (J.7) is still deferred.
+        match event {
+            StreamEvent::ToolCallStarted { tool_name, .. } => {
+                eprintln!("aivyx team: [{}] → {tool_name}", self.label);
+            }
+            StreamEvent::ToolCallFinished { tool_name, outcome_summary, .. } => {
+                let summary: String = outcome_summary.chars().take(120).collect();
+                eprintln!("aivyx team: [{}] ← {tool_name} — {summary}", self.label);
+            }
+            _ => {}
+        }
+        Ok(())
     }
     async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
         Ok(()) // the lead reads the result from run()'s return value
@@ -136,6 +156,7 @@ impl SpecialistPool {
             effective_trust(member.trust_ceiling, lead_channel.trust_tier()),
             lead_channel.platform(),
             lead_channel.cancellation_token(),
+            member.name.clone(),
         )
     }
 
@@ -174,6 +195,38 @@ impl SpecialistPool {
 mod tests {
     use super::*;
     use crate::config::DialogueConfig;
+
+    #[tokio::test]
+    async fn spyglass_channel_logs_tool_events_without_erroring() {
+        // Chapter Spyglass — stream_event now surfaces specialist tool calls;
+        // the channel accepts tool start/finish (and ignores token text) cleanly.
+        let ch = SpecialistChannel::new(
+            SessionId::new(),
+            TrustTier::Trusted,
+            ChannelPlatform::Local,
+            CancellationToken::new(),
+            "writer",
+        );
+        let id = aivyx_core::ToolId::new();
+        let input = serde_json::json!({"path": "foo.md"});
+        assert!(ch
+            .stream_event(StreamEvent::ToolCallStarted {
+                tool: id,
+                tool_name: "workspace.write",
+                input: &input,
+            })
+            .await
+            .is_ok());
+        assert!(ch
+            .stream_event(StreamEvent::ToolCallFinished {
+                tool: id,
+                tool_name: "workspace.write",
+                outcome_summary: "wrote foo.md",
+            })
+            .await
+            .is_ok());
+        assert!(ch.stream_event(StreamEvent::Text("thinking…")).await.is_ok());
+    }
     use aivyx_capability::Scope;
     use aivyx_core::NullAuditHook;
     use aivyx_llm::{LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent};
