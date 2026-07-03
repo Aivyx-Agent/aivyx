@@ -709,10 +709,41 @@ impl TeamMissionService {
 /// (the returned [`MissionMeter`] feeds the driver's wave-boundary halt check).
 /// When unbounded, the real audit is used directly and `None` is returned — the
 /// run is byte-identical to pre-Ballast.
+/// Chapter Anchorage — bind the runtime workspace capability into a team config.
+///
+/// The `workspace:<root>` scope is a runtime path the static roster can't
+/// express, so a specialist that carries `workspace.*` tools is otherwise
+/// attenuated to nothing (a specialist can never exceed its lead, and the lead
+/// doesn't hold a scope it was never given) and never persists its deliverable —
+/// the root cause of "team missions report done but produce no file". This
+/// injects the concrete `workspace:<canonical-root>/**` scope into the LEAD (so
+/// it can grant it) and every member carrying a `workspace.*` tool. Idempotent;
+/// a non-canonicalizable root is a no-op.
+fn bind_workspace_scope(config: &mut TeamConfig, workspace_root: &std::path::Path) {
+    let Ok(root) = std::fs::canonicalize(workspace_root) else {
+        return;
+    };
+    let scope = format!("workspace:{}/**", root.display());
+    let lead_name = config.lead.clone();
+    for m in &mut config.members {
+        let carries_ws = m.tool_allowlist.iter().any(|t| t.starts_with("workspace."));
+        if (carries_ws || m.name == lead_name)
+            && !m.capability_scopes.iter().any(|s| s == &scope)
+        {
+            m.capability_scopes.push(scope.clone());
+        }
+    }
+}
+
 fn assemble_runtime(
     deps: &TeamRunDeps,
-    config: TeamConfig,
+    mut config: TeamConfig,
 ) -> Result<(Arc<TeamRuntime>, Option<crate::mission_meter::MissionMeter>), MissionDriverError> {
+    // Chapter Anchorage — bind the runtime workspace scope so writing
+    // specialists can actually persist their deliverable (see the fn doc).
+    if let Some(ws) = &deps.workspace_root {
+        bind_workspace_scope(&mut config, ws);
+    }
     let lead = config
         .lead_member()
         .ok_or_else(|| TeamError::Config("team has no lead".into()))?
@@ -1347,6 +1378,33 @@ mod tests {
     }
 
     // ---- Chapter Keystone — mission-level artifact grounding ----------------
+
+    #[test]
+    fn bind_workspace_scope_grants_lead_and_writers_only() {
+        let dir = std::env::temp_dir().join(format!("aivyx-anchorage-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = std::fs::canonicalize(&dir).unwrap();
+        let scope = format!("workspace:{}/**", root.display());
+        let mut config = default_nonagon();
+        bind_workspace_scope(&mut config, &dir);
+        bind_workspace_scope(&mut config, &dir); // idempotency: run twice
+        fn caps<'a>(config: &'a TeamConfig, name: &str) -> &'a [String] {
+            &config.members.iter().find(|m| m.name == name).unwrap().capability_scopes
+        }
+        // The lead (so it can GRANT) + workspace-tool carriers get it…
+        assert!(caps(&config, "coordinator").contains(&scope), "lead can grant workspace");
+        assert!(caps(&config, "writer").contains(&scope), "writer gets workspace");
+        assert!(caps(&config, "archivist").contains(&scope));
+        // …a read-only, workspace-less specialist does NOT.
+        assert!(!caps(&config, "analyst").contains(&scope), "analyst has no workspace tool");
+        // Injected exactly once despite two calls.
+        assert_eq!(
+            caps(&config, "writer").iter().filter(|s| *s == &scope).count(),
+            1,
+            "scope injected once"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn artifact_plan() -> MissionPlan {
         MissionPlan::new(

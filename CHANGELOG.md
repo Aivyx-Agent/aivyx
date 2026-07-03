@@ -7,6 +7,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **Team specialists can finally persist their deliverable to the workspace
+  (Chapter Anchorage).** The root cause of "team missions report done but
+  produce no file": a specialist is attenuated to `declared ∩ what the lead
+  grants`, and the coordinator lead's scopes were narrow (`memory` +
+  `team.delegate`), so every writing specialist was stripped of write
+  capability — the file was never created *anywhere*. The `workspace:<root>`
+  capability is a runtime path the static roster can't express, so it's now
+  injected at assembly into the lead (so it can grant it) and every specialist
+  carrying a `workspace.*` tool (Writer/Coder/Archivist, which now hold those
+  tools and are told to persist via `workspace.write`). Live-verified: a mission
+  now writes the requested file into the workspace with real content, where
+  every prior run produced nothing. (Non-workspace tool starvation — the
+  Researcher still can't `web.fetch` because the lead doesn't grant it — is a
+  separate known follow-up.)
 - **Team missions left `Executing` on a daemon restart no longer become
   permanent zombies (Chapter Reckon).** There is no resume machinery for team
   missions, so a mission interrupted mid-flight would sit `Executing` forever in

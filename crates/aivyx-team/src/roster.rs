@@ -68,16 +68,22 @@ pub fn default_nonagon() -> TeamConfig {
             "coder",
             "Coder",
             "You implement focused changes, reach for tests first, and keep diffs minimal. \
-             You explain WHY before WHAT and never leave the tree in a broken state.",
-            &["fs.read", "fs.write", "shell.exec"],
+             You explain WHY before WHAT and never leave the tree in a broken state. When \
+             asked to create a file in the workspace, persist it with workspace.write.",
+            &["fs.read", "fs.write", "shell.exec", "workspace.read", "workspace.write"],
             &["fs.read", "fs.write", "shell.exec"],
         ),
         member(
             "writer",
             "Writer",
             "You turn raw material into clear prose — docs, summaries, release notes — \
-             matching the requested audience and voice without inventing facts.",
-            &["fs.read", "fs.write"],
+             matching the requested audience and voice without inventing facts. When a \
+             task asks you to save or create a file, you PERSIST it with workspace.write \
+             (at the exact filename requested) so the deliverable actually lands in the \
+             shared workspace — you never just describe the file, you write it.",
+            // workspace.* tools in the allowlist; the concrete `workspace:<root>`
+            // capability is bound at assembly (the root is a runtime path).
+            &["fs.read", "fs.write", "workspace.read", "workspace.write"],
             &["fs.read", "fs.write"],
         ),
         member(
@@ -108,8 +114,9 @@ pub fn default_nonagon() -> TeamConfig {
             "archivist",
             "Archivist",
             "You persist significant findings to memory so they outlive the session, and \
-             retrieve prior context the team needs. You keep the record clean and findable.",
-            &["memory.read", "memory.write", "fs.read"],
+             retrieve prior context the team needs. You keep the record clean and findable. \
+             When a deliverable belongs in a workspace file, you save it with workspace.write.",
+            &["memory.read", "memory.write", "fs.read", "workspace.read", "workspace.write"],
             &["memory.read", "memory.write", "fs.read"],
         ),
     ];
