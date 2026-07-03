@@ -236,6 +236,14 @@ verify-by-execution role replaces ops):
   bundles (a `.deb` on Linux, a `.app` on macOS) and uploads them to that
   same release — it waits for cargo-dist to create the release first, so
   the two never race on creation.
+- `.github/workflows/docker-publish.yml` builds + pushes the **server
+  appliance image** to GHCR on the same tag.
+- `.github/workflows/wsl-release.yml` reuses that appliance image to export
+  a **WSL distribution** (`Aivyx.wsl`) — the daemon pre-installed for
+  Windows/WSL2 users — and attaches it to the release. This is the
+  cheapest real "Aivyx on Windows" path: it sidesteps the deferred native
+  Windows port (the daemon's Unix-socket IPC just works inside WSL2's Linux
+  kernel). See [docs/INSTALL.md](docs/INSTALL.md#windows-wsl2-or-docker).
 - `.github/workflows/ci.yml` runs `cargo clippy --workspace --all-targets
   -- -D warnings` and `cargo test --workspace` on every push to
   main and every PR.

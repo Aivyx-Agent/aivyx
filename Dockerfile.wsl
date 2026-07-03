@@ -1,0 +1,28 @@
+# Aivyx — WSL distribution image.
+#
+# Layers WSL-specific configuration on top of the Harbor server-appliance image
+# (Dockerfile) so Windows users can run the real Linux daemon inside WSL2 with
+# no NamedPipe IPC port required (see docs/INSTALL.md "Windows"). WSL boots the
+# root filesystem and drops into a login shell — it never runs the Docker
+# ENTRYPOINT — so this stage only ADDS files + a first-launch user setup; the
+# inherited ENTRYPOINT/WORKDIR/HOME are simply ignored by WSL.
+#
+# The root filesystem of this image is exported to a `.wsl` tarball by
+# .github/workflows/wsl-release.yml. BASE defaults to the published appliance
+# image so the expensive Rust build is reused, never repeated.
+ARG BASE=ghcr.io/aivyx-agent/aivyx:latest
+FROM ${BASE}
+
+# WSL discourages root; oobe.sh creates an unprivileged default user on first
+# launch and needs sudo + the user-management tools present.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sudo passwd \
+    && rm -rf /var/lib/apt/lists/*
+
+# /etc/wsl.conf              — applied every launch (default user, interop)
+# /etc/wsl-distribution.conf — install-time OOBE + Start-menu shortcut
+# /usr/local/bin/aivyx-wsl-oobe — the first-launch user-creation script
+COPY deploy/wsl/wsl.conf /etc/wsl.conf
+COPY deploy/wsl/wsl-distribution.conf /etc/wsl-distribution.conf
+COPY deploy/wsl/oobe.sh /usr/local/bin/aivyx-wsl-oobe
+RUN chmod 0755 /usr/local/bin/aivyx-wsl-oobe

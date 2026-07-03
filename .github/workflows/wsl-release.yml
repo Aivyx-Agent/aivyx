@@ -1,0 +1,103 @@
+# Build the Aivyx WSL distribution and attach it to the GitHub Release.
+#
+# Runs after a release is published (so the Docker Publish workflow has pushed
+# the appliance image it reuses as a base) and exports that image's root
+# filesystem to a `.wsl` distribution tarball for Windows/WSL2 users. See
+# docs/INSTALL.md "Windows" and Dockerfile.wsl.
+#
+# Also `workflow_dispatch` so an existing release (e.g. one published before
+# this workflow existed) can be back-filled by tag.
+
+name: WSL Distribution
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build + attach the .wsl artifact to (e.g. v0.7.36)"
+        required: true
+
+permissions:
+  contents: write   # upload the .wsl asset to the release
+  packages: read    # pull the appliance base image from GHCR
+
+concurrency:
+  group: wsl-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-wsl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag + version
+        id: v
+        run: |
+          set -eu
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          if [ -z "$TAG" ]; then echo "no tag resolved"; exit 1; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the appliance base image (retry while Docker Publish is in flight)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -eu
+          ref="${IMAGE,,}:${VERSION}"   # GHCR requires a lowercase repo path
+          for i in $(seq 1 30); do
+            if docker pull "$ref"; then
+              echo "BASE_REF=$ref" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "base image $ref not ready yet (attempt $i/30) — waiting…"
+            sleep 20
+          done
+          echo "base image $ref never appeared"; exit 1
+
+      - name: Build the WSL image layer
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -eu
+          docker build -f Dockerfile.wsl \
+            --build-arg BASE="$BASE_REF" \
+            -t "aivyx-wsl:${VERSION}" .
+
+      - name: Export the root filesystem to a WSL distro tarball
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -eu
+          cid="$(docker create "aivyx-wsl:${VERSION}")"
+          # A `.wsl` file (WSL 2.4.4+) is a gzip-compressed rootfs tarball that
+          # contains /etc/wsl-distribution.conf. The same file also imports with
+          # the classic `wsl --import`.
+          docker export "$cid" | gzip -9 > "Aivyx.wsl"
+          cp "Aivyx.wsl" "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz"
+          docker rm "$cid" >/dev/null
+          ls -lh Aivyx.wsl "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz"
+
+      - name: Attach the artifacts to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -eu
+          gh release upload "$TAG" \
+            "Aivyx.wsl" \
+            "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz" \
+            --clobber --repo "${{ github.repository }}"

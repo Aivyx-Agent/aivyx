@@ -59,13 +59,40 @@ Both are real ports, so until a dedicated Windows effort lands, use
 one of the two fully-supported paths below — **both run the exact same
 Linux binary**, with no loss of functionality.
 
-### Option A — WSL2 (recommended for desktop use)
-
 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) runs a real
 Linux kernel under Windows. Aivyx installs and behaves there exactly
 as a Linux x86_64 install — the local-first model holds (the agent
 reaches your files inside the WSL2 filesystem, accessible from Windows
-at `\\wsl$\`).
+at `\\wsl$\`). There are two WSL paths: a **pre-built Aivyx distro**
+(fastest — daemon already installed) or a **manual install** into your
+existing Ubuntu.
+
+### Option A1 (fastest) — the pre-built Aivyx WSL distribution
+
+Every release attaches a ready-to-run WSL distribution, **`Aivyx.wsl`**,
+with the daemon and all tool binaries pre-installed — no in-distro
+install step, no Ubuntu to set up first. It runs the exact same Linux
+binary as every other target.
+
+```powershell
+# In Windows PowerShell — download Aivyx.wsl from the latest release, then:
+wsl --install --from-file Aivyx.wsl        # WSL 2.4.4+ (installs a distro named "Aivyx")
+
+# On older WSL, import it manually instead:
+#   wsl --import Aivyx C:\WSL\Aivyx Aivyx.wsl
+```
+
+Grab `Aivyx.wsl` from the
+[latest release](https://github.com/Aivyx-Agent/aivyx/releases/latest)
+(or double-click it in Explorer on WSL 2.4.4+). On first launch it
+creates your user, then:
+
+```sh
+aivyx init      # one-time guided setup
+aivyx           # start chatting — auto-starts the local daemon
+```
+
+### Option A2 — manual install into your own Ubuntu WSL
 
 ```powershell
 # In Windows PowerShell (one-time):
@@ -82,7 +109,7 @@ aivyx --version
 aivyx init
 ```
 
-The Web Studio is reachable from a Windows browser at
+Either way, the Web Studio is reachable from a Windows browser at
 `http://127.0.0.1:7843` (WSL2 forwards localhost to Windows
 automatically).
 
