@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.34] — 2026-07-03
+
 ### Changed
 
 - **Accord detector precision: fewer borderline false positives.** The Soul-
