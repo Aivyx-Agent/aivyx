@@ -114,6 +114,12 @@ pub struct TeamRunDeps {
     /// deliverable is flipped to `Rejected`. `false` (default) ⇒ a mission is
     /// `Done` on step-completion alone (pre-Keystone behavior).
     pub verify_missions: bool,
+    /// Chapter Ensemble — the daemon's real role-floor capability scopes (as
+    /// strings). The lead is granted these so it can hand each specialist the
+    /// concrete (path/host-qualified) grants its role needs; the static roster's
+    /// bare scopes can't match the qualified floor. Empty ⇒ pre-Ensemble
+    /// behavior (specialists run on the roster's declared scopes alone).
+    pub lead_scopes: Vec<String>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -709,28 +715,64 @@ impl TeamMissionService {
 /// (the returned [`MissionMeter`] feeds the driver's wave-boundary halt check).
 /// When unbounded, the real audit is used directly and `None` is returned — the
 /// run is byte-identical to pre-Ballast.
-/// Chapter Anchorage — bind the runtime workspace capability into a team config.
+/// Base of a scope string — the part before the first `:` (`fs.write:/root/**`
+/// → `fs.write`; a bare `net.fetch` → `net.fetch`).
+fn scope_base(s: &str) -> &str {
+    s.split(':').next().unwrap_or(s)
+}
+
+/// Chapter Ensemble — bind the daemon's REAL authority into a team config so
+/// specialists can actually USE their tools.
 ///
-/// The `workspace:<root>` scope is a runtime path the static roster can't
-/// express, so a specialist that carries `workspace.*` tools is otherwise
-/// attenuated to nothing (a specialist can never exceed its lead, and the lead
-/// doesn't hold a scope it was never given) and never persists its deliverable —
-/// the root cause of "team missions report done but produce no file". This
-/// injects the concrete `workspace:<canonical-root>/**` scope into the LEAD (so
-/// it can grant it) and every member carrying a `workspace.*` tool. Idempotent;
-/// a non-canonicalizable root is a no-op.
-fn bind_workspace_scope(config: &mut TeamConfig, workspace_root: &std::path::Path) {
-    let Ok(root) = std::fs::canonicalize(workspace_root) else {
+/// A specialist's effective caps are `declared ∩ what the lead grants` (NT-02).
+/// The static roster declares BARE bases (`fs.write`, `net.fetch`, …) that don't
+/// match the daemon's path/host-qualified floor (`fs.write:<root>/**`,
+/// `net.fetch:<url>`), and the coordinator lead held only `[memory, team.delegate]`
+/// — so every specialist was attenuated to near-nothing and couldn't write files,
+/// fetch the web, or run commands (the root cause of "missions report done but do
+/// nothing"). This grants the LEAD the daemon's full floor (so it can grant), and
+/// each specialist the lead's floor scopes whose BASE its role declares (from its
+/// roster scopes + `workspace` when it carries workspace tools). Each specialist
+/// therefore stays ⊆ the lead ⊆ the daemon's real authority, attenuated per role.
+/// Empty `lead_scopes` ⇒ a no-op (pre-Ensemble behavior; tests unaffected).
+fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
+    if lead_scopes.is_empty() {
         return;
-    };
-    let scope = format!("workspace:{}/**", root.display());
+    }
     let lead_name = config.lead.clone();
     for m in &mut config.members {
-        let carries_ws = m.tool_allowlist.iter().any(|t| t.starts_with("workspace."));
-        if (carries_ws || m.name == lead_name)
-            && !m.capability_scopes.iter().any(|s| s == &scope)
-        {
-            m.capability_scopes.push(scope.clone());
+        if m.name == lead_name {
+            // The lead holds the full daemon authority (to grant), plus its own
+            // orchestration scopes (team.delegate / team.message).
+            let mut caps: Vec<String> = lead_scopes.to_vec();
+            caps.extend(m.capability_scopes.iter().cloned());
+            caps.sort();
+            caps.dedup();
+            m.capability_scopes = caps;
+        } else {
+            // The scope bases this specialist's role covers.
+            let mut bases: std::collections::HashSet<&str> =
+                m.capability_scopes.iter().map(|s| scope_base(s)).collect();
+            if m.tool_allowlist.iter().any(|t| t.starts_with("workspace.")) {
+                bases.insert("workspace");
+            }
+            // Grant the lead's floor scopes for those bases…
+            let mut caps: Vec<String> = lead_scopes
+                .iter()
+                .filter(|s| bases.contains(scope_base(s)))
+                .cloned()
+                .collect();
+            // …and keep the non-floor scopes the roster declared (the team bus
+            // and any MCP grants aren't in the daemon capability floor).
+            for s in &m.capability_scopes {
+                let b = scope_base(s);
+                if b == "team.message" || b == "team.delegate" || b.starts_with("mcp.") {
+                    caps.push(s.clone());
+                }
+            }
+            caps.sort();
+            caps.dedup();
+            m.capability_scopes = caps;
         }
     }
 }
@@ -739,11 +781,9 @@ fn assemble_runtime(
     deps: &TeamRunDeps,
     mut config: TeamConfig,
 ) -> Result<(Arc<TeamRuntime>, Option<crate::mission_meter::MissionMeter>), MissionDriverError> {
-    // Chapter Anchorage — bind the runtime workspace scope so writing
-    // specialists can actually persist their deliverable (see the fn doc).
-    if let Some(ws) = &deps.workspace_root {
-        bind_workspace_scope(&mut config, ws);
-    }
+    // Chapter Ensemble — bind the daemon's real authority so specialists can
+    // actually use their tools (write files, fetch, run commands). See the fn.
+    bind_lead_scopes(&mut config, &deps.lead_scopes);
     let lead = config
         .lead_member()
         .ok_or_else(|| TeamError::Config("team has no lead".into()))?
@@ -1248,6 +1288,7 @@ mod tests {
             memory: None,
             workspace_root: None,
             verify_missions: false,
+            lead_scopes: vec![],
         }
     }
 
@@ -1278,6 +1319,7 @@ mod tests {
             memory: None,
             workspace_root: None,
             verify_missions: false,
+            lead_scopes: vec![],
         }
     }
 
@@ -1380,30 +1422,50 @@ mod tests {
     // ---- Chapter Keystone — mission-level artifact grounding ----------------
 
     #[test]
-    fn bind_workspace_scope_grants_lead_and_writers_only() {
-        let dir = std::env::temp_dir().join(format!("aivyx-anchorage-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let root = std::fs::canonicalize(&dir).unwrap();
-        let scope = format!("workspace:{}/**", root.display());
+    fn bind_lead_scopes_grants_per_role_and_stays_least_privilege() {
+        // A stand-in daemon floor with the real qualified forms.
+        let floor: Vec<String> = [
+            "memory.read",
+            "memory.write",
+            "fs.read:/root/**",
+            "fs.write:/root/**",
+            "shell.exec:cwd:/root/**",
+            "net.fetch",
+            "workspace:/ws/**",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let mut config = default_nonagon();
-        bind_workspace_scope(&mut config, &dir);
-        bind_workspace_scope(&mut config, &dir); // idempotency: run twice
-        fn caps<'a>(config: &'a TeamConfig, name: &str) -> &'a [String] {
-            &config.members.iter().find(|m| m.name == name).unwrap().capability_scopes
-        }
-        // The lead (so it can GRANT) + workspace-tool carriers get it…
-        assert!(caps(&config, "coordinator").contains(&scope), "lead can grant workspace");
-        assert!(caps(&config, "writer").contains(&scope), "writer gets workspace");
-        assert!(caps(&config, "archivist").contains(&scope));
-        // …a read-only, workspace-less specialist does NOT.
-        assert!(!caps(&config, "analyst").contains(&scope), "analyst has no workspace tool");
-        // Injected exactly once despite two calls.
-        assert_eq!(
-            caps(&config, "writer").iter().filter(|s| *s == &scope).count(),
-            1,
-            "scope injected once"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+        bind_lead_scopes(&mut config, &floor);
+        let caps = |name: &str| -> Vec<String> {
+            config
+                .members
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap()
+                .capability_scopes
+                .clone()
+        };
+        // Lead holds the FULL floor (so it can grant) + its own orchestration.
+        let lead = caps("coordinator");
+        assert!(lead.contains(&"net.fetch".to_string()));
+        assert!(lead.contains(&"fs.write:/root/**".to_string()));
+        assert!(lead.iter().any(|s| s == "team.delegate"));
+        // Writer (fs.read/write + workspace tools) gets the qualified write
+        // grants + workspace, but NOT net.fetch or shell.
+        let w = caps("writer");
+        assert!(w.contains(&"fs.write:/root/**".to_string()), "writer can write files");
+        assert!(w.contains(&"workspace:/ws/**".to_string()), "writer can write workspace");
+        assert!(!w.iter().any(|s| s == "net.fetch"), "writer has no network");
+        assert!(!w.iter().any(|s| s.starts_with("shell.exec")), "writer has no shell");
+        // Researcher (declares net.fetch) can now actually fetch.
+        assert!(caps("researcher").contains(&"net.fetch".to_string()), "researcher can fetch");
+        // Reviewer (fs.read only) stays READ-ONLY — least privilege preserved.
+        let r = caps("reviewer");
+        assert!(r.contains(&"fs.read:/root/**".to_string()));
+        assert!(!r.iter().any(|s| s.starts_with("fs.write")), "reviewer cannot write");
+        assert!(!r.iter().any(|s| s == "net.fetch"), "reviewer has no network");
     }
 
     fn artifact_plan() -> MissionPlan {

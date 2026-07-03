@@ -8191,6 +8191,10 @@ async fn run_async(
                 // Chapter Keystone — a team mission is `Done` only if its
                 // deliverable actually exists (artifact-grounded verdict).
                 verify_missions: true,
+                // Chapter Ensemble — the daemon's real authority, so the team
+                // lead can grant specialists the concrete scopes their tools
+                // need (bare roster scopes can't match the qualified floor).
+                lead_scopes: backcompat_floor.iter().map(|s| s.as_str().to_string()).collect(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`

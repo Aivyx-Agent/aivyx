@@ -7,20 +7,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
-- **Team specialists can finally persist their deliverable to the workspace
-  (Chapter Anchorage).** The root cause of "team missions report done but
-  produce no file": a specialist is attenuated to `declared ∩ what the lead
-  grants`, and the coordinator lead's scopes were narrow (`memory` +
-  `team.delegate`), so every writing specialist was stripped of write
-  capability — the file was never created *anywhere*. The `workspace:<root>`
-  capability is a runtime path the static roster can't express, so it's now
-  injected at assembly into the lead (so it can grant it) and every specialist
-  carrying a `workspace.*` tool (Writer/Coder/Archivist, which now hold those
-  tools and are told to persist via `workspace.write`). Live-verified: a mission
-  now writes the requested file into the workspace with real content, where
-  every prior run produced nothing. (Non-workspace tool starvation — the
-  Researcher still can't `web.fetch` because the lead doesn't grant it — is a
-  separate known follow-up.)
+- **Team specialists can actually use their tools (Chapter Ensemble).** The root
+  cause of "team missions do nothing": a specialist's caps are `declared ∩ what
+  the lead grants`, but the coordinator lead held only `[memory, team.delegate]`
+  and the roster declares *bare* scopes (`fs.write`, `net.fetch`) that can't
+  match the daemon's *qualified* floor (`fs.write:<root>/**`, `net.fetch:<url>`)
+  — so every specialist was attenuated to memory-only and couldn't write files,
+  fetch, or run commands. The mission lead now holds the daemon's real authority
+  and each specialist inherits the lead's floor scopes for the bases its role
+  declares. Stays least-privilege (a reviewer remains read-only; a writer gets
+  no network/shell) and `⊆ daemon floor`. Live-verified: a writer now writes its
+  file to the workspace and the mission completes `Done`. (Supersedes the
+  workspace-only Anchorage fix with one general mechanism.)
 - **Team missions left `Executing` on a daemon restart no longer become
   permanent zombies (Chapter Reckon).** There is no resume machinery for team
   missions, so a mission interrupted mid-flight would sit `Executing` forever in
