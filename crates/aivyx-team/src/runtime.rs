@@ -11,10 +11,14 @@
 //! Each step delegates to a specialist sub-turn via [`SpecialistPool::run`]
 //! (attenuated + trust-floored, exactly as a single `delegate_task` call).
 //! Downstream steps receive their upstream outputs as context. A
-//! [`StepKind::Gate`] runs a reviewer over the upstream work; a failing
-//! verdict aborts the mission so the gate's dependents never run — returned
-//! as a [`MissionStatus::GateRejected`] report (not an error), so the lead
-//! keeps the partial outputs and the verdict.
+//! [`StepKind::Gate`] runs a reviewer over the upstream work; Chapter Ombudsman
+//! makes an **auto** gate ADVISORY — its verdict (PASS or FAIL) is recorded and
+//! fed to downstream steps as context, but a FAIL no longer aborts the mission
+//! (that killed otherwise-fine deliverables before the writer ran). Final
+//! quality is enforced end-to-end by the mission artifact gate (Keystone). Only
+//! a **human** gate blocks (it pauses for operator approval); a
+//! [`MissionStatus::GateRejected`] now arises only from an operator rejection or
+//! the explicit `verify_output` tool.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -249,7 +253,6 @@ impl TeamRuntime {
             });
             let results = futures_util::future::join_all(futures).await;
 
-            let mut rejection: Option<(String, String)> = None;
             for (id, res) in results {
                 let output = res?; // a specialist error aborts the whole mission
                 // Only AUTO gates run here (human gates were filtered out above).
@@ -258,26 +261,27 @@ impl TeamRuntime {
                     Some(StepKind::Gate { .. })
                 );
                 if is_gate {
+                    // Chapter Ombudsman — an auto gate is ADVISORY, not fatal. A
+                    // reviewer FAIL used to abort the whole mission (killing the
+                    // deliverable before the writer even ran); instead we record
+                    // the verdict as this step's output — `build_input` feeds it
+                    // to downstream steps as context, so a "FAIL: add X" review
+                    // makes the next step do better — and the mission continues.
+                    // Final quality is still enforced end-to-end by the mission
+                    // artifact gate (Chapter Keystone). Only a HUMAN gate blocks.
                     let passed = gate_passed(&output);
                     observer.on_gate(&id, passed, &output);
-                    if !passed && rejection.is_none() {
-                        rejection = Some((id.clone(), output.clone()));
-                    }
+                    let recorded = if passed {
+                        output
+                    } else {
+                        format!("REVIEW (advisory, not blocking): {output}")
+                    };
+                    outputs.insert(id.clone(), recorded);
                 } else {
                     observer.on_step_completed(&id, &output);
+                    outputs.insert(id.clone(), output);
                 }
-                outputs.insert(id.clone(), output);
                 completed.insert(id);
-            }
-
-            if let Some((step, verdict)) = rejection {
-                let report = MissionReport {
-                    goal: plan.goal.clone(),
-                    outputs,
-                    status: MissionStatus::GateRejected { step, verdict },
-                };
-                observer.on_mission_finished(&report);
-                return Ok(RunYield::Done(report));
             }
         }
 
@@ -413,10 +417,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_observed_reports_a_gate_rejection() {
+    async fn a_failing_auto_gate_is_advisory_and_the_mission_continues() {
+        // Chapter Ombudsman — an auto-gate FAIL no longer aborts: the reviewer's
+        // verdict is recorded (advisory) and the gate's dependent STILL runs.
         let rt = runtime(FakeProvider::always("FAIL: nope"), &["worker", "reviewer"]);
         let plan = MissionPlan::new(
-            "observed-reject",
+            "observed-advisory",
             vec![
                 Step::delegate("a", "worker", "do work"),
                 Step::gate("g", "reviewer", "good?").after(["a"]),
@@ -426,13 +432,21 @@ mod tests {
         let lead = FakeLeadChannel::at(TrustTier::Trusted);
         let obs = RecordingObserver::default();
         let report = rt.run_observed(&plan, &lead, &obs).await.unwrap();
-        assert!(matches!(report.status, MissionStatus::GateRejected { .. }));
+        // The mission COMPLETES (advisory gate), not GateRejected.
+        assert!(matches!(report.status, MissionStatus::Completed));
         let events = obs.snapshot();
-        assert!(events.contains(&"gate:g:false".to_string()), "rejection observed: {events:?}");
-        assert!(events.contains(&"finished:false".to_string()));
+        assert!(events.contains(&"gate:g:false".to_string()), "gate verdict still observed: {events:?}");
+        assert!(events.contains(&"finished:true".to_string()));
+        // The gate's dependent DID run despite the failing review.
         assert!(
-            !events.iter().any(|e| e.starts_with("start:after_g")),
-            "the rejected gate's dependent never started: {events:?}"
+            events.iter().any(|e| e.starts_with("start:after_g")),
+            "the dependent runs after an advisory-failed gate: {events:?}"
+        );
+        // The reviewer's feedback is preserved (as advisory) for the record.
+        assert!(
+            report.outputs.get("g").is_some_and(|v| v.contains("advisory") && v.contains("FAIL")),
+            "the advisory verdict is kept: {:?}",
+            report.outputs.get("g")
         );
     }
 
@@ -660,9 +674,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failing_gate_aborts_and_skips_dependents() {
-        // Every turn returns a FAIL verdict; the gate rejects, so `after_g`
-        // (its dependent) must never run.
+    async fn a_failing_auto_gate_does_not_skip_dependents() {
+        // Chapter Ombudsman — a FAIL verdict is advisory: the dependent `after_g`
+        // STILL runs, and the mission completes (final quality is Keystone's job).
         let rt = runtime(FakeProvider::always("FAIL: not good enough"), &["worker", "reviewer"]);
         let plan = MissionPlan::new(
             "gated",
@@ -674,16 +688,10 @@ mod tests {
         );
         let lead = FakeLeadChannel::at(TrustTier::Trusted);
         let report = rt.run(&plan, &lead).await.unwrap();
-        match &report.status {
-            MissionStatus::GateRejected { step, verdict } => {
-                assert_eq!(step, "g");
-                assert!(verdict.contains("FAIL"));
-            }
-            other => panic!("expected GateRejected, got {other:?}"),
-        }
+        assert!(matches!(report.status, MissionStatus::Completed));
         assert!(report.outputs.contains_key("a"), "upstream output kept");
         assert!(report.outputs.contains_key("g"), "gate verdict kept");
-        assert!(!report.outputs.contains_key("after_g"), "dependent skipped");
+        assert!(report.outputs.contains_key("after_g"), "dependent RAN (advisory gate)");
     }
 
     #[tokio::test]

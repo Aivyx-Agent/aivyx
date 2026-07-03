@@ -7,6 +7,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **A reviewer gate no longer kills a whole team mission (Chapter Ombudsman).**
+  An in-DAG *auto* gate would abort the entire mission on any reviewer `FAIL` —
+  so a research→review→write plan died at the review step, before the writer
+  ever produced the deliverable. An auto gate is now **advisory**: its verdict
+  is recorded and fed to downstream steps as context (a "FAIL: add X" review
+  makes the next step better), and the mission continues; final quality is
+  enforced end-to-end by the artifact gate (Keystone), and a **human** gate
+  still blocks for operator approval. Live-verified: a multi-step mission now
+  runs its write step instead of aborting at the review.
 - **Team specialists can actually use their tools (Chapter Ensemble).** The root
   cause of "team missions do nothing": a specialist's caps are `declared ∩ what
   the lead grants`, but the coordinator lead held only `[memory, team.delegate]`

@@ -433,7 +433,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decompose_reports_a_gate_rejection() {
+    async fn decompose_auto_gate_fail_is_advisory_dependent_still_runs() {
+        // Chapter Ombudsman — an auto-gate FAIL no longer aborts the mission:
+        // the reviewer's verdict is advisory and the dependent `z` still runs.
         let tool = DecomposeTaskTool::new(runtime(FakeProvider::always("FAIL: nope"), &["worker", "reviewer"]));
         let ch = FakeLeadChannel::at(TrustTier::Trusted);
         let audit = NullAuditHook;
@@ -448,9 +450,8 @@ mod tests {
         });
         match tool.execute(input, &ctx!(ch, audit, tok)).await {
             ToolOutcome::Completed { output, .. } => {
-                assert_eq!(output["status"], json!("gate_rejected"));
-                assert_eq!(output["rejected_step"], json!("g"));
-                assert!(output["outputs"].get("z").is_none(), "dependent skipped");
+                assert_eq!(output["status"], json!("completed"));
+                assert!(output["outputs"].get("z").is_some(), "dependent RAN (advisory gate)");
             }
             other => panic!("expected Completed, got {other:?}"),
         }
