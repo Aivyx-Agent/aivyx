@@ -163,18 +163,25 @@ impl SoulContradictionDetector {
          CONTRADICTIONS. You are given a NUMBERED list of the assistant's \
          standing guidance: learned facets, learned SKILLS (shown as `skill \
          \"X\": when … → …`), and the operator's FIXED rules (marked RULE). \
-         Find pairs that are genuinely INCOMPATIBLE as standing guidance — where \
-         following one means violating the other (e.g. \"be extremely concise\" \
-         vs \"always give long, detailed explanations\"; a learned \"warm and \
-         effusive\" vs a RULE \"never flatter me, be candid\"; two skills whose \
-         procedures give opposite instructions for the same situation). Refer to \
-         each item by its number in brackets. Output ONLY a \
-         JSON array of `{\"a\":N,\"b\":M,\"reason\":\"...\"}`, where N and M are \
-         the item numbers of the two incompatible items (different numbers). \
-         `reason` is one short clause naming the incompatibility. Report ONLY \
-         real contradictions — NOT items that merely differ, add nuance, or \
-         cover different situations. If there are none, output `[]`. No prose, \
-         no markdown fences."
+         Report a pair ONLY when the two are MUTUALLY EXCLUSIVE as standing \
+         guidance — there is NO situation in which the assistant could honor \
+         both at once. Apply this test: could a thoughtful assistant follow both \
+         items together? If yes, they are NOT a contradiction. \
+         CONTRADICTIONS (report): \"answer in one short sentence\" vs \"always \
+         answer in several detailed paragraphs\"; \"recommend pharmaceuticals \
+         first\" vs a RULE \"never suggest pharmaceuticals\"; two skills whose \
+         procedures give OPPOSITE instructions for the SAME trigger. \
+         NOT contradictions (do NOT report): complementary traits that coexist \
+         (e.g. \"warm\" and \"candid\", \"friendly\" and \"direct\"); a default \
+         plus an exception (\"concise by default\" and \"detailed when asked\"); \
+         a broad tone next to a specific rule they can both be honored (\"warm\" \
+         and \"do not flatter\" — you can be warm without flattering); or items \
+         about DIFFERENT situations, topics, or that merely differ in emphasis. \
+         When unsure, do NOT report. Refer to each item by its number in \
+         brackets. Output ONLY a JSON array of `{\"a\":N,\"b\":M,\"reason\":\
+         \"...\"}`, where N and M are the numbers of the two mutually-exclusive \
+         items (different numbers) and `reason` names why they cannot both hold. \
+         If there are none, output `[]`. No prose, no markdown fences."
     }
 
     /// Render the indexed item list into the user prompt. Pure + testable.

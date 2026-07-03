@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Accord detector precision: fewer borderline false positives.** The Soul-
+  contradiction judge's prompt was teaching itself to over-flag — it used
+  "warm" vs "be candid" as a *positive* example, so it intermittently flagged
+  complementary traits on a perfectly coherent Soul. Rewrote the prompt around a
+  sharp mutual-exclusivity test ("is there NO situation in which both can be
+  honored at once?") with explicit NOT-a-contradiction cases (complementary
+  traits, default+exception, broad tone next to a specific rule). Live-verified
+  on the rig: the real coherent Soul went from intermittent 1–2 false positives
+  to 8/8 clean, while a genuine contradiction (one-line vs multi-paragraph) is
+  still caught — recall preserved.
+
 ## [0.7.33] — 2026-07-03
 
 ### Added
