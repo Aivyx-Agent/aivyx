@@ -32,4 +32,28 @@ if [ ! -f /root/.aivyx/aivyx.toml ]; then
     echo "aivyx (entrypoint): seeded /root/.aivyx/aivyx.toml from the appliance default" >&2
 fi
 
+# Chapter Gatehouse — the daemon refuses an off-host bind with no auth token
+# (the exposure interlock), and the appliance binds beyond loopback by design.
+# If the active config exposes the web UI but sets neither a token nor the
+# explicit insecure escape hatch, generate a Studio token once, insert it into
+# the existing [daemon] section (a second [daemon] table would be invalid
+# TOML), and print it so the operator can log in. Idempotent: subsequent boots
+# see the token in the file.
+_cfg=/root/.aivyx/aivyx.toml
+if grep -qE '^[[:space:]]*web_ui_host' "$_cfg" \
+    && ! grep -qE '^[[:space:]]*web_ui_host[[:space:]]*=[[:space:]]*"(127\.|::1)' "$_cfg" \
+    && ! grep -qE '^[[:space:]]*web_ui_(auth_token|insecure_no_auth)' "$_cfg"; then
+    _tok="$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 43)"
+    awk -v tok="$_tok" '
+        { print }
+        /^[[:space:]]*web_ui_host/ && !done {
+            print "web_ui_auth_token = \"" tok "\"  # generated at first boot (Gatehouse)"
+            done = 1
+        }' "$_cfg" > "$_cfg.new" && mv "$_cfg.new" "$_cfg"
+    echo "aivyx (entrypoint): generated a Studio auth token (Gatehouse):" >&2
+    echo "aivyx (entrypoint):   $_tok" >&2
+    echo "aivyx (entrypoint): browsers: any username, this token as the password." >&2
+    echo "aivyx (entrypoint): it is saved in /root/.aivyx/aivyx.toml (web_ui_auth_token)." >&2
+fi
+
 exec aivyx daemon run "$@"

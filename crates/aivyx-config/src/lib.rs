@@ -1235,6 +1235,11 @@ pub struct AivyxConfig {
     /// Binding beyond loopback is a deliberate network exposure — pair it
     /// with auth/TLS in front (see `docs/DOCKER.md`).
     pub web_ui_host: Option<std::net::IpAddr>,
+    /// Chapter Gatehouse — `true` acknowledges an off-host bind with no
+    /// auth token (behind the operator's own authenticating reverse
+    /// proxy). Without it, off-host + no-token is refused at config
+    /// load — the two-key launch. Default `false`.
+    pub web_ui_insecure_no_auth: bool,
     /// Extra WS Origin allowlist entries beyond the built-in loopback origins
     /// (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`).
     /// Empty (default) keeps the localhost-only CSWSH/DNS-rebind posture. Chapter
@@ -3822,6 +3827,10 @@ struct RawDaemon {
     web_ui_host: Option<String>,
     web_ui_allowed_origins: Option<Vec<String>>,
     web_ui_auth_token: Option<String>,
+    /// Chapter Gatehouse — the exposure-interlock escape hatch: binding
+    /// beyond loopback with NO auth token is a config error unless this
+    /// is explicitly `true` (the behind-my-own-reverse-proxy case).
+    web_ui_insecure_no_auth: Option<bool>,
 }
 
 /// `[team]` section. Chapter Roster — points the daemon at a `[team]`-rooted
@@ -7129,6 +7138,76 @@ impl AivyxConfig {
             );
         }
 
+        // Chapter Gatehouse — hoisted so the exposure interlock below can
+        // see host + token together before the struct is built.
+        let web_ui_host: Option<std::net::IpAddr> = match toml.daemon.web_ui_host {
+            None => None,
+            Some(s) => Some(s.parse::<std::net::IpAddr>().map_err(|_| {
+                ConfigError::Invalid {
+                    field: "daemon.web_ui_host",
+                    reason: format!(
+                        "must be an IP address (e.g. \"127.0.0.1\" or \
+                         \"0.0.0.0\"); got {s:?}"
+                    ),
+                }
+            })?),
+        };
+        let web_ui_auth_token: Option<String> = match toml.daemon.web_ui_auth_token {
+            // A whitespace-only or empty token is a config error — it would
+            // silently read as "auth on" while trivially guessable.
+            Some(t) if t.trim().is_empty() => {
+                return Err(ConfigError::Invalid {
+                    field: "daemon.web_ui_auth_token",
+                    reason: "must be a non-empty token; remove the field to \
+                             leave the web UI unauthenticated"
+                        .to_string(),
+                });
+            }
+            // The token is planted verbatim in a Set-Cookie value, so it
+            // must be cookie/URL-safe (unreserved chars). This also nudges
+            // operators toward opaque high-entropy tokens.
+            Some(t)
+                if !t
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~')) =>
+            {
+                return Err(ConfigError::Invalid {
+                    field: "daemon.web_ui_auth_token",
+                    reason: "must contain only URL-safe characters \
+                             (A-Z a-z 0-9 - _ . ~); use an opaque token like \
+                             `openssl rand -hex 32`"
+                        .to_string(),
+                });
+            }
+            other => other,
+        };
+        let web_ui_insecure_no_auth =
+            toml.daemon.web_ui_insecure_no_auth.unwrap_or(false);
+        // Chapter Gatehouse — the exposure interlock (v1.0 runway decision
+        // 2, locked 2026-07-04): binding the Studio beyond loopback with NO
+        // auth token is refused at config load — fail-fast, impossible to
+        // miss — unless the operator explicitly signs the risk for the
+        // behind-my-own-reverse-proxy case. Chapter Postern's runtime
+        // warnings still fire on that escape-hatch path. Two-key launch: an
+        // unauthenticated agent with filesystem + shell reach can never be
+        // exposed to a network by accident (the exposed-Ollama lesson).
+        if web_ui_host.is_some_and(|h| !h.is_loopback())
+            && web_ui_auth_token.is_none()
+            && !web_ui_insecure_no_auth
+        {
+            return Err(ConfigError::Invalid {
+                field: "daemon.web_ui_host",
+                reason: "binding the web UI beyond loopback without \
+                         `daemon.web_ui_auth_token` would expose an \
+                         UNAUTHENTICATED agent (filesystem + shell reach) to \
+                         the network. Set `web_ui_auth_token` (e.g. `openssl \
+                         rand -hex 32`), or — ONLY behind your own \
+                         authenticating reverse proxy — set \
+                         `web_ui_insecure_no_auth = true`"
+                    .to_string(),
+            });
+        }
+
         Ok(Self {
             anthropic_api_key,
             openai_api_key,
@@ -7214,18 +7293,8 @@ impl AivyxConfig {
                 // Not configured or explicitly disabled.
                 _ => None,
             },
-            web_ui_host: match toml.daemon.web_ui_host {
-                None => None,
-                Some(s) => Some(s.parse::<std::net::IpAddr>().map_err(|_| {
-                    ConfigError::Invalid {
-                        field: "daemon.web_ui_host",
-                        reason: format!(
-                            "must be an IP address (e.g. \"127.0.0.1\" or \
-                             \"0.0.0.0\"); got {s:?}"
-                        ),
-                    }
-                })?),
-            },
+            web_ui_host,
+            web_ui_insecure_no_auth,
             web_ui_allowed_origins: {
                 let entries = toml.daemon.web_ui_allowed_origins.unwrap_or_default();
                 for o in &entries {
@@ -7248,35 +7317,7 @@ impl AivyxConfig {
                 }
                 entries
             },
-            web_ui_auth_token: match toml.daemon.web_ui_auth_token {
-                // A whitespace-only or empty token is a config error — it would
-                // silently read as "auth on" while trivially guessable.
-                Some(t) if t.trim().is_empty() => {
-                    return Err(ConfigError::Invalid {
-                        field: "daemon.web_ui_auth_token",
-                        reason: "must be a non-empty token; remove the field to \
-                                 leave the web UI unauthenticated"
-                            .to_string(),
-                    });
-                }
-                // The token is planted verbatim in a Set-Cookie value, so it
-                // must be cookie/URL-safe (unreserved chars). This also nudges
-                // operators toward opaque high-entropy tokens.
-                Some(t)
-                    if !t
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~')) =>
-                {
-                    return Err(ConfigError::Invalid {
-                        field: "daemon.web_ui_auth_token",
-                        reason: "must contain only URL-safe characters \
-                                 (A-Z a-z 0-9 - _ . ~); use an opaque token like \
-                                 `openssl rand -hex 32`"
-                            .to_string(),
-                    });
-                }
-                other => other,
-            },
+            web_ui_auth_token,
             // Chapter Roster — the operator's team-config file pointer. Stored
             // as-given (relative paths are resolved against the loaded
             // `aivyx.toml`'s directory at the daemon's team build site).

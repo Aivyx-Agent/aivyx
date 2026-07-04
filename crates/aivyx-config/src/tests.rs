@@ -3718,16 +3718,79 @@ fn daemon_web_ui_host_absent_defaults_to_none() {
 
 #[test]
 fn daemon_web_ui_host_parses_bind_all() {
-    // Chapter Harbor — `0.0.0.0` for containerized deployment.
+    // Chapter Harbor — `0.0.0.0` for containerized deployment. (With a
+    // token: bare off-host binds are refused by the Gatehouse interlock,
+    // tested separately below.)
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n",
+        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n\
+         web_ui_auth_token = \"t0ken-t0ken\"\n",
         "web-ui-host-all",
     );
     assert_eq!(
         cfg.web_ui_host,
         Some(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
     );
+    drop(env);
+}
+
+// ---- Chapter Gatehouse — the exposure interlock ------------------------
+
+#[test]
+fn gatehouse_off_host_without_token_is_refused() {
+    // The two-key launch: off-host + no token + no explicit escape hatch
+    // must fail AT CONFIG LOAD, naming both remedies.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("gatehouse-refuse");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must refuse");
+    let msg = err.to_string();
+    assert!(msg.contains("UNAUTHENTICATED"), "names the risk: {msg}");
+    assert!(msg.contains("web_ui_auth_token"), "names remedy 1: {msg}");
+    assert!(msg.contains("web_ui_insecure_no_auth"), "names remedy 2: {msg}");
+    drop(env);
+}
+
+#[test]
+fn gatehouse_escape_hatch_permits_bare_off_host_bind() {
+    // The behind-my-own-reverse-proxy case: explicit acknowledgement
+    // makes the bare off-host bind legal (Postern's runtime warnings
+    // still fire — that path is web_ui.rs's).
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n\
+         web_ui_insecure_no_auth = true\n",
+        "gatehouse-hatch",
+    );
+    assert!(cfg.web_ui_insecure_no_auth);
+    assert_eq!(cfg.web_ui_auth_token, None);
+    drop(env);
+}
+
+#[test]
+fn gatehouse_loopback_without_token_is_untouched() {
+    // The desktop local-first posture: loopback (default or explicit)
+    // needs no token and no hatch — byte-identical to pre-Gatehouse.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"127.0.0.1\"\n",
+        "gatehouse-loopback",
+    );
+    assert_eq!(cfg.web_ui_auth_token, None);
+    assert!(!cfg.web_ui_insecure_no_auth);
     drop(env);
 }
 

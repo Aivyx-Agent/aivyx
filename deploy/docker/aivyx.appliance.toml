@@ -34,12 +34,16 @@ root = "/work"
 web_ui = true
 web_ui_host = "0.0.0.0"
 
-# STRONGLY RECOMMENDED when the Studio is reachable beyond host-localhost: a
-# shared-secret token gating the control plane (/ws). Without it, anyone who can
-# reach the published port drives the agent. Generate one with `openssl rand -hex
-# 32`. Browsers are prompted (HTTP Basic; the token is the password); non-browser
-# clients send `Authorization: Bearer <token>`. Not a TLS substitute.
+# REQUIRED off loopback (Chapter Gatehouse): the daemon refuses to bind the
+# Studio beyond localhost without a token — unless you explicitly set
+# `web_ui_insecure_no_auth = true` because YOUR OWN reverse proxy authenticates
+# in front. Leave both unset here and the container entrypoint generates a
+# token at first boot, inserts it below web_ui_host, and prints it once to the
+# container log. Browsers are prompted (HTTP Basic; the token is the password);
+# non-browser clients send `Authorization: Bearer <token>`. Not a TLS
+# substitute.
 # web_ui_auth_token = "REPLACE-with-openssl-rand-hex-32"
+# web_ui_insecure_no_auth = false
 
 # The agent boots without a Profile/Persona on purpose: open the Studio and use
 # the **Create** screen (Chapter Genesis) to shape your assistant. A minimal

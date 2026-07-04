@@ -5178,6 +5178,9 @@ async fn run_async(
         web_ui_host: config_web_ui_host,
         web_ui_allowed_origins: config_web_ui_allowed_origins,
         web_ui_auth_token: config_web_ui_auth_token,
+        // Chapter Gatehouse — the interlock is enforced at config load;
+        // the daemon needs no runtime branch on the acknowledgement flag.
+        web_ui_insecure_no_auth: _,
         memory_ttl_secs,
         // Phase 74 — per-topic-glob retention rules. Threaded
         // into the daemon's memory-GC timer below so the hourly
