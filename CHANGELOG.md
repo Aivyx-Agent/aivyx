@@ -5,6 +5,30 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.40] — 2026-07-04
+
+**Chapter Strop** — skill effectiveness now measures how well a skill
+*serves*, not how often it runs, so the self-learning refinement loop fires
+organically at its default thresholds. Live-verified on the test rig: one
+hollow skill turn (result claimed, tool never called) was enough for the
+agent to propose a sharper version of that skill — with no healthy skill
+swept up. Refinement remains propose-only and operator-governed.
+
+### Changed
+
+- **A completed turn is no longer an automatic +1 in the per-skill
+  effectiveness ledger.** The fold now reads Candor's verdict: a turn that
+  completed but carries an unfulfilled-claim annotation (the skill's result
+  was claimed while the fulfilling tool was never called — the dominant
+  local-model failure) folds negative. Failed/looping turns stay negative;
+  clean completions stay positive. Ledger format and thresholds unchanged.
+- **Corrected skill turns count against the skill.** On the reflection
+  cadence, a completed skill turn the operator immediately reworked (the
+  correction ledger's definition) retro-folds negative — the
+  correction cross-reference the original Whetstone design specified. Each
+  correction folds exactly once across the repeating lookback windows via a
+  per-schedule watermark keyed on the follow-up turn.
+
 ## [0.7.39] — 2026-07-04
 
 The self-learning loops now actually run for a fresh install. A live dogfood
