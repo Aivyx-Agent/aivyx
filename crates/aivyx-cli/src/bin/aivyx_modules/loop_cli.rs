@@ -14,7 +14,7 @@ use aivyx_channel::daemon_client::{
     loop_start, loop_status, loop_stop,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::loop_backlog::{Story, StoryStatus};
+use aivyx_channel::loop_backlog::{Story, StoryStatus, MAX_TITLE_LEN};
 use aivyx_channel::loop_driver::LoopRunState;
 
 use crate::LoopSubcommand;
@@ -30,6 +30,13 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
             body,
             priority,
         } => {
+            let (title, body, split) = split_overlong_title(&title, &body);
+            if split {
+                println!(
+                    "note: title exceeded {MAX_TITLE_LEN} characters — \
+                     moved the overflow into the story body"
+                );
+            }
             let id = loop_add(&socket_path, title, body, priority)
                 .await
                 .map_err(|e| format!("loop add failed: {e}"))?;
@@ -112,6 +119,43 @@ pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
             }
         }
     }
+}
+
+/// Pure helper — rescue a natural long goal from the backlog's
+/// title cap (dogfood 2026-07-04: it failed with a bare "title
+/// exceeds 200 characters"). An over-long title is split at the
+/// last word boundary that fits; the overflow becomes the story
+/// body (prepended above any `--body` text, blank-line separated).
+/// Returns `(title, body, split?)` — `split` is false and the
+/// inputs pass through untouched when the title already fits.
+fn split_overlong_title(title: &str, body: &str) -> (String, String, bool) {
+    let title = title.trim();
+    if title.chars().count() <= MAX_TITLE_LEN {
+        return (title.to_string(), body.to_string(), false);
+    }
+    // Byte index of the last whitespace among the first
+    // MAX_TITLE_LEN chars; a whitespace-free run falls back to a
+    // hard cut at the cap.
+    let mut hard_cut = title.len();
+    let mut last_ws = None;
+    for (nchars, (i, c)) in title.char_indices().enumerate() {
+        if nchars == MAX_TITLE_LEN {
+            hard_cut = i;
+            break;
+        }
+        if c.is_whitespace() {
+            last_ws = Some(i);
+        }
+    }
+    let split_at = last_ws.unwrap_or(hard_cut);
+    let head = title[..split_at].trim_end().to_string();
+    let overflow = title[split_at..].trim_start();
+    let new_body = if body.is_empty() {
+        overflow.to_string()
+    } else {
+        format!("{overflow}\n\n{body}")
+    };
+    (head, new_body, true)
 }
 
 /// Pure renderer — the progress log, oldest-first (the order the
@@ -320,6 +364,45 @@ mod tests {
             created_seq: seq,
             status,
         }
+    }
+
+    #[test]
+    fn short_title_passes_through_unsplit() {
+        let (title, body, split) =
+            split_overlong_title("fix the thing", "details");
+        assert_eq!(title, "fix the thing");
+        assert_eq!(body, "details");
+        assert!(!split);
+    }
+
+    #[test]
+    fn overlong_title_splits_at_a_word_boundary_into_the_body() {
+        // 50 five-char words = 299 chars, well past the 200 cap.
+        let goal = vec!["word!"; 50].join(" ");
+        let (title, body, split) = split_overlong_title(&goal, "");
+        assert!(split);
+        assert!(title.chars().count() <= MAX_TITLE_LEN);
+        assert!(title.ends_with("word!"), "no mid-word cut: {title:?}");
+        assert!(!body.is_empty());
+        // Nothing lost: title + body reassemble the goal.
+        assert_eq!(format!("{title} {body}"), goal);
+    }
+
+    #[test]
+    fn overflow_lands_above_an_explicit_body() {
+        let goal = vec!["word!"; 50].join(" ");
+        let (_, body, split) = split_overlong_title(&goal, "acceptance");
+        assert!(split);
+        assert!(body.ends_with("\n\nacceptance"));
+    }
+
+    #[test]
+    fn whitespace_free_title_hard_cuts_at_the_cap() {
+        let goal = "x".repeat(300);
+        let (title, body, split) = split_overlong_title(&goal, "");
+        assert!(split);
+        assert_eq!(title.chars().count(), MAX_TITLE_LEN);
+        assert_eq!(body.chars().count(), 100);
     }
 
     #[test]

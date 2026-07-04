@@ -1970,7 +1970,7 @@ impl TeamSubcommand {
 /// Phase 173 — `aivyx loop <subcommand>` variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum LoopSubcommand {
-    /// `aivyx loop add <title> [--body <text>] [--priority <n>]`
+    /// `aivyx loop add <title> [body] [--body <text>] [--priority <n>]`
     Add {
         title: String,
         body: String,
@@ -2972,9 +2972,26 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let mut body = String::new();
                 let mut priority: Option<u32> = None;
                 let mut idx = 3;
+                // A second positional is the story body — operators
+                // naturally reach for `loop add <title> <detail>`
+                // before discovering `--body` (dogfood 2026-07-04).
+                if let Some(positional) = args.get(3) {
+                    if !positional.starts_with('-') {
+                        body = positional.clone();
+                        idx = 4;
+                    }
+                }
                 while idx < args.len() {
                     match args[idx].as_str() {
                         "--body" => {
+                            if !body.is_empty() {
+                                return Err(
+                                    "`aivyx loop add` got both a \
+                                     positional body and `--body` — \
+                                     pass one or the other"
+                                        .to_string(),
+                                );
+                            }
                             body = args
                                 .get(idx + 1)
                                 .ok_or_else(|| {
@@ -11266,6 +11283,42 @@ mod tests {
         let err = parse_cli_args_from(&argv(&["loop", "skip"]))
             .expect_err("missing story id must error");
         assert!(err.contains("requires a <story-id>"), "error: {err}");
+    }
+
+    // ---- Dogfood 2026-07-04 — `loop add` positional body -------
+
+    #[test]
+    fn loop_add_accepts_a_positional_body() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "loop",
+            "add",
+            "short title",
+            "the long detail",
+            "--priority",
+            "2",
+        ]))
+        .expect("loop add with positional body must parse");
+        match parsed.mode {
+            CliMode::Loop(LoopSubcommand::Add {
+                title,
+                body,
+                priority,
+            }) => {
+                assert_eq!(title, "short title");
+                assert_eq!(body, "the long detail");
+                assert_eq!(priority, Some(2));
+            }
+            other => panic!("unexpected mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loop_add_rejects_positional_body_plus_body_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "loop", "add", "title", "body one", "--body", "body two",
+        ]))
+        .expect_err("two bodies must error");
+        assert!(err.contains("one or the other"), "error: {err}");
     }
 
     #[test]

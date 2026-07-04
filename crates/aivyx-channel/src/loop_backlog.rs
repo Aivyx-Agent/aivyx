@@ -123,8 +123,10 @@ pub enum BacklogError {
 /// fit in the 32-byte genesis buffer.
 const BACKLOG_GENESIS_SEED: &[u8] = b"aivyx-loop-backlog-genesis-v1";
 
-/// Max title length — a one-liner, not an essay.
-const MAX_TITLE_LEN: usize = 200;
+/// Max title length — a one-liner, not an essay. Public so the CLI
+/// can split an over-long goal into title + body instead of letting
+/// the operator trip over this cap (dogfood 2026-07-04).
+pub const MAX_TITLE_LEN: usize = 200;
 
 /// In-memory backlog chain. Owns its HMAC key + the ordered
 /// entry vector. Persistence is layered on top via
@@ -170,7 +172,9 @@ impl BacklogChainLog {
         if trimmed.chars().count() > MAX_TITLE_LEN {
             return Err(BacklogError::InvalidStory {
                 reason: format!(
-                    "story title exceeds {MAX_TITLE_LEN} characters"
+                    "story title exceeds {MAX_TITLE_LEN} characters — \
+                     keep the title to a one-liner and put the detail \
+                     in the story body (`--body` on the CLI)"
                 ),
             });
         }
