@@ -121,19 +121,20 @@ fold (micro-refactor, only if it falls out naturally).
 |---|---|---|
 | **ST.0** | This doc — scope + decisions locked. | Reviewed. |
 | **ST.1** ✅ | **DONE.** Graded per-turn fold via `turn_folds_helpful` (pure, in `skill_effectiveness`) reading Candor's embedded annotation (`claim_check::has_unfulfilled_claim_annotation` — see the implementation decision above); `record_turn_skills` keeps its bool signature (the caller grades). Tests: the dogfood shape (Candor-annotated Completed folds unhelpful, with the fixture built through the real detect+append path), clean Completed folds helpful, Failed/Looping stay unhelpful, annotation detection rejects raw claim prose + organic ⚠ text. | `cargo test` green. |
-| **ST.2** | Correction retro-fold in the reflection scheduler: `turn_id → skills` map from the lookback audit walk + `followup_outcome` reuse; fold −1 per corrected skill turn. Unit tests over canned summaries/audit entries; ST-OQ1 resolved with a test. | `cargo test`. |
+| **ST.2** ✅ | **DONE.** `retrofold_corrected_skill_turns` (skill_effectiveness) + `run_skill_retrofold_pass` (reflection scheduler, runs BEFORE the refinement pass so this cycle's corrections count when the ledger is read). Exactly-once across repeating lookbacks via a per-schedule **watermark keyed on the FOLLOW-UP turn's start** (`SkillRefinementDeps.retrofold_watermark`, in-memory; a restart re-folds the current lookback once — bounded, accepted). Tests: exactly-once, uncorrected/skill-less turns ignored, ST-OQ1 independence. | `cargo test` green. |
 | **ST.3** | Live rig verification: drive a skill turn that claims-but-doesn't (Candor negative), a skill turn the "operator" corrects next turn (retro-fold negative), and clean skill turns (positive); watch the ledger cross floor 0.0 and Whetstone file a refinement **at default thresholds** — the organic-firing proof the dogfood couldn't give. | Journal + `persona proposals list` on the rig; findings folded back here. |
 
 ## 5. Open questions (resolve in-phase)
 
-- **ST-OQ1** — a turn graded −1 per-turn (Candor) that is *also*
-  corrected next turn: fold once or twice? Leaning twice (independent
-  evidence), capped by the existing per-window fold semantics; decide
-  with a test in ST.2.
+- **ST-OQ1** ✅ **RESOLVED (ST.2): fold twice.** The retro-fold is
+  independent of the per-turn grade — a Candor-flagged turn that also
+  gets corrected accrues both negatives (two independent pieces of
+  evidence about one use). Locked by
+  `retrofold_is_independent_of_the_per_turn_grade`.
 - **ST-OQ2** — should `SKILL_UNHELPFUL_NET` outweigh the positive
   (e.g. −2.0 vs +1.0) so one real incident isn't erased by two routine
-  uses? Leaning keep 1:1 for ST.1 (simplest honest scale; decay already
-  privileges recency) and let ST.3's live numbers decide.
-- **ST-OQ3** — does the retro-fold need its own breadcrumb
-  (`aivyx skill-effectiveness: retro-folded N …`) for observability?
-  Leaning yes, one line, only when N > 0 (matches the house pattern).
+  uses? Kept 1:1 through ST.1/ST.2 (simplest honest scale; decay already
+  privileges recency); let ST.3's live numbers decide.
+- **ST-OQ3** ✅ **RESOLVED (ST.2): yes.** One breadcrumb, only when
+  N > 0: `aivyx skill-effectiveness: retro-folded N corrected skill
+  turn(s) for schedule "…"`.

@@ -1268,6 +1268,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         proposal_log: plog,
                         persona_log: persona,
                         drafter,
+                        retrofold_watermark: std::sync::Mutex::new(
+                            std::collections::HashMap::new(),
+                        ),
                     })
                 }
                 _ => None,

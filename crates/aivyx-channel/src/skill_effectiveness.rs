@@ -144,6 +144,85 @@ pub async fn record_turn_skills(
     }
 }
 
+/// Chapter Strop (ST.2) — retro-fold corrected skill turns: the
+/// correction-ledger cross-reference the original WHETSTONE design
+/// specified. A turn that invoked a skill, `completed`, and was then
+/// immediately reworked by the operator (the `followup_outcome`
+/// definition the correction detectors share) folds
+/// `-SKILL_UNHELPFUL_NET` for each distinct skill it invoked —
+/// independent of the per-turn grade (ST-OQ1: a turn Candor already
+/// folded negative that ALSO gets corrected folds again; two
+/// independent pieces of evidence about one use).
+///
+/// `followup_after_ms` is the caller's watermark: only corrections
+/// whose FOLLOW-UP turn started after it are folded, so a correction
+/// folds exactly once across the repeating lookback windows (keying on
+/// the follow-up, not the corrected turn, catches a late correction of
+/// an old turn the moment it happens). Returns the number of corrected
+/// skill turns folded. Best-effort: a ledger error is logged and
+/// swallowed.
+pub async fn retrofold_corrected_skill_turns(
+    ledger: &SkillEffectivenessLedger,
+    summaries: &[crate::reflection_scheduler::OutcomeSummary],
+    audit_entries: &[SignedEntry],
+    followup_after_ms: u64,
+    now_secs: u64,
+) -> usize {
+    // turn id → the distinct skills that turn invoked.
+    let mut by_turn: std::collections::BTreeMap<String, BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for entry in audit_entries {
+        if let AuditEvent::SkillInvocation {
+            turn_id, skill_name, ..
+        } = &entry.event
+        {
+            by_turn
+                .entry(turn_id.to_string())
+                .or_default()
+                .insert(skill_name.clone());
+        }
+    }
+    if by_turn.is_empty() {
+        return 0;
+    }
+    let mut folds: std::collections::BTreeMap<String, f32> =
+        std::collections::BTreeMap::new();
+    let mut corrected_turns = 0usize;
+    for s in summaries {
+        if s.outcome_kind != "completed" {
+            continue;
+        }
+        let Some(skills) = by_turn.get(&s.turn_id) else {
+            continue;
+        };
+        let Some(follow) =
+            crate::recall_feedback::followup_outcome(s, summaries)
+        else {
+            continue;
+        };
+        if follow.started_at_unix_ms <= followup_after_ms {
+            continue;
+        }
+        corrected_turns += 1;
+        for skill in skills {
+            *folds.entry(skill.clone()).or_insert(0.0) -=
+                SKILL_UNHELPFUL_NET;
+        }
+    }
+    if folds.is_empty() {
+        return 0;
+    }
+    let folds: Vec<(String, f32)> = folds.into_iter().collect();
+    if let Err(e) = ledger.record_window(&folds, now_secs).await {
+        eprintln!(
+            "aivyx skill-effectiveness: retro-fold record_window \
+             failed: {e}"
+        );
+        return 0;
+    }
+    corrected_turns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +339,111 @@ mod tests {
         let under = l.underperformers(0.0, 3, 3000).await.unwrap();
         let names: Vec<_> = under.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["bad"], "only the well-sampled negative skill");
+    }
+
+    // ---- Chapter Strop (ST.2) — the correction retro-fold -----------
+
+    fn summary(
+        turn: &str,
+        session: &str,
+        start: u64,
+        dur: u64,
+    ) -> crate::reflection_scheduler::OutcomeSummary {
+        crate::reflection_scheduler::OutcomeSummary {
+            session_id: session.into(),
+            turn_id: turn.into(),
+            started_at_unix_ms: start,
+            outcome_kind: "completed".into(),
+            tool_calls_made: 1,
+            duration_ms: dur,
+            tools: vec![],
+        }
+    }
+
+    fn skill_entry_for(
+        seq: u64,
+        name: &str,
+        turn_id: aivyx_core::TurnId,
+    ) -> SignedEntry {
+        SignedEntry {
+            seq,
+            appended_at: std::time::SystemTime::now(),
+            event: AuditEvent::SkillInvocation {
+                turn_id,
+                session_id: aivyx_core::SessionId::new(),
+                skill_name: name.to_string(),
+            },
+            mac: [0u8; 32],
+            prev_mac: [0u8; 32],
+        }
+    }
+
+    #[tokio::test]
+    async fn retrofold_folds_a_corrected_skill_turn_exactly_once() {
+        let l = ledger().await;
+        let t = aivyx_core::TurnId::new();
+        // A completed skill turn the operator came right back on
+        // (follow-up in the same session, right after it ended).
+        let summaries = vec![
+            summary(&t.to_string(), "s1", 1_000, 500),
+            summary("follow-up", "s1", 1_600, 200),
+        ];
+        let entries = vec![skill_entry_for(0, "checklist", t)];
+
+        let n = retrofold_corrected_skill_turns(&l, &summaries, &entries, 0, 10)
+            .await;
+        assert_eq!(n, 1);
+        let s = l.skill_score("checklist", 10).await.unwrap().unwrap();
+        assert!(s.ewma_score < 0.0, "corrected use folds negative");
+
+        // Same lookback next cycle, watermark advanced past the
+        // follow-up: nothing re-folds.
+        let n2 = retrofold_corrected_skill_turns(
+            &l, &summaries, &entries, 1_600, 20,
+        )
+        .await;
+        assert_eq!(n2, 0, "a correction folds exactly once");
+        let s2 = l.skill_score("checklist", 20).await.unwrap().unwrap();
+        assert_eq!(s2.samples, 1);
+    }
+
+    #[tokio::test]
+    async fn retrofold_ignores_uncorrected_and_skill_less_turns() {
+        let l = ledger().await;
+        let skilled = aivyx_core::TurnId::new();
+        let summaries = vec![
+            // A skill turn with NO follow-up — not a correction.
+            summary(&skilled.to_string(), "s1", 1_000, 500),
+            // A corrected turn that invoked no skill.
+            summary("plain", "s2", 1_000, 500),
+            summary("plain-follow-up", "s2", 1_600, 200),
+        ];
+        let entries = vec![skill_entry_for(0, "checklist", skilled)];
+        let n = retrofold_corrected_skill_turns(&l, &summaries, &entries, 0, 10)
+            .await;
+        assert_eq!(n, 0);
+        assert!(l.skill_score("checklist", 10).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn retrofold_is_independent_of_the_per_turn_grade() {
+        // ST-OQ1 resolved: a turn the per-turn fold already graded
+        // unhelpful (e.g. Candor-flagged) that ALSO gets corrected
+        // folds again — two independent pieces of evidence.
+        let l = ledger().await;
+        let t = aivyx_core::TurnId::new();
+        let entries = vec![skill_entry_for(0, "checklist", t)];
+        record_turn_skills(&l, &entries, false, 5).await; // per-turn −1
+        let summaries = vec![
+            summary(&t.to_string(), "s1", 1_000, 500),
+            summary("follow-up", "s1", 1_600, 200),
+        ];
+        let n = retrofold_corrected_skill_turns(&l, &summaries, &entries, 0, 10)
+            .await;
+        assert_eq!(n, 1);
+        let s = l.skill_score("checklist", 10).await.unwrap().unwrap();
+        assert_eq!(s.samples, 2, "per-turn fold + retro-fold both count");
+        assert!(s.ewma_score < -1.5, "two negatives accumulate: {}", s.ewma_score);
     }
 
     #[tokio::test]

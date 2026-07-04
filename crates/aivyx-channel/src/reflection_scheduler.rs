@@ -405,6 +405,13 @@ pub struct SkillRefinementDeps {
         std::sync::Arc<crate::persona::PersistentPersonaLog>,
     pub drafter:
         std::sync::Arc<dyn crate::skill_refinement::RefinementDrafter>,
+    /// Chapter Strop (ST.2) — per-schedule retro-fold watermark: the
+    /// `now_ms` of the last retro-fold pass, so a correction folds
+    /// exactly once across the repeating lookback windows. In-memory —
+    /// a daemon restart re-folds the current lookback's corrections
+    /// once (bounded, accepted; see docs/STROP.md).
+    pub retrofold_watermark:
+        std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// Chapter Praxis (PX.2) — handles the skill-authoring pass needs. `None`
@@ -1001,6 +1008,11 @@ async fn fire_reflection(
     // supersession proposals only — the operator approves them in the
     // existing Agents UI.
     if let Some(deps) = skill_refinement {
+        // Chapter Strop (ST.2) — the correction retro-fold runs FIRST,
+        // so a correction observed this cycle already counts against
+        // the skill when the refinement pass reads the ledger below.
+        run_skill_retrofold_pass(deps, sched, &summaries, audit_log, now_ms)
+            .await;
         run_skill_refinement_pass(deps, sched, now_ms).await;
     }
 
@@ -1793,6 +1805,61 @@ async fn run_persona_lifecycle_pass(
 /// phrasing returns `None`) is recorded on the Phase 78 stat
 /// so a quiet "0 filed" cycle stays distinguishable from "LLM
 /// unavailable."
+/// Chapter Strop (ST.2) — drive the correction retro-fold: fold
+/// `-1` into the skill-effectiveness ledger for each corrected skill
+/// turn (completed, invoked a skill, operator came right back) whose
+/// follow-up is new since this schedule's watermark. Reads the same
+/// audit chain the summaries came from; best-effort throughout.
+async fn run_skill_retrofold_pass(
+    deps: &SkillRefinementDeps,
+    sched: &ReflectionScheduleConfig,
+    summaries: &[OutcomeSummary],
+    audit_log: &PersistentAuditLog,
+    now_ms: u64,
+) {
+    if !deps.config.enabled {
+        return;
+    }
+    let prev = {
+        let wm = deps
+            .retrofold_watermark
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *wm.get(&sched.name).unwrap_or(&0)
+    };
+    let entries = match audit_log.entries_range(0, audit_log.len()) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!(
+                "aivyx skill-effectiveness: retro-fold audit read \
+                 failed for schedule {:?}: {e}",
+                sched.name,
+            );
+            return;
+        }
+    };
+    let n = crate::skill_effectiveness::retrofold_corrected_skill_turns(
+        deps.ledger.as_ref(),
+        summaries,
+        &entries,
+        prev,
+        now_ms / 1000,
+    )
+    .await;
+    // Advance the watermark only after the fold ran — a failed audit
+    // read above leaves it untouched so the window retries next cycle.
+    if let Ok(mut wm) = deps.retrofold_watermark.lock() {
+        wm.insert(sched.name.clone(), now_ms);
+    }
+    if n > 0 {
+        eprintln!(
+            "aivyx skill-effectiveness: retro-folded {n} corrected \
+             skill turn(s) for schedule {:?}",
+            sched.name,
+        );
+    }
+}
+
 /// Chapter Whetstone (WH.3c) — drive the skill-refinement pass: read the
 /// effective persona's `learned_skills` + the effectiveness ledger and
 /// file refinement proposals for underperformers. Propose-only.
