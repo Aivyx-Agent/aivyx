@@ -11,6 +11,9 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
+# Chapter Freight — validate `[pack] trusted_publishers` entries are
+# base64 of 32-byte keys at load (strict-at-load house style).
+base64 = { workspace = true }
 # Error types for typed ConfigError variants. Matches the workspace's
 # "every crate uses thiserror for its own error type" convention.
 thiserror = { workspace = true }

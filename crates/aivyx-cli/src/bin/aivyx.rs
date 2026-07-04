@@ -126,6 +126,8 @@ mod headless;
 mod learning;
 #[path = "aivyx_modules/loop_cli.rs"]
 mod loop_cli;
+#[path = "aivyx_modules/pack.rs"]
+mod pack;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]
@@ -878,6 +880,12 @@ fn run() -> Result<(), String> {
     // Phase 173 — `aivyx loop <subcommand>`: autonomous loop
     // control. IPC-backed; same minimal-runtime shape as
     // `learning`.
+    // Chapter Freight — `aivyx pack` is fully offline (no daemon, no
+    // runtime): keygen/build/inspect/install operate on files + config.
+    if let CliMode::Pack(sub) = mode {
+        return pack::run_pack(sub);
+    }
+
     if let CliMode::Loop(sub) = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1877,6 +1885,8 @@ enum CliMode {
     /// loop (the Aivyx Ralph loop). IPC-backed; stocks the
     /// backlog + drives runs.
     Loop(LoopSubcommand),
+    /// Chapter Freight — `aivyx pack <subcommand>`: signed pack bundles.
+    Pack(PackSubcommand),
     /// `aivyx tui [--role <name>]`: Phase 185 — the ratatui terminal
     /// UI. A frontend client over the local daemon IPC (auto-spawns
     /// the daemon if needed), exactly like the default REPL — only
@@ -1972,6 +1982,19 @@ impl TeamSubcommand {
                 | TeamSubcommand::Abort { .. }
         )
     }
+}
+
+/// Chapter Freight — `aivyx pack <subcommand>` variants.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum PackSubcommand {
+    /// `aivyx pack keygen <keyfile>`
+    Keygen { keyfile: String },
+    /// `aivyx pack build <staging> --key <keyfile> --out <file>`
+    Build { staging: String, key: String, out: String },
+    /// `aivyx pack inspect <file> [--allow-untrusted]`
+    Inspect { file: String, allow_untrusted: bool },
+    /// `aivyx pack install <file>`
+    Install { file: String },
 }
 
 /// Phase 173 — `aivyx loop <subcommand>` variants.
@@ -2959,6 +2982,70 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Connect(service),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Chapter Freight — `aivyx pack <subcommand>`: signed pack bundles.
+    if !args.is_empty() && args[0] == "pack" {
+        let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
+        let take_one = |what: &str| -> Result<String, String> {
+            match args.get(2) {
+                Some(v) if !v.starts_with('-') => Ok(v.clone()),
+                _ => Err(format!("`aivyx pack {sub}` requires {what}")),
+            }
+        };
+        let pack_sub = match sub {
+            "keygen" => PackSubcommand::Keygen { keyfile: take_one("a <keyfile> path")? },
+            "build" => {
+                let staging = take_one("a <staging-dir>")?;
+                let mut key = None;
+                let mut out = None;
+                let mut idx = 3;
+                while idx < args.len() {
+                    match args[idx].as_str() {
+                        "--key" => {
+                            key = Some(args.get(idx + 1).ok_or("`--key` requires a value")?.clone());
+                            idx += 2;
+                        }
+                        "--out" => {
+                            out = Some(args.get(idx + 1).ok_or("`--out` requires a value")?.clone());
+                            idx += 2;
+                        }
+                        other => return Err(format!("unrecognized argument to `aivyx pack build`: `{other}`")),
+                    }
+                }
+                PackSubcommand::Build {
+                    staging,
+                    key: key.ok_or("`aivyx pack build` requires `--key <keyfile>`")?,
+                    out: out.ok_or("`aivyx pack build` requires `--out <file>`")?,
+                }
+            }
+            "inspect" => {
+                let file = take_one("a <bundle-file>")?;
+                let allow_untrusted = match args.get(3).map(|s| s.as_str()) {
+                    None => false,
+                    Some("--allow-untrusted") => true,
+                    Some(other) => return Err(format!("unrecognized argument to `aivyx pack inspect`: `{other}`")),
+                };
+                PackSubcommand::Inspect { file, allow_untrusted }
+            }
+            "install" => PackSubcommand::Install { file: take_one("a <bundle-file>")? },
+            other => {
+                return Err(format!(
+                    "unrecognized `aivyx pack` subcommand: `{other}`. \
+                     Supported: keygen, build, inspect, install"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Pack(pack_sub),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -5181,6 +5268,9 @@ async fn run_async(
         // Chapter Gatehouse — the interlock is enforced at config load;
         // the daemon needs no runtime branch on the acknowledgement flag.
         web_ui_insecure_no_auth: _,
+        // Chapter Freight — pack trust is read by the `aivyx pack` CLI
+        // path, not the daemon.
+        pack_trusted_publishers: _,
         memory_ttl_secs,
         // Phase 74 — per-topic-glob retention rules. Threaded
         // into the daemon's memory-GC timer below so the hourly
@@ -11301,6 +11391,65 @@ mod tests {
             err.contains("requires a proposal id"),
             "error: {err}"
         );
+    }
+
+    // ---- Chapter Freight — `aivyx pack` parsing ----------------
+
+    #[test]
+    fn pack_build_parses_staging_key_and_out() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "pack", "build", "stage/", "--key", "k.bin", "--out", "p.aivyxpack",
+        ]))
+        .expect("pack build must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Pack(PackSubcommand::Build {
+                staging: "stage/".into(),
+                key: "k.bin".into(),
+                out: "p.aivyxpack".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn pack_build_requires_key_and_out() {
+        let err = parse_cli_args_from(&argv(&["pack", "build", "stage/"]))
+            .expect_err("missing flags must error");
+        assert!(err.contains("--key"), "error: {err}");
+    }
+
+    #[test]
+    fn pack_inspect_parses_allow_untrusted() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "pack", "inspect", "p.aivyxpack", "--allow-untrusted",
+        ]))
+        .expect("pack inspect must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Pack(PackSubcommand::Inspect {
+                file: "p.aivyxpack".into(),
+                allow_untrusted: true,
+            })
+        );
+    }
+
+    #[test]
+    fn pack_install_and_keygen_take_one_path() {
+        assert_eq!(
+            parse_cli_args_from(&argv(&["pack", "install", "p.aivyxpack"]))
+                .unwrap()
+                .mode,
+            CliMode::Pack(PackSubcommand::Install { file: "p.aivyxpack".into() })
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["pack", "keygen", "k.bin"]))
+                .unwrap()
+                .mode,
+            CliMode::Pack(PackSubcommand::Keygen { keyfile: "k.bin".into() })
+        );
+        let err = parse_cli_args_from(&argv(&["pack", "frobnicate"]))
+            .expect_err("unknown subcommand must error");
+        assert!(err.contains("keygen, build, inspect, install"), "error: {err}");
     }
 
     // ---- Phase 177 — `aivyx loop skip` parsing ----------------

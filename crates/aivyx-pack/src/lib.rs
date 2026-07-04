@@ -37,6 +37,10 @@ use thiserror::Error;
 /// read is worse than none.
 pub const AIVYX_PUBLISHER_KEYS: &[&str] = &[];
 
+/// The target triple this binary was built for (relayed by build.rs) —
+/// `pack install` refuses bundles built for a foreign platform.
+pub const HOST_TARGET: &str = env!("AIVYX_BUILD_TARGET");
+
 const PAYLOAD_NAME: &str = "payload.tar.gz";
 const SIGNATURE_NAME: &str = "signature.bin";
 const PUBLISHER_NAME: &str = "publisher.txt";
@@ -176,6 +180,28 @@ pub fn daemon_version_ok(required: &str, current: &str) -> Result<(), PackError>
 // ---------------------------------------------------------------------------
 // Publisher side — keys, payload build, bundle write
 // ---------------------------------------------------------------------------
+
+/// Generate a keypair and write the 32-byte secret to `path` (0600 on
+/// unix). Returns the base64 verifying key for `trusted_publishers`.
+pub fn keygen_to_file(path: &Path) -> Result<String, PackError> {
+    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    std::fs::write(path, key.to_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(encode_verifying_key(&key.verifying_key()))
+}
+
+/// Load a signing key written by [`keygen_to_file`].
+pub fn load_signing_key(path: &Path) -> Result<SigningKey, PackError> {
+    let bytes = std::fs::read(path)?;
+    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
+        PackError::BadEntry("keyfile", "must be exactly 32 secret bytes".into())
+    })?;
+    Ok(SigningKey::from_bytes(&arr))
+}
 
 /// Encode a verifying key for `publisher.txt` / `trusted_publishers`.
 pub fn encode_verifying_key(key: &VerifyingKey) -> String {

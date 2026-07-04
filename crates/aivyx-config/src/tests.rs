@@ -3737,6 +3737,34 @@ fn daemon_web_ui_host_parses_bind_all() {
 // ---- Chapter Gatehouse — the exposure interlock ------------------------
 
 #[test]
+fn pack_trusted_publishers_validates_key_shape() {
+    // Chapter Freight — entries must be base64 of exactly 32 bytes.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[pack]\ntrusted_publishers = [\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"]\n",
+        "pack-trust-ok",
+    );
+    assert_eq!(cfg.pack_trusted_publishers.len(), 1);
+    drop(env);
+
+    let env = EnvScope::new();
+    let tmp = TempDir::new("pack-trust-bad");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(&toml_path, "\n[pack]\ntrusted_publishers = [\"not-base64!\"]\n").unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must reject");
+    assert!(err.to_string().contains("trusted_publishers"), "error: {err}");
+    drop(env);
+}
+
+#[test]
 fn gatehouse_off_host_without_token_is_refused() {
     // The two-key launch: off-host + no token + no explicit escape hatch
     // must fail AT CONFIG LOAD, naming both remedies.

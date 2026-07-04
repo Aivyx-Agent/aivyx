@@ -82,6 +82,12 @@ pub fn set_team_config_path_if_absent(doc: &mut toml_edit::DocumentMut, pack: &s
     if existing.is_some() {
         return false;
     }
+    // Create the table explicitly first — indexing a missing table into
+    // existence makes toml_edit render an INLINE `team = { … }` at the
+    // root (valid but ugly; found by the Freight install smoke).
+    if doc.get("team").is_none() {
+        doc["team"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
     doc["team"]["config_path"] = toml_edit::value(pack);
     true
 }

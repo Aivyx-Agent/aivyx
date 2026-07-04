@@ -1264,6 +1264,11 @@ pub struct AivyxConfig {
     /// who never touches teams sees byte-identical behavior. A relative path is
     /// resolved against the directory of the loaded `aivyx.toml`.
     pub team_config_path: Option<PathBuf>,
+    /// Chapter Freight — `[pack] trusted_publishers`: base64 Ed25519
+    /// verifying keys trusted for `aivyx pack install` (unioned with the
+    /// compiled-in publisher set at verify time). Validated at load:
+    /// every entry must be base64 of exactly 32 bytes.
+    pub pack_trusted_publishers: Vec<String>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -3653,6 +3658,9 @@ struct RawToml {
     /// `[team]` section. Chapter Roster — the operator's team-config file.
     #[serde(default)]
     team: RawTeam,
+    /// `[pack]` section. Chapter Freight — signed pack-bundle trust.
+    #[serde(default)]
+    pack: RawPack,
     #[serde(default)]
     email: RawEmail,
     /// `[embedding]` section. Phase 75 — semantic memory search.
@@ -3838,6 +3846,14 @@ struct RawDaemon {
 #[derive(Debug, Default, Deserialize)]
 struct RawTeam {
     config_path: Option<String>,
+}
+
+/// `[pack]` section. Chapter Freight — base64 Ed25519 verifying keys the
+/// operator trusts for `aivyx pack install`, unioned at verify time with
+/// the compiled-in Aivyx publisher set.
+#[derive(Debug, Default, Deserialize)]
+struct RawPack {
+    trusted_publishers: Option<Vec<String>>,
 }
 
 /// `[profile]` section in the TOML file. Phase 57 (PRODUCT.md P13).
@@ -7322,6 +7338,27 @@ impl AivyxConfig {
             // as-given (relative paths are resolved against the loaded
             // `aivyx.toml`'s directory at the daemon's team build site).
             team_config_path: toml.team.config_path.map(PathBuf::from),
+            pack_trusted_publishers: {
+                let entries = toml.pack.trusted_publishers.unwrap_or_default();
+                for e in &entries {
+                    use base64::Engine;
+                    let ok = base64::engine::general_purpose::STANDARD
+                        .decode(e.trim())
+                        .map(|b| b.len() == 32)
+                        .unwrap_or(false);
+                    if !ok {
+                        return Err(ConfigError::Invalid {
+                            field: "pack.trusted_publishers",
+                            reason: format!(
+                                "{e:?} is not base64 of a 32-byte Ed25519 \
+                                 verifying key (as printed by `aivyx pack \
+                                 keygen`)"
+                            ),
+                        });
+                    }
+                }
+                entries
+            },
         })
     }
 
