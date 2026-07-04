@@ -20,7 +20,7 @@ of that loop and produces the phase's backlog.
 
 | # | Chapter | Scope | Status |
 |---|---|---|---|
-| 1 | **Gatehouse** | Studio remote auth: `web_ui_token` bearer gate at one choke point (HTTP + WS upgrade) + the refuse-to-bind interlock (`insecure_no_auth` escape hatch) + install-time token generation + the Studio token prompt. Locked design in the v1.0 runway. Localhost-only installs untouched. | next |
+| 1 | **Gatehouse** | Studio remote auth. Found on scoping: Chapter Postern had already built the auth *mechanism* (`web_ui_auth_token`: Bearer/Basic/cookie, constant-time, `/ws`-gated) — Gatehouse added the refuse-to-bind interlock at config load, the `web_ui_insecure_no_auth` escape hatch, and first-boot token generation in the Harbor appliance. See docs/GATEHOUSE.md. | ✅ done (7ba97b2) |
 | 2 | **Freight** | Paid-pack bundles: signed archive (binaries + config TOMLs + manifest w/ min-daemon-version), `aivyx pack install` (verify + Mise-pattern wiring), `aivyx pack update`. Locked design in the v1.0 runway. Kitchen = the free worked example. | queued |
 | 3 | **Vitrine** | The operator walkthrough: all 15 Studio screens + TUI + desktop, friction notes → the polish backlog; inventory which `/classic` panes lack Studio equivalents. | queued (operator session) |
 | 4 | Polish waves | Fix the Vitrine backlog, batched by screen family. | sized by 3 |
