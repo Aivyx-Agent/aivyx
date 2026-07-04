@@ -1,6 +1,6 @@
 # The Edge Between Uses — grading skill effectiveness (Chapter Strop)
 
-> **Status: PLANNED (scoped 2026-07-04).** A whetstone sharpens the blade;
+> **Status: COMPLETE (ST.0–ST.3, 2026-07-04).** A whetstone sharpens the blade;
 > a strop hones the edge between uses. Chapter Whetstone built the
 > refinement loop (ledger → underperformer → LLM draft → governed
 > supersession) and the 2026-07-04 self-learning dogfood proved it live —
@@ -122,7 +122,7 @@ fold (micro-refactor, only if it falls out naturally).
 | **ST.0** | This doc — scope + decisions locked. | Reviewed. |
 | **ST.1** ✅ | **DONE.** Graded per-turn fold via `turn_folds_helpful` (pure, in `skill_effectiveness`) reading Candor's embedded annotation (`claim_check::has_unfulfilled_claim_annotation` — see the implementation decision above); `record_turn_skills` keeps its bool signature (the caller grades). Tests: the dogfood shape (Candor-annotated Completed folds unhelpful, with the fixture built through the real detect+append path), clean Completed folds helpful, Failed/Looping stay unhelpful, annotation detection rejects raw claim prose + organic ⚠ text. | `cargo test` green. |
 | **ST.2** ✅ | **DONE.** `retrofold_corrected_skill_turns` (skill_effectiveness) + `run_skill_retrofold_pass` (reflection scheduler, runs BEFORE the refinement pass so this cycle's corrections count when the ledger is read). Exactly-once across repeating lookbacks via a per-schedule **watermark keyed on the FOLLOW-UP turn's start** (`SkillRefinementDeps.retrofold_watermark`, in-memory; a restart re-folds the current lookback once — bounded, accepted). Tests: exactly-once, uncorrected/skill-less turns ignored, ST-OQ1 independence. | `cargo test` green. |
-| **ST.3** | Live rig verification: drive a skill turn that claims-but-doesn't (Candor negative), a skill turn the "operator" corrects next turn (retro-fold negative), and clean skill turns (positive); watch the ledger cross floor 0.0 and Whetstone file a refinement **at default thresholds** — the organic-firing proof the dogfood couldn't give. | Journal + `persona proposals list` on the rig; findings folded back here. |
+| **ST.3** ✅ | **DONE (2026-07-04, on the rig).** Staged a hollow skill turn (invoke `draft-reply`, claim a memory save, never call `memory.write`) → Candor annotated it live → the graded fold put `draft-reply` at −1 → the next reflection tick filed the supersession pair **at the default floor 0.0** with `(1 considered)` — no healthy skill qualified. The organic-firing proof the original dogfood couldn't give. Honest limits: the rig ran `min_samples = 1` (the default-4 confidence gate is orthogonal and unit-tested); the correction retro-fold could NOT be live-staged (`--headless` is one-task-per-process, so no same-session follow-up turn from the CLI) — its exactly-once semantics stay unit-proven; live observation is opportunistic (any real corrected skill turn will breadcrumb). | Journal `filed 1 (1 considered)` + the pair in `persona proposals list`; synthetic pair rejected after verification. |
 
 ## 5. Open questions (resolve in-phase)
 
@@ -131,10 +131,11 @@ fold (micro-refactor, only if it falls out naturally).
   gets corrected accrues both negatives (two independent pieces of
   evidence about one use). Locked by
   `retrofold_is_independent_of_the_per_turn_grade`.
-- **ST-OQ2** — should `SKILL_UNHELPFUL_NET` outweigh the positive
-  (e.g. −2.0 vs +1.0) so one real incident isn't erased by two routine
-  uses? Kept 1:1 through ST.1/ST.2 (simplest honest scale; decay already
-  privileges recency); let ST.3's live numbers decide.
+- **ST-OQ2** ✅ **RESOLVED (ST.3): keep 1:1.** A single negative fold
+  crossed the default floor live; the decayed EWMA already privileges
+  recency, and the `min_samples` confidence gate (default 4) is the
+  right knob for "don't refine on one incident" — weight asymmetry
+  would duplicate it on a worse axis.
 - **ST-OQ3** ✅ **RESOLVED (ST.2): yes.** One breadcrumb, only when
   N > 0: `aivyx skill-effectiveness: retro-folded N corrected skill
   turn(s) for schedule "…"`.
