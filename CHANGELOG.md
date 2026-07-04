@@ -5,6 +5,33 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.41] — 2026-07-04
+
+**Chapter Wire** — headless multi-turn sessions. Pipe newline-delimited
+turns into `aivyx --headless` and they run as consecutive turns of one
+daemon session, making session-scoped behavior (session-partitioned
+memory, recall's conversation window, consecutive-turn signals like the
+correction detector) reachable from a terminal, a cron line, or a test
+harness for the first time.
+
+### Added
+
+- **`printf "first\nsecond\n" | aivyx --headless`** — bare `--headless`
+  with piped stdin reads each non-empty line as one turn of a single
+  session. Fail-fast for batch callers: the stream stops at the first
+  non-completed turn and exits with the existing headless code (`3`
+  gate-refusal, `1` other failure); all turns completed exits `0`. The
+  one-shot `aivyx --headless "<task>"` form is unchanged, and bare
+  `--headless` on an interactive terminal errors with a hint to pipe.
+  Every turn keeps the unattended posture (gates refuse, never park).
+
+### Notes
+
+- A session carries session-partitioned memory, the conversation-window
+  relevance feed, and turn adjacency — turns are deliberately
+  fresh-context, with continuity flowing through memory and recall
+  rather than transcript replay. `docs/WIRE.md` records the distinction.
+
 ## [0.7.40] — 2026-07-04
 
 **Chapter Strop** — skill effectiveness now measures how well a skill
