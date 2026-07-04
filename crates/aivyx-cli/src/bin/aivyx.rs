@@ -7461,6 +7461,16 @@ async fn run_async(
         // write half remains auto-proposer / role-declared.
         Scope::parse("skills.list").unwrap(),
         Scope::parse("skills.invoke").unwrap(),
+        // Phase 67 schedule tools — READ half only: enumerate the
+        // agent's own routines (self-knowledge, the skills.list class).
+        // Fifth registered-but-unauthorized floor gap found (soak review
+        // 2026-07-04): schedule.list was never callable by the default
+        // role, so the agent couldn't see its own routines and Candor's
+        // "I've scheduled" rule could only ever fire unfulfilled. The
+        // WRITE half (schedule.create/update/delete = self-directed
+        // future autonomy) deliberately stays out pending an [autonomy]
+        // gating decision — do not add it here reflexively.
+        Scope::parse("schedule.list").unwrap(),
         fs_read_scope,
         fs_write_scope,
         fs_metadata_scope,

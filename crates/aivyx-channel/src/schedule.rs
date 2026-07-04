@@ -94,9 +94,21 @@ pub fn validate_cron(expr: &str) -> Result<(), String> {
         .map_err(|e| format!("invalid cron expression {expr:?}: {e}"))
 }
 
+/// Cron fields are the **operator's local wall clock** — the init
+/// template has always said "local time", but until the 2026-07-04 soak
+/// review the engine evaluated them in UTC, firing every routine hours
+/// off operator intent on any non-UTC host ("nightly" reflection at
+/// 10:00 AWST). Evaluate in `chrono::Local`, return the instant as Utc
+/// (all stored timestamps stay UTC; only the wall-clock interpretation
+/// of the cron fields changes). One-time effect at upgrade: a schedule
+/// whose local-time tick already passed today fires one catch-up.
 pub fn next_fire_after(cron_expr: &str, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let schedule = CronSchedule::from_str(cron_expr).ok()?;
-    schedule.after(&after).next()
+    let local_after = after.with_timezone(&chrono::Local);
+    schedule
+        .after(&local_after)
+        .next()
+        .map(|t| t.with_timezone(&Utc))
 }
 
 // ---------------------------------------------------------------------------
@@ -242,12 +254,34 @@ mod tests {
         let anchor = DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        // Every day at 09:00 UTC
+        // Every day at 09:00 — OPERATOR-LOCAL wall clock (soak fix
+        // 2026-07-04), so assert the local rendering of the instant.
         let next = next_fire_after("0 0 9 * * * *", anchor);
         assert!(next.is_some());
         let fire = next.unwrap();
         assert!(fire > anchor);
-        assert_eq!(fire.format("%H:%M").to_string(), "09:00");
+        assert_eq!(
+            fire.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+            "09:00"
+        );
+    }
+
+    /// Soak review 2026-07-04 — cron fields are the operator's LOCAL
+    /// wall clock ("0 0 7 …" = 7am where the operator lives), matching
+    /// what the init template always promised; the engine used to
+    /// evaluate UTC, firing "nightly" reflection at 10:00 AWST. On a
+    /// UTC host both interpretations coincide; on any offset host the
+    /// local hour must win — this test fails under UTC evaluation on
+    /// any non-UTC machine.
+    #[test]
+    fn cron_fields_are_operator_local_wall_clock() {
+        let anchor = Utc::now();
+        let fire = next_fire_after("0 0 7 * * *", anchor).unwrap();
+        assert!(fire > anchor);
+        assert_eq!(
+            fire.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+            "07:00"
+        );
     }
 
     #[test]

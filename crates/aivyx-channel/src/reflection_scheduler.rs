@@ -2489,9 +2489,12 @@ async fn run_recall_judgment_pass(
     }
 }
 
+/// Delegates to the canonical [`crate::schedule::next_fire_after`] so
+/// cron wall-clock semantics (operator-LOCAL, soak fix 2026-07-04) can
+/// never drift between the routine scheduler and the reflection
+/// scheduler — this was a private UTC duplicate before.
 fn next_fire_after(cron_expr: &str, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    let schedule = CronSchedule::from_str(cron_expr).ok()?;
-    schedule.after(&after).next()
+    crate::schedule::next_fire_after(cron_expr, after)
 }
 
 fn update_earliest(
