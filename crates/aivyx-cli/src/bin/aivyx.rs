@@ -7434,6 +7434,17 @@ async fn run_async(
         // Chapter Lattice — the default agent may query its own typed
         // knowledge graph (a read of derived memory, like memory.read).
         Scope::parse("graph.read").unwrap(),
+        // Phase 110 skills substrate — enumerate + render the agent's own
+        // operator-approved skill set (read-only, same self-knowledge class
+        // as graph.read). Never granted before, so the registered
+        // skills.list / skills.invoke tools were dead on arrival for the
+        // floor-only role (the mcp/app/loop grant signature): the agent
+        // couldn't read its skill procedures, no SkillInvocation audit
+        // entries could exist, and Whetstone's effectiveness ledger
+        // structurally never accumulated. skills.propose stays out — the
+        // write half remains auto-proposer / role-declared.
+        Scope::parse("skills.list").unwrap(),
+        Scope::parse("skills.invoke").unwrap(),
         fs_read_scope,
         fs_write_scope,
         fs_metadata_scope,
