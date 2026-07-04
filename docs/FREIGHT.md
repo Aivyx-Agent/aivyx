@@ -1,0 +1,70 @@
+# Sealed Crates — signed binary pack bundles (Chapter Freight)
+
+> **Status: IN PROGRESS (FR.0 scoped 2026-07-04).** v1.0-runway decision
+> 1, locked 2026-07-04: paid vertical packs ship as **signed binary
+> bundles over the tool-process boundary** — the customer is an
+> *operator*, not a Rust developer. A pack is compiled tool-process
+> binaries + config TOMLs + a manifest in one Ed25519-signed archive;
+> `aivyx pack install` verifies and wires it the Mise way. Development
+> stays in the in-tree private workspace glob; customers only ever see
+> binaries. Kitchen is the free worked example proving the format.
+
+## 1. The bundle format (locked)
+
+`<name>-<version>-<target>.aivyxpack` — an **outer plain tar** with
+exactly three entries:
+
+| entry | what |
+|---|---|
+| `payload.tar.gz` | the signed unit: `manifest.toml` + `bin/*` (tool-process executables) + `config/*` (team pack TOMLs etc.) |
+| `signature.bin` | 64-byte Ed25519 signature **over the raw `payload.tar.gz` bytes** |
+| `publisher.txt` | base64 of the publisher's verifying key — a *selector* only; it must match a trusted key, it is never trusted itself |
+
+Why two layers: the signature cannot live inside what it signs, and
+signing the compressed payload bytes makes verification a single pass
+over one file — no canonicalization questions.
+
+`manifest.toml` (inside the payload — the *signed* copy is
+authoritative): `name`, `version`, `target` (Rust triple — install
+refuses a foreign host), `min_daemon_version`, `publisher` (display
+label), `[[tool_process]]` entries (name + `bin`-relative command),
+optional `team_config` (a `config/`-relative path wired
+`[team] config_path` no-clobber).
+
+## 2. Trust model (locked for v0.9; the v1.0 key ceremony is separate)
+
+- Verification requires the publisher key to appear in
+  `[pack] trusted_publishers` (base64 Ed25519 keys, operator config) —
+  **unioned with** the compiled-in `AIVYX_PUBLISHER_KEYS` (empty until
+  the v1.0 web presence establishes the real publisher key; documented
+  TODO, not a placeholder key).
+- The signature proves **authenticity and integrity** (protects the
+  customer from tampered packs). It is deliberately not DRM.
+- Archive extraction is path-sanitized: absolute paths, `..`
+  components, and symlink entries are refused outright.
+
+## 3. CLI surface
+
+- `aivyx pack keygen <keyfile>` — publisher-side: new Ed25519 keypair
+  (secret 0600; prints the base64 verifying key).
+- `aivyx pack build <staging-dir> --key <keyfile> --out <file>` —
+  stage dir must hold `manifest.toml` + `bin/` + `config/`; builds the
+  payload, signs, writes the bundle.
+- `aivyx pack inspect <file>` — verify + print the manifest (trust
+  check included; `--allow-untrusted` prints anyway, loudly).
+- `aivyx pack install <file>` — verify → target/version checks →
+  unpack to `~/.aivyx/packs/<name>/<version>/` → Mise-pattern wiring
+  (reuses `connect`'s `append_tool_process` / no-clobber
+  `[team] config_path`).
+- `aivyx pack update` — **deferred to the v1.0 web presence** (there is
+  no distribution endpoint to update from yet).
+
+## 4. Phase plan
+
+| Phase | What | Proof |
+|---|---|---|
+| **FR.0** ✅ | This doc. | Reviewed. |
+| **FR.1** | The format core: manifest types, build/sign, verify/inspect, path sanitization; `tar` + `flate2` workspace deps; `[pack] trusted_publishers` config. Round-trip + tamper + untrusted-key + sanitize tests with generated keys. | `cargo test`. |
+| **FR.2** | `aivyx pack` CLI (keygen/build/inspect/install) + the Mise-pattern install wiring. Temp-HOME install test. | `cargo test`. |
+| **FR.3** | Kitchen as the worked example: a `just pack-kitchen` recipe staging the kitchen-toolkit binary + `kitchen-boh.toml` into a real signed bundle; install it on the rig with a dev key in `trusted_publishers`; `aivyx doctor` kitchen section green. | Live on the rig. |
+| **FR.4** | Docs: operator install guide + publisher guide (INSTALL.md section). | Review. |
