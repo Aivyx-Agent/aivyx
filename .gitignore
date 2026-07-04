@@ -17,6 +17,11 @@ Thumbs.db
 .env
 *.local
 
+# Claude Code local harness state (permission grants etc.) — protected
+# in-repo, not just by a contributor's global git excludes.
+.claude/settings.local.json
+.claude/*.local.json
+
 # Phase 99 — disposable local-run state from scripts/dev-run.sh
 # (sandbox FS root + encrypted dev store; never real data)
 /.dev-run/
