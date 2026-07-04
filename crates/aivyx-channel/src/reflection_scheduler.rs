@@ -427,6 +427,11 @@ pub struct SkillAuthoringDeps {
         std::sync::Arc<crate::persona::PersistentPersonaLog>,
     pub drafter:
         std::sync::Arc<dyn crate::skill_authoring::SpecializationDrafter>,
+    /// 2026-07-04 dogfood (#6) — topics never authored from: the
+    /// configured routine/reflection schedule names, whose memory writes
+    /// are the agent's own journal, not operator-domain knowledge. Built
+    /// by the daemon from the resolved config.
+    pub excluded_topics: std::collections::HashSet<String>,
 }
 
 /// Phase 91 — handles the LLM-judged recall pass needs.
@@ -1846,6 +1851,7 @@ async fn run_skill_authoring_pass(
         deps.drafter.as_ref(),
         deps.proposal_log.as_ref(),
         &deps.config,
+        &deps.excluded_topics,
         &source_label,
         now_ms,
     )

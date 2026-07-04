@@ -53,13 +53,18 @@ mod tests {
     use aivyx_memory::InMemoryMemory;
 
     #[test]
-    fn is_internal_topic_catches_pruned_archives_only() {
+    fn is_internal_topic_catches_machine_state_only() {
         // #11 — the predicate operator-facing listings hide by.
         assert!(is_internal_topic("context:pruned:abc-123"));
         assert!(is_internal_topic(INTERNAL_TOPIC_PREFIX));
+        // 2026-07-04 dogfood — the loop's progress log is machine
+        // state too (it had leaked a knowledge-wiki page).
+        assert!(is_internal_topic("loop:progress"));
         assert!(!is_internal_topic("coffee-preferences"));
         assert!(!is_internal_topic("home-airport"));
         assert!(!is_internal_topic("weekly-digest"));
+        // A topic merely mentioning "loop" is NOT internal.
+        assert!(!is_internal_topic("training-loop-notes"));
     }
 
     #[tokio::test]

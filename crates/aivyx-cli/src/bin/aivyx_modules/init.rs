@@ -933,6 +933,29 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     // search), its "findings" are fabricated and are never broadcast.
     emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_grounded", None);
 
+    // 2026-07-04 self-learning dogfood (#2) — a fresh install never got a
+    // `[[reflection_schedule]]`, so the whole Phase-70 reflection-pass
+    // family (persona proposals, consolidation, Whetstone skill
+    // refinement, Praxis skill authoring) never fired: the routine named
+    // "nightly-reflection" above is a generic prompt TURN, not the
+    // reflection scheduler. Plant a real one — daily, off-peak, and
+    // skip-when-idle so a quiet day costs nothing. Same local-on /
+    // cloud-off posture as the routines above.
+    out.push_str(&format!(
+        "\n# The reflection scheduler — drives the self-learning passes \
+         (persona\n\
+         # proposals, skill refinement/authoring when those are enabled). \
+         Distinct\n\
+         # from the \"nightly-reflection\" routine above, which is a plain \
+         prompt turn.\n\
+         [[reflection_schedule]]\n\
+         name = \"reflection\"\n\
+         cron = \"0 30 2 * * *\"\n\
+         enabled = {}\n\
+         skip_when_idle = true\n",
+        b(core_enabled),
+    ));
+
     out
 }
 
@@ -2926,6 +2949,46 @@ mod tests {
         ] {
             assert!(!enabled_of(&toml, name), "cloud routine {name} must be disabled");
         }
+    }
+
+    /// 2026-07-04 self-learning dogfood (#2) — a fresh config must arm the
+    /// REAL reflection scheduler (the self-learning passes ride it), not just
+    /// the lookalike "nightly-reflection" prompt routine.
+    #[test]
+    fn default_reflection_schedule_is_planted() {
+        use toml_edit::DocumentMut;
+        let cfg =
+            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let toml = render_default_schedules(&cfg);
+        let doc: DocumentMut = toml.parse().unwrap();
+        let rs = doc["reflection_schedule"].as_array_of_tables().unwrap();
+        assert_eq!(rs.len(), 1);
+        let t = rs.iter().next().unwrap();
+        assert_eq!(t.get("name").and_then(|v| v.as_str()), Some("reflection"));
+        assert_eq!(t.get("enabled").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            t.get("skip_when_idle").and_then(|v| v.as_bool()),
+            Some(true),
+            "a quiet day must cost nothing"
+        );
+
+        // Cloud: written but disabled (cost-aware), same as the routines.
+        let cfg = init_config_no_profile(
+            Provider::Anthropic,
+            "claude",
+            Some("k"),
+            "s",
+            "/r",
+            true,
+        );
+        let toml = render_default_schedules(&cfg);
+        let doc: DocumentMut = toml.parse().unwrap();
+        let rs = doc["reflection_schedule"].as_array_of_tables().unwrap();
+        assert_eq!(
+            rs.iter().next().unwrap().get("enabled").and_then(|v| v.as_bool()),
+            Some(false),
+            "cloud reflection must be written disabled"
+        );
     }
 
     /// Chapter Plumb (PL.2) — the reporting routines must stay GROUNDED: they

@@ -1272,6 +1272,29 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 }
                 _ => None,
             };
+            // 2026-07-04 dogfood (#6) — topics skill authoring must never
+            // draw from: every configured routine's name (reflection +
+            // synced cron schedules; store records are "cfg-<name>"). A
+            // routine's memory writes are the agent's own journal, not
+            // operator-domain knowledge — the first live Praxis pass
+            // authored a skill from the nightly-reflection routine's
+            // writes. Best-effort: a store read failure just narrows the
+            // exclusion to the reflection names.
+            let mut sa_excluded_topics: std::collections::HashSet<String> =
+                rs_schedules.iter().map(|s| s.name.clone()).collect();
+            if let Some(store) = query_schedule_store.as_ref() {
+                if let Ok(records) =
+                    crate::schedule::list_schedules(store).await
+                {
+                    for r in records {
+                        let name = r
+                            .schedule_id
+                            .strip_prefix("cfg-")
+                            .unwrap_or(&r.schedule_id);
+                        sa_excluded_topics.insert(name.to_string());
+                    }
+                }
+            }
             // Chapter Praxis (PX.2) — skill-authoring deps: armed only when
             // [skill_authoring] is enabled AND every piece is present (the
             // wiki + graph stores + the proposal/persona chains + an
@@ -1302,6 +1325,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         proposal_log: plog,
                         persona_log: persona,
                         drafter,
+                        excluded_topics: sa_excluded_topics,
                     })
                 }
                 _ => None,

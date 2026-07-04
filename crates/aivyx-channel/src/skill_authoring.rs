@@ -77,6 +77,43 @@ pub struct SkillAuthoringStat {
 /// How many raw memory entries to sample into the synthesis context.
 const AUTHOR_MAX_ENTRIES: usize = 12;
 
+/// 2026-07-04 dogfood (#5) — normalized word set for the topic↔graph
+/// join. Wiki topics are slugs ("triathlon-basic") while graph subjects
+/// are LLM-extracted phrases ("triathlon beginner advice", sometimes
+/// with Unicode hyphens), so an exact `out_edges(topic)` lookup never
+/// matched and the pass was organically starved of candidates. Lowercase,
+/// split on non-alphanumeric (this also splits Unicode dashes), keep
+/// words of 3+ chars minus bare grammar words, fold a trailing plural-s.
+fn normalized_tokens(s: &str) -> HashSet<String> {
+    const STOP: [&str; 8] =
+        ["the", "and", "for", "with", "from", "this", "that", "its"];
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3 && !STOP.contains(w))
+        .map(|w| w.strip_suffix('s').unwrap_or(w).to_string())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// The triples "about" a topic: subject shares at least one significant
+/// normalized token with the topic name. Deliberately loose — the edge
+/// count is a connectedness heuristic and the matched relations feed the
+/// drafter as context, so an extra tangential triple is harmless while a
+/// missed one starves candidacy.
+fn edges_about<'a>(
+    triples: &'a [crate::knowledge_graph::GraphTriple],
+    topic: &str,
+) -> Vec<&'a crate::knowledge_graph::GraphTriple> {
+    let want = normalized_tokens(topic);
+    if want.is_empty() {
+        return Vec::new();
+    }
+    triples
+        .iter()
+        .filter(|t| !normalized_tokens(&t.subject).is_disjoint(&want))
+        .collect()
+}
+
 /// Chapter Praxis — author specialized skills for knowledge-rich, skill-
 /// less topics.
 ///
@@ -92,6 +129,7 @@ pub async fn propose_specialized_skills(
     drafter: &dyn SpecializationDrafter,
     proposal_log: &PersistentPersonaProposalLog,
     config: &SkillAuthoringConfig,
+    excluded_topics: &HashSet<String>,
     source_label: &str,
     now_ms: u64,
 ) -> SkillAuthoringStat {
@@ -118,9 +156,23 @@ pub async fn propose_specialized_skills(
         }
     };
 
+    // #5 — fetch the graph once per pass; the per-page join below is a
+    // token-overlap scan over this snapshot, not a per-topic store read.
+    let triples = graph_store.all_triples().await.unwrap_or_default();
+
     for page in pages {
         if stat.filed >= config.max_per_cycle {
             break;
+        }
+        // 2026-07-04 dogfood (#3/#6) — never author from machine state
+        // (`loop:progress` had a leaked wiki page) or from a routine's
+        // own topic (the first live pass authored a "nightly-reflection"
+        // skill from the nightly routine's journal writes — the agent
+        // talking to itself, not operator-domain knowledge).
+        if aivyx_memory::is_internal_topic(&page.topic)
+            || excluded_topics.contains(&page.topic)
+        {
+            continue;
         }
         stat.considered += 1;
 
@@ -142,8 +194,9 @@ pub async fn propose_specialized_skills(
             continue;
         }
         // Graph neighbourhood — evidence it's a connected, procedural
-        // subject (not an isolated fact).
-        let edges = graph_store.out_edges(&page.topic).await.unwrap_or_default();
+        // subject (not an isolated fact). Joined by normalized token
+        // overlap (#5), not exact node name — see `edges_about`.
+        let edges = edges_about(&triples, &page.topic);
         if edges.len() < config.min_edges {
             stat.skipped_thin += 1;
             continue;
@@ -376,13 +429,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn topic_graph_join_matches_the_real_rig_shapes() {
+        // 2026-07-04 dogfood (#5) — the exact pairs that never matched
+        // under the old out_edges(topic) lookup: slug topics vs
+        // LLM-extracted entity phrases, one with a Unicode hyphen.
+        let t = |s: &str| GraphTriple {
+            subject: s.into(),
+            predicate: "contains".into(),
+            object: "x".into(),
+            source_seqs: vec![1],
+            mentions: 1,
+            updated_at: 1,
+        };
+        let triples = vec![
+            t("triathlon beginner advice"),
+            t("movement\u{2011}tips memory"), // U+2011 non-breaking hyphen
+            t("focus\u{2011}tips"),
+            t("bike-to-work ride"),
+        ];
+        assert_eq!(edges_about(&triples, "triathlon-basic").len(), 1);
+        // The tips-family topics cross-match on the shared "tip" token —
+        // loose by design (the count is a connectedness heuristic).
+        assert_eq!(edges_about(&triples, "movement-tip").len(), 2);
+        assert_eq!(edges_about(&triples, "focus-tip").len(), 2);
+        // No token overlap ⇒ no edges.
+        assert!(edges_about(&triples, "coffee-preference").is_empty());
+        // A degenerate topic (no significant tokens) never matches.
+        assert!(edges_about(&triples, "--").is_empty());
+    }
+
+    #[tokio::test]
+    async fn internal_and_routine_topics_are_never_authored_from() {
+        let h = harness().await;
+        // Machine state — a leaked loop bookkeeping page.
+        seed_rich_topic(&h, "loop:progress").await;
+        // A routine's own topic, rich enough to otherwise qualify.
+        seed_rich_topic(&h, "nightly-reflection").await;
+        let excluded: HashSet<String> =
+            [String::from("nightly-reflection")].into();
+        let stat = propose_specialized_skills(
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()),
+            &h.proposals, &cfg(), &excluded, "r", 1000,
+        )
+        .await;
+        assert_eq!(stat.filed, 0);
+        assert!(h.proposals.get("skill-author:loop:progress").is_none());
+        assert!(h.proposals.get("skill-author:nightly-reflection").is_none());
+    }
+
     #[tokio::test]
     async fn rich_skill_less_topic_yields_a_specialized_proposal() {
         let h = harness().await;
         seed_rich_topic(&h, "deploy").await;
         let stat = propose_specialized_skills(
             &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()),
-            &h.proposals, &cfg(), "reflection", 1000,
+            &h.proposals, &cfg(), &HashSet::new(), "reflection", 1000,
         )
         .await;
         assert_eq!(stat.filed, 1);
@@ -416,7 +518,7 @@ mod tests {
             .await
             .unwrap();
         let s = propose_specialized_skills(
-            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), &HashSet::new(), "r", 1000,
         )
         .await;
         assert_eq!(s.filed, 0);
@@ -433,7 +535,7 @@ mod tests {
         }
         .to_json_value()];
         let s2 = propose_specialized_skills(
-            &h.wiki, &h.graph, &h.memory, &existing, &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &existing, &FixedDrafter(drafted()), &h.proposals, &cfg(), &HashSet::new(), "r", 1000,
         )
         .await;
         assert_eq!(s2.filed, 0);
@@ -442,7 +544,7 @@ mod tests {
         // Disabled config → nothing.
         let off = SkillAuthoringConfig { enabled: false, ..cfg() };
         let s3 = propose_specialized_skills(
-            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &off, "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &off, &HashSet::new(), "r", 1000,
         )
         .await;
         assert_eq!(s3.filed, 0);
@@ -464,7 +566,7 @@ mod tests {
         h.memory.put("deploy", "step: run the smoke test before ship").await.unwrap();
         let drafter = Capturing(Mutex::new(String::new()));
         let stat = propose_specialized_skills(
-            &h.wiki, &h.graph, &h.memory, &[], &drafter, &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &drafter, &h.proposals, &cfg(), &HashSet::new(), "r", 1000,
         )
         .await;
         assert_eq!(stat.filed, 1);
@@ -479,12 +581,12 @@ mod tests {
         let h = harness().await;
         seed_rich_topic(&h, "deploy").await;
         let first = propose_specialized_skills(
-            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 1000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), &HashSet::new(), "r", 1000,
         )
         .await;
         assert_eq!(first.filed, 1);
         let second = propose_specialized_skills(
-            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), "r", 2000,
+            &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()), &h.proposals, &cfg(), &HashSet::new(), "r", 2000,
         )
         .await;
         assert_eq!(second.filed, 0);

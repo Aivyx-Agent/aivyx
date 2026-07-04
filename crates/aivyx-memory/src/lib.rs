@@ -145,10 +145,18 @@ pub mod bm25;
 /// truly hidden — just kept out of "show me everything" views.
 pub const INTERNAL_TOPIC_PREFIX: &str = "context:pruned:";
 
+/// Reserved topic prefix for the autonomous loop's own bookkeeping —
+/// today the driver's progress log (`loop:progress`, Phase 173). Machine
+/// state like the prune sink, so the same enumerating surfaces hide it.
+/// (2026-07-04 self-learning dogfood: `loop:progress` had leaked a
+/// knowledge-wiki page because only `context:pruned:` was classified.)
+pub const LOOP_TOPIC_PREFIX: &str = "loop:";
+
 /// Whether `topic` is a reserved internal-bookkeeping topic (see
-/// [`INTERNAL_TOPIC_PREFIX`]).
+/// [`INTERNAL_TOPIC_PREFIX`] and [`LOOP_TOPIC_PREFIX`]).
 pub fn is_internal_topic(topic: &str) -> bool {
     topic.starts_with(INTERNAL_TOPIC_PREFIX)
+        || topic.starts_with(LOOP_TOPIC_PREFIX)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

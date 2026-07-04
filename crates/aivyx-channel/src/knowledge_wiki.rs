@@ -367,6 +367,20 @@ impl WikiSynthesizer {
     /// `skipped`. Returns a [`SweepReport`] for the breadcrumb / tests.
     pub async fn sweep(&self, now_secs: u64, max_pages: usize) -> SweepReport {
         let mut report = SweepReport::default();
+        // Self-heal (2026-07-04 dogfood): purge pages that ALREADY exist
+        // for internal/machine topics — e.g. `loop:progress` leaked a page
+        // before the classifier covered the loop's bookkeeping prefix.
+        // Skipping at synthesis (below) prevents new leaks but leaves the
+        // stored page listing in the Studio Wiki, recall fusion, and the
+        // Praxis candidate walk forever. Best-effort: a failed delete just
+        // retries next sweep.
+        if let Ok(pages) = self.store.all_pages().await {
+            for page in pages {
+                if crate::prune_sink::is_internal_topic(&page.topic) {
+                    let _ = self.store.delete_page(&page.topic).await;
+                }
+            }
+        }
         let topics = match self.memory.list_topics().await {
             Ok(t) => t,
             Err(_) => return report,
