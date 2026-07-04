@@ -5,6 +5,44 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.38] — 2026-07-04
+
+Dogfood-surfaced reliability fixes from the 2026-07-04 single-agent loop run,
+each live-verified on the test rig before release.
+
+### Fixed
+
+- **A planner-named unknown specialist no longer kills the story.** When the
+  LLM planner reaches for a generic role word that isn't in the roster
+  ("Operations", "QA-Engineer"), `SpecialistPool::resolve` now maps the word to
+  a capability and routes to the best-fit, least-privilege roster member instead
+  of hard-failing the whole delegation. Truly unmatchable names still error, and
+  naming the lead is still rejected; Keystone's artifact gate keeps a bad
+  best-effort attempt honest.
+- **`aivyx loop add` no longer trips over the 200-character title cap.** A
+  second positional argument is now accepted as the story body
+  (`aivyx loop add <title> [body]`), and an over-long title auto-splits at the
+  last word boundary that fits — the overflow moves into the body with a printed
+  note instead of a bare error. The cap error itself now says where the detail
+  belongs.
+
+### Changed
+
+- **`memory.write` supersedes near-duplicate rewrites.** A refinement of an
+  already-stored fact (same content with a citation appended, a punctuation or
+  case tweak) now replaces the older entry instead of piling up beside it as
+  recall noise. Thresholds are deliberately conservative — distinct facts that
+  merely share words ("…Tuesday…" vs "…Thursday…") stay side by side — and the
+  new entry always lands before any older one is removed, so a mid-way failure
+  leaves noise, never loss. Superseded sequence numbers are reported in the tool
+  output.
+
+### Security
+
+- Bumped the transitive `cmov` dependency 0.5.3 → 0.5.4 (Dependabot alert:
+  wrong Cmov/CmovEq results on aarch64 when register high bits are set; sits
+  under the audit chain's HMAC stack).
+
 ## [0.7.37] — 2026-07-04
 
 ### Added
