@@ -5,6 +5,43 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.7.39] — 2026-07-04
+
+The self-learning loops now actually run for a fresh install. A live dogfood
+of the skill self-learning arc (Whetstone refinement + Praxis authoring)
+found five gaps that together kept it structurally dark; all are fixed and
+each was verified live on the test rig — including the first-ever
+agent-refined skill and first-ever knowledge-authored skill landing on a
+real persona chain under operator governance.
+
+### Fixed
+
+- **The default role can now use its own skills.** `skills.list` and
+  `skills.invoke` were never granted in the default-role capability floor, so
+  every fresh install's agent was denied on calling them — no skill invocation
+  could be audited and the skill-effectiveness ledger could never accumulate.
+  Both scopes (read-only over the agent's own operator-approved skill set) are
+  now in the floor; `skills.propose` deliberately stays out.
+- **Fresh installs get a real reflection schedule.** `aivyx init` never wrote a
+  `[[reflection_schedule]]`, so the whole reflection-pass family (persona
+  proposals, consolidation, skill refinement, skill authoring) never fired —
+  the starter routine *named* "nightly-reflection" is a plain prompt turn, not
+  the reflection scheduler. init now plants a daily, skip-when-idle reflection
+  schedule (enabled on local providers, written-disabled on cloud).
+- **Skill authoring can actually find candidates.** Praxis gated candidacy on
+  the wiki topic name appearing verbatim as a knowledge-graph subject — but
+  topics are slugs while graph subjects are LLM-extracted phrases, so the
+  lookup never matched and the pass was silently starved. Candidacy now joins
+  on normalized word overlap, verified against the exact shapes observed live.
+- **The loop's bookkeeping no longer pollutes the knowledge base.** The
+  `loop:progress` progress log had leaked a knowledge-wiki page;
+  `is_internal_topic` now covers the loop's reserved prefix and the wiki sweep
+  purges any already-leaked internal pages.
+- **Skill authoring skips the agent's own journal.** The authoring pass could
+  synthesize a "skill" from a scheduled routine's own memory writes (the agent
+  talking to itself). Configured routine and reflection schedule names are now
+  excluded authoring topics.
+
 ## [0.7.38] — 2026-07-04
 
 Dogfood-surfaced reliability fixes from the 2026-07-04 single-agent loop run,
