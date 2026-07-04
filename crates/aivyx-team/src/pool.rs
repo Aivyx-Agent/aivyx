@@ -137,11 +137,97 @@ impl SpecialistPool {
                 )))
             }
             Some(m) => Ok(m),
-            None => Err(TeamError::Config(format!(
-                "no specialist {specialist:?} in team {:?}",
-                self.config.name
-            ))),
+            // Graceful fallback: the LLM planner sometimes names a specialist
+            // that isn't in the roster (a generic role word like "Operations"
+            // or "QA Engineer"). Hard-failing the whole delegation there just
+            // skips a doable story (seen live in the loop dogfood, sharpened by
+            // the ops→verifier rename). Instead, map the requested word to a
+            // capability and route to the best-fit specialist — the acceptance
+            // gate (Keystone) still catches a bad result, so a best-effort
+            // attempt strictly beats an abandoned story.
+            None => match self.fallback_specialist(specialist) {
+                Some(m) => {
+                    eprintln!(
+                        "aivyx team: planner named unknown specialist \
+                         {specialist:?}; routing to best-fit {:?}",
+                        m.name
+                    );
+                    Ok(m)
+                }
+                None => Err(TeamError::Config(format!(
+                    "no specialist {specialist:?} in team {:?}",
+                    self.config.name
+                ))),
+            },
         }
+    }
+
+    /// Best-effort recovery when an exact name/role match fails: map a generic
+    /// role word the planner reached for to a capability, then pick the roster
+    /// member that best provides it. Capability-based rather than name-based so
+    /// it works for ANY roster (incl. a vertical pack's), and prefers the
+    /// least-privilege fit (e.g. a run-only "operations" step goes to a
+    /// shell-but-not-write specialist over the coder). `None` when nothing
+    /// sensible fits — the caller then errors as before.
+    fn fallback_specialist(&self, specialist: &str) -> Option<&TeamMember> {
+        let q = specialist.to_ascii_lowercase();
+        let hit = |kws: &[&str]| kws.iter().any(|kw| q.contains(kw));
+        // A member's declared scope bases (bare or qualified, `base` or
+        // `base:qualifier`).
+        let has = |m: &&TeamMember, base: &str| {
+            m.capability_scopes
+                .iter()
+                .any(|s| s.split(':').next() == Some(base))
+        };
+        let specialists = || {
+            self.config
+                .members
+                .iter()
+                .filter(|m| !m.name.eq_ignore_ascii_case(&self.config.lead))
+        };
+
+        // Order matters: more specific capability wants are checked first so
+        // e.g. "developer" routes to the coder, not merely any writer/runner.
+        if hit(&["cod", "develop", "engineer", "program", "implement", "build"]) {
+            if let Some(m) = specialists().find(|m| has(m, "fs.write") && has(m, "shell.exec")) {
+                return Some(m);
+            }
+        }
+        if hit(&["writ", "author", "scribe", "editor", "document", "content", "note"]) {
+            // Prefer a pure writer (can write, no shell) over the coder, both
+            // for semantic fit and least privilege; else any writer.
+            if let Some(m) = specialists()
+                .find(|m| (has(m, "fs.write") || has(m, "workspace")) && !has(m, "shell.exec"))
+            {
+                return Some(m);
+            }
+            if let Some(m) = specialists().find(|m| has(m, "fs.write") || has(m, "workspace")) {
+                return Some(m);
+            }
+        }
+        if hit(&[
+            "operation", "ops", "devops", "sysadmin", "sre", "infra", "execut", "deploy", "run",
+            "qa", "test", "verif", "validat",
+        ]) {
+            // Prefer a least-privilege runner (shell without write), else any.
+            if let Some(m) = specialists().find(|m| has(m, "shell.exec") && !has(m, "fs.write")) {
+                return Some(m);
+            }
+            if let Some(m) = specialists().find(|m| has(m, "shell.exec")) {
+                return Some(m);
+            }
+        }
+        if hit(&["research", "investigat", "gather", "search", "analy", "data", "fetch"]) {
+            if let Some(m) = specialists().find(|m| has(m, "net.fetch") || has(m, "web.search")) {
+                return Some(m);
+            }
+        }
+        if hit(&["review", "critic", "audit", "inspect", "read"]) {
+            if let Some(m) = specialists().find(|m| has(m, "fs.read")) {
+                return Some(m);
+            }
+        }
+        None
     }
 
     /// Build the derived channel for a specialist sub-turn — trust floored
@@ -476,5 +562,36 @@ mod tests {
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
         assert!(p.run("lead", "task", &lead_ch).await.is_err());
+    }
+
+    #[test]
+    fn resolve_falls_back_to_best_fit_for_an_unknown_specialist() {
+        // The planner sometimes names a specialist that isn't in the roster (a
+        // generic role word). Rather than hard-fail the story, resolve routes to
+        // the best-fit member BY CAPABILITY. Uses the real default Nonagon.
+        let p = pool(
+            FakeProvider::says("x"),
+            crate::roster::default_nonagon().members,
+            "coordinator",
+        );
+
+        // "Operations" is no longer a role (ops→verifier); a run/inspect word
+        // maps to a shell-capable, least-privilege (non-writing) runner.
+        assert_eq!(p.resolve("Operations").unwrap().name, "verifier");
+        assert_eq!(p.resolve("Tester").unwrap().name, "verifier");
+        // A code word → the write+shell coder.
+        assert_eq!(p.resolve("Developer").unwrap().name, "coder");
+        // A writing word → a pure writer (not the coder), least-privilege.
+        assert_eq!(p.resolve("Technical Author").unwrap().name, "writer");
+        // A research word → a fetch-capable member.
+        assert_eq!(p.resolve("Investigator").unwrap().name, "researcher");
+        // No sensible capability fit still errors (unchanged behaviour).
+        assert!(matches!(
+            p.resolve("Astrologer"),
+            Err(TeamError::Config(m)) if m.contains("no specialist")
+        ));
+        // The lead guard is untouched — naming the lead is still an error, not
+        // a fallback.
+        assert!(p.resolve("coordinator").is_err());
     }
 }
