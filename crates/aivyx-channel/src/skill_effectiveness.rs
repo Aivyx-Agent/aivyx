@@ -30,6 +30,26 @@ pub const SKILL_HELPFUL_NET: f32 = 1.0;
 /// Net folded (negatively) for each skill invoked in a turn that did not.
 pub const SKILL_UNHELPFUL_NET: f32 = 1.0;
 
+/// Chapter Strop (ST.1) — grade a turn for the effectiveness fold.
+/// Before Strop this was `matches!(outcome, Completed)`, and since local
+/// models complete nearly every turn — including turns where the skill's
+/// result was claimed but never done — every skill's EWMA drifted
+/// positive and the WH.3 refinement pass never found an underperformer
+/// at the default floor. A turn now folds helpful only when it Completed
+/// **without a Candor unfulfilled-claim annotation** (the turn loop's
+/// own verdict, embedded in the final message with registry-accurate
+/// tool names). Failed/Looping turns stay unhelpful, as before. Pure.
+pub fn turn_folds_helpful(outcome: &aivyx_core::TurnOutcome) -> bool {
+    match outcome {
+        aivyx_core::TurnOutcome::Completed { final_message, .. } => {
+            !aivyx_core::claim_check::has_unfulfilled_claim_annotation(
+                final_message,
+            )
+        }
+        _ => false,
+    }
+}
+
 /// Durable, decayed per-skill effectiveness ledger over
 /// [`aivyx_storage::KeyDomain::SkillHelpfulnessLedger`]. Key = skill
 /// name; value = the shared [`LedgerEntry`] (decayed EWMA + samples).
@@ -129,6 +149,54 @@ mod tests {
     use super::*;
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{KeyDomain, RedbStorage, StorageConfig};
+
+    // ---- Chapter Strop (ST.1) — the graded fold ---------------------
+
+    #[test]
+    fn completed_clean_turn_folds_helpful() {
+        let outcome = aivyx_core::TurnOutcome::Completed {
+            final_message: "Saved to memory under coffee-preferences.".into(),
+            tool_calls_made: 1,
+            duration: std::time::Duration::from_secs(1),
+        };
+        assert!(turn_folds_helpful(&outcome));
+    }
+
+    #[test]
+    fn candor_annotated_completion_folds_unhelpful() {
+        // The dogfood shape: the model invoked a skill, CLAIMED the
+        // save, never called the tool — the turn still Completed, and
+        // Candor appended its note. Pre-Strop this folded +1.
+        let notes = aivyx_core::claim_check::detect_unfulfilled_claims(
+            "Done — I saved that to memory for you.",
+            &[String::from("web.search")],
+        );
+        assert_eq!(notes.len(), 1, "fixture must trip a real rule");
+        let outcome = aivyx_core::TurnOutcome::Completed {
+            final_message: format!(
+                "Done — I saved that to memory for you.\n\n⚠ {}",
+                notes[0]
+            ),
+            tool_calls_made: 1,
+            duration: std::time::Duration::from_secs(1),
+        };
+        assert!(!turn_folds_helpful(&outcome));
+    }
+
+    #[test]
+    fn non_completed_turns_stay_unhelpful() {
+        let looping = aivyx_core::TurnOutcome::Looping {
+            final_message: "…".into(),
+            tool_calls_made: 9,
+            duration: std::time::Duration::from_secs(30),
+            repeat_limit: 3,
+        };
+        assert!(!turn_folds_helpful(&looping));
+        let failed = aivyx_core::TurnOutcome::Failed(
+            aivyx_core::AivyxError::Internal("provider down".into()),
+        );
+        assert!(!turn_folds_helpful(&failed));
+    }
 
     async fn ledger() -> SkillEffectivenessLedger {
         let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());

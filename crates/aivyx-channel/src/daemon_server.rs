@@ -2119,18 +2119,22 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // effectiveness fold. Same detached, failure-
                             // isolated shape: walk this turn's audit slice
                             // for SkillInvocation entries and fold each
-                            // distinct skill by the turn outcome (helpful =
-                            // Completed). Fires only when [skill_refinement]
+                            // distinct skill by the turn's grade. Chapter
+                            // Strop (ST.1): helpful = Completed WITHOUT a
+                            // Candor unfulfilled-claim annotation — a
+                            // claimed-but-not-done skill turn now folds
+                            // negative instead of drifting every score
+                            // positive. Fires only when [skill_refinement]
                             // is configured (the ledger is `Some`).
                             if let (Some(skill_ledger), Some(pre_len), Some(audit)) = (
                                 &skill_effectiveness_ledger,
                                 audit_pre_turn_len,
                                 &audit_log,
                             ) {
-                                let helpful = matches!(
-                                    outcome,
-                                    TurnOutcome::Completed { .. }
-                                );
+                                let helpful =
+                                    crate::skill_effectiveness::turn_folds_helpful(
+                                        &outcome,
+                                    );
                                 let ledger_clone = Arc::clone(skill_ledger);
                                 let audit_clone = Arc::clone(audit);
                                 tokio::spawn(async move {

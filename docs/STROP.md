@@ -40,19 +40,22 @@ was deferred out of WH.3b and never landed. Consequences today:
 fold site (the detached task in `daemon_server`, ~L2094), grade:
 
 - **−1.0** — turn `Failed` / `Looping` (today's negative, unchanged), OR
-  the turn Completed but **Candor flagged an unfulfilled claim**
-  (`aivyx_core::claim_check::detect_unfulfilled_claims(final_message,
-  called_tools)` — pure, deterministic, zero LLM cost). The called-tools
-  list is derived from the same audit slice the fold already walks
-  (`ToolCallStarted`/equivalent entries), the final message from the
-  outcome already in scope. This targets the dominant local-model
-  failure: invoke the skill, claim the result, never do the work.
+  the turn Completed but **Candor flagged an unfulfilled claim**. This
+  targets the dominant local-model failure: invoke the skill, claim the
+  result, never do the work.
 - **+1.0** — Completed, no unfulfilled claim (today's positive).
 
-No double-computation concern: Candor's turn-loop hook annotates the
-message for the *operator*; Strop re-runs the same pure function for the
-*ledger*. Sharing one computation is a possible later refactor, not a
-requirement (the function is string scanning; cost is nil).
+**ST.1 implementation decision (built):** the fold reads Candor's
+verdict from the *annotation* the turn loop already embedded in
+`final_message` ("⚠ {note}", matched against the exact finite `RULES`
+note strings via `claim_check::has_unfulfilled_claim_annotation`) rather
+than re-running the detection. Two reasons: the audit slice **cannot**
+reconstruct `called_tools` (`ToolCall` entries carry `tool_id`, not the
+name — the registry lives in the turn loop), and the annotation *is* the
+turn loop's own registry-accurate computation, so reading it shares one
+verdict instead of maintaining two. Exact-note matching means organic
+model text (or a bare ⚠ glyph) can't false-positive. The grade itself is
+the pure `skill_effectiveness::turn_folds_helpful(&TurnOutcome)`.
 
 ### Correction cross-reference at reflection cadence — the original design
 `correction_detect::detect_tool_corrections` already identifies
@@ -117,7 +120,7 @@ fold (micro-refactor, only if it falls out naturally).
 | Phase | What | Proof |
 |---|---|---|
 | **ST.0** | This doc — scope + decisions locked. | Reviewed. |
-| **ST.1** | Graded per-turn fold: thread `final_message` + called-tools into the fold site; `helpful` becomes a three-way grade computed there; `record_turn_skills` keeps its bool signature (the caller grades). Unit tests: Candor-flagged Completed folds −1; clean Completed folds +1; Failed folds −1; no-skill turn folds nothing. | `cargo test` + the dogfood-shape test. |
+| **ST.1** ✅ | **DONE.** Graded per-turn fold via `turn_folds_helpful` (pure, in `skill_effectiveness`) reading Candor's embedded annotation (`claim_check::has_unfulfilled_claim_annotation` — see the implementation decision above); `record_turn_skills` keeps its bool signature (the caller grades). Tests: the dogfood shape (Candor-annotated Completed folds unhelpful, with the fixture built through the real detect+append path), clean Completed folds helpful, Failed/Looping stay unhelpful, annotation detection rejects raw claim prose + organic ⚠ text. | `cargo test` green. |
 | **ST.2** | Correction retro-fold in the reflection scheduler: `turn_id → skills` map from the lookback audit walk + `followup_outcome` reuse; fold −1 per corrected skill turn. Unit tests over canned summaries/audit entries; ST-OQ1 resolved with a test. | `cargo test`. |
 | **ST.3** | Live rig verification: drive a skill turn that claims-but-doesn't (Candor negative), a skill turn the "operator" corrects next turn (retro-fold negative), and clean skill turns (positive); watch the ledger cross floor 0.0 and Whetstone file a refinement **at default thresholds** — the organic-firing proof the dogfood couldn't give. | Journal + `persona proposals list` on the rig; findings folded back here. |
 

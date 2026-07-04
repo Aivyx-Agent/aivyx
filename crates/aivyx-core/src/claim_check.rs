@@ -80,6 +80,21 @@ const RULES: &[ClaimRule] = &[
 /// names invoked during the turn) and return an honest note for each concrete
 /// action that was claimed but whose fulfilling tool was never called. Empty
 /// when everything claimed was backed by a real call (the common case). Pure.
+/// Chapter Strop (ST.1) — whether `final_message` carries a Candor
+/// annotation (the turn loop appends "⚠ {note}" for each unfulfilled
+/// claim before building `TurnOutcome::Completed`). Downstream consumers
+/// (the skill-effectiveness fold) read the verdict from the message
+/// instead of re-deriving it: the turn loop computed it with
+/// registry-accurate tool names, which the audit slice can't reconstruct
+/// (`ToolCall` entries carry `tool_id`, not the name). Matches the exact
+/// finite note strings from `RULES`, so organic model text can't
+/// false-positive. Pure.
+pub fn has_unfulfilled_claim_annotation(final_message: &str) -> bool {
+    RULES
+        .iter()
+        .any(|r| final_message.contains(&format!("⚠ {}", r.note)))
+}
+
 pub fn detect_unfulfilled_claims(final_message: &str, called_tools: &[String]) -> Vec<String> {
     let msg = final_message.to_lowercase();
     let mut notes = Vec::new();
@@ -104,6 +119,32 @@ mod tests {
 
     fn tools(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ---- Chapter Strop (ST.1) — annotation detection ----------------
+
+    #[test]
+    fn annotation_detection_keys_on_candors_verdict_not_raw_claims() {
+        // A raw unfulfilled-claim SENTENCE without the annotation is not
+        // a verdict — the fold must key on what Candor concluded (with
+        // registry-accurate tool names), not re-guess from prose.
+        let raw_claim_only = "I researched it and saved that to memory.";
+        let notes = detect_unfulfilled_claims(
+            raw_claim_only,
+            &tools(&["web.search"]),
+        );
+        assert_eq!(notes.len(), 1);
+        // Build the annotated message exactly the way the turn loop
+        // does ("\n⚠ {note}" appended), so this test tracks the real
+        // append shape rather than a hardcoded copy of the note text.
+        let annotated = format!("{raw_claim_only}\n\n⚠ {}", notes[0]);
+        // An organic warning glyph with non-RULES text is not a verdict.
+        let organic_warning = "⚠ the disk is 90% full — consider a cleanup.";
+
+        assert!(has_unfulfilled_claim_annotation(&annotated));
+        assert!(!has_unfulfilled_claim_annotation(raw_claim_only));
+        assert!(!has_unfulfilled_claim_annotation(organic_warning));
+        assert!(!has_unfulfilled_claim_annotation(""));
     }
 
     #[test]
