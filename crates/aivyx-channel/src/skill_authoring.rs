@@ -156,6 +156,43 @@ pub async fn propose_specialized_skills(
         }
     };
 
+    // Soak review 2026-07-04 — near-duplicate TOPIC names propagate up
+    // the stack (memory topics → wiki pages → twin skills: the first
+    // soak filed "triathlon" AND "triathlon-basic"). Before authoring a
+    // topic, compare its normalized token set against every covered
+    // skill name/domain AND every prior `skill-author:*` proposal topic
+    // (any status — a rejected twin means the operator didn't want the
+    // family): a CONTAINMENT relation either way (one set ⊆ the other,
+    // both non-empty) marks a near-dup and the topic is skipped as
+    // deduped. Deliberately containment-only: token sets can't see
+    // synonym pairs ("focus-tip" vs "concentration-tip"), and a looser
+    // any-shared-token rule would wrongly merge genuinely distinct
+    // domains ("movement-tip" vs "focus-tip"); the synonym class stays
+    // with operator governance, which is the dedup of last resort.
+    let mut claimed_token_sets: Vec<HashSet<String>> = covered
+        .iter()
+        .map(|name| normalized_tokens(name))
+        .filter(|t| !t.is_empty())
+        .collect();
+    for p in proposal_log.list(crate::persona_proposal::ProposalStatusFilter::All) {
+        if let Some(topic) = p.id.strip_prefix("skill-author:") {
+            let t = normalized_tokens(topic);
+            if !t.is_empty() {
+                claimed_token_sets.push(t);
+            }
+        }
+    }
+    fn near_dup_of_claimed(
+        claimed: &[HashSet<String>],
+        topic: &str,
+    ) -> bool {
+        let t = normalized_tokens(topic);
+        if t.is_empty() {
+            return false;
+        }
+        claimed.iter().any(|c| c.is_subset(&t) || t.is_subset(c))
+    }
+
     // #5 — fetch the graph once per pass; the per-page join below is a
     // token-overlap scan over this snapshot, not a per-topic store read.
     let triples = graph_store.all_triples().await.unwrap_or_default();
@@ -190,6 +227,13 @@ pub async fn propose_specialized_skills(
         // proposal) dedups instead of nagging.
         let proposal_id = format!("skill-author:{}", page.topic);
         if proposal_log.get(&proposal_id).is_some() {
+            stat.deduped += 1;
+            continue;
+        }
+        // Near-dup topic family already claimed by a skill or a prior
+        // authoring proposal (soak 2026-07-04; see the containment note
+        // above).
+        if near_dup_of_claimed(&claimed_token_sets, &page.topic) {
             stat.deduped += 1;
             continue;
         }
@@ -257,6 +301,12 @@ pub async fn propose_specialized_skills(
             continue;
         }
         stat.filed += 1;
+        // A filed topic claims its family within this pass too, so a
+        // max_per_cycle > 1 pass can't file twins back to back.
+        let t = normalized_tokens(&page.topic);
+        if !t.is_empty() {
+            claimed_token_sets.push(t);
+        }
     }
     stat
 }
@@ -392,6 +442,12 @@ mod tests {
         SkillAuthoringConfig { enabled: true, min_summary_chars: 50, min_edges: 2, max_per_cycle: 2 }
     }
 
+    /// Production-shaped cap (1/cycle) — the near-dup test drives two
+    /// cycles so the second sees the first's claimed family.
+    fn cfg1() -> SkillAuthoringConfig {
+        SkillAuthoringConfig { max_per_cycle: 1, ..cfg() }
+    }
+
     fn drafted() -> Option<DraftedSkill> {
         Some(DraftedSkill {
             trigger: "when deploying".into(),
@@ -457,6 +513,45 @@ mod tests {
         assert!(edges_about(&triples, "coffee-preference").is_empty());
         // A degenerate topic (no significant tokens) never matches.
         assert!(edges_about(&triples, "--").is_empty());
+    }
+
+    #[tokio::test]
+    async fn near_dup_topic_families_are_not_authored_twice() {
+        // Soak 2026-07-04: "triathlon" was proposed, then the next tick
+        // proposed "triathlon-basic" — twin skills from near-dup topic
+        // names. Containment on normalized tokens blocks the family;
+        // genuinely distinct domains sharing a generic word survive.
+        let h = harness().await;
+        seed_rich_topic(&h, "triathlon").await;
+        seed_rich_topic(&h, "triathlon-basic").await;
+        seed_rich_topic(&h, "movement-tip").await;
+
+        // Two cycles at cap 1. Page order is storage-defined, so assert
+        // the family INVARIANT rather than which twin wins: exactly one
+        // of the triathlon pair gets a proposal, the distinct domain
+        // gets one, and the blocked twin registers as deduped.
+        let mut filed_total = 0;
+        let mut deduped_total = 0;
+        for now in [1000, 2000] {
+            let s = propose_specialized_skills(
+                &h.wiki, &h.graph, &h.memory, &[], &FixedDrafter(drafted()),
+                &h.proposals, &cfg1(), &HashSet::new(), "r", now,
+            )
+            .await;
+            filed_total += s.filed;
+            deduped_total += s.deduped;
+        }
+        assert_eq!(filed_total, 2, "one per family across two cycles");
+        let tri = h.proposals.get("skill-author:triathlon").is_some();
+        let tri_basic =
+            h.proposals.get("skill-author:triathlon-basic").is_some();
+        assert!(
+            tri ^ tri_basic,
+            "exactly ONE of the triathlon twins may be authored \
+             (tri={tri}, tri_basic={tri_basic})"
+        );
+        assert!(h.proposals.get("skill-author:movement-tip").is_some());
+        assert!(deduped_total >= 1, "the blocked twin counts as deduped");
     }
 
     #[tokio::test]

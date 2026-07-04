@@ -107,6 +107,12 @@ impl ContradictionDetector {
          entries. `reason` is one short clause naming the incompatibility. \
          Report ONLY genuine contradictions — NOT entries that merely \
          differ, elaborate, update a plan, or describe different subjects. \
+         Entries describing a CHANGE OVER TIME are a sequence, not a \
+         contradiction: an older \"X exists / X is the case\" followed by \
+         a newer \"X was removed / added / renamed / changed\" (environment \
+         observations, progress logs, before-and-after states) must NOT \
+         be flagged — the world changed between the two entries; neither \
+         is wrong. \
          If there are none, output `[]`. No prose, no markdown fences."
     }
 
@@ -277,6 +283,29 @@ mod tests {
             created_at_secs: created,
             last_read_at_secs: 0,
         }
+    }
+
+    /// Soak review 2026-07-04 — the detector flagged "suite-check.md
+    /// present" (older) vs "suite-check.md removed" (newer) as a
+    /// contradiction. Daily environment observations produce change
+    /// sequences forever, so the prompt must carve them out explicitly.
+    /// Drift-guard in the Plumb style: fails if a future edit quietly
+    /// drops the temporal-sequence exemption.
+    #[test]
+    fn prompt_exempts_change_over_time_sequences() {
+        let p = ContradictionDetector::system_prompt().to_lowercase();
+        assert!(
+            p.contains("change over time"),
+            "prompt must name the temporal-sequence class"
+        );
+        assert!(
+            p.contains("sequence, not a contradiction"),
+            "prompt must say a sequence is not a contradiction"
+        );
+        assert!(
+            p.contains("the world changed"),
+            "prompt must explain WHY (neither entry is wrong)"
+        );
     }
 
     #[test]
