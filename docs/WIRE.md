@@ -1,6 +1,6 @@
 # Turns Down a Pipe — headless multi-turn sessions (Chapter Wire)
 
-> **Status: SCOPED 2026-07-04.** `aivyx --headless "<task>"` is
+> **Status: COMPLETE (WI.0–WI.2, 2026-07-04).** `aivyx --headless "<task>"` is
 > one-task-per-process: every invocation is a fresh session, so no
 > same-session conversation can be driven from a terminal, a script, or a
 > test harness. The Chapter Strop live verification hit this wall
@@ -16,13 +16,21 @@
 ## 1. Why — the session is the unit the CLI can't reach
 
 Everything session-scoped is invisible to headless callers today:
-conversation continuity, session-partitioned memory, and every
-consecutive-turn signal (the correction proxy `followup_outcome`, and
-through it Strop's retro-fold). Operators scripting the agent get the
-same ceiling: a batch file of related steps runs as unrelated one-shot
-strangers. The daemon-side machinery is complete — Chapter H's headless
-posture (gates refuse instead of parking) applies per-submit, and the
-interactive REPL already drives multi-turn sessions over the same IPC.
+session-partitioned memory, the Phase 86 conversation window (prior
+turns feeding recall relevance), and every consecutive-turn signal (the
+correction proxy `followup_outcome`, and through it Strop's retro-fold).
+Operators scripting the agent get the same ceiling: a batch file of
+related steps runs as unrelated one-shot strangers. The daemon-side
+machinery is complete — Chapter H's headless posture (gates refuse
+instead of parking) applies per-submit, and the interactive REPL already
+drives multi-turn sessions over the same IPC.
+
+**What a session is NOT (WI.2 finding):** Aivyx turns are deliberately
+fresh-context; there is no verbatim transcript replay between turns of a
+session — continuity flows through memory/recall (the Etch/charter
+"save it, the conversation alone will not persist it" design) plus the
+Phase 86 window's relevance feed. Wire exposes the session semantics
+that exist; it does not add transcript injection.
 
 ## 2. Architecture & decisions (locked)
 
@@ -62,5 +70,5 @@ adds an IPC surface Wire deliberately doesn't need.
 | Phase | What | Proof |
 |---|---|---|
 | **WI.0** | This doc. | Reviewed. |
-| **WI.1** | `run_headless_stdin` in the headless module (one connect, loop over lines, fail-fast exit mapping) + the parser accepting bare `--headless`; TTY guard with the pipe hint. | `cargo test` (parser + pure helpers) + full gates. |
-| **WI.2** | Live on the rig: a piped two-turn session proves same-session continuity (turn 2 references turn 1), and a piped skill-turn + follow-up pair fires Strop's `retro-folded` breadcrumb on the next reflection tick — closing the one unproven Strop path. | Journal breadcrumb + session evidence; findings folded back here. |
+| **WI.1** ✅ | **DONE.** `run_headless_stdin` (one connect, loop over lines, fail-fast exit mapping) + the parser accepting bare `--headless` (`CliMode::Headless(Option<String>)`); TTY guard with the pipe hint. | `cargo test` + full gates green. |
+| **WI.2** ✅ | **DONE (live on the rig).** A piped skill-turn + immediate follow-up pair fired Strop's `retro-folded 1 corrected skill turn(s)` breadcrumb on the next reflection tick AND cascaded into a filed refinement pair (`2 considered, 1 filed` — the previously-rejected skill correctly deduped) — the one unproven Strop path, closed. FINDING folded into §1: sessions carry memory partition + window-fed recall + turn adjacency, **not transcript replay** (fresh-context turns are the design; a naive "what did I just say?" probe answers from recall, not the conversation). Synthetic proposals rejected after verification. | Journal breadcrumb + the filed pair. |
