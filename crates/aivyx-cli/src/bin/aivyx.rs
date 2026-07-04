@@ -522,7 +522,11 @@ fn run() -> Result<(), String> {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        return rt.block_on(headless::run_headless(&task));
+        // Chapter Wire — no task = the piped-stdin multi-turn session.
+        return match task {
+            Some(task) => rt.block_on(headless::run_headless(&task)),
+            None => rt.block_on(headless::run_headless_stdin()),
+        };
     }
 
     // ---- Phase 44: interactive init wizard ----------------------------
@@ -1782,12 +1786,15 @@ enum CliMode {
     /// shipped via package managers and required by cargo-dist's
     /// installer smoke test.
     Version,
-    /// `aivyx --headless "<task>"`: one-shot unattended turn over the
+    /// `aivyx --headless ["<task>"]`: unattended turn(s) over the
     /// running daemon (Chapter H follow-on). The daemon refuses at any
     /// approval gate rather than parking for an operator; the process
-    /// exit code reports the turn's outcome (0 completed / 3 refused /
-    /// 1 other). For cron, batch, and fully-autonomous callers.
-    Headless(String),
+    /// exit code reports the outcome (0 completed / 3 refused / 1
+    /// other). For cron, batch, and fully-autonomous callers.
+    /// `Some(task)` = the one-shot; `None` (Chapter Wire) = read
+    /// newline-delimited turns from piped stdin as ONE multi-turn
+    /// session, fail-fast on the first non-completed turn.
+    Headless(Option<String>),
     /// `aivyx identity <subcommand>`: Profile + Persona
     /// export/import (Phase 64). Closes the Phase 60
     /// deferral; lets operators move identity between hosts.
@@ -2366,21 +2373,30 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // short-circuits here like `--version`, before the channel/role
     // flag machinery. The task is a single argument — quote it.
     if !args.is_empty() && args[0] == "--headless" {
-        let task = args.get(1).ok_or_else(|| {
-            "`--headless` requires a task: `aivyx --headless \"<task>\"`".to_string()
-        })?;
-        if task.trim().is_empty() {
-            return Err("`--headless` requires a non-empty task".to_string());
-        }
-        if args.len() > 2 {
-            return Err(format!(
-                "`--headless` takes a single quoted task. \
-                 Got extra arguments: `{}`",
-                args[2..].join(" ")
-            ));
-        }
+        // Chapter Wire — bare `--headless` is the stdin session mode:
+        // newline-delimited turns piped in run as ONE multi-turn
+        // session. Whether stdin is actually piped is checked at run
+        // time (the TTY guard lives with the loop, not the parser).
+        let task = match args.get(1) {
+            None => None,
+            Some(t) => {
+                if t.trim().is_empty() {
+                    return Err(
+                        "`--headless` requires a non-empty task".to_string()
+                    );
+                }
+                if args.len() > 2 {
+                    return Err(format!(
+                        "`--headless` takes a single quoted task. \
+                         Got extra arguments: `{}`",
+                        args[2..].join(" ")
+                    ));
+                }
+                Some(t.clone())
+            }
+        };
         return Ok(CliArgs {
-            mode: CliMode::Headless(task.clone()),
+            mode: CliMode::Headless(task),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -10569,18 +10585,18 @@ mod tests {
             .expect("`--headless \"summarize the inbox\"` must parse");
         assert_eq!(
             parsed.mode,
-            CliMode::Headless("summarize the inbox".into())
+            CliMode::Headless(Some("summarize the inbox".into()))
         );
     }
 
     #[test]
-    fn headless_flag_missing_task_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["--headless"]))
-            .expect_err("`--headless` with no task must error");
-        assert!(
-            err.contains("--headless"),
-            "error must mention the flag: {err}"
-        );
+    fn headless_flag_without_a_task_is_the_stdin_session_mode() {
+        // Chapter Wire — bare `--headless` parses to the piped-stdin
+        // multi-turn session (the TTY guard lives at run time, where
+        // stdin's nature is knowable).
+        let parsed = parse_cli_args_from(&argv(&["--headless"]))
+            .expect("bare `--headless` must parse");
+        assert_eq!(parsed.mode, CliMode::Headless(None));
     }
 
     #[test]

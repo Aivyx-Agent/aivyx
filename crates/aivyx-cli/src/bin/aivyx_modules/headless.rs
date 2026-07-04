@@ -73,6 +73,68 @@ pub async fn run_headless(task: &str) -> Result<(), String> {
     std::process::exit(code);
 }
 
+/// Chapter Wire — `aivyx --headless` with no task: read newline-
+/// delimited turns from piped stdin and run them as consecutive turns
+/// of ONE daemon session (conversation continuity, session-partitioned
+/// memory, and consecutive-turn signals like the correction proxy all
+/// apply — none of which a one-task-per-process caller can reach).
+///
+/// Fail-fast: the stream stops at the first non-completed turn and
+/// exits with that turn's Chapter H code (3 gate-refusal / 1 other), so
+/// a batch caller keeps the branchable codes and later lines of a
+/// broken conversation never run. Blank lines are skipped. EOF with
+/// every turn completed → exit 0.
+pub async fn run_headless_stdin() -> Result<(), String> {
+    use std::io::{BufRead, IsTerminal};
+
+    if std::io::stdin().is_terminal() {
+        return Err(
+            "`aivyx --headless` without a task reads turns from piped \
+             stdin — pipe newline-delimited turns in (e.g. `printf \
+             \"first\\nsecond\\n\" | aivyx --headless`) or pass a single \
+             task: `aivyx --headless \"<task>\"`"
+                .to_string(),
+        );
+    }
+
+    let socket_path = default_socket_path()?;
+    require_daemon_running(&socket_path).await?;
+
+    let mut session = DaemonSession::connect(&socket_path, None, Some(FrontendType::Local))
+        .await
+        .map_err(|e| {
+            format!(
+                "aivyx --headless: failed to connect to the daemon on {} — {e}",
+                socket_path.display(),
+            )
+        })?;
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let line =
+            line.map_err(|e| format!("aivyx --headless: stdin read failed — {e}"))?;
+        let task = line.trim();
+        if task.is_empty() {
+            continue;
+        }
+        let (events, outcome) = session
+            .submit_input_headless(task.to_string())
+            .await
+            .map_err(|e| format!("aivyx --headless: turn failed — {e}"))?;
+        for event in &events {
+            print!("{}", event.render_for_cli());
+        }
+        eprintln!("aivyx --headless: {outcome}");
+        let code = headless_exit_code(&outcome);
+        if code != 0 {
+            let _ = session.disconnect().await;
+            std::process::exit(code);
+        }
+    }
+    let _ = session.disconnect().await;
+    Ok(())
+}
+
 async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
     if daemon_is_running(socket_path).await {
         return Ok(());
