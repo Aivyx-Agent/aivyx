@@ -742,6 +742,42 @@ fn write_input_schema_value() -> Value {
     })
 }
 
+/// Normalized word set — lowercase alphanumeric runs. Case and
+/// punctuation tweaks don't count as new information.
+fn word_set(s: &str) -> std::collections::HashSet<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect()
+}
+
+/// Dogfood 2026-07-04 — a refine/rewrite of a fact lands as a second
+/// near-identical entry (the loop wrote a walking-benefit one-liner,
+/// then rewrote it with a citation appended: two entries, one fact).
+/// `old` is a near-duplicate of `new` when their word sets are
+/// essentially the same (Jaccard ≥ 0.85) or virtually every word of
+/// the old entry appears in a strictly larger new one (containment
+/// ≥ 0.95 — the "rewrite with an addition" signature). Thresholds
+/// are deliberately conservative: a survivor is recall noise (the
+/// pre-fix status quo), a false match deletes a distinct fact — so
+/// "…Tuesday…" vs "…Thursday…" (one word swapped, 0.9 containment,
+/// equal size) must stay apart. The containment rule also needs ≥ 5
+/// words so a tiny entry can't be swallowed by any longer one
+/// mentioning its words.
+fn is_near_duplicate_of(old: &str, new: &str) -> bool {
+    let a = word_set(old);
+    let b = word_set(new);
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let inter = a.intersection(&b).count();
+    let union = a.len() + b.len() - inter;
+    if inter as f64 / union as f64 >= 0.85 {
+        return true;
+    }
+    a.len() >= 5 && b.len() > a.len() && inter as f64 / a.len() as f64 >= 0.95
+}
+
 #[async_trait]
 impl Tool for MemoryWriteTool {
     fn id(&self) -> ToolId {
@@ -865,6 +901,26 @@ impl Tool for MemoryWriteTool {
             }
         }
 
+        // Dogfood 2026-07-04 — supersede near-duplicates. A rewrite
+        // or refinement of an existing fact should replace it, not
+        // sit beside it as recall noise. The new entry is already in
+        // (write first, delete second — a failure in between leaves
+        // duplicate noise, never data loss), so drop every older
+        // entry the new body repeats or subsumes. Best-effort: a
+        // delete failure leaves a survivor, which is the pre-fix
+        // status quo.
+        let mut superseded: Vec<u64> = Vec::new();
+        for old in &existing {
+            if is_near_duplicate_of(&old.body, &body)
+                && matches!(
+                    self.memory.delete_entry(&physical, old.seq).await,
+                    Ok(true)
+                )
+            {
+                superseded.push(old.seq);
+            }
+        }
+
         // Verification fence. Re-read the topic's newest entry and
         // confirm it is what we just wrote. This catches substrate
         // drift: if a put-then-read races with a concurrent
@@ -884,13 +940,16 @@ impl Tool for MemoryWriteTool {
             Err(_) => Verification::Unverified,
         };
 
-        ToolOutcome::Completed {
-            output: json!({
-                "topic": topic,
-                "seq": seq,
-            }),
-            verified,
+        // `superseded` only appears when a near-duplicate was
+        // replaced, so the common case keeps its exact output shape.
+        let mut output = json!({
+            "topic": topic,
+            "seq": seq,
+        });
+        if !superseded.is_empty() {
+            output["superseded"] = json!(superseded);
         }
+        ToolOutcome::Completed { output, verified }
     }
 }
 
@@ -1516,6 +1575,103 @@ mod tests {
             }
             other => panic!("read should complete, got {other:?}"),
         }
+    }
+
+    // ---- Near-duplicate supersession (dogfood 2026-07-04) ----------
+
+    #[test]
+    fn near_duplicate_metric_separates_rewrites_from_distinct_facts() {
+        // The dogfood case: the same fact rewritten with a citation
+        // appended is a near-duplicate…
+        let plain = "Short walking breaks during the workday improve \
+                     focus and reduce fatigue.";
+        let cited = "Short walking breaks during the workday improve \
+                     focus and reduce fatigue (PMCID: PMC9432722).";
+        assert!(is_near_duplicate_of(plain, cited));
+        // …and punctuation/case tweaks don't count as new information.
+        assert!(is_near_duplicate_of(plain, &plain.to_uppercase()));
+        // But a one-word factual difference is a DISTINCT fact.
+        assert!(!is_near_duplicate_of(
+            "Meeting with Bob on Tuesday at 3pm about the roadmap",
+            "Meeting with Bob on Thursday at 3pm about the roadmap",
+        ));
+        // A tiny entry is never swallowed by a longer one that merely
+        // mentions its words.
+        assert!(!is_near_duplicate_of(
+            "buy milk",
+            "buy milk, eggs, flour, butter, and a birthday card for Sam",
+        ));
+        assert!(!is_near_duplicate_of("", "anything"));
+    }
+
+    #[tokio::test]
+    async fn write_supersedes_a_near_duplicate_rewrite() {
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let plain = "Short walking breaks during the workday improve \
+                     focus and reduce fatigue.";
+        let cited = "Short walking breaks during the workday improve \
+                     focus and reduce fatigue (PMCID: PMC9432722).";
+
+        let ctx = make_ctx(&chan, &audit);
+        writer
+            .execute(json!({"topic": "movement-tips", "body": plain}), &ctx)
+            .await;
+        let ctx = make_ctx(&chan, &audit);
+        let outcome = writer
+            .execute(json!({"topic": "movement-tips", "body": cited}), &ctx)
+            .await;
+
+        // The rewrite reports what it replaced…
+        match outcome {
+            ToolOutcome::Completed { output, verified } => {
+                assert_eq!(output["seq"], 1);
+                assert_eq!(output["superseded"], json!([0]));
+                assert_eq!(verified, Verification::Verified);
+            }
+            other => panic!("write should complete, got {other:?}"),
+        }
+        // …and only the refined entry remains in the topic. (No
+        // `session` in the input ⇒ physical topic = logical topic.)
+        let entries = mem.get_recent("movement-tips", 16).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].body, cited);
+    }
+
+    #[tokio::test]
+    async fn write_keeps_distinct_facts_side_by_side() {
+        let mem = fresh_memory();
+        let writer = MemoryWriteTool::new(mem.clone());
+        let chan = fresh_channel();
+        let audit = NullAuditHook;
+
+        let ctx = make_ctx(&chan, &audit);
+        writer
+            .execute(
+                json!({"topic": "notes", "body": "Meeting with Bob on Tuesday at 3pm about the roadmap"}),
+                &ctx,
+            )
+            .await;
+        let ctx = make_ctx(&chan, &audit);
+        let outcome = writer
+            .execute(
+                json!({"topic": "notes", "body": "Meeting with Bob on Thursday at 3pm about the roadmap"}),
+                &ctx,
+            )
+            .await;
+
+        // No supersession — the output keeps its pre-fix shape…
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert!(output.get("superseded").is_none());
+            }
+            other => panic!("write should complete, got {other:?}"),
+        }
+        // …and both facts survive.
+        assert_eq!(mem.get_recent("notes", 16).await.unwrap().len(), 2);
     }
 
     #[tokio::test]
