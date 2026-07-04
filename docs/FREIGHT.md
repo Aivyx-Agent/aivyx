@@ -1,6 +1,6 @@
 # Sealed Crates — signed binary pack bundles (Chapter Freight)
 
-> **Status: IN PROGRESS (FR.0 scoped 2026-07-04).** v1.0-runway decision
+> **Status: COMPLETE (FR.0–FR.4, 2026-07-04).** v1.0-runway decision
 > 1, locked 2026-07-04: paid vertical packs ship as **signed binary
 > bundles over the tool-process boundary** — the customer is an
 > *operator*, not a Rust developer. A pack is compiled tool-process
@@ -67,4 +67,4 @@ optional `team_config` (a `config/`-relative path wired
 | **FR.1** | The format core: manifest types, build/sign, verify/inspect, path sanitization; `tar` + `flate2` workspace deps; `[pack] trusted_publishers` config. Round-trip + tamper + untrusted-key + sanitize tests with generated keys. | `cargo test`. |
 | **FR.2** | `aivyx pack` CLI (keygen/build/inspect/install) + the Mise-pattern install wiring. Temp-HOME install test. | `cargo test`. |
 | **FR.3** ✅ | **DONE (live on the rig).** `just pack-kitchen` stages the release kitchen-toolkit + `kitchen-boh.toml` + a generated manifest into a signed bundle (dev key in git-ignored `.pack-dev/`). Live proof: `pack inspect` → `signature: VERIFIED`; `pack install` unpacked to `~/.aivyx/packs/kitchen/0.8.0/` and wired both the tool process and `[team] config_path`; on restart the daemon **loaded the pack's team config** and launched the tool process sandboxed. The toolkit then exited at handshake wanting its KitchenDB credentials file — exactly the pre-`aivyx connect kitchen` state (the pack delivers capability; `connect` provides the operator's DB credentials; the two compose). Rig config restored to soak posture afterward. | Journal: `loaded team config from …/packs/kitchen/0.8.0/config/kitchen-boh.toml`. |
-| **FR.4** | Docs: operator install guide + publisher guide (INSTALL.md section). | Review. |
+| **FR.4** ✅ | **DONE.** INSTALL.md "Vertical packs" section: operator trust/inspect/install/connect flow + publisher keygen/build guide. | Committed 53f5e3a. |

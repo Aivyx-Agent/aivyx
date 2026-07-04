@@ -21,7 +21,7 @@ of that loop and produces the phase's backlog.
 | # | Chapter | Scope | Status |
 |---|---|---|---|
 | 1 | **Gatehouse** | Studio remote auth. Found on scoping: Chapter Postern had already built the auth *mechanism* (`web_ui_auth_token`: Bearer/Basic/cookie, constant-time, `/ws`-gated) — Gatehouse added the refuse-to-bind interlock at config load, the `web_ui_insecure_no_auth` escape hatch, and first-boot token generation in the Harbor appliance. See docs/GATEHOUSE.md. | ✅ done (7ba97b2) |
-| 2 | **Freight** | Paid-pack bundles: signed archive (binaries + config TOMLs + manifest w/ min-daemon-version), `aivyx pack install` (verify + Mise-pattern wiring), `aivyx pack update`. Locked design in the v1.0 runway. Kitchen = the free worked example. | queued |
+| 2 | **Freight** | Signed pack bundles, complete: format core (aivyx-pack), the `aivyx pack` CLI, Kitchen worked example live-proven on the rig, operator+publisher docs. `pack update` deferred to the v1.0 web presence. See docs/FREIGHT.md. | ✅ done (53f5e3a) |
 | 3 | **Vitrine** | The operator walkthrough: all 15 Studio screens + TUI + desktop, friction notes → the polish backlog; inventory which `/classic` panes lack Studio equivalents. | queued (operator session) |
 | 4 | Polish waves | Fix the Vitrine backlog, batched by screen family. | sized by 3 |
 | 5 | **Fleet panel** | Live specialist/mission feed: new streaming IPC over the Spyglass journal traces + the Studio screen (F3's deferred half). | queued |
