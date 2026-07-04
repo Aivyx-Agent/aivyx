@@ -5,6 +5,40 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-04
+
+**Milestone: the self-learning arc is real, live-proven, and honest.**
+v0.8.0 marks core refinement converged: across the v0.7.38–v0.7.41 run and
+this release, the complete self-learning loop was exercised live on real
+hardware — skills invoked, effectiveness measured with honest signals,
+underperformers refined, new skills authored from the agent's own
+consolidated knowledge, every change gated by operator governance on the
+signed persona chain, and the restraint properties (no churn, no
+re-nagging, no twin proposals) verified under soak. This begins the run-up
+to the v0.9 interface-polish phase.
+
+### Fixed
+
+- **Cron schedules now fire on the operator's local wall clock.** The init
+  template always said "local time," but the engine evaluated cron fields
+  in UTC — on any non-UTC host every routine fired hours off intent (a
+  "nightly" reflection at 10 a.m. local). Both schedulers now share one
+  local-time evaluation. One-time upgrade effect: a schedule whose
+  local-time tick already passed today fires a single catch-up.
+- **Skill authoring no longer proposes twin skills from near-duplicate
+  topic names** ("triathlon" and "triathlon-basic"): candidacy skips a
+  topic whose normalized name is contained by — or contains — any covered
+  skill or prior authoring proposal. Synonym-named twins remain the
+  operator's call in the proposal inbox, by design.
+- **The memory conflict detector no longer flags change-over-time
+  sequences as contradictions** ("file X present" then "file X removed" is
+  the world changing, not a conflict) — the recurring false-positive class
+  produced by daily environment observations.
+- **The agent can now see its own routines**: `schedule.list` joins the
+  default-role capability floor (read-only, like `skills.list`). The
+  schedule *write* tools deliberately remain outside the floor pending an
+  autonomy-gating decision.
+
 ## [0.7.41] — 2026-07-04
 
 **Chapter Wire** — headless multi-turn sessions. Pipe newline-delimited
