@@ -32,3 +32,42 @@ check-web:
 # Drop the built bundle so the daemon reverts to the fallback page.
 clean-web:
     rm -rf crates/aivyx-web/dist
+
+# Chapter Freight (FR.3) — build + sign the Kitchen pack bundle, the free
+# worked example of the signed pack format. Uses a DEV key (generated on
+# first run into .pack-dev/, git-ignored); the v1.0 web presence will
+# establish the real publisher key ceremony.
+#
+#   just pack-kitchen
+#
+# Output: .pack-dev/kitchen-<version>-<host-triple>.aivyxpack plus the dev
+# verifying key to paste into the target machine's [pack] trusted_publishers.
+pack-kitchen:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ver="$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)"
+    triple="$(rustc -vV | grep host | cut -d' ' -f2)"
+    cargo build --release -p aivyx-kitchen-toolkit
+    mkdir -p .pack-dev
+    if [ ! -f .pack-dev/dev-signing.key ]; then
+        cargo run --release -p aivyx-cli --bin aivyx -- pack keygen .pack-dev/dev-signing.key
+    fi
+    stage=".pack-dev/stage-kitchen"
+    rm -rf "$stage" && mkdir -p "$stage/bin" "$stage/config"
+    cp target/release/aivyx-kitchen-toolkit "$stage/bin/"
+    cp crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml "$stage/config/"
+    cat > "$stage/manifest.toml" <<MANIFEST
+    name = "kitchen"
+    version = "$ver"
+    target = "$triple"
+    min_daemon_version = "0.8.0"
+    publisher = "Aivyx (dev key)"
+    team_config = "kitchen-boh.toml"
+
+    [[tool_process]]
+    name = "kitchen-toolkit"
+    bin = "aivyx-kitchen-toolkit"
+    MANIFEST
+    out=".pack-dev/kitchen-$ver-$triple.aivyxpack"
+    target/release/aivyx pack build "$stage" --key .pack-dev/dev-signing.key --out "$out"
+    echo "bundle: $out"
