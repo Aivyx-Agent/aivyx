@@ -3038,6 +3038,52 @@ authenticated, the daemon prints the remedy at startup
 > `aivyx connect` path for them is a planned follow-on. The
 > manual per-service setup below still works for every tool.
 
+## Vertical packs — install a signed pack (Chapter Freight)
+
+A **pack** adds a vertical capability (domain tools + a specialist team
+roster) as a single signed file — no Rust toolchain, no source build.
+Kitchen (back-of-house) is the free worked example; commercial packs
+ship the same way.
+
+```sh
+# 1. Trust the publisher (one-time). The publisher gives you their
+#    verifying key; add it to aivyx.toml:
+#      [pack]
+#      trusted_publishers = ["<base64 key>"]
+
+# 2. Look before you leap — verifies the signature and prints what the
+#    pack will wire:
+aivyx pack inspect kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
+
+# 3. Install: verifies again, unpacks to ~/.aivyx/packs/<name>/<ver>/,
+#    wires the [[tool_process]] entries, and sets [team] config_path
+#    ONLY if you don't already have one (never clobbers your roster).
+aivyx pack install kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
+
+# 4. Restart the daemon to load it, then connect the pack's data
+#    source if it has one (Kitchen wants its KitchenDB credentials):
+aivyx connect kitchen
+```
+
+The install refuses: an untrusted or tampered signature, a bundle built
+for a different platform, a pack needing a newer daemon, and any
+archive entry that tries to escape the install directory. A pack is
+**capability**; `aivyx connect <pack>` supplies your **credentials** —
+the two compose.
+
+**Publishing a pack** (pack authors): stage `manifest.toml` + `bin/` +
+`config/` (root manifest keys must come *before* `[[tool_process]]`
+tables), then:
+
+```sh
+aivyx pack keygen my-signing.key      # prints the operators' trust snippet
+aivyx pack build ./stage --key my-signing.key --out my-pack.aivyxpack
+```
+
+Bundles are deterministic per staging tree; the signature covers the
+whole payload. See `docs/FREIGHT.md` for the format, and
+`just pack-kitchen` in the repo for a working publisher recipe.
+
 ## External productivity integrations (Chapter F)
 
 After three named local-LLM rehab phases (120-122), the
