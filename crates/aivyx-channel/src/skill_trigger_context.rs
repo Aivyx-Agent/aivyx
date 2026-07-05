@@ -80,9 +80,12 @@ const STOPWORDS: &[&str] = &[
 pub struct SkillTriggerContext {
     reader: SkillReader,
     embedder: Option<Arc<dyn EmbeddingProvider>>,
-    /// Trigger-embedding cache keyed by `name@version` — skills
-    /// change only through governed chain appends, so a version's
-    /// trigger text is immutable.
+    /// Trigger-embedding cache keyed by the embedded text itself
+    /// (`name. trigger`), so it self-invalidates when wording
+    /// changes. NOT keyed by `name@version`: a Tutor `skills update`
+    /// deliberately preserves the version (skill_edit.rs), which
+    /// served a stale trigger embedding forever — caught live in the
+    /// 2026-07-05 skills check minutes after shipping the first key.
     cache: Mutex<HashMap<String, Vec<f32>>>,
 }
 
@@ -117,22 +120,20 @@ impl SkillTriggerContext {
     ) -> Option<Vec<f32>> {
         let embedder = self.embedder.as_ref()?;
         // Which triggers still need embedding?
-        let mut missing: Vec<(String, String)> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
         {
             let cache = self.cache.lock().ok()?;
             for s in skills {
-                let key = format!("{}@{}", s.name, s.version);
+                let key = format!("{}. {}", s.name, s.trigger);
                 if !cache.contains_key(&key) {
-                    missing.push((key, format!("{}. {}", s.name, s.trigger)));
+                    missing.push(key);
                 }
             }
         }
         if !missing.is_empty() {
-            let texts: Vec<String> =
-                missing.iter().map(|(_, t)| t.clone()).collect();
-            let vecs = embedder.embed(&texts).await.ok()?;
+            let vecs = embedder.embed(&missing).await.ok()?;
             let mut cache = self.cache.lock().ok()?;
-            for ((key, _), v) in missing.into_iter().zip(vecs) {
+            for (key, v) in missing.into_iter().zip(vecs) {
                 cache.insert(key, v);
             }
         }
@@ -151,7 +152,7 @@ impl SkillTriggerContext {
             skills
                 .iter()
                 .map(|s| {
-                    let key = format!("{}@{}", s.name, s.version);
+                    let key = format!("{}. {}", s.name, s.trigger);
                     cache
                         .get(&key)
                         .map(|t| cosine(&qvec, t))

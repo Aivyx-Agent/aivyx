@@ -313,8 +313,16 @@ pub fn default_starter_skills() -> Vec<SeedSkill> {
         },
         SeedSkill {
             name: "capture-note".to_string(),
-            trigger: "When the operator shares a fact, preference, decision, or \
-                      instruction worth remembering."
+            // Vitrine §5 skills check (2026-07-05): triggers that describe a
+            // message TYPE ("shares a fact worth remembering") don't embed
+            // near concrete INSTANCES ("my medical expires 15 March 2027") —
+            // the trigger-injection matcher missed every real fact. Name the
+            // instances so the embedding has something to grip.
+            trigger: "When the operator states a specific fact, date, expiry, \
+                      preference, decision, plan, or contact detail about their \
+                      life or work — e.g. a certificate expiry date, a \
+                      favourite coffee, an upcoming appointment, a chosen \
+                      option — anything they'd expect you to know later."
                 .to_string(),
             procedure: "Write it to memory under a fitting topic (create one if \
                         needed), phrased so a future recall is useful. Confirm in one \
