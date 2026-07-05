@@ -555,6 +555,15 @@ fn App() -> Element {
                 id: "mc-audit".to_string(),
                 payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_FEED_N },
             });
+            // Vitrine final sweep — routines have live-changing fields
+            // (last-fired / next-fire move as crons tick), so the
+            // Routines panel polls with the missions + audit feed
+            // instead of staying a page-load snapshot. The schedule
+            // list is tiny; the query is cheap.
+            ws.send(FrontendMessage::Query {
+                id: "mc-schedules".to_string(),
+                payload: QueryPayload::GetSchedules,
+            });
             TimeoutFuture::new(POLL_INTERVAL_MS).await;
         }
     });
@@ -642,7 +651,7 @@ fn App() -> Element {
                     }
                 }
             }
-            StatusBar { connected: connected() }
+            StatusBar { connected: connected(), agent_name: dashboard().assistant_name.clone().unwrap_or_default() }
             if palette_open() {
                 CommandPalette { view, open: palette_open }
             }
@@ -922,14 +931,23 @@ fn guide_page_for(v: View) -> usize {
 }
 
 #[component]
-fn StatusBar(connected: bool) -> Element {
+fn StatusBar(connected: bool, agent_name: String) -> Element {
+    // Vitrine final sweep (2026-07-05): this segment was a hardcoded
+    // "AGENT · NONAGON" literal — the one static datum in the shell.
+    // It now shows the RUNNING agent's name from the dashboard profile
+    // snapshot (empty until the first snapshot arrives).
+    let agent = if agent_name.trim().is_empty() {
+        "AGENT · —".to_string()
+    } else {
+        format!("AGENT · {}", agent_name.to_uppercase())
+    };
     rsx! {
         footer { class: "statusbar label-tech",
             div { class: if connected { "seg live" } else { "seg" },
                 span { class: "dot" }
                 if connected { "DAEMON · CONNECTED" } else { "DAEMON · OFFLINE" }
             }
-            div { class: "seg seg-mid", "AGENT · NONAGON" }
+            div { class: "seg seg-mid", "{agent}" }
             div { class: "seg seg-ver", {format!("AIVYX · v{}", env!("CARGO_PKG_VERSION"))} }
         }
     }
