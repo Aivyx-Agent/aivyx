@@ -5211,6 +5211,9 @@ async fn run_async(
         // if present, otherwise falls back to this Phase 113
         // single-config shape.
         skill_auto_propose: config_skill_auto_propose,
+        // Vitrine §5 — `[skills] trigger_injection`; composed into the
+        // turn context provider below (after the skills reader exists).
+        skills_trigger_injection: config_skills_trigger_injection,
         // Phase 114 — `[persona.auto_propose]` loaded config.
         // When `Some`, takes precedence over the Phase 113 alias.
         // Used by the bin's `SkillAutoProposerContext`
@@ -6672,9 +6675,45 @@ async fn run_async(
             as Arc<dyn Tool>,
     );
     tool_list.push(
-        Arc::new(aivyx_core::SkillsInvokeTool::new(skills_reader))
+        Arc::new(aivyx_core::SkillsInvokeTool::new(skills_reader.clone()))
             as Arc<dyn Tool>,
     );
+
+    // Vitrine §5 fix — structural skill use. Compose the trigger-
+    // injection provider with auto-recall into the single planner
+    // context slot: every turn now sees its best trigger-matching
+    // skill procedure the same way it sees relevant memories, instead
+    // of relying on the model to take the skills.list/skills.invoke
+    // indirection (which local models never do — a fresh agent's
+    // skills were otherwise dead weight and Whetstone's effectiveness
+    // arc could never start).
+    let turn_context: Option<Arc<dyn aivyx_core::llm_planner::ContextProvider>> = {
+        let skill_context: Option<Arc<dyn aivyx_core::llm_planner::ContextProvider>> =
+            if config_skills_trigger_injection {
+                Some(Arc::new(
+                    aivyx_channel::skill_trigger_context::SkillTriggerContext::new(
+                        skills_reader.clone(),
+                        embedding_provider.clone(),
+                    ),
+                ))
+            } else {
+                None
+            };
+        let providers: Vec<Arc<dyn aivyx_core::llm_planner::ContextProvider>> =
+            [skill_context, recall_context.clone()]
+                .into_iter()
+                .flatten()
+                .collect();
+        match providers.len() {
+            0 => None,
+            1 => Some(providers.into_iter().next().expect("len checked")),
+            _ => Some(Arc::new(
+                aivyx_channel::skill_trigger_context::ComposedContextProvider::new(
+                    providers,
+                ),
+            )),
+        }
+    };
 
     // Phase 109 — `git.status` + `git.diff` register only
     // when `[git]` config supplies an allow-set. Operators
@@ -7809,7 +7848,7 @@ async fn run_async(
     // Phase 76 — sub-agents recall too. Captured by-Option-Arc so
     // each child planner gets the same auto-recall hook the parent
     // has (or none, identically, when `[embedding]` is off).
-    let recall_context_for_factory = recall_context.clone();
+    let recall_context_for_factory = turn_context.clone();
     // Phase 79 — sub-agents get the adaptive Soul too.
     // Phase 117 — `system_prompt_refiner` is now the
     // combined (potentially Phase 117 + Phase 79) refiner;
@@ -8231,7 +8270,7 @@ async fn run_async(
         // Phase 76 — automatic recall (Q1a). Carried by-Arc
         // through the per-turn `planner_config.clone()` in the
         // factory below, exactly like the prune sink.
-        if let Some(rc) = &recall_context {
+        if let Some(rc) = &turn_context {
             planner_config =
                 planner_config.with_context_provider(Arc::clone(rc));
         }
@@ -9104,7 +9143,7 @@ async fn run_async(
                 )),
                 // Phase 76 — automatic recall (Q1a). `None` when
                 // `[embedding]` is unconfigured → no auto-recall.
-                context_provider: recall_context.clone(),
+                context_provider: turn_context.clone(),
                 // Phase 79 — adaptive Persona; Phase 117 —
                 // tool/skill relevance section. Both ride on
                 // the same refiner slot through the combined
@@ -9560,7 +9599,7 @@ async fn run_async(
                             Arc::clone(&memory),
                         ),
                     )),
-                    context_provider: recall_context.clone(),
+                    context_provider: turn_context.clone(),
                     system_prompt_refiner: system_prompt_refiner.clone(),
                     // Chapter K (K.4.2) — the voice channel writes to the same
                     // persistent HMAC chain as every other turn, so it gets the

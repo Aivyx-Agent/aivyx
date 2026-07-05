@@ -1044,6 +1044,11 @@ pub struct AivyxConfig {
     /// `PersonaAutoProposeConfig` from this section
     /// (LearnedSkill-only, every other category disabled).
     pub skill_auto_propose: Option<SkillAutoProposeConfig>,
+    /// Vitrine §5 fix — `[skills] trigger_injection` (default `true`):
+    /// inject the best trigger-matching approved skill's procedure
+    /// into each turn's context. `false` restores invoke-only skill
+    /// access.
+    pub skills_trigger_injection: bool,
 
     /// Phase 114 — `[persona.auto_propose]` section. `None`
     /// when absent: the loader falls back to
@@ -5050,6 +5055,14 @@ struct RawSkills {
     /// suppress the compiled-in [`default_starter_skills`] (byte-identical to a
     /// pre-Outfit build).
     starter: Option<bool>,
+    /// Vitrine §5 fix (2026-07-05) — `[skills] trigger_injection`.
+    /// `None`/absent ⇒ ON: each turn, the best trigger-matching
+    /// approved skill's procedure is injected into turn context
+    /// (structural skill use — local models never take the
+    /// skills.list/skills.invoke indirection on their own, so a
+    /// fresh agent otherwise never uses its skills). `false` ⇒
+    /// restore invoke-only skill access.
+    trigger_injection: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6073,6 +6086,8 @@ impl AivyxConfig {
             build_recall_feedback_config(&toml.recall_feedback)?;
         let skill_auto_propose =
             build_skill_auto_propose_config(&toml.skills.auto_propose)?;
+        let skills_trigger_injection =
+            toml.skills.trigger_injection.unwrap_or(true);
         let persona_auto_propose =
             build_persona_auto_propose_config(&toml.persona.auto_propose)?;
         let tool_relevance =
@@ -7299,6 +7314,7 @@ impl AivyxConfig {
             reminders_check_interval_secs,
             recall_feedback,
             skill_auto_propose,
+            skills_trigger_injection,
             persona_auto_propose,
             tool_relevance,
             ollama_options,

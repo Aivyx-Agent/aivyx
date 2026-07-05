@@ -47,6 +47,7 @@ pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
 pub mod conversation_window;
+pub mod skill_trigger_context;
 /// Chapter L — durable persistence for daemon-run Nonagon team missions
 /// (`TeamMissionRecord` over `KeyDomain::TeamMissions`), the checkpoint/resume
 /// state behind the live TUI Missions feed.
