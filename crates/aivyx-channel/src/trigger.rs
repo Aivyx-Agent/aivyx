@@ -332,7 +332,10 @@ impl TriggerDispatch {
         // event can carry it; the same id is recorded on the
         // `TurnStarted` audit entry emitted from agent.turn().
         let session_id = SessionId::new();
-        let msg = Message::text(session_id, prompt.to_owned());
+        // System-originated: routine/reflection prompts are already fully
+        // engineered — instruction-bearing context injection (skill
+        // procedures) must not compete with them.
+        let msg = Message::text(session_id, prompt.to_owned()).system_originated();
 
         // Create mission if requested.
         let mission_id = if wrap_mission {

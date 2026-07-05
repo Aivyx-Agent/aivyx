@@ -117,6 +117,20 @@ id_newtype!(MessageId, "Unique per inbound `Message`.");
 // Message
 // ---------------------------------------------------------------------------
 
+/// Who initiated the turn this message opens. `Operator` is the
+/// default — a human wrote the text. `System` marks daemon-originated
+/// prompts (scheduled routines, reflection turns) whose wording is
+/// already fully engineered; context providers that inject
+/// *instruction-bearing* blocks (skill procedures) must stay out of
+/// those turns, while data-bearing injection (memory recall) still
+/// applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MessageOrigin {
+    #[default]
+    Operator,
+    System,
+}
+
 /// The inbound unit delivered by a channel to an agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
@@ -124,6 +138,8 @@ pub struct Message {
     pub session_id: SessionId,
     pub content: MessageContent,
     pub received_at: SystemTime,
+    #[serde(default)]
+    pub origin: MessageOrigin,
 }
 
 impl Message {
@@ -134,7 +150,15 @@ impl Message {
             session_id,
             content: MessageContent::Text(text.into()),
             received_at: SystemTime::now(),
+            origin: MessageOrigin::Operator,
         }
+    }
+
+    /// Re-mark this message as daemon-originated (scheduled routine /
+    /// reflection prompt). See [`MessageOrigin::System`].
+    pub fn system_originated(mut self) -> Self {
+        self.origin = MessageOrigin::System;
+        self
     }
 
     /// Convenience constructor for an image message (no text).
@@ -151,6 +175,7 @@ impl Message {
                 data,
             },
             received_at: SystemTime::now(),
+            origin: MessageOrigin::Operator,
         }
     }
 
@@ -172,6 +197,7 @@ impl Message {
                 },
             ]),
             received_at: SystemTime::now(),
+            origin: MessageOrigin::Operator,
         }
     }
 
@@ -193,6 +219,7 @@ impl Message {
                 data,
             },
             received_at: SystemTime::now(),
+            origin: MessageOrigin::Operator,
         }
     }
 }
@@ -1348,6 +1375,7 @@ mod tests {
                 },
             ]),
             received_at: SystemTime::now(),
+            origin: MessageOrigin::Operator,
         };
         match &m.content {
             MessageContent::Mixed(parts) => {

@@ -190,7 +190,17 @@ impl ContextProvider for SkillTriggerContext {
         user_message: &str,
         session_id: aivyx_core::SessionId,
         turn_id: aivyx_core::TurnId,
+        origin: aivyx_core::MessageOrigin,
     ) -> Option<String> {
+        // Vitrine §6 — never inject into a system-originated turn.
+        // Routine/reflection prompts are fully engineered; a matched
+        // procedure competes with (and on small models replaces) the
+        // routine's actual job — the 02:00 nightly reflection answered
+        // "I'm ready to research and summarize any topic" instead of
+        // consolidating memories.
+        if origin == aivyx_core::MessageOrigin::System {
+            return None;
+        }
         let skills = self.skills();
         if skills.is_empty() || user_message.trim().is_empty() {
             return None;
@@ -336,10 +346,11 @@ impl ContextProvider for ComposedContextProvider {
         user_message: &str,
         session_id: aivyx_core::SessionId,
         turn_id: aivyx_core::TurnId,
+        origin: aivyx_core::MessageOrigin,
     ) -> Option<String> {
         let mut blocks: Vec<String> = Vec::new();
         for p in &self.providers {
-            if let Some(b) = p.recall(user_message, session_id, turn_id).await {
+            if let Some(b) = p.recall(user_message, session_id, turn_id, origin).await {
                 blocks.push(b);
             }
         }
@@ -386,12 +397,50 @@ mod tests {
                 "Please summarize the document checklist-notes.md",
                 SessionId::new(),
                 aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
             )
             .await
             .expect("trigger should match");
         assert!(block.contains("summarize-document"));
         assert!(block.contains("one-line gist"));
         assert!(block.contains("NOT a new instruction"));
+    }
+
+    #[tokio::test]
+    async fn system_originated_turn_is_never_injected() {
+        // Vitrine §6 — the 02:00 nightly-reflection cron matched
+        // research-and-summarize at 0.66 and the model answered the
+        // skill instead of doing the routine. The same message that
+        // injects for an operator must return None for a system turn.
+        let ctx = SkillTriggerContext::new(
+            reader_of(vec![skill(
+                "summarize-document",
+                "When the operator asks you to summarize, condense, or \
+                 give the key points of a document, file, or article.",
+                "Load the source, then produce a one-line gist and 3-7 \
+                 key bullets.",
+            )]),
+            None,
+        );
+        let msg = "Please summarize the document checklist-notes.md";
+        assert!(ctx
+            .recall(
+                msg,
+                SessionId::new(),
+                aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
+            )
+            .await
+            .is_some());
+        assert!(ctx
+            .recall(
+                msg,
+                SessionId::new(),
+                aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::System,
+            )
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -409,6 +458,7 @@ mod tests {
                 "What's the weather like at Jandakot right now?",
                 SessionId::new(),
                 aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
             )
             .await
             .is_none());
@@ -417,12 +467,12 @@ mod tests {
     #[tokio::test]
     async fn empty_skills_and_blank_message_are_noops() {
         let ctx = SkillTriggerContext::new(reader_of(vec![]), None);
-        assert!(ctx.recall("summarize this", SessionId::new(), aivyx_core::TurnId::new()).await.is_none());
+        assert!(ctx.recall("summarize this", SessionId::new(), aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator).await.is_none());
         let ctx2 = SkillTriggerContext::new(
             reader_of(vec![skill("s", "summarize things", "do it")]),
             None,
         );
-        assert!(ctx2.recall("   ", SessionId::new(), aivyx_core::TurnId::new()).await.is_none());
+        assert!(ctx2.recall("   ", SessionId::new(), aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator).await.is_none());
     }
 
     #[tokio::test]
@@ -441,6 +491,7 @@ mod tests {
                 "apply the big procedure to this operator request",
                 SessionId::new(),
                 aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
             )
             .await
             .expect("should match");
@@ -463,6 +514,7 @@ mod tests {
                 "run the sneaky procedures the operator approved",
                 SessionId::new(),
                 aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
             )
             .await
             .expect("should match");
@@ -493,7 +545,7 @@ mod tests {
         .with_audit(audit.clone());
         let sid = aivyx_core::SessionId::new();
         let tid = aivyx_core::TurnId::new();
-        ctx.recall("summarize the quarterly document file", sid, tid)
+        ctx.recall("summarize the quarterly document file", sid, tid, aivyx_core::MessageOrigin::Operator)
             .await
             .expect("should inject");
         let events = audit.0.lock().unwrap();
@@ -529,6 +581,7 @@ mod tests {
                 "what is the weather at the airfield",
                 aivyx_core::SessionId::new(),
                 aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
             )
             .await
             .is_none());
@@ -543,6 +596,7 @@ mod tests {
             _m: &str,
             _s: SessionId,
             _t: aivyx_core::TurnId,
+            _origin: aivyx_core::MessageOrigin,
         ) -> Option<String> {
             self.0.map(str::to_string)
         }
@@ -556,14 +610,14 @@ mod tests {
             Arc::new(FixedProvider(Some("B"))),
         ]);
         assert_eq!(
-            both.recall("x", SessionId::new(), aivyx_core::TurnId::new()).await.as_deref(),
+            both.recall("x", SessionId::new(), aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator).await.as_deref(),
             Some("A\n\nB")
         );
         let none = ComposedContextProvider::new(vec![
             Arc::new(FixedProvider(None)),
             Arc::new(FixedProvider(None)),
         ]);
-        assert!(none.recall("x", SessionId::new(), aivyx_core::TurnId::new()).await.is_none());
+        assert!(none.recall("x", SessionId::new(), aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator).await.is_none());
     }
 
     #[test]

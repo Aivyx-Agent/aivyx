@@ -1841,8 +1841,16 @@ fn SkillsPanel() -> Element {
     // proposal feed + ProposalCard, filtered to skill proposals.
     let agents = use_context::<Signal<AgentsState>>();
 
-    // Load the inventory + the pending proposals each time the view opens.
-    use_future(move || async move {
+    // Load the inventory + the pending proposals each time the view opens,
+    // and re-load after any proposal-resolve/revert ack bumps the shared
+    // refresh tick — approving a LearnedSkill from this screen must show
+    // the landed skill without a manual reload (Vitrine §6 operator
+    // finding). Same memo-isolation as the Agents panel: the effect
+    // re-runs only on mount and on the tick, never on the state writes
+    // its own queries produce.
+    let tick = use_memo(move || agents().refresh_tick);
+    use_effect(move || {
+        let _ = tick();
         ws.send(skills_query());
         ws.send(list_proposals_query());
     });

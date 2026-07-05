@@ -430,7 +430,70 @@
   proposal test since the floor fix made proposals grantable at all.
 
 ### 6 · Agents (proposal triage — live governance test)
-_(pending)_
+
+**Overnight 02:30 reflection tick (2026-07-06) — first organic
+Praxis run since the propose-floor fix, verified in the journal:**
+
+- ✅ **Praxis fired organically**: `skill-authoring: filed 1
+  specialized-skill proposal(s) (3 considered)` at 02:30:07 — the
+  full arc (144 outcome summaries in the 24 h lookback → topic scan
+  → LLM authoring → Pending proposal on the governed chain) ran
+  with zero human involvement.
+- ✅ **Whetstone correctly silent**: refinement needs `min_samples=4`
+  folded windows AND net-negative effectiveness (`floor=0.0`);
+  `summarize-document` has 1 positive sample. Working as designed —
+  nothing underperforming to refine yet.
+- ✅ **Persona-delta half proposed nothing** — valid per constraint 4
+  (empty reflections preferred over speculation); the 144 outcomes
+  were dominated by uniform routine turns, no 3-turn behavioral
+  pattern to cite.
+
+**New findings from the same journal window:**
+
+- **P1 — skill trigger injection hijacks system-originated turns.**
+  The 02:00 `cfg-nightly-reflection` cron prompt matched the
+  `research-and-summarize` trigger at 0.66 cosine (genuinely similar
+  text — "examine/consolidate/summarize"); gpt-oss:20b then abandoned
+  the routine and answered *"I'm ready to research and summarize any
+  topic you have in mind"* — the nightly memory-consolidation routine
+  did nothing, silently, and would every night. The 02:30 reflection
+  turn likewise got `capture-note` injected at 0.58 and emitted a bare
+  `{}`. Routine/reflection prompts are already fully engineered
+  (Chapter Plumb); matching them against skill triggers is noise at
+  best, a hijack at worst. **Fix: mark trigger/reflection-fired
+  messages as system-originated and suppress skill injection for
+  them** (memory recall stays — routines legitimately read memories).
+  Revisit per-cron opt-in when the Schedules screen lands.
+- **P2 — Praxis fact-baking.** The authored `overall_condition` skill
+  bakes yesterday's specific weather observations (YPJT 4 500 ft
+  broken, YMML 3 400 ft scattered, YSSY showers) into the *procedure*
+  as if they were durable steps — and step 2 ("no METAR data, say
+  categories can't be assessed") contradicts steps 3–5 (which assert
+  conditions). A skill must encode *how*, never *what was observed*.
+  The authoring prompt needs a time-invariance constraint: never
+  embed observed data values; if the topic is a fact snapshot, don't
+  author. Silver lining: this is exactly the specimen operator triage
+  exists for — governance held, nothing landed without review.
+- **P3 — skill/topic naming leak**: proposal id
+  `skill-author:overall_condition`, skill name `overall_condition` —
+  internal graph-topic snake_case leaks into an operator-facing
+  skill name (known watch-item family: topic naming discipline).
+
+**Operator triage (live, 2026-07-06 morning):** the operator
+deliberately **Approved** the flawed proposal to exercise the full
+lifecycle and review the landed skill card, then **Forgot** the
+skill from the Skills screen. Post-triage daemon state verified over
+IPC: proposal status `Approved` (honest historical record of the
+decision), roster back to the 7 pre-existing skills
+(`overall_condition` gone), 0 pending. **Approve → land → review →
+forget round-trips cleanly; section 6 complete.** Findings above
+(P1 injection hijack, P2 fact-baking) move to same-day fixes.
+- **P2 — Approve is not dynamically reflected (operator finding):**
+  approving the proposal did not refresh the UI; the new skill only
+  appeared after a manual screen reload. Same family as the §8
+  Documents stale-after-save bug: the mutation ack must chase a
+  fresh read query (proposals + skills) instead of trusting local
+  state. Fix in the same-day batch.
 
 ### 7 · Teams
 - **Positives (operator verdict):** all 9 Nonagon members render with

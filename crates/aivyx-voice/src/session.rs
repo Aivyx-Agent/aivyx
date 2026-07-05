@@ -430,6 +430,7 @@ where
             session_id: channel.session_id(),
             content: MessageContent::Mixed(parts),
             received_at: SystemTime::now(),
+            origin: aivyx_core::MessageOrigin::Operator,
         }
     };
     let outcome = agent.turn(message, channel.as_ref()).await;

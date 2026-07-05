@@ -329,8 +329,15 @@ const AUTHOR_MAX_TOKENS: u32 = 600;
 const AUTHOR_SYSTEM_PROMPT: &str = "You write a reusable SKILL for an AI \
 assistant — a named procedure it will follow when a trigger matches — \
 from what it already knows about one topic (a knowledge summary + typed \
-relations it extracted from its own memory). Ground the skill ONLY in the \
-provided knowledge; do not invent facts. Output ONLY a JSON object: \
+relations it extracted from its own memory). A skill is a durable METHOD \
+that must still be correct months from now: steps say HOW to obtain, \
+check, and judge information, never what a value happened to be. NEVER \
+copy observed data (weather readings, measurements, prices, dates, \
+current conditions) into the steps — those were true once; they are not \
+instructions. Ground the method ONLY in the provided knowledge; do not \
+invent facts. If the knowledge is only a snapshot of observations with \
+no reusable method behind it, output {\"skip\":\"one-line reason\"} \
+instead. Otherwise output ONLY a JSON object: \
 {\"trigger\":\"one or two sentences: when this skill applies\",\
 \"procedure\":\"concrete step-by-step instructions that use the stated \
 relations\"}. No prose outside the JSON, no markdown fences.";

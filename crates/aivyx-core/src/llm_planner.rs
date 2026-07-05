@@ -102,11 +102,19 @@ pub trait ContextProvider: Send + Sync {
     /// event with the surrounding `TurnStarted`/`TurnEnded` pair the
     /// way a tool-path event would. Pure-recall implementations
     /// ignore it.
+    ///
+    /// Vitrine §6 follow-up — `origin` is the turn message's
+    /// [`crate::MessageOrigin`]. Instruction-bearing injectors (the
+    /// skill trigger injector) must return `None` for
+    /// `MessageOrigin::System` turns: routine/reflection prompts are
+    /// fully engineered and a matched procedure hijacks them.
+    /// Data-bearing recall ignores it.
     async fn recall(
         &self,
         user_message: &str,
         session_id: crate::SessionId,
         turn_id: crate::TurnId,
+        origin: crate::MessageOrigin,
     ) -> Option<String>;
 }
 
@@ -770,7 +778,7 @@ impl TurnPlanner for LlmPlanner {
         if let Some(provider) = &self.config.context_provider {
             if has_query {
                 if let Some(block) = provider
-                    .recall(&query_text, message.session_id, turn_id)
+                    .recall(&query_text, message.session_id, turn_id, message.origin)
                     .await
                 {
                     content.insert(0, ContentBlock::text(block));
@@ -1797,6 +1805,7 @@ mod tests {
             user_message: &str,
             session_id: SessionId,
             _turn_id: TurnId,
+            _origin: crate::MessageOrigin,
         ) -> Option<String> {
             self.seen.lock().unwrap().push(user_message.to_string());
             self.seen_sessions.lock().unwrap().push(session_id);
