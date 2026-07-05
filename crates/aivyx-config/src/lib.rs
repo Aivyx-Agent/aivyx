@@ -319,10 +319,9 @@ pub fn default_starter_skills() -> Vec<SeedSkill> {
             // the trigger-injection matcher missed every real fact. Name the
             // instances so the embedding has something to grip.
             trigger: "When the operator states a specific fact, date, expiry, \
-                      preference, decision, plan, or contact detail about their \
-                      life or work — e.g. a certificate expiry date, a \
-                      favourite coffee, an upcoming appointment, a chosen \
-                      option — anything they'd expect you to know later."
+                      preference, decision, or plan — e.g. a certificate expiry \
+                      date, a favourite coffee, an upcoming appointment — \
+                      anything they'd expect you to know later."
                 .to_string(),
             procedure: "Write it to memory under a fitting topic (create one if \
                         needed), phrased so a future recall is useful. Confirm in one \
