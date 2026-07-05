@@ -142,7 +142,10 @@ impl Default for SkillAutoProposeConfig {
         SkillAutoProposeConfig {
             enabled: true,
             heuristic: HeuristicConfig::default(),
-            judge_model: "claude-haiku-4-5".into(),
+            // Empty = follow the planner's configured model
+            // (resolved at daemon wiring). A concrete foreign-model
+            // default 404s on any non-Anthropic install.
+            judge_model: String::new(),
             judge_max_tokens: 800,
             auto_accept_confidence_threshold: 0.85,
             fuzzy_match_threshold: 0.80,
@@ -243,7 +246,10 @@ impl From<aivyx_config::SkillAutoProposeConfig> for SkillAutoProposeConfig {
         SkillAutoProposeConfig {
             enabled: c.enabled,
             heuristic: convert_heuristic(&c.heuristic),
-            judge_model: c.judge_model,
+            // `None` (operator didn't pin a model) becomes "" here;
+            // the daemon wiring resolves "" to the planner's
+            // configured model before the context is built.
+            judge_model: c.judge_model.unwrap_or_default(),
             judge_max_tokens: c.judge_max_tokens,
             auto_accept_confidence_threshold: c.auto_accept_confidence_threshold,
             fuzzy_match_threshold: c.fuzzy_match_threshold,
@@ -266,7 +272,10 @@ impl From<aivyx_config::PersonaAutoProposeConfig> for SkillAutoProposeConfig {
         SkillAutoProposeConfig {
             enabled: c.enabled,
             heuristic: convert_heuristic(&c.heuristic),
-            judge_model: c.judge_model,
+            // `None` (operator didn't pin a model) becomes "" here;
+            // the daemon wiring resolves "" to the planner's
+            // configured model before the context is built.
+            judge_model: c.judge_model.unwrap_or_default(),
             judge_max_tokens: c.judge_max_tokens,
             // Phase 114 — `PersonaAutoProposeConfig` has no
             // top-level auto_accept_confidence_threshold; the
@@ -2929,7 +2938,7 @@ mod tests {
                 require_gate_resolve: true,
                 mode: aivyx_config::SkillsAutoProposeMatchMode::All,
             },
-            judge_model: "claude-opus-4-7".into(),
+            judge_model: Some("claude-opus-4-7".into()),
             judge_max_tokens: 1200,
             auto_accept_confidence_threshold: 0.91,
             fuzzy_match_threshold: 0.65,
@@ -2958,7 +2967,7 @@ mod tests {
                 require_gate_resolve: false,
                 mode: aivyx_config::SkillsAutoProposeMatchMode::Any,
             },
-            judge_model: "m".into(),
+            judge_model: Some("m".into()),
             judge_max_tokens: 800,
             fuzzy_match_threshold: 0.80,
             per_category: aivyx_config::PerCategoryConfigSet::defaults(),
@@ -3002,7 +3011,7 @@ mod tests {
                 require_gate_resolve: false,
                 mode: aivyx_config::SkillsAutoProposeMatchMode::Any,
             },
-            judge_model: "m".into(),
+            judge_model: Some("m".into()),
             judge_max_tokens: 800,
             auto_accept_confidence_threshold: 0.90,
             fuzzy_match_threshold: 0.80,
@@ -3023,7 +3032,7 @@ mod tests {
                 require_gate_resolve: false,
                 mode: aivyx_config::SkillsAutoProposeMatchMode::Any,
             },
-            judge_model: "x".into(),
+            judge_model: Some("x".into()),
             judge_max_tokens: 1,
             auto_accept_confidence_threshold: 0.0,
             fuzzy_match_threshold: 0.0,

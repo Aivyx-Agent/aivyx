@@ -8672,7 +8672,18 @@ async fn run_async(
                 (Some(p), _) => Some(p.into()),
                 (None, Some(s)) => Some(s.into()),
                 (None, None) => None,
-            };
+            }
+            .map(|mut cfg: aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig| {
+                // Vitrine §6 — an unset judge_model follows the
+                // planner's configured model on the same provider
+                // (the configured-provider invariant). The old
+                // hardcoded "claude-haiku-4-5" default 404'd after
+                // every tool-heavy turn on an Ollama-only install.
+                if cfg.judge_model.is_empty() {
+                    cfg.judge_model = model.clone();
+                }
+                cfg
+            });
         let skill_auto_proposer_ctx = runtime_cfg.map(|cfg| {
             Arc::new(
                 aivyx_channel::skill_auto_proposer::SkillAutoProposerContext {

@@ -9512,10 +9512,9 @@ fn skills_auto_propose_minimal_section_uses_defaults() {
     );
     let sap = cfg.skill_auto_propose.expect("section present");
     assert!(sap.enabled);
-    assert_eq!(
-        sap.judge_model,
-        crate::DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL
-    );
+    // Unset judge_model stays None — the daemon wiring resolves
+    // it to the planner's configured model (Vitrine §6).
+    assert_eq!(sap.judge_model, None);
     assert_eq!(
         sap.judge_max_tokens,
         crate::DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MAX_TOKENS
@@ -9559,7 +9558,7 @@ fn skills_auto_propose_full_section_parses_every_field() {
     );
     let sap = cfg.skill_auto_propose.expect("section present");
     assert!(sap.enabled);
-    assert_eq!(sap.judge_model, "claude-opus-4-7");
+    assert_eq!(sap.judge_model.as_deref(), Some("claude-opus-4-7"));
     assert_eq!(sap.judge_max_tokens, 1200);
     assert!(
         (sap.auto_accept_confidence_threshold - 0.92).abs() < 1e-6

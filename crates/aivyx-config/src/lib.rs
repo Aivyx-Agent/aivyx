@@ -3089,8 +3089,14 @@ pub struct SkillAutoProposeConfig {
     /// Q1b first-stage heuristic thresholds.
     pub heuristic: SkillsAutoProposeHeuristic,
     /// Provider-specific model identifier for the LLM-judge
-    /// call. Default `"claude-haiku-4-5"`.
-    pub judge_model: String,
+    /// call. `None` (unset) means "follow the planner's
+    /// configured model" — the judge always runs on the same
+    /// provider as the planner (the configured-provider
+    /// invariant), so a hardcoded foreign-model default would
+    /// 404 on any non-Anthropic install (found live: an
+    /// Ollama-only rig burned a `claude-haiku-4-5 not found`
+    /// judge error after every tool-heavy turn).
+    pub judge_model: Option<String>,
     /// Max tokens the judge may emit. Default `800`.
     pub judge_max_tokens: u32,
     /// Q3b auto-accept threshold (0.0–1.0). Default `0.85`.
@@ -3124,8 +3130,10 @@ pub enum SkillsAutoProposeMatchMode {
 /// to backfill any field the operator omits from the TOML.
 /// Match Phase 112's `SkillAutoProposeConfig::default()`
 /// values byte-for-byte.
-pub const DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL: &str =
-    "claude-haiku-4-5";
+// (Removed: DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL. An unset
+// judge_model now stays `None` and follows the planner's configured
+// model — a hardcoded foreign-model default 404'd on non-Anthropic
+// installs. Vitrine §6.)
 pub const DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MAX_TOKENS: u32 = 800;
 pub const DEFAULT_SKILLS_AUTO_PROPOSE_AUTO_ACCEPT_THRESHOLD: f32 = 0.85;
 pub const DEFAULT_SKILLS_AUTO_PROPOSE_FUZZY_THRESHOLD: f32 = 0.80;
@@ -3150,9 +3158,10 @@ pub struct PersonaAutoProposeConfig {
     /// Master switch. Default `true` per Q3b — operators who
     /// configure the section opted in deliberately.
     pub enabled: bool,
-    /// LLM-judge model. Defaults to
-    /// `DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL`.
-    pub judge_model: String,
+    /// LLM-judge model. `None` follows the planner's
+    /// configured model (see the `[skills.auto_propose]`
+    /// twin field).
+    pub judge_model: Option<String>,
     /// Max tokens the judge may emit. Default 800.
     pub judge_max_tokens: u32,
     /// Q4b fuzzy-match pre-filter cutoff for the LearnedSkill
@@ -5042,7 +5051,7 @@ struct RawRecallFeedback {
 /// ```toml
 /// [skills.auto_propose]
 /// enabled = true
-/// judge_model = "claude-haiku-4-5"
+/// judge_model = "claude-haiku-4-5"   # optional; unset = planner's model
 /// judge_max_tokens = 800
 /// auto_accept_confidence_threshold = 0.85
 /// fuzzy_match_threshold = 0.80
@@ -9132,11 +9141,8 @@ fn build_skill_auto_propose_config(
     }
 
     let enabled = raw.enabled.unwrap_or(true);
-    let judge_model = raw
-        .judge_model
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL.to_string());
-    if judge_model.trim().is_empty() {
+    let judge_model = raw.judge_model.clone();
+    if judge_model.as_deref().is_some_and(|m| m.trim().is_empty()) {
         return Err(ConfigError::Invalid {
             field: "skills.auto_propose.judge_model",
             reason: "`judge_model` must be non-empty".into(),
@@ -9275,11 +9281,8 @@ fn build_persona_auto_propose_config(
     }
 
     let enabled = raw.enabled.unwrap_or(true);
-    let judge_model = raw
-        .judge_model
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SKILLS_AUTO_PROPOSE_JUDGE_MODEL.to_string());
-    if judge_model.trim().is_empty() {
+    let judge_model = raw.judge_model.clone();
+    if judge_model.as_deref().is_some_and(|m| m.trim().is_empty()) {
         return Err(ConfigError::Invalid {
             field: "persona.auto_propose.judge_model",
             reason: "`judge_model` must be non-empty".into(),
