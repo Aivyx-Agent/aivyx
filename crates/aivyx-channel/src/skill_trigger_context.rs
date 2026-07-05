@@ -51,7 +51,11 @@ use async_trait::async_trait;
 /// Deliberately higher than recall's `rag_min_similarity` floor
 /// (0.20): an irrelevant memory is background noise, but an
 /// irrelevant *procedure* is an instruction-shaped distraction.
-const TRIGGER_MIN_COSINE: f32 = 0.45;
+/// Calibrated live on nomic-embed-text (rig, 2026-07-05): a true
+/// trigger match scored 0.68 while a briefing-adjacent weather
+/// question pulled an unrelated skill at 0.47 — 0.50 keeps the
+/// separation.
+const TRIGGER_MIN_COSINE: f32 = 0.50;
 
 /// Embedding-free fallback: the fraction of the shorter side's
 /// content words that must overlap between query and trigger.
