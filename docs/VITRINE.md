@@ -455,7 +455,24 @@ _(pending)_
   with the banner + self-heal instead of zombifying.
 
 ### 9 · Settings
-_(pending)_
+- **Positives:** read view matches the running config; the write path
+  PASSED the surgical-write test — a two-knob edit (autonomy level →
+  unleashed, deliberate; a no-op budget policy line) diffed to exactly
+  those lines, with the hand-maintained token/MCP/comment content
+  byte-identical (the toml_edit promise held on a real, hand-edited
+  config).
+- **P2 (product) — settings coverage is thin.** Operator verdict: the
+  screen exposes a limited subset of the config surface; he wants a
+  future chapter to inventory `aivyx.toml`'s operator-relevant knobs
+  and expose them properly ("more settings for the end user"). Queue
+  as a v0.9 chapter candidate alongside the UI modernization pass.
+- **P3 (safety UX) — autonomy-tier knobs deserve a louder confirm.**
+  The level change to unleashed saved as casually as any field; the
+  operator confirmed it was deliberate here, but a dial that composes
+  the agent's entire permission posture should get an explicit,
+  unmissable confirmation (the destructive-action pattern), and
+  arguably a chip on the Command Center showing the pending-restart
+  divergence.
 
 ### 10 · MCP (Lantern) + Voice
 _(pending)_
