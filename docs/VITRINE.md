@@ -226,15 +226,18 @@
   tool calls + outcome like trigger turns do.
 
 ### 3 · Missions
-- **P1 — a daemon restart zombifies the Studio silently.** The page's
-  /ws dies with the daemon; the Chat composer greys out
-  (`disabled: !ready`) but every OTHER action surface stays live-
-  looking — the operator typed a mission goal and hit Run into a dead
-  socket, and nothing happened, anywhere. No banner, no auto-
-  reconnect, no ready-gating on the mission bar. Fix candidates:
-  (a) a global "connection lost — reconnecting…" banner + auto-
-  reconnect with backoff, (b) gate all action inputs on `ready` like
-  the composer.
+- **P1 — a daemon restart zombifies the Studio silently. FIXED
+  (657a3e6) after claiming its third operator action** (a mission Run,
+  then a roster save + another Run during section 7). The page's /ws
+  died with the daemon and the client ws task simply ENDED — stale
+  signals kept every screen looking alive while all sends vanished.
+  Fix: ws_task is a reconnect loop (1s/2s/4s/8s backoff), a sticky
+  "Connection to the agent lost — reconnecting…" alert banner in the
+  app shell, dashboard boot queries replayed on every (re)connect, the
+  in-flight message a dying socket rejected is re-sent after
+  reconnect, and the mission Run bar + roster Save gate on the
+  connection signal like the chat composer. Dead sockets are detected
+  within one poll tick.
 - **P1 — Run gives zero feedback even on a live socket.** The client
   has no handler for `TeamRunStarted` and no `QueryError` arm for the
   `mc-start` id — success and failure are BOTH silently dropped; the
@@ -414,7 +417,16 @@
 _(pending)_
 
 ### 7 · Teams
-_(pending)_
+- **Positives (operator verdict):** all 9 Nonagon members render with
+  appropriate data and settings (roles, souls, tools, scopes — incl.
+  the new `mcp.call` markers); same UI-polish-only verdict as the
+  other screens.
+- **The "lost roster save" + "missions broken again" reports were both
+  the §3 zombie page** (the v0.8.1 release deploy restarted the daemon
+  under the operator's open tab; reads rendered cached state, writes
+  vanished). Root-caused via journal silence + no team file on disk;
+  fixed by the reconnect work above. Roster save re-test pending after
+  one final manual reload.
 
 ### 8 · Documents
 _(pending)_
