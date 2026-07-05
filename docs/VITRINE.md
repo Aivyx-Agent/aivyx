@@ -320,7 +320,29 @@
   fidelity prompts.
 
 ### 4 · Memory / Wiki / Graph
-_(pending)_
+- **Positives (operator verdict 2026-07-05):** memory screen renders the
+  accumulated mission/chat content well ("lots of info saved"), search
+  works as expected, data is correct throughout, no internal-topic
+  leaks (pre-flight confirmed data-side too).
+- **P3 — the graph views are "messy and unintuitive."** Data correct,
+  presentation not: the operator wants layout/readability work
+  (clustering, label collision, visual hierarchy). Joins the Command
+  Center restyle as the Studio polish wave's design workload.
+- **P2 (data-side, from the same session) — mission turns have no
+  topic-naming discipline.** Specialists filed single entries under
+  bare-ICAO topics (`YPJT`, `YMML`, `YSSY`) alongside
+  `overall_conditions` + `overall_conditions_summary` — three naming
+  conventions from one mission. Candidate: a topic-naming hint in the
+  member/mission prompts, or a mission-scoped topic prefix.
+- **P2 — contradictory memory entries carry no on-screen indication.**
+  `overall_conditions` holds 6 entries from the mission retries,
+  including a direct contradiction ("No METAR data available" vs "All
+  three Australian airports are VFR"). Concord detects conflicts but
+  only the CLI (`aivyx memory conflicts`) surfaces them — the Memory
+  screen should badge conflicted topics.
+- _(watch-item)_ wiki page keyed `operator-note` (singular) vs live
+  memory topic `operator-notes` (plural) — verify backlinks connect;
+  if not, the Codex topic-keying has a normalization gap.
 
 ### 5 · Skills (Repertoire)
 _(pending)_
