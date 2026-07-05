@@ -5,6 +5,77 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-07-05
+
+**The Vitrine harvest: one day of live operator walkthrough, fifteen-plus
+bugs found, nearly all fixed same-day and re-proven on the rig.** The
+first five walkthrough sections (Gatehouse baptism, Command Center, Chat,
+Missions, Memory, Skills) drove every fix in this release; the standout
+theme is honesty under pressure — silent failures now speak, stochastic
+judges get deterministic backstops, and skills finally get used.
+
+### Added
+
+- **Conversation-history replay (Chapter Thread).** Interactive-session
+  turns now replay the session's recent user/assistant messages as real
+  conversation history, so follow-ups like "did you find the correct
+  code?" resolve against what was actually said. Default-on
+  (`[agent] conversation_history_turns = 8`; `0` restores fresh-context
+  turns exactly); trigger-fired turns are structurally unaffected, and
+  durable memory remains the persistence layer.
+- **Skill trigger injection — skills are finally used.** Each turn, the
+  best trigger-matching approved skill's procedure is injected into
+  context alongside memory recall (embedding cosine with live-calibrated
+  0.50 floor; token-overlap fallback for embedding-free installs). Local
+  models never took the `skills.list`/`skills.invoke` indirection, so a
+  fresh agent's skills were dead weight. Verified end-to-end: teach →
+  use on the next turn with no restart; update → use;
+  `[skills] trigger_injection = false` opts out.
+- **Deterministic identifier backstop in the completion judge.** When a
+  goal names uppercase identifiers (ICAO codes, tickers) and the
+  majority appear nowhere in the deliverable or evidence, the verdict
+  rejects before any LLM opinion — after a live mission's judge
+  hallucinated a PASS over a brief about entirely different airports.
+- **Team specialists can use the operator's MCP servers.** The
+  researcher/analyst/verifier roles now receive qualified per-server
+  `mcp.call` grants and see bridged MCP tools; previously the whole team
+  was structurally MCP-blind and approximated one weather-tool call with
+  sixteen raw page fetches.
+
+### Fixed
+
+- **Web search reports backend refusals instead of silently returning
+  nothing.** DuckDuckGo answers bot-flagged traffic with HTTP 202 + a
+  challenge page; the zero-config backend parsed that to an empty result
+  set, and the model either went mute or invented answers.
+- **Reflection proposals were scope-dead on a clean install** — the
+  default capability floor granted neither `reflection.propose` nor
+  `persona.propose`, so every organic proposal died with a denial.
+- **Reflection no longer fires on every daemon restart** (the last-fired
+  anchor was epoch, not boot).
+- **Clean systemd stops no longer report "unclean shutdown"** — the
+  daemon now handles SIGTERM like Ctrl-C.
+- **The planner's context budget honors an explicit `[ollama] num_ctx`**
+  instead of an 8k class default, and **giant tool results are capped**
+  (~half the context window, with an explicit truncation marker) — one
+  raw page fetch used to become an un-prunable 30k-token message that
+  pushed the request past the real window and silently truncated the
+  system prompt server-side.
+- **Pruning can no longer discard the turn's own question.** The task
+  message is pinned through context pruning; a fat tool turn used to
+  lose its task and reset to a greeting mid-mission.
+- **Mission retries are bounded again.** The Reprise attempt counter is
+  persisted on the mission record; an approval gate used to reset a
+  driver-local counter on every "Approve", producing an infinite
+  reject-retry-gate loop.
+- **The trigger-injection embedding cache keys on trigger text**, not
+  `name@version` — a Tutor `skills update` preserves the version and
+  would have served the stale trigger embedding forever.
+- **`capture-note`'s starter trigger is written in instance nouns**
+  (dates, expiries, favourites) so real volunteered facts actually match
+  it; with injection live, a stated fact is now saved to memory and
+  confirmed in one line.
+
 ## [0.8.0] — 2026-07-04
 
 **Milestone: the self-learning arc is real, live-proven, and honest.**
