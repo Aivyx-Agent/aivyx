@@ -548,7 +548,13 @@ provide a quick summary" →
   (`pp-b8f67e4b…`, AU aviation terminology + knots); **Approve
   updated the screen without a manual reload**; daemon state
   confirms Approved. The §6 stale-screen fix holds.
-- **A ⏳** 06:00 routine suppression watcher armed.
+- **A ✅ (organic, 06:00):** `cfg-health-check` fired with **no**
+  `skills: injected` line, memory recall still ran (1 memory, by
+  design), and the routine did its real job (`"OK"`, 1 tool call,
+  6.7 s). The nightly-hijack fix is proven on a live routine.
+  **All five verification tests green — 2026-07-06 morning batch
+  closed: 6 bugs found (incl. yesterday's carry-over), 5 fixed +
+  live-verified same-morning, 1 precision watch-item logged.**
 - Precision watch-item reinforced: the propose-request message
   pulled `draft-reply` at 0.65 (task still executed correctly).
 
