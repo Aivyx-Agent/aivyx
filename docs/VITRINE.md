@@ -226,7 +226,40 @@
   tool calls + outcome like trigger turns do.
 
 ### 3 · Missions
-_(pending)_
+- **P1 — a daemon restart zombifies the Studio silently.** The page's
+  /ws dies with the daemon; the Chat composer greys out
+  (`disabled: !ready`) but every OTHER action surface stays live-
+  looking — the operator typed a mission goal and hit Run into a dead
+  socket, and nothing happened, anywhere. No banner, no auto-
+  reconnect, no ready-gating on the mission bar. Fix candidates:
+  (a) a global "connection lost — reconnecting…" banner + auto-
+  reconnect with backoff, (b) gate all action inputs on `ready` like
+  the composer.
+- **P1 — Run gives zero feedback even on a live socket.** The client
+  has no handler for `TeamRunStarted` and no `QueryError` arm for the
+  `mc-start` id — success and failure are BOTH silently dropped; the
+  row only ever appears via the background list poll. Fix: optimistic
+  row / notice on `TeamRunStarted`, an error banner for `mc-start`
+  errors, and an immediate `TeamMissionList` refresh.
+- **P2 (team behavior) — specialists confabulate file-based handoffs.**
+  Live mission (725be8d8): the writer opened its turn by reading
+  `workspace: …/brief_text.md` — a file NO step ever wrote (the real
+  handoff is `team.message` content) — got file-not-found in 17µs,
+  quietly gave up, and the deliverable `conditions-brief.md` was never
+  written. This is the 2026-07-03 "multi-step variance" item with a
+  precise signature: the plan should state where each artifact LIVES,
+  or member prompts should say "your inputs arrive in the message,
+  not on disk."
+- **Positives:** mission journaling is rich and readable
+  (`aivyx team: [researcher] → web.fetch` per call); the artifact
+  verdict honestly REJECTED the mission with a precise reason ("the
+  one-line summary was stored in memory, but no conditions-brief.md
+  exists"); member envelopes are correctly attenuated per role (the
+  writer holds workspace scopes, the researcher doesn't).
+- _(walkthrough note)_ no approval gate fired on this goal-run —
+  planning went straight to executing; confirm when the
+  AwaitingApproval phase is supposed to appear before judging the
+  gate UX._(section in progress)_
 
 ### 4 · Memory / Wiki / Graph
 _(pending)_
