@@ -517,6 +517,9 @@ fn App() -> Element {
         )
     });
     use_context_provider(|| ws);
+    // Connection state, so action surfaces (mission bar, roster save) can
+    // gate on a live socket instead of sending into a zombie page.
+    use_context_provider(|| connected);
     use_context_provider(|| memory);
     use_context_provider(|| wiki);
     use_context_provider(|| lattice);
@@ -609,6 +612,13 @@ fn App() -> Element {
             // Mobile-only scrim behind the open drawer; tap to dismiss.
             div { class: "nav-backdrop", onclick: move |_| nav_open.set(false) }
             div { class: "main",
+                if !connected() {
+                    div {
+                        style: "position:sticky;top:0;z-index:1000;background:var(--danger, #b91c1c);color:#fff;text-align:center;padding:6px 12px;font-size:13px;letter-spacing:0.02em;",
+                        role: "alert",
+                        "Connection to the agent lost — reconnecting…"
+                    }
+                }
                 Topbar { title, light, nav_open, view, guide_page }
                 main { class: "view fade-in", id: "main-content", tabindex: "-1",
                     match view() {
@@ -1297,13 +1307,16 @@ fn MissionsPanel(missions: Vec<TeamMissionView>) -> Element {
 #[component]
 fn NewMissionBar() -> Element {
     let ws = use_context::<Sender>();
+    let connected = use_context::<Signal<bool>>();
     let mut goal = use_signal(String::new);
+    let ready = connected();
     rsx! {
         div { class: "newbar",
             input {
                 class: "input",
                 "aria-label": "New mission goal",
-                placeholder: "new mission goal — e.g. \"audit the deps for CVEs\"",
+                placeholder: if ready { "new mission goal — e.g. \"audit the deps for CVEs\"" } else { "reconnecting…" },
+                disabled: !ready,
                 value: "{goal}",
                 oninput: move |e| goal.set(e.value()),
                 onkeydown: move |e| {
@@ -1315,6 +1328,7 @@ fn NewMissionBar() -> Element {
             }
             button {
                 class: "btn btn-primary",
+                disabled: !ready,
                 onclick: move |_| {
                     let g = goal().trim().to_string();
                     if !g.is_empty() { ws.send(start_query(g)); goal.set(String::new()); }
@@ -4162,6 +4176,7 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
 #[component]
 fn TeamsPanel() -> Element {
     let ws = use_context::<Sender>();
+    let connected = use_context::<Signal<bool>>();
     let teams = use_context::<Signal<TeamsState>>();
     let missions = use_context::<Signal<Vec<TeamMissionView>>>();
 
@@ -4342,9 +4357,9 @@ fn TeamsPanel() -> Element {
                     },
                     {if can_add { "Add specialist" } else { "Max 9 specialists" }}
                 }
-                button { class: "btn btn-primary", disabled: !dirty,
+                button { class: "btn btn-primary", disabled: !dirty || !connected(),
                     onclick: move |_| { if let Some(t) = draft() { ws.send(set_team_roster_query(&t)); } },
-                    "Save team" }
+                    {if connected() { "Save team" } else { "reconnecting…" }} }
                 button { class: "btn btn-glass", disabled: !dirty,
                     onclick: move |_| { draft.set(teams().roster); },
                     "Discard changes" }
@@ -4806,6 +4821,133 @@ fn fmt_size(bytes: u64) -> String {
 #[allow(clippy::too_many_arguments)]
 async fn ws_task(
     mut rx: UnboundedReceiver<FrontendMessage>,
+    missions: Signal<Vec<TeamMissionView>>,
+    dashboard: Signal<Dashboard>,
+    memory: Signal<MemoryState>,
+    wiki: Signal<WikiState>,
+    lattice: Signal<GraphKnowledgeState>,
+    settings: Signal<SettingsState>,
+    agents: Signal<AgentsState>,
+    teams: Signal<TeamsState>,
+    documents: Signal<DocumentsState>,
+    voice: Signal<VoiceState>,
+    skills: Signal<SkillsState>,
+    mcp: Signal<McpState>,
+    mut connected: Signal<bool>,
+    session: Signal<Option<String>>,
+    transcript: Signal<Vec<ChatLine>>,
+    streaming: Signal<String>,
+    gate: Signal<Option<GateInfo>>,
+) {
+    // Vitrine walkthrough fix (2026-07-05, third operator casualty): a
+    // daemon restart used to END this task — the socket died, `connected`
+    // flipped false (visible only as the Command Center chip), the write
+    // loop broke, and every later `ws.send` from every screen vanished
+    // silently into a dead coroutine. The page looked alive (stale
+    // signals still rendered) while edits, mission starts, and roster
+    // saves went nowhere. This loop reconnects with backoff, replays the
+    // dashboard boot queries on every (re)connect, and re-sends the one
+    // in-flight message a dying socket rejected. Outbound traffic flows
+    // at least every POLL_INTERVAL_MS (the mission/audit poll), so a dead
+    // socket is detected within one poll tick.
+    let mut attempt: u32 = 0;
+    // The message a dying socket refused — re-sent first on reconnect so
+    // an operator action that raced the disconnect still lands.
+    let mut unsent: Option<String> = None;
+    loop {
+        let ws = match WebSocket::open(&ws_url()) {
+            Ok(ws) => ws,
+            Err(_) => {
+                connected.set(false);
+                attempt = attempt.saturating_add(1);
+                TimeoutFuture::new(reconnect_backoff_ms(attempt)).await;
+                continue;
+            }
+        };
+        connected.set(true);
+        attempt = 0;
+        let (mut write, read) = ws.split();
+
+        spawn(read_task(
+            read, missions, dashboard, memory, wiki, lattice, settings, agents, teams,
+            documents, voice, skills, mcp, connected, session, transcript, streaming, gate,
+        ));
+
+        // (Re)hydrate the dashboard one-shots — on a fresh page load this
+        // duplicates the boot `use_future` harmlessly; on a reconnect it is
+        // what refreshes the stale screens.
+        for q in reconnect_boot_queries() {
+            if let Ok(json) = serde_json::to_string(&q) {
+                let _ = write.send(Message::Text(json)).await;
+            }
+        }
+        if let Some(json) = unsent.take() {
+            if write.send(Message::Text(json.clone())).await.is_err() {
+                // This socket is already dead — stash the message back
+                // and go straight to the next reconnect attempt.
+                unsent = Some(json);
+                connected.set(false);
+                attempt = attempt.saturating_add(1);
+                TimeoutFuture::new(reconnect_backoff_ms(attempt)).await;
+                continue;
+            }
+        }
+
+        // Outbound relay: runs until the socket dies (write error) or the
+        // app tears down (rx closed).
+        loop {
+            match rx.next().await {
+                Some(msg) => {
+                    let Ok(json) = serde_json::to_string(&msg) else {
+                        continue;
+                    };
+                    if write.send(Message::Text(json.clone())).await.is_err() {
+                        unsent = Some(json);
+                        break;
+                    }
+                }
+                None => return,
+            }
+        }
+        connected.set(false);
+        attempt = attempt.saturating_add(1);
+        TimeoutFuture::new(reconnect_backoff_ms(attempt)).await;
+    }
+}
+
+/// Reconnect backoff: 1s, 2s, 4s, then 8s forever. Fast enough that a
+/// deploy restart heals in seconds; slow enough not to hammer a daemon
+/// that is genuinely down.
+fn reconnect_backoff_ms(attempt: u32) -> u32 {
+    match attempt {
+        0 | 1 => 1_000,
+        2 => 2_000,
+        3 => 4_000,
+        _ => 8_000,
+    }
+}
+
+/// The dashboard's boot queries, re-sent on every (re)connect so a
+/// reconnected page refreshes without navigation. Mission list + audit
+/// refresh via the standing poll; screen-local data refreshes on view
+/// switch.
+fn reconnect_boot_queries() -> Vec<FrontendMessage> {
+    let q = |id: &str, payload: QueryPayload| FrontendMessage::Query {
+        id: id.to_string(),
+        payload,
+    };
+    vec![
+        q("mc-profile", QueryPayload::GetProfile { from_disk: false }),
+        q("mc-verify", QueryPayload::VerifyAuditChain),
+        q("mc-settings", QueryPayload::GetSettings),
+        q("mc-schedules", QueryPayload::GetSchedules),
+        q("mc-teams-roster", QueryPayload::GetTeamRoster),
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn read_task(
+    mut read: futures_util::stream::SplitStream<WebSocket>,
     mut missions: Signal<Vec<TeamMissionView>>,
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
@@ -4824,17 +4966,7 @@ async fn ws_task(
     mut streaming: Signal<String>,
     mut gate: Signal<Option<GateInfo>>,
 ) {
-    let ws = match WebSocket::open(&ws_url()) {
-        Ok(ws) => ws,
-        Err(_) => {
-            connected.set(false);
-            return;
-        }
-    };
-    connected.set(true);
-    let (mut write, mut read) = ws.split();
-
-    spawn(async move {
+    {
         while let Some(Ok(Message::Text(text))) = read.next().await {
             let Ok(env) = serde_json::from_str::<DaemonEnvelope>(&text) else {
                 continue;
@@ -5219,18 +5351,10 @@ async fn ws_task(
                 _ => {}
             }
         }
+        // Socket died: flip the banner on immediately and clear the chat
+        // session — the ws bridge mints a fresh one on reconnect.
         connected.set(false);
-    });
-
-    while let Some(msg) = rx.next().await {
-        match serde_json::to_string(&msg) {
-            Ok(json) => {
-                if write.send(Message::Text(json)).await.is_err() {
-                    break;
-                }
-            }
-            Err(_) => continue,
-        }
+        session.set(None);
     }
 }
 
