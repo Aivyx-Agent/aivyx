@@ -534,6 +534,22 @@ provide a quick summary" →
   observation shows the *invocation* carries the true channel
   session id and `TurnStarted` the divergent one.)
 
+### 12 · TUI (`aivyx tui` on the rig)
+_(walkthrough pending — checklist issued)_
+- 5 views (Chat / Missions / Dashboard / Audit / Tools); Chat +
+  Missions live, Dashboard minimal-live, **Audit + Tools are known
+  placeholders** (the /classic-port backlog — not new findings).
+
+### 13 · Desktop shell (wry/tao webview)
+_(walkthrough pending — checklist issued)_
+- **P2 FOUND + FIXED before launch (af9e8be):** the shell hardcoded
+  `http://127.0.0.1:7843` and would spawn a *local* daemon when
+  nothing listened — unusable against the rig/Harbor topology.
+  `AIVYX_STUDIO_URL` now overrides the webview URL, reachability
+  probe, and gate-watcher ws endpoint; daemon spawn/stop stays
+  local-only. Known limitation: the gate watcher can't pass the
+  Gatehouse token yet (remote notifications deferred).
+
 **Comprehensive verification pass (operator + IPC-driven, 05:20–):**
 - **B ✅** clean single-intent request → `summarize-document` won at
   0.71, procedure format followed, file actually read (audit:
