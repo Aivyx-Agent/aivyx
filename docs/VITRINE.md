@@ -365,7 +365,19 @@
   directly into turn context; skill "use" becomes structural instead
   of an indirection the model must choose, and injected-skill turns
   can be graded. (Charter-nudge and ledger-warming are weaker
-  fallbacks.)
+  fallbacks.) **BUILT + LIVE-PROVEN same-day (2e1af39 + 4b13d51):**
+  `SkillTriggerContext` matches skill triggers per turn (embedding
+  cosine with cached trigger vectors; token-overlap fallback for
+  embedding-free installs) and injects the top match's procedure as a
+  labeled, capped, header-defanged block composed with recall in the
+  planner's context slot. Threshold calibrated live on
+  nomic-embed-text: floor 0.50 (true match 0.68; a briefing-adjacent
+  false positive at 0.47 correctly excluded on re-test). `[skills]
+  trigger_injection = false` opts out. OPEN follow-up: injected use
+  doesn't emit `SkillInvocation` yet (the event needs a turn_id the
+  ContextProvider seam doesn't carry), so Repertoire counts and
+  Whetstone samples still accrue only from explicit invokes — the
+  per-injection journal breadcrumb is the interim observability.
 - **Creation paths staged for the overnight tick:** [skill_authoring]
   (Praxis) runs at reflection cadence (02:30 post-fix) and the
   aviation topics are exactly its knowledge-rich + skill-less input;
