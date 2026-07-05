@@ -492,8 +492,27 @@ _(pending)_
   tool-level health signal (recent success/failure from the audit
   chain) is the polish-wave candidate.
 
+- **Voice — empty state PASSES** (setup instructions render; no
+  config on the rig). **Operator decision: voice work is deferred
+  until after v1.0** — core surfaces take priority.
+
 ### 11 · `/classic` — panes worth porting vs deleting
-_(pending)_
+- Inventory (2026-07-05, against the live Studio): of the ten
+  /classic panes — chat, missions, audit, sessions, profile, persona,
+  proposals, notifications, memory, learning — six are fully covered
+  by Studio screens (chat/missions/memory directly; profile/persona/
+  proposals by Agents). **Four need porting before retirement:**
+  1. **audit** — the Studio has only the Command Center tail; the
+     full-chain browser (pagination, event types) has no equivalent.
+  2. **sessions** — no Studio equivalent.
+  3. **notifications** — history exists over IPC (Phase 73) but no
+     Studio screen renders it.
+  4. **learning** — the GetLearningInsights view (reflection cadence,
+     recall feedback) has no Studio home; candidate: fold into the
+     Command Center rather than a dedicated screen.
+  All four fit the read-only screen recipe. Retirement keeps the
+  minimal no-bundle fallback page per the plan (item 7 is NOT a blind
+  delete).
 
 ## TUI + desktop shell
 _(pending — separate pass)_
