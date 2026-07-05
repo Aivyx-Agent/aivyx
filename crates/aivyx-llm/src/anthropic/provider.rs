@@ -1897,12 +1897,19 @@ mod tests {
 
     #[test]
     fn pdf_page_cap_default_matches_constant() {
+        // `AnthropicConfig::new` reads AIVYX_ANTHROPIC_PDF_PAGE_CAP,
+        // so this must hold `env_lock` like the sibling env-var tests
+        // — without it, a parallel sibling's set_var races this read.
+        let _lock = env_lock();
         let cfg = AnthropicConfig::new(SecretString::from("k"));
         assert_eq!(cfg.pdf_page_cap, ANTHROPIC_PDF_PAGE_CAP);
     }
 
     #[test]
     fn pdf_page_cap_builder_overrides_default() {
+        // Holds `env_lock` for the same reason as the default test
+        // above (`new` reads the env var before the builder override).
+        let _lock = env_lock();
         let cfg = AnthropicConfig::new(SecretString::from("k"))
             .with_pdf_page_cap(200);
         assert_eq!(cfg.pdf_page_cap, 200);

@@ -414,10 +414,19 @@ async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<Strin
                 .send()
                 .await
                 .map_err(|e| format!("Brave Search request failed: {e}"))?;
+            let status = resp.status();
             let body = resp
                 .text()
                 .await
                 .map_err(|e| format!("read Brave Search response: {e}"))?;
+            if !status.is_success() {
+                return Err(format!(
+                    "Brave Search returned HTTP {status} — the backend refused the \
+                     request (bad key, quota, or outage); this is NOT an empty \
+                     result set: {}",
+                    body.chars().take(200).collect::<String>()
+                ));
+            }
             parse_brave_json(&body)
         }
         SearchBackend::SerpApi(api_key) => {
@@ -433,10 +442,19 @@ async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<Strin
                 .send()
                 .await
                 .map_err(|e| format!("SerpAPI request failed: {e}"))?;
+            let status = resp.status();
             let body = resp
                 .text()
                 .await
                 .map_err(|e| format!("read SerpAPI response: {e}"))?;
+            if !status.is_success() {
+                return Err(format!(
+                    "SerpAPI returned HTTP {status} — the backend refused the \
+                     request (bad key, quota, or outage); this is NOT an empty \
+                     result set: {}",
+                    body.chars().take(200).collect::<String>()
+                ));
+            }
             parse_serpapi_json(&body)
         }
         SearchBackend::DuckDuckGo => {
@@ -446,10 +464,26 @@ async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<Strin
                 .send()
                 .await
                 .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
+            let status = resp.status();
             let html = resp
                 .text()
                 .await
                 .map_err(|e| format!("read DuckDuckGo response: {e}"))?;
+            // DDG answers bot-flagged traffic with HTTP **202** + a
+            // challenge page — a 2xx, so `is_success()` would wave it
+            // through and the parser would yield a silent `[]` that the
+            // model reads as "zero hits" (live rig 2026-07-05: every
+            // search empty → the agent either went mute or confabulated
+            // an answer). Only a plain 200 carries a result page.
+            if status != reqwest::StatusCode::OK {
+                return Err(format!(
+                    "DuckDuckGo returned HTTP {status} (anti-bot challenge or \
+                     rate limit) — the zero-config search backend is currently \
+                     unavailable; this is NOT an empty result set. A keyed \
+                     backend (BRAVE_SEARCH_API_KEY or SERPAPI_API_KEY) avoids \
+                     this."
+                ));
+            }
             parse_ddg_html(&html)
         }
     };

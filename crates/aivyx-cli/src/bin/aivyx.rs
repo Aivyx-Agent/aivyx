@@ -7564,6 +7564,19 @@ async fn run_async(
         // future autonomy) deliberately stays out pending an [autonomy]
         // gating decision — do not add it here reflexively.
         Scope::parse("schedule.list").unwrap(),
+        // Reflection proposals — SIXTH registered-but-unauthorized floor
+        // gap (Vitrine investigation 2026-07-05): the reflection
+        // scheduler's system prompt instructs the model to call
+        // `reflection.propose`, and a persona-delta-bearing call
+        // escalates to require `persona.propose`
+        // (ReflectionProposeTool::required_scope) — but the floor
+        // granted neither, so every organic reflection proposal on a
+        // clean install died with ScopeDenied. Both are governance-safe
+        // to grant: a proposal only ever lands as Pending behind the
+        // operator's approval gate, so this is the propose half, not
+        // self-modification.
+        Scope::parse("reflection.propose").unwrap(),
+        Scope::parse("persona.propose").unwrap(),
         fs_read_scope,
         fs_write_scope,
         fs_metadata_scope,
@@ -8421,8 +8434,43 @@ async fn run_async(
         let shutdown = CancellationToken::new();
         let shutdown_for_signal = shutdown.clone();
         tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_err() {
-                std::process::exit(130);
+            // systemd stops the service with SIGTERM, which Rust does not
+            // handle by default — the process died without dropping the
+            // daemon's StateGuard, so every `systemctl stop/restart` left
+            // the crash-recovery state file behind and the next boot
+            // reported a bogus "detected unclean shutdown" (live rig
+            // 2026-07-05). Treat SIGTERM exactly like Ctrl-C: cancel the
+            // shutdown token and let the daemon unwind cleanly.
+            #[cfg(unix)]
+            {
+                let mut sigterm = match tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate(),
+                ) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        // No SIGTERM stream — fall back to Ctrl-C only.
+                        if tokio::signal::ctrl_c().await.is_err() {
+                            std::process::exit(130);
+                        }
+                        eprintln!("\naivyx daemon: shutting down.");
+                        shutdown_for_signal.cancel();
+                        return;
+                    }
+                };
+                tokio::select! {
+                    r = tokio::signal::ctrl_c() => {
+                        if r.is_err() {
+                            std::process::exit(130);
+                        }
+                    }
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
             }
             eprintln!("\naivyx daemon: shutting down.");
             shutdown_for_signal.cancel();

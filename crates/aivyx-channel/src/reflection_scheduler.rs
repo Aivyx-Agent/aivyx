@@ -804,6 +804,14 @@ pub async fn run_reflection_scheduler(
     // at the next cron boundary." This is fine for v1 — the
     // schedule is operator-declared and the cadence is large
     // (typical: daily / weekly).
+    //
+    // The no-entry anchor is BOOT TIME, not epoch: an epoch
+    // anchor makes `next_fire_after` always-past, so reflection
+    // fired immediately on every daemon restart (live rig
+    // 2026-07-05: four restarts in one morning = four reflection
+    // turns, one of which burned a proposal attempt) — the
+    // opposite of the "next cron boundary" contract above.
+    let boot_anchor = Utc::now();
     let mut last_fired: HashMap<String, DateTime<Utc>> = HashMap::new();
     // Phase 95 — per-schedule audit-log length at last fired
     // cycle. `None` means "this schedule hasn't fired yet
@@ -826,7 +834,7 @@ pub async fn run_reflection_scheduler(
             let anchor = last_fired
                 .get(&sched.name)
                 .copied()
-                .unwrap_or(DateTime::UNIX_EPOCH);
+                .unwrap_or(boot_anchor);
             let Some(next_fire) = next_fire_after(&sched.cron, anchor) else {
                 eprintln!(
                     "aivyx reflection: schedule {:?} produced no next fire — \
