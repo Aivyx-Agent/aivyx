@@ -73,10 +73,75 @@
   deterministic hook only catches explicit "remember this" phrasing;
   the ask→answered→persist loop needs closing (candidate: when the
   agent just asked a question, treat the operator's next message as a
-  candidate answer and bias the memory hook accordingly).
-- **P3 (agent behavior) — 3 identical memory.search calls in one turn**
-  before concluding absence; sits right at the Bridle repeat-call
-  threshold. One search (or search + list-topics) should suffice.
+  candidate answer and bias the memory hook accordingly). Root cause
+  amplified by the fresh-context finding below — the agent literally
+  cannot see that it just asked a question.
+- ~~P3 — 3 identical memory.search calls in one turn~~ **CORRECTED by
+  the audit chain (2026-07-05): the three searches were DISTINCT
+  queries** ("airport", "home airport", "base") — reasonable refinement,
+  not a loop. The real finding: **P3 — Studio chat tool lines render
+  only the tool name, never the arguments**, so distinct calls look like
+  stuck repetition to the operator. Mission/cron turns journal full args
+  (`→ web_search {"query": …}`); chat should render the same.
+- **P1 (2026-07-05 investigation) — same-session follow-ups fail by
+  design on the Chat surface.** "Whats the ICAO for Jandakot?" →
+  web_search → *(nothing rendered)* → "Did you find the correct code?"
+  → the agent guessed "code" meant a code snippet/repo — zero knowledge
+  of its own previous turn. Audit chain confirms both turns share one
+  session; the cause is the WI.2 design: turns are fresh-context (no
+  transcript replay), and the Phase 86 conversation window feeds only
+  recall *relevance*, never the model prompt. Fine for headless
+  automation; on a chat UI it breaks the most basic conversational
+  expectation (pronouns, ellipsis, "did you find it?"). Decision
+  needed: inject the conversation window as model context for
+  conversational channels (web chat / TUI REPL), or explicitly ship
+  "each message is a fresh ask" as the documented chat model.
+- **P1 (2026-07-05 investigation) — the bundled web-search backend was
+  silently dead all day.** DuckDuckGo answers bot-flagged traffic with
+  HTTP **202** + a challenge page; the zero-config backend parsed that
+  to `[]` with no error, so every `web_search` today (operator chat +
+  the 07:16/07:30 trend-scans) returned "no results" indistinguishable
+  from a real zero-hit. Downstream: the ICAO turn ended with an empty
+  completion (the operator saw nothing), and a headless repro of the
+  same question **confabulated "YJND"** (real answer: YPJT) tagged
+  "source unknown" — a never-invent violation triggered by garbage-in.
+  **FIXED same-day (backend honesty):** non-200 from DDG (and non-2xx
+  from Brave/SerpAPI) now returns an explicit tool error saying the
+  backend is unavailable and results are NOT empty-because-no-matches.
+  Still open: the 202 means DDG is blocking this rig — keyed backend
+  (Brave/SerpAPI) guidance for operators, and the Chat surface should
+  render *something* (e.g. "(no reply)") when a turn completes with
+  empty text instead of a silent void (routine turns also often end
+  with `final_message: ""` on gpt-oss:20b — same phenomenon).
+
+### 2a · Daemon findings (from the same investigation, all fixed same-day)
+- **P1 — reflection proposals were scope-dead on a clean v0.8.0.** The
+  reflection scheduler's prompt instructs the model to call
+  `reflection.propose`; a persona-delta-bearing call requires
+  `persona.propose` — and the default-role floor granted **neither**
+  (sixth registered-but-unauthorized floor gap). Audit chain: two
+  ScopeDenied at the 07:44/08:17 boots; the model reported "my current
+  permissions don't include the persona.propose capability". FIXED:
+  both scopes added to the backcompat floor (governance-safe — a
+  proposal only ever lands Pending behind the operator's approval).
+- **P2 — reflection fired on EVERY daemon restart.** `last_fired`
+  anchored at UNIX_EPOCH on boot, making the next fire always-past —
+  four restarts this morning = four reflection turns (one burned the
+  proposal attempt above). FIXED: anchor at boot time, so a restart
+  waits for the next cron boundary, as the code's own comment always
+  claimed.
+- **P2 — "detected unclean shutdown" on every clean systemd stop.**
+  The daemon only handled Ctrl-C (SIGINT); systemd stops with SIGTERM,
+  which killed the process without dropping the StateGuard, leaving
+  the crash-recovery state file behind. Every `systemctl restart`
+  then reported a bogus unclean shutdown. FIXED: SIGTERM now cancels
+  the shutdown token exactly like Ctrl-C.
+- **P2 (observability, open) — web-chat turns are nearly invisible in
+  the daemon journal.** Mission/cron turns log `→ tool {args}` /
+  `[turn completed]` / final message; Studio chat turns log only the
+  `recall:` line — the operator's ICAO mystery needed an audit-chain
+  dump over IPC to reconstruct. Chat turns should journal at least
+  tool calls + outcome like trigger turns do.
 
 ### 3 · Missions
 _(pending)_
