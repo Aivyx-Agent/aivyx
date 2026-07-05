@@ -345,7 +345,34 @@
   if not, the Codex topic-keying has a normalization gap.
 
 ### 5 · Skills (Repertoire)
-_(pending)_
+- **Positives (operator verdict):** all 6 skills render with correct
+  data (triggers, procedures, provenance); zero-state effectiveness
+  displays. UI needs the same refinement pass as the other screens.
+- **P2 (self-learning, the section's headline) — skill USE has a
+  cold-start problem on a fresh agent, and the whole Whetstone arc
+  starves behind it.** Live probes (2026-07-05): a turn matching
+  `summarize-document`'s trigger word-for-word did the work directly —
+  no `skills.invoke`, no SkillInvocation event — and even NAMING the
+  skill explicitly didn't elicit an invocation from gpt-oss:20b.
+  Mechanism: skills surface via the LEARNED tool-relevance ledger
+  (empty on day one) and model initiative (local models don't take
+  the indirection). Old Jarvis's organic Whetstone proof rode days of
+  warmed history. Without invocations there are no effectiveness
+  samples, no Candor-graded skill turns, no correction retro-folds —
+  refinement can never start. Candidate fix (strong): **semantic
+  trigger matching** — embed skill triggers, match against each turn's
+  query like recall does, and inject the top skill's procedure
+  directly into turn context; skill "use" becomes structural instead
+  of an indirection the model must choose, and injected-skill turns
+  can be graded. (Charter-nudge and ledger-warming are weaker
+  fallbacks.)
+- **Creation paths staged for the overnight tick:** [skill_authoring]
+  (Praxis) runs at reflection cadence (02:30 post-fix) and the
+  aviation topics are exactly its knowledge-rich + skill-less input;
+  the per-turn auto-proposer evaluated today's turns (heuristic
+  signals partially matched, nothing filed yet). Verify tomorrow:
+  pending proposals should show Praxis output — the first organic
+  proposal test since the floor fix made proposals grantable at all.
 
 ### 6 · Agents (proposal triage — live governance test)
 _(pending)_
