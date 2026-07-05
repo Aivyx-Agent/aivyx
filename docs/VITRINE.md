@@ -378,6 +378,30 @@
   ContextProvider seam doesn't carry), so Repertoire counts and
   Whetstone samples still accrue only from explicit invokes — the
   per-injection journal breadcrumb is the interim observability.
+- **COMPREHENSIVE SKILLS CHECK (2026-07-05, post-fix battery):** all 6
+  skills + a taught 7th verified live. Positives: `draft-reply` 0.60,
+  `daily-briefing` 0.72, `research-and-summarize` 0.57,
+  `suggest-next-steps` 0.72; negatives (arithmetic, raw METAR ask)
+  stay silent at the 0.50 floor; an ambiguous multi-intent goal
+  injected exactly ONE skill (top-1 discipline). **Teach→use proven
+  end-to-end**: `aivyx skills teach metar-decode …` was live on the
+  next turn with no restart, injected at 0.76, and the reply followed
+  the taught procedure's format. **Update→use proven** after the check
+  caught two more bugs, both fixed same-day (a237e44 + 2055272):
+  (1) the trigger-embedding cache keyed `name@version`, but Tutor
+  updates preserve version — a rewritten trigger served its STALE
+  embedding forever; now keyed on the embedded text
+  (self-invalidating); (2) `capture-note`'s type-level trigger
+  ("shares a fact worth remembering") embeds nowhere near concrete
+  instances ("my medical expires 15 March 2027") — rewritten with
+  instance nouns in the Outfit defaults + on the rig chain. Post-fix:
+  the medical-certificate fact injected `capture-note` at 0.55 and
+  the agent SAVED IT to memory with a one-line confirmation — **which
+  structurally closes the persist half of the §2 volunteered-fact
+  P2**. Residual (minor): "key points of README.md" picked the
+  adjacent `research-and-summarize` (0.56) over `summarize-document`
+  — top-1 cosine between sibling skills is fuzzy; harmless while
+  procedures overlap.
 - **Creation paths staged for the overnight tick:** [skill_authoring]
   (Praxis) runs at reflection cadence (02:30 post-fix) and the
   aviation topics are exactly its knowledge-rich + skill-less input;
