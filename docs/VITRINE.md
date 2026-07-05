@@ -530,7 +530,27 @@ provide a quick summary" →
 - **P3 noted:** `SkillInvocation.session_id` differs from the
   surrounding `TurnStarted.session_id` (turn_id correlates fine —
   counters/Whetstone unaffected). Cosmetic chain inconsistency;
-  investigate where the injector's session id diverges.
+  investigate where the injector's session id diverges. (Second
+  observation shows the *invocation* carries the true channel
+  session id and `TurnStarted` the divergent one.)
+
+**Comprehensive verification pass (operator + IPC-driven, 05:20–):**
+- **B ✅** clean single-intent request → `summarize-document` won at
+  0.71, procedure format followed, file actually read (audit:
+  failed absolute-path probe → workspace.list → workspace read),
+  `SkillInvocation` counted.
+- **C ✅** judge-404 fix proven: `SkillAutoProposal` verdict in
+  3.1 s on gpt-oss:20b — `DuplicateOfExistingLlm →
+  summarize-document`, the correct judgment for a turn that used an
+  existing skill.
+- **D ✅ (operator-verified):** Jarvis filed a real
+  BehavioralPreferences proposal on request
+  (`pp-b8f67e4b…`, AU aviation terminology + knots); **Approve
+  updated the screen without a manual reload**; daemon state
+  confirms Approved. The §6 stale-screen fix holds.
+- **A ⏳** 06:00 routine suppression watcher armed.
+- Precision watch-item reinforced: the propose-request message
+  pulled `draft-reply` at 0.65 (task still executed correctly).
 
 ### 7 · Teams
 - **Positives (operator verdict):** all 9 Nonagon members render with
