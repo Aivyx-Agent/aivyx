@@ -297,7 +297,27 @@
 - _(walkthrough note)_ the approval gate DID appear on the operator's
   own run (`gate_review_brief`, Approve/Reject rendered and worked);
   the earlier socket-launched run gated nothing — gate placement
-  varies with the planned steps._(section in progress)_
+  varies with the planned steps.
+- **PROOF RUN (post-fix, same goal, 4th run):** specialists called
+  `get_metar` on the aviation-weather MCP directly (no fetch thrash);
+  attempt 1's placeholder was honestly rejected; attempt 2 produced a
+  brief with REAL YPJT/YMML/YSSY METARs; the judge rejected on genuine
+  defects and — the fixed assertion — **the mission terminated after
+  exactly 2 attempts.** Bounded, honest, tool-equipped. A separate
+  identifier-free goal (flat-white essay) passed its verdict, proving
+  the deterministic backstop stays out of the way when the goal names
+  nothing.
+- **P3 (model quality) — METAR field transposition in the brief:**
+  `22012KT` (220° at 12 kt) rendered as "220 kt" in the wind column —
+  the identifier/precision family again, now in structured-data
+  reading. Feeds the same Candor-style fidelity-check candidate.
+- **Positive — abort:** `aivyx team abort <id>` on an executing
+  mission halted it at the next step boundary; phase flipped to
+  `halted` with `halt_reason: "aborted by operator"` persisted and the
+  journal line matching. **Section 3 complete** — open items feed the
+  polish waves: zombie-page reconnect/banner, Run feedback, rejection
+  reason on the row, gate labels with attempt context, handoff
+  fidelity prompts.
 
 ### 4 · Memory / Wiki / Graph
 _(pending)_
