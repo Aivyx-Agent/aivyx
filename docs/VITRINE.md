@@ -376,11 +376,15 @@
   planner's context slot. Threshold calibrated live on
   nomic-embed-text: floor 0.50 (true match 0.68; a briefing-adjacent
   false positive at 0.47 correctly excluded on re-test). `[skills]
-  trigger_injection = false` opts out. OPEN follow-up: injected use
-  doesn't emit `SkillInvocation` yet (the event needs a turn_id the
-  ContextProvider seam doesn't carry), so Repertoire counts and
-  Whetstone samples still accrue only from explicit invokes — the
-  per-injection journal breadcrumb is the interim observability.
+  trigger_injection = false` opts out. Follow-up LANDED same-day
+  (3e8ca41) after the operator hit it live ("skill used but the screen
+  says otherwise"): the turn id now reaches the injection seam
+  (TurnPlanner::begin_turn + ContextProvider::recall carry TurnId) and
+  every injection emits a turn-correlated `SkillInvocation` inside the
+  turn's audit range. Live proof: one injected summarize turn →
+  audit-chain SkillInvocation + Repertoire `invocations: 1, samples: 1`
+  — Whetstone folded its FIRST effectiveness sample from an injected
+  use. The full arc (inject → record → count → grade) is closed.
 - **COMPREHENSIVE SKILLS CHECK (2026-07-05, post-fix battery):** all 6
   skills + a taught 7th verified live. Positives: `draft-reply` 0.60,
   `daily-briefing` 0.72, `research-and-summarize` 0.57,
