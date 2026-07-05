@@ -435,7 +435,24 @@ _(pending)_
   UI-polish only beyond the (fixed) zombie page.
 
 ### 8 · Documents
-_(pending)_
+- **Positives (operator verdict):** browsing, reading, and editing all
+  work; "promising." Document CONTENT is ~95% accurate with some
+  invented details — that's the agent-authorship confabulation family
+  (§2b/§3), not a browser bug; the browser renders faithfully what the
+  agent wrote.
+- **P2 — editor forced single-line text. FIXED (0bca834):**
+  `.doc-edit` used `white-space: pre`; now wraps like the read view.
+- **P2 — saved edits looked stale until a screen reload. FIXED
+  (0bca834):** Save now re-reads the file through the ordered ws
+  bridge so post-write content refreshes in place, and a refresh
+  re-list no longer closes an open viewer out from under an edit.
+- **P3 (polish wave) — render markdown as markdown.** Operator wants
+  .md files formatted (headings, tables, lists) with mermaid support
+  rather than raw monospace text — a natural fit since agent
+  deliverables are markdown; pairs with the UI modernization pass.
+- _(milestone note)_ the 0bca834 deploy doubled as the reconnect fix's
+  first live proof: the operator's open page rode a daemon restart
+  with the banner + self-heal instead of zombifying.
 
 ### 9 · Settings
 _(pending)_
