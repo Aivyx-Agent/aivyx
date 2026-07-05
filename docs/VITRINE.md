@@ -61,6 +61,18 @@
   design intent, plus fresh web research on modern dashboard treatments
   (depth/elevation, gradients/glass, asymmetric layout, motion). This is
   the headline item for the Command Center polish wave.
+- **Final dynamic-data sweep (2026-07-05 evening, db6b3c8):** audited
+  every shell + dashboard element for live-vs-static. Missions/audit
+  feed were already on the 5s poll; the agent-vitals rail is
+  connect-time BY DESIGN (mirrors boot state; reconnect refetches).
+  Two failures fixed: the footer's "AGENT · NONAGON" was a hardcoded
+  literal (now the running agent's name from the profile snapshot),
+  and the Routines panel was a page-load snapshot whose last-fired/
+  next-fire went stale as crons ticked (GetSchedules now rides the
+  standing poll). Residual honesty note: a redeployed WASM bundle
+  still needs one manual reload — the reconnect self-heals data, not
+  code; a version-mismatch "new version available — reload" hint is a
+  polish-wave candidate.
 
 ### 2 · Chat
 - **Positive: honest non-answer on missing memory** — "what's my home
