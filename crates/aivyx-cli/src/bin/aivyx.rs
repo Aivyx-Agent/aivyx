@@ -6694,7 +6694,11 @@ async fn run_async(
                     aivyx_channel::skill_trigger_context::SkillTriggerContext::new(
                         skills_reader.clone(),
                         embedding_provider.clone(),
-                    ),
+                    )
+                    // Injections emit turn-correlated SkillInvocation
+                    // events — Repertoire counters + the Whetstone fold
+                    // see injected use like an explicit skills.invoke.
+                    .with_audit(Arc::clone(&audit)),
                 ))
             } else {
                 None

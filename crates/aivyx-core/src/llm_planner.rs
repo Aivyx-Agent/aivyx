@@ -95,10 +95,18 @@ pub trait ContextProvider: Send + Sync {
     /// event correlated to the turn (the reflection loop pairs it
     /// against the audit chain's per-session `TurnEnded`). It does
     /// not influence what is recalled.
+    ///
+    /// Vitrine §5 follow-up — `turn_id` is the turn's audit id, so an
+    /// implementation that *injects* something audit-worthy (the skill
+    /// trigger injector emits `SkillInvocation`) can correlate its
+    /// event with the surrounding `TurnStarted`/`TurnEnded` pair the
+    /// way a tool-path event would. Pure-recall implementations
+    /// ignore it.
     async fn recall(
         &self,
         user_message: &str,
         session_id: crate::SessionId,
+        turn_id: crate::TurnId,
     ) -> Option<String>;
 }
 
@@ -704,7 +712,7 @@ impl LlmPlanner {
 
 #[async_trait]
 impl TurnPlanner for LlmPlanner {
-    async fn begin_turn(&mut self, message: &Message) {
+    async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
         let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
             MessageContent::Image { media_type, data } => {
@@ -762,7 +770,7 @@ impl TurnPlanner for LlmPlanner {
         if let Some(provider) = &self.config.context_provider {
             if has_query {
                 if let Some(block) = provider
-                    .recall(&query_text, message.session_id)
+                    .recall(&query_text, message.session_id, turn_id)
                     .await
                 {
                     content.insert(0, ContentBlock::text(block));
@@ -1542,7 +1550,7 @@ mod tests {
 
     use crate::planner::NextStep;
     use crate::{
-        AivyxError, ChannelError, ChannelPlatform, SessionId, Tool, ToolContext, ToolId,
+        AivyxError, ChannelError, ChannelPlatform, SessionId, Tool, ToolContext, ToolId, TurnId,
         ToolOutcome, TurnOutcome, Verification,
     };
 
@@ -1739,7 +1747,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hi"))
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         assert!(matches!(step, NextStep::FinalMessage(ref m) if m == "hello"));
@@ -1788,6 +1796,7 @@ mod tests {
             &self,
             user_message: &str,
             session_id: SessionId,
+            _turn_id: TurnId,
         ) -> Option<String> {
             self.seen.lock().unwrap().push(user_message.to_string());
             self.seen_sessions.lock().unwrap().push(session_id);
@@ -1814,7 +1823,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "what's my color?"))
+            .begin_turn(&Message::text(channel.session, "what's my color?"), TurnId::new())
             .await;
 
         // The query handed to recall is the raw user text.
@@ -1859,7 +1868,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hi there"))
+            .begin_turn(&Message::text(channel.session, "hi there"), TurnId::new())
             .await;
         // recall consulted, returned None → turn byte-identical.
         assert_eq!(provider.seen.lock().unwrap().len(), 1);
@@ -1876,7 +1885,7 @@ mod tests {
         let mut planner = bare_planner(LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hello"))
+            .begin_turn(&Message::text(channel.session, "hello"), TurnId::new())
             .await;
         assert!(matches!(
             planner.history()[0],
@@ -1897,7 +1906,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "   "))
+            .begin_turn(&Message::text(channel.session, "   "), TurnId::new())
             .await;
         assert!(provider.seen.lock().unwrap().is_empty());
         assert!(matches!(
@@ -2057,7 +2066,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "follow-up?"))
+            .begin_turn(&Message::text(channel.session, "follow-up?"), TurnId::new())
             .await;
         // Session id threaded through so the impl can find the window.
         assert_eq!(
@@ -2092,7 +2101,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hello"))
+            .begin_turn(&Message::text(channel.session, "hello"), TurnId::new())
             .await;
         let history = planner.history();
         assert_eq!(history.len(), 1);
@@ -2116,7 +2125,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "now?"))
+            .begin_turn(&Message::text(channel.session, "now?"), TurnId::new())
             .await;
         let history = planner.history();
         assert_eq!(history.len(), 3);
@@ -2169,7 +2178,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "help me ship"))
+            .begin_turn(&Message::text(channel.session, "help me ship"), TurnId::new())
             .await;
         assert_eq!(
             refiner.seen.lock().unwrap().clone(),
@@ -2191,7 +2200,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hi"))
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
             .await;
         // Consulted, returned None → base byte-identical.
         assert_eq!(refiner.seen.lock().unwrap().len(), 1);
@@ -2209,7 +2218,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hello"))
+            .begin_turn(&Message::text(channel.session, "hello"), TurnId::new())
             .await;
         assert_eq!(
             planner.config.system_prompt.as_deref(),
@@ -2229,7 +2238,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "   "))
+            .begin_turn(&Message::text(channel.session, "   "), TurnId::new())
             .await;
         assert!(refiner.seen.lock().unwrap().is_empty());
         assert_eq!(
@@ -2266,7 +2275,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "recall"))
+            .begin_turn(&Message::text(channel.session, "recall"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -2322,7 +2331,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "go"))
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         let _ = planner.next_step(&[], &channel).await;
 
@@ -2377,7 +2386,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "run stuff"))
+            .begin_turn(&Message::text(channel.session, "run stuff"), TurnId::new())
             .await;
         let _ = planner.next_step(&[], &channel).await;
 
@@ -2445,7 +2454,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "help"))
+            .begin_turn(&Message::text(channel.session, "help"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         assert!(matches!(step, NextStep::FinalMessage(ref m) if m == "giving up"));
@@ -2496,7 +2505,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "read a file"))
+            .begin_turn(&Message::text(channel.session, "read a file"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -2555,7 +2564,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "do it"))
+            .begin_turn(&Message::text(channel.session, "do it"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         // Loop continued past the unknown call and reached
@@ -2599,7 +2608,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "read"))
+            .begin_turn(&Message::text(channel.session, "read"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -2792,7 +2801,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "do it"))
+            .begin_turn(&Message::text(channel.session, "do it"), TurnId::new())
             .await;
         let _ = planner.next_step(&[], &channel).await;
         // History carries an unknown_tool ToolResult whose JSON
@@ -2868,7 +2877,7 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "read"))
+            .begin_turn(&Message::text(channel.session, "read"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         // Partial match doesn't clear threshold 1.0 → unknown_tool.
@@ -2900,7 +2909,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "hi"))
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -2974,7 +2983,7 @@ mod tests {
         });
 
         planner
-            .begin_turn(&Message::text(channel.session, "hi"))
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
 
@@ -3058,7 +3067,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "do both"))
+            .begin_turn(&Message::text(channel.session, "do both"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
 
@@ -3129,7 +3138,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "go"))
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
 
@@ -3462,7 +3471,7 @@ mod tests {
 
         let session = crate::SessionId::new();
         let msg = Message::image(session, "image/png", vec![0x89, 0x50]);
-        planner.begin_turn(&msg).await;
+        planner.begin_turn(&msg, TurnId::new()).await;
 
         let hist = planner.history();
         assert_eq!(hist.len(), 1);
@@ -3491,7 +3500,7 @@ mod tests {
 
         let session = crate::SessionId::new();
         let msg = Message::text_with_image(session, "describe this", "image/jpeg", vec![0xFF]);
-        planner.begin_turn(&msg).await;
+        planner.begin_turn(&msg, TurnId::new()).await;
 
         let hist = planner.history();
         assert_eq!(hist.len(), 1);
@@ -3583,7 +3592,7 @@ mod tests {
         let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "go"))
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         match planner.next_step(&[], &channel).await {
             NextStep::ToolCall { tool_id: got, .. } => assert_eq!(got, tool_id),
@@ -3637,7 +3646,7 @@ mod tests {
         let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "go"))
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         match planner.next_step(&[], &channel).await {
             NextStep::ToolCall { tool_id: got, input, .. } => {
@@ -3683,7 +3692,7 @@ mod tests {
         let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "go"))
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         assert!(
@@ -3732,7 +3741,7 @@ mod tests {
         let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "go"))
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         // Only the valid call dispatches — the invalid one is errored,
         // leaving a single-tool batch.
@@ -3789,7 +3798,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "read x.txt")).await;
+        planner.begin_turn(&Message::text(channel.session, "read x.txt"), TurnId::new()).await;
         let step = planner.next_step(&[], &channel).await;
         match step {
             NextStep::ToolCall {
@@ -3842,7 +3851,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "read memory")).await;
+        planner.begin_turn(&Message::text(channel.session, "read memory"), TurnId::new()).await;
         let step = planner.next_step(&[], &channel).await;
         match step {
             NextStep::ToolCall {
@@ -3882,7 +3891,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "say hi")).await;
+        planner.begin_turn(&Message::text(channel.session, "say hi"), TurnId::new()).await;
         let step = planner.next_step(&[], &channel).await;
         assert!(matches!(
             step,
@@ -3921,7 +3930,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "save it"))
+            .begin_turn(&Message::text(channel.session, "save it"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -3984,7 +3993,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "do thing")).await;
+        planner.begin_turn(&Message::text(channel.session, "do thing"), TurnId::new()).await;
         let step = planner.next_step(&[], &channel).await;
         // Round 1 produced an unknown_tool error in history; the
         // planner looped to round 2 which returned a clean
@@ -4035,7 +4044,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "two tasks")).await;
+        planner.begin_turn(&Message::text(channel.session, "two tasks"), TurnId::new()).await;
         let step = planner.next_step(&[], &channel).await;
         match step {
             NextStep::ToolCalls(batch) => {
@@ -4078,7 +4087,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "x")).await;
+        planner.begin_turn(&Message::text(channel.session, "x"), TurnId::new()).await;
         let step = planner.next_step(&[], &channel).await;
         // Malformed → no extraction → falls through to FinalMessage
         // with the original raw text.
@@ -4114,7 +4123,7 @@ mod tests {
         );
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "x")).await;
+        planner.begin_turn(&Message::text(channel.session, "x"), TurnId::new()).await;
         let _ = planner.next_step(&[], &channel).await;
 
         let hist = planner.history();
@@ -4191,7 +4200,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "write a file"))
+            .begin_turn(&Message::text(channel.session, "write a file"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -4241,7 +4250,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "x"))
+            .begin_turn(&Message::text(channel.session, "x"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -4289,7 +4298,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "x"))
+            .begin_turn(&Message::text(channel.session, "x"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -4340,7 +4349,7 @@ mod tests {
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "x"))
+            .begin_turn(&Message::text(channel.session, "x"), TurnId::new())
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {

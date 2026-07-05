@@ -342,7 +342,7 @@ impl Agent for ConcreteAgent {
         });
 
         let mut planner = (self.planner_factory)();
-        planner.begin_turn(&message).await;
+        planner.begin_turn(&message, turn_id).await;
 
         // Chapter Throttle (TH.3) — reset per-turn tool-call quotas at the turn
         // boundary. Applies to every turn (a scripted planner can still dispatch
@@ -2396,7 +2396,7 @@ mod tests {
 
     #[async_trait]
     impl TurnPlanner for HangingPlanner {
-        async fn begin_turn(&mut self, _message: &Message) {}
+        async fn begin_turn(&mut self, _message: &Message, _turn_id: TurnId) {}
 
         async fn next_step(
             &mut self,

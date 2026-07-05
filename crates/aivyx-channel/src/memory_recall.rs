@@ -517,6 +517,7 @@ impl ContextProvider for SemanticMemoryContext {
         &self,
         user_message: &str,
         session_id: aivyx_core::SessionId,
+        _turn_id: aivyx_core::TurnId,
     ) -> Option<String> {
         // Chapter Etch (backlog #8) — deterministically persist an explicit
         // "remember / note / save this" request. The local model treats such
@@ -1234,6 +1235,7 @@ impl ContextProvider for LiteRecallContext {
         &self,
         user_message: &str,
         session_id: aivyx_core::SessionId,
+        _turn_id: aivyx_core::TurnId,
     ) -> Option<String> {
         // Chapter Etch — store-only explicit capture (no embed in lite).
         // Runs before the gate so even a short "remember X" is captured.
@@ -1543,7 +1545,7 @@ mod tests {
     async fn recall_returns_labeled_block_for_relevant_hit() {
         let memory = seed().await;
         let block = ctx(memory, false, 0.0)
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a relevant hit must produce a block");
         assert!(block.starts_with("## Relevant context (auto-recalled)"));
@@ -1557,7 +1559,7 @@ mod tests {
         let memory = seed().await;
         // Impossibly high floor → every hit filtered → None.
         let out = ctx(memory, false, 0.999_999)
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await;
         assert!(out.is_none());
     }
@@ -1565,7 +1567,7 @@ mod tests {
     #[tokio::test]
     async fn recall_none_when_embed_fails() {
         let memory = seed().await;
-        let out = ctx(memory, true, 0.0).recall("anything", sid()).await;
+        let out = ctx(memory, true, 0.0).recall("anything", sid(), aivyx_core::TurnId::new()).await;
         assert!(out.is_none());
     }
 
@@ -1574,7 +1576,7 @@ mod tests {
         // Memory with an entry but NO vectors → nothing to rank.
         let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
         memory.put("notes", "unembedded").await.unwrap();
-        let out = ctx(memory, false, 0.0).recall("query", sid()).await;
+        let out = ctx(memory, false, 0.0).recall("query", sid(), aivyx_core::TurnId::new()).await;
         assert!(out.is_none());
     }
 
@@ -1595,7 +1597,7 @@ mod tests {
             .await
             .unwrap();
         let out = ctx(memory, false, 0.0)
-            .recall("what was pruned from the conversation", sid())
+            .recall("what was pruned from the conversation", sid(), aivyx_core::TurnId::new())
             .await;
         assert!(
             out.is_none(),
@@ -1701,7 +1703,7 @@ mod tests {
         let context = ctx(memory, false, 0.0).with_recall_log(log.clone());
         let session = sid();
         let block = context
-            .recall("what is my favorite color", session)
+            .recall("what is my favorite color", session, aivyx_core::TurnId::new())
             .await;
         assert!(block.is_some(), "a relevant hit must inject");
 
@@ -1717,7 +1719,7 @@ mod tests {
         let memory2 = seed().await;
         let ctx2 = ctx(memory2, false, 0.999_999)
             .with_recall_log(log.clone());
-        assert!(ctx2.recall("x", sid()).await.is_none());
+        assert!(ctx2.recall("x", sid(), aivyx_core::TurnId::new()).await.is_none());
         assert_eq!(
             log.events_since(0).await.unwrap().len(),
             1,
@@ -1806,7 +1808,7 @@ mod tests {
         .with_cluster(Arc::clone(&cooc), cfg.clone());
         let s = sid();
         assert!(c
-            .recall("what is my favorite color", s)
+            .recall("what is my favorite color", s, aivyx_core::TurnId::new())
             .await
             .is_some());
         let ev = log.events_since(0).await.unwrap();
@@ -1839,7 +1841,7 @@ mod tests {
         )
         .with_cluster(Arc::clone(&cooc), cfg.clone());
         let b1 = c1
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("block");
         assert_eq!(
@@ -1864,7 +1866,7 @@ mod tests {
             },
         );
         let boff = off
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("block");
         assert!(
@@ -1934,7 +1936,7 @@ mod tests {
         )
         .with_conversation_windows(windows.clone(), 3);
 
-        let _ = ctx.recall("now my follow-up", s).await;
+        let _ = ctx.recall("now my follow-up", s, aivyx_core::TurnId::new()).await;
 
         let seen = provider.seen.lock().unwrap().clone();
         let q = seen
@@ -2007,7 +2009,7 @@ mod tests {
                 _ => unreachable!(),
             }
 
-            let _ = ctx.recall("bare message", s).await;
+            let _ = ctx.recall("bare message", s, aivyx_core::TurnId::new()).await;
             let seen = provider.seen.lock().unwrap().clone();
             assert_eq!(
                 seen,
@@ -2041,7 +2043,7 @@ mod tests {
         .with_recall_gate(4);
 
         // Trimmed length 2 (`"ok"`) < threshold 4 → gate.
-        let out = ctx.recall("ok", sid()).await;
+        let out = ctx.recall("ok", sid(), aivyx_core::TurnId::new()).await;
         assert!(out.is_none(), "gated turn returns None");
         assert!(
             provider.seen.lock().unwrap().is_empty(),
@@ -2070,7 +2072,7 @@ mod tests {
         // recall fires, embed is called, the seeded memory
         // hits.
         let out =
-            ctx.recall("how do I deploy", sid()).await;
+            ctx.recall("how do I deploy", sid(), aivyx_core::TurnId::new()).await;
         assert!(
             out.is_some(),
             "ungated turn proceeds to recall"
@@ -2103,7 +2105,7 @@ mod tests {
         );
 
         // A would-be-gated turn flows through to the embed.
-        let _ = ctx.recall("ok", sid()).await;
+        let _ = ctx.recall("ok", sid(), aivyx_core::TurnId::new()).await;
         let seen = provider.seen.lock().unwrap().clone();
         assert_eq!(
             seen,
@@ -2120,7 +2122,7 @@ mod tests {
     async fn recall_token_budget_zero_passes_through() {
         let memory = seed().await;
         let block = ctx(memory, false, 0.0)
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a relevant hit must produce a block");
         assert!(
@@ -2177,7 +2179,7 @@ mod tests {
         .with_recall_token_budget(50);
 
         let block = ctx
-            .recall("anything that maps", sid())
+            .recall("anything that maps", sid(), aivyx_core::TurnId::new())
             .await
             .expect("at least the short body fits");
         assert!(block.contains("short"));
@@ -2194,7 +2196,7 @@ mod tests {
     async fn recall_hybrid_off_is_semantic_only() {
         let memory = seed().await;
         let block = ctx(memory, false, 0.0)
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a relevant hit must produce a block");
         assert!(block.contains("purple"));
@@ -2249,7 +2251,7 @@ mod tests {
         .with_recall_hybrid(true);
 
         let block = ctx
-            .recall("atc-417", sid())
+            .recall("atc-417", sid(), aivyx_core::TurnId::new())
             .await
             .expect("hybrid recall finds the rare-term entry");
         assert!(
@@ -2292,7 +2294,7 @@ mod tests {
         .with_recall_hybrid(true);
 
         let block = ctx
-            .recall("favorite color", sid())
+            .recall("favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("must produce a block");
         // The favorites entry — matched by both rankers —
@@ -2326,7 +2328,7 @@ mod tests {
         )
         .with_recall_token_budget(10);
 
-        let block = ctx.recall("anything", sid()).await;
+        let block = ctx.recall("anything", sid(), aivyx_core::TurnId::new()).await;
         assert!(block.is_none());
     }
 
@@ -2395,7 +2397,7 @@ mod tests {
         .with_recall_fusion(1.0, 1, 0.5, 1.0); // graph_hops = 1
 
         let block = ctx
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a block is produced");
         assert!(block.contains("deploy runbook"), "graph pulled in deploy: {block}");
@@ -2439,7 +2441,7 @@ mod tests {
         .with_recall_fusion(1.0, 0, 0.5, 1.0); // graph_hops = 0
 
         let block = ctx
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a block is produced");
         assert!(!block.contains("deploy runbook"), "graph off → no deploy: {block}");
@@ -2477,7 +2479,7 @@ mod tests {
     ) -> f32 {
         let mut hits = 0usize;
         for (q, expected) in cases {
-            if let Some(block) = ctx.recall(q, sid()).await {
+            if let Some(block) = ctx.recall(q, sid(), aivyx_core::TurnId::new()).await {
                 if block.contains(expected) {
                     hits += 1;
                 }
@@ -2536,7 +2538,7 @@ mod tests {
         )
         .with_recall_hybrid(true)
         .with_recall_wiki(Arc::clone(&wiki_store), 0.0);
-        let block_off = off.recall("kubernetes autoscaling", sid()).await;
+        let block_off = off.recall("kubernetes autoscaling", sid(), aivyx_core::TurnId::new()).await;
         assert!(
             block_off.map(|b| !b.contains("autoscaling and node pool")).unwrap_or(true),
             "wiki off → page summary must not appear",
@@ -2552,7 +2554,7 @@ mod tests {
         .with_recall_hybrid(true)
         .with_recall_wiki(Arc::clone(&wiki_store), 2.0);
         let block_on = on
-            .recall("kubernetes autoscaling", sid())
+            .recall("kubernetes autoscaling", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a block");
         assert!(
@@ -2613,7 +2615,7 @@ mod tests {
         )
         .with_recall_hybrid(true)
         .with_recall_typed_graph(Arc::clone(&graph), 0.0);
-        let b_off = off.recall("what is my favorite color", sid()).await;
+        let b_off = off.recall("what is my favorite color", sid(), aivyx_core::TurnId::new()).await;
         assert!(
             b_off.map(|b| !b.contains("ci pipeline runbook")).unwrap_or(true),
             "typed graph off → ci must not appear",
@@ -2629,7 +2631,7 @@ mod tests {
         .with_recall_hybrid(true)
         .with_recall_typed_graph(Arc::clone(&graph), 2.0);
         let b_on = on
-            .recall("what is my favorite color", sid())
+            .recall("what is my favorite color", sid(), aivyx_core::TurnId::new())
             .await
             .expect("a block");
         assert!(
@@ -2724,7 +2726,7 @@ mod tests {
         // BM25 ranks the coffee memory above the unrelated one.
         let lite = LiteRecallContext::new(Arc::clone(&memory), 1);
         let block = lite
-            .recall("what coffee does the operator like", sid())
+            .recall("what coffee does the operator like", sid(), aivyx_core::TurnId::new())
             .await
             .expect("lexical hit recalled with no embeddings");
         assert!(
@@ -2745,7 +2747,7 @@ mod tests {
         memory.put("coffee", "flat white no sugar").await.unwrap();
         let lite = LiteRecallContext::new(Arc::clone(&memory), 5);
         assert!(lite
-            .recall("quantum chromodynamics lattice gauge theory", sid())
+            .recall("quantum chromodynamics lattice gauge theory", sid(), aivyx_core::TurnId::new())
             .await
             .is_none());
     }
@@ -2757,7 +2759,7 @@ mod tests {
         memory.put("coffee", "flat white no sugar").await.unwrap();
         let lite = LiteRecallContext::new(Arc::clone(&memory), 5)
             .with_recall_gate(50);
-        assert!(lite.recall("coffee?", sid()).await.is_none());
+        assert!(lite.recall("coffee?", sid(), aivyx_core::TurnId::new()).await.is_none());
     }
 
     /// The co-occurrence walk pulls in an affined sibling the literal query
@@ -2805,7 +2807,7 @@ mod tests {
             .with_cooccurrence(Arc::clone(&cooc), 1.0, 5)
             .with_recall_log(Arc::clone(&log));
         let block = lite
-            .recall("tell me about the coffee", sid())
+            .recall("tell me about the coffee", sid(), aivyx_core::TurnId::new())
             .await
             .expect("recall present");
         assert!(block.contains("flat white"), "primary lexical hit: {block}");
@@ -2828,11 +2830,11 @@ mod tests {
         // First turn: a remember request. Recall itself may return None;
         // the capture is the point.
         let _ = lite
-            .recall("Remember my home airport is YSSY", sid())
+            .recall("Remember my home airport is YSSY", sid(), aivyx_core::TurnId::new())
             .await;
         // The fact is now in memory under the explicit topic.
         let block = lite
-            .recall("what is my home airport", sid())
+            .recall("what is my home airport", sid(), aivyx_core::TurnId::new())
             .await
             .expect("captured fact is lexically recallable");
         assert!(block.contains("YSSY"), "captured home airport: {block}");

@@ -183,7 +183,7 @@ async fn memory_stack_composes_end_to_end() {
     .with_recall_typed_graph(Arc::clone(&graph_store), 1.0);
 
     let block = recall
-        .recall("how does deploy work", SessionId::new())
+        .recall("how does deploy work", SessionId::new(), aivyx_core::TurnId::new())
         .await
         .expect("recall produces a block");
 

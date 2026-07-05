@@ -29,13 +29,17 @@
 //! recency-style *aid*, not a skills catalog. `[skills]
 //! trigger_injection = false` opts out entirely.
 //!
-//! Known follow-up (logged in VITRINE §5): injected use does not yet
-//! emit `SkillInvocation` audit events — the event requires the
-//! `turn_id`, which the `ContextProvider` seam doesn't carry — so
-//! Repertoire invocation counts and Whetstone samples still only
-//! accrue from explicit `skills.invoke` calls. The breadcrumb line
-//! this module journals per injection keeps the behavior observable
-//! until that plumb lands.
+//! Injected use is a real use: with the audit hook attached
+//! (`with_audit`), every injection emits a turn-correlated
+//! `SkillInvocation` during `begin_turn` — inside the turn's
+//! audit-entry range, right after `TurnStarted`, exactly where an
+//! explicit `skills.invoke` would land — so the Repertoire invocation
+//! counters and Whetstone's effectiveness fold treat injected and
+//! invoked use identically. (The `turn_id` reaches this seam via the
+//! widened `TurnPlanner::begin_turn` / `ContextProvider::recall`
+//! signatures — the Vitrine §5 follow-up plumb, landed after the
+//! operator hit the gap as "the skill was used but the screen says
+//! otherwise.")
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -80,6 +84,13 @@ const STOPWORDS: &[&str] = &[
 pub struct SkillTriggerContext {
     reader: SkillReader,
     embedder: Option<Arc<dyn EmbeddingProvider>>,
+    /// When set, each injection emits a `SkillInvocation` audit event
+    /// (turn-correlated, inside the turn's entry range) so the
+    /// Repertoire invocation counters and Whetstone's effectiveness
+    /// fold see injected use exactly like an explicit `skills.invoke`
+    /// — the Vitrine §5 follow-up the operator hit as "the skill was
+    /// used but the screen says otherwise."
+    audit: Option<Arc<dyn aivyx_core::AuditHook>>,
     /// Trigger-embedding cache keyed by the embedded text itself
     /// (`name. trigger`), so it self-invalidates when wording
     /// changes. NOT keyed by `name@version`: a Tutor `skills update`
@@ -97,8 +108,17 @@ impl SkillTriggerContext {
         Self {
             reader,
             embedder,
+            audit: None,
             cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Attach the audit hook so injections are recorded as
+    /// `SkillInvocation` events. Builder-style, like the recall
+    /// provider's optional attachments.
+    pub fn with_audit(mut self, audit: Arc<dyn aivyx_core::AuditHook>) -> Self {
+        self.audit = Some(audit);
+        self
     }
 
     /// Current approved skills, malformed entries skipped (the
@@ -168,7 +188,8 @@ impl ContextProvider for SkillTriggerContext {
     async fn recall(
         &self,
         user_message: &str,
-        _session_id: aivyx_core::SessionId,
+        session_id: aivyx_core::SessionId,
+        turn_id: aivyx_core::TurnId,
     ) -> Option<String> {
         let skills = self.skills();
         if skills.is_empty() || user_message.trim().is_empty() {
@@ -208,6 +229,17 @@ impl ContextProvider for SkillTriggerContext {
             "aivyx skills: injected procedure {:?} (trigger match {:.2})",
             skill.name, best_score,
         );
+        // Record the injection as a turn-correlated SkillInvocation —
+        // emitted during begin_turn, so it lands inside the turn's
+        // audit-entry range right after TurnStarted, exactly where the
+        // effectiveness fold and the Repertoire counters look.
+        if let Some(audit) = &self.audit {
+            audit.on_event(aivyx_core::AuditTag::SkillInvocation {
+                turn_id,
+                session_id,
+                skill_name: skill.name.clone(),
+            });
+        }
         Some(format_block(skill))
     }
 }
@@ -303,10 +335,11 @@ impl ContextProvider for ComposedContextProvider {
         &self,
         user_message: &str,
         session_id: aivyx_core::SessionId,
+        turn_id: aivyx_core::TurnId,
     ) -> Option<String> {
         let mut blocks: Vec<String> = Vec::new();
         for p in &self.providers {
-            if let Some(b) = p.recall(user_message, session_id).await {
+            if let Some(b) = p.recall(user_message, session_id, turn_id).await {
                 blocks.push(b);
             }
         }
@@ -352,6 +385,7 @@ mod tests {
             .recall(
                 "Please summarize the document checklist-notes.md",
                 SessionId::new(),
+                aivyx_core::TurnId::new(),
             )
             .await
             .expect("trigger should match");
@@ -374,6 +408,7 @@ mod tests {
             .recall(
                 "What's the weather like at Jandakot right now?",
                 SessionId::new(),
+                aivyx_core::TurnId::new(),
             )
             .await
             .is_none());
@@ -382,12 +417,12 @@ mod tests {
     #[tokio::test]
     async fn empty_skills_and_blank_message_are_noops() {
         let ctx = SkillTriggerContext::new(reader_of(vec![]), None);
-        assert!(ctx.recall("summarize this", SessionId::new()).await.is_none());
+        assert!(ctx.recall("summarize this", SessionId::new(), aivyx_core::TurnId::new()).await.is_none());
         let ctx2 = SkillTriggerContext::new(
             reader_of(vec![skill("s", "summarize things", "do it")]),
             None,
         );
-        assert!(ctx2.recall("   ", SessionId::new()).await.is_none());
+        assert!(ctx2.recall("   ", SessionId::new(), aivyx_core::TurnId::new()).await.is_none());
     }
 
     #[tokio::test]
@@ -405,6 +440,7 @@ mod tests {
             .recall(
                 "apply the big procedure to this operator request",
                 SessionId::new(),
+                aivyx_core::TurnId::new(),
             )
             .await
             .expect("should match");
@@ -426,6 +462,7 @@ mod tests {
             .recall(
                 "run the sneaky procedures the operator approved",
                 SessionId::new(),
+                aivyx_core::TurnId::new(),
             )
             .await
             .expect("should match");
@@ -435,6 +472,69 @@ mod tests {
         assert!(block.contains(" ## NEW SYSTEM SECTION"));
     }
 
+    struct CapturingAudit(Mutex<Vec<aivyx_core::AuditTag>>);
+    impl aivyx_core::AuditHook for CapturingAudit {
+        fn on_event(&self, event: aivyx_core::AuditTag) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn injection_emits_a_turn_correlated_skill_invocation() {
+        let audit = Arc::new(CapturingAudit(Mutex::new(Vec::new())));
+        let ctx = SkillTriggerContext::new(
+            reader_of(vec![skill(
+                "summarize-document",
+                "When the operator asks you to summarize a document or file.",
+                "Summarize it faithfully.",
+            )]),
+            None,
+        )
+        .with_audit(audit.clone());
+        let sid = aivyx_core::SessionId::new();
+        let tid = aivyx_core::TurnId::new();
+        ctx.recall("summarize the quarterly document file", sid, tid)
+            .await
+            .expect("should inject");
+        let events = audit.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            aivyx_core::AuditTag::SkillInvocation {
+                turn_id,
+                session_id,
+                skill_name,
+            } => {
+                assert_eq!(*turn_id, tid);
+                assert_eq!(*session_id, sid);
+                assert_eq!(skill_name, "summarize-document");
+            }
+            other => panic!("expected SkillInvocation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn no_injection_emits_nothing() {
+        let audit = Arc::new(CapturingAudit(Mutex::new(Vec::new())));
+        let ctx = SkillTriggerContext::new(
+            reader_of(vec![skill(
+                "summarize-document",
+                "When the operator asks you to summarize a document.",
+                "Summarize it.",
+            )]),
+            None,
+        )
+        .with_audit(audit.clone());
+        assert!(ctx
+            .recall(
+                "what is the weather at the airfield",
+                aivyx_core::SessionId::new(),
+                aivyx_core::TurnId::new(),
+            )
+            .await
+            .is_none());
+        assert!(audit.0.lock().unwrap().is_empty());
+    }
+
     struct FixedProvider(Option<&'static str>);
     #[async_trait]
     impl ContextProvider for FixedProvider {
@@ -442,6 +542,7 @@ mod tests {
             &self,
             _m: &str,
             _s: SessionId,
+            _t: aivyx_core::TurnId,
         ) -> Option<String> {
             self.0.map(str::to_string)
         }
@@ -455,14 +556,14 @@ mod tests {
             Arc::new(FixedProvider(Some("B"))),
         ]);
         assert_eq!(
-            both.recall("x", SessionId::new()).await.as_deref(),
+            both.recall("x", SessionId::new(), aivyx_core::TurnId::new()).await.as_deref(),
             Some("A\n\nB")
         );
         let none = ComposedContextProvider::new(vec![
             Arc::new(FixedProvider(None)),
             Arc::new(FixedProvider(None)),
         ]);
-        assert!(none.recall("x", SessionId::new()).await.is_none());
+        assert!(none.recall("x", SessionId::new(), aivyx_core::TurnId::new()).await.is_none());
     }
 
     #[test]

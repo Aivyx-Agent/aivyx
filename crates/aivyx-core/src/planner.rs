@@ -100,9 +100,13 @@ pub struct StepObservation {
 #[async_trait]
 pub trait TurnPlanner: Send + Sync {
     /// Called once, at the start of a turn, with the triggering user
-    /// message. Deterministic planners can ignore it; LLM-backed
-    /// planners seed their conversation history here.
-    async fn begin_turn(&mut self, _message: &Message) {}
+    /// message and the turn's audit id. Deterministic planners can
+    /// ignore both; LLM-backed planners seed their conversation
+    /// history here, and the per-turn context hooks use `turn_id` to
+    /// correlate audit events (e.g. an injected skill's
+    /// `SkillInvocation`) with the surrounding `TurnStarted` /
+    /// `TurnEnded` pair.
+    async fn begin_turn(&mut self, _message: &Message, _turn_id: crate::TurnId) {}
 
     /// Return the next step given everything observed so far. The
     /// `channel` handle is available for planners that want to relay
