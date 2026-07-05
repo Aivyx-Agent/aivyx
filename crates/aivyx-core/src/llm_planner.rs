@@ -467,6 +467,15 @@ pub struct LlmPlanner {
     /// Running count of messages pruned during this turn for context
     /// window management (Phase 43).
     pruned_message_count: usize,
+    /// Index into `history` of the current turn's task message — the
+    /// user message `begin_turn` pushed. Pruning drops oldest-first
+    /// and the task is the oldest turn-local message, so a fat tool
+    /// turn used to discard its own question (live rig 2026-07-05:
+    /// the model, left with seven tool results and no task, reset to
+    /// a greeter reply and made off-task persona-flavored tool
+    /// calls). The pruner now pins this message: if it falls inside
+    /// the pruned prefix it is re-inserted right after the sentinel.
+    task_message_index: Option<usize>,
 }
 
 impl LlmPlanner {
@@ -510,6 +519,7 @@ impl LlmPlanner {
             pending_call_ids: VecDeque::new(),
             accumulated_usage: crate::TokenUsage::default(),
             pruned_message_count: 0,
+            task_message_index: None,
         }
     }
 
@@ -811,6 +821,8 @@ impl TurnPlanner for LlmPlanner {
         }
 
         self.history.push(LlmMessage::User { content });
+        // Pin the task message through pruning (see the field doc).
+        self.task_message_index = Some(self.history.len() - 1);
         self.pending_call_ids.clear();
     }
 
@@ -862,6 +874,15 @@ impl TurnPlanner for LlmPlanner {
                 }
                 let pruned_count = keep_from;
                 if pruned_count > 0 {
+                    // Pin the turn's task message: if it sits inside
+                    // the prefix about to be dropped, clone it out so
+                    // it can be re-inserted after the sentinel — a
+                    // turn must never lose its own question (see the
+                    // `task_message_index` field doc).
+                    let rescued_task = self
+                        .task_message_index
+                        .filter(|&idx| idx < pruned_count)
+                        .map(|idx| self.history[idx].clone());
                     // Build a summary before draining, for the prune sink.
                     if let Some(ref sink) = self.config.prune_sink {
                         let summary = summarise_pruned(&self.history[..pruned_count]);
@@ -876,6 +897,15 @@ impl TurnPlanner for LlmPlanner {
                              to fit context window]"
                         )),
                     );
+                    if let Some(task) = rescued_task {
+                        self.history.insert(1, task);
+                        self.task_message_index = Some(1);
+                    } else if let Some(idx) = self.task_message_index {
+                        // Survived the drain — shift for the removed
+                        // prefix plus the inserted sentinel.
+                        self.task_message_index =
+                            Some(idx - pruned_count + 1);
+                    }
                     self.pruned_message_count += pruned_count;
                 }
 
@@ -3223,6 +3253,64 @@ mod tests {
         assert_eq!(planner.pruned_message_count(), 1);
         // History: sentinel + last-original + assistant-reply = 3.
         assert_eq!(planner.history().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn pruning_pins_the_turns_task_message() {
+        // Live-rig failure shape (2026-07-05): the task question is
+        // the OLDEST turn-local message and big tool results follow,
+        // so naive oldest-first pruning discarded the turn's own
+        // question and the model reset to a greeter reply. The pin
+        // re-inserts the task right after the sentinel.
+        let mut msgs =
+            vec![LlmMessage::user_text("what is the cruise speed?")];
+        for i in 0..6 {
+            msgs.push(LlmMessage::ToolResult {
+                call_id: format!("c{i}"),
+                content: "h".repeat(400), // ~100 tokens each
+                is_error: false,
+            });
+        }
+        let (mut planner, ch) = make_pruning_planner(150, msgs, "ok");
+        planner.task_message_index = Some(0);
+        planner.next_step(&[], &ch).await;
+        assert!(planner.pruned_message_count() > 0);
+        // Sentinel first, the rescued task right after it.
+        match &planner.history()[1] {
+            LlmMessage::User { content } => {
+                assert_eq!(
+                    content[0],
+                    ContentBlock::text("what is the cruise speed?")
+                );
+            }
+            other => panic!("expected pinned task, got {other:?}"),
+        }
+        assert_eq!(planner.task_message_index, Some(1));
+    }
+
+    #[tokio::test]
+    async fn pruning_shifts_a_surviving_task_index() {
+        // Task near the tail survives the drain — its index must
+        // shift by (pruned prefix - inserted sentinel).
+        let mut msgs: Vec<LlmMessage> = (0..5)
+            .map(|_| LlmMessage::user_text("x".repeat(400)))
+            .collect();
+        msgs.push(LlmMessage::user_text("the task"));
+        msgs.push(LlmMessage::ToolResult {
+            call_id: "c0".into(),
+            content: "y".repeat(200),
+            is_error: false,
+        });
+        let (mut planner, ch) = make_pruning_planner(200, msgs, "ok");
+        planner.task_message_index = Some(5);
+        planner.next_step(&[], &ch).await;
+        let idx = planner.task_message_index.unwrap();
+        match &planner.history()[idx] {
+            LlmMessage::User { content } => {
+                assert_eq!(content[0], ContentBlock::text("the task"));
+            }
+            other => panic!("expected task at shifted index, got {other:?}"),
+        }
     }
 
     #[tokio::test]
