@@ -495,6 +495,16 @@ forget round-trips cleanly; section 6 complete.** Findings above
   fresh read query (proposals + skills) instead of trusting local
   state. Fix in the same-day batch.
 
+**Fix batch LANDED (1a30d97, deployed 04:55 rig time):** P1 →
+`MessageOrigin` on core `Message`, trigger/reflection turns marked
+System, `SkillTriggerContext` returns `None` for them (regression
+test: same message injects for Operator, silent for System); P2
+authoring → durable-METHOD constraint + `{"skip": reason}` refusal
+path (parses to `None`, topic skipped); P2 Studio → `SkillsPanel`
+re-queries skills+proposals on the shared refresh tick. Live-verify
+pending: the 06:00 routine should fire with no `skills: injected`
+journal line.
+
 ### 7 · Teams
 - **Positives (operator verdict):** all 9 Nonagon members render with
   appropriate data and settings (roles, souls, tools, scopes — incl.
