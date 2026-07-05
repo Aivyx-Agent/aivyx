@@ -75,7 +75,12 @@
   agent just asked a question, treat the operator's next message as a
   candidate answer and bias the memory hook accordingly). Root cause
   amplified by the fresh-context finding below — the agent literally
-  cannot see that it just asked a question.
+  cannot see that it just asked a question. **HALF-FIXED by Chapter
+  Thread (2026-07-05): with history replay the answer now CONNECTS**
+  ("Your home airport is Jandakot Airport") — but the fact is still
+  not memory.written, so the persist half stays open. Same probe also
+  reproduced the never-invent pattern: the reply appended an
+  unprompted, confabulated "(YJAT)" code.
 - ~~P3 — 3 identical memory.search calls in one turn~~ **CORRECTED by
   the audit chain (2026-07-05): the three searches were DISTINCT
   queries** ("airport", "home airport", "base") — reasonable refinement,

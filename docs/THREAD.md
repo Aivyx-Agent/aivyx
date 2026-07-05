@@ -1,7 +1,7 @@
 # Following the Thread — conversation-history replay (Chapter Thread)
 
-> **Status: CORE COMPLETE (TR.1–TR.3, 2026-07-05); TR.4 rig verification
-> pending.** Interactive-session turns now replay the session's recent
+> **Status: COMPLETE (TR.1–TR.4, 2026-07-05, live-proven on the rig).**
+> Interactive-session turns now replay the session's recent
 > user/assistant messages into the model's context as real conversation
 > history, so follow-ups like *"did you find the correct code?"* resolve
 > against what was actually said. Fresh-context turns remain the
@@ -78,4 +78,4 @@ default** — the model should see the conversation the operator sees.
 | **TR.1** ✅ | Core: `PriorTurn` + `ConversationSeeder` trait + `seeded_history_messages` normalization + `begin_turn` seeding + config field/builder. | 8 new unit tests; planner suite green. |
 | **TR.2** ✅ | Channel: `WindowConversationSeeder` over the shared windows (newest-first budget trim, oldest-first replay) + `[agent] conversation_history_turns` (default 8, 0 disables). | 4 new window tests; config check green. |
 | **TR.3** ✅ | Binary wiring: windows built unconditionally; seeder attached to the daemon planner when the knob > 0. | Full workspace clippy + tests green. |
-| **TR.4** | Rig live-verify: piped two-turn session re-running the exact ICAO scenario — the follow-up must resolve "the correct code" against the prior turn. | Pending. |
+| **TR.4** ✅ | **DONE (live on the rig, gpt-oss:20b).** The exact ICAO pair: *"What is the ICAO code for Jandakot airport?"* → YPJT → *"Did you find the correct code?"* → **"Yes, that's correct – Jandakot Airport's ICAO designation is YPJT"** (pre-Thread this produced "which code snippet or project do you mean?"). Second probe: agent asks for the home airport → operator answers "Jandakot" → reply connects ("Your home airport is Jandakot Airport"). Residuals (agent behavior, NOT Thread): the reply appended an unprompted confabulated code "(YJAT)", and the volunteered fact still wasn't memory.written — the persist half of the Vitrine P2 stays open. | Piped two-turn headless sessions, 2026-07-05. |
