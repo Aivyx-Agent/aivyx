@@ -167,6 +167,28 @@
   the tool-result cap deployed, per-call context estimates stay inside
   the 16k window (peak summed-turn input 43k across 5 calls ≈ 8.6k
   per call; no pruning storms, no server-side truncation).
+- **P1 — pruning discarded the turn's own question. FIXED + verified.**
+  The seven-turn workout's fat turn (9 tool calls, 18650→9580 prune)
+  dropped the task message (oldest-first pruning; the question is the
+  oldest turn-local message) — the model reset to a greeter reply and
+  fired a rogue persona-flavored search (Colombian coffee), and the
+  garbage final poisoned the next turn's replay. Fix: the pruner pins
+  the task message, re-inserting it after the sentinel. Re-run: the
+  same fat turn stays on-topic, the follow-up comparison answers
+  properly, and the memory-vs-replay layering works (a turn-1 fact
+  beyond replay depth correctly answered from Etch-written memory).
+- **P3 (model quality, open) — identifier transposition.** With memory
+  verified to hold "VH-EZT", the reply quoted "VH-EQT" — a one-letter
+  flip on a rare token, stochastic (the previous run quoted it
+  correctly). Candidate deterministic countermeasure for the polish
+  waves: an identifier-fidelity check in the Candor family — flag a
+  reply token that is edit-distance-1 from a recalled/tool-provided
+  identifier (registrations, ICAO codes, part numbers).
+- **P3 (model quality, open) — wrong sub-question under heavy fetch.**
+  The pinned fat turn answered "is the C172 still in production?"
+  instead of the asked cruise speed — on-topic now, but the model
+  latches onto the page lead when the relevant section was truncated.
+  Same gpt-oss finishing family as the empty completions.
 - **P2 (agent behavior, open) — no currency check on source data.** The
   "GA airports near Perth" answer listed defunct 1930s aerodromes
   (Langley Park, Maylands, Caversham) read off a Wikipedia list that
