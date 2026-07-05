@@ -505,6 +505,33 @@ re-queries skills+proposals on the shared refresh tick. Live-verify
 pending: the 06:00 routine should fire with no `skills: injected`
 journal line.
 
+**Live chat-injection test (operator, 05:03):** "Good Morning
+Jarvis, can you review the current documents in the workspace and
+provide a quick summary" →
+- ✅ operator-origin injection fired and was audit-counted
+  (`SkillInvocation` turn-correlated; 12 tool calls; the workspace
+  review itself was done correctly).
+- **P3 — wrong skill won the top-1**: `daily-briefing` matched at
+  0.60 (greeting + "quick summary" pulled the briefing trigger) over
+  `summarize-document`; the turn's tail ran two briefing procedure
+  steps (`schedule.list`, `memory.read environment-baseline`).
+  Task completed, mildly contaminated — the borderline-precision
+  family ([[accord-detector-precision]] cousin). Watch-item: consider
+  logging runner-up scores for diagnosis; a margin rule can't fix a
+  genuinely multi-intent message.
+- **P1 FOUND + FIXED same-hour (c137d3c, deployed):** the audit
+  chain showed `SkillAutoProposal JudgeError: model
+  'claude-haiku-4-5' not found (404)` — the auto-proposal judge
+  reused the planner's PROVIDER but its model defaulted to a
+  hardcoded Claude id, so every tool-heavy turn on an Ollama-only
+  install burned a judge 404 (silently killing the auto-proposal
+  arc for all local-first users). `judge_model` is now optional:
+  unset follows the planner's configured model; explicit still wins.
+- **P3 noted:** `SkillInvocation.session_id` differs from the
+  surrounding `TurnStarted.session_id` (turn_id correlates fine —
+  counters/Whetstone unaffected). Cosmetic chain inconsistency;
+  investigate where the injector's session id diverges.
+
 ### 7 · Teams
 - **Positives (operator verdict):** all 9 Nonagon members render with
   appropriate data and settings (roles, souls, tools, scopes — incl.
