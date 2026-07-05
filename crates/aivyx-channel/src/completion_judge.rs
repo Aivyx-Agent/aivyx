@@ -119,6 +119,40 @@ impl CompletionJudge {
                 "\n\n## Recent workspace files (ground-truth evidence)\n{f}"
             ));
         }
+        // Deterministic identifier backstop (live rig 2026-07-05): a mission
+        // goal naming YPJT/YMML/YSSY was "verified" by an LLM verdict that
+        // hallucinated PASS over a deliverable about entirely different
+        // airports — after six correct rejections, the seventh sample let the
+        // fiction through, and unbounded retries had guaranteed the false
+        // PASS would eventually arrive. When the goal names ≥2 uppercase
+        // identifiers and the MAJORITY of them appear nowhere in the summary
+        // or the grounded evidence, no LLM opinion is needed: the deliverable
+        // is about something else. Runs BEFORE the provider call, so this
+        // class can't slip through the fail-open path either.
+        let identifiers =
+            extract_goal_identifiers(&format!("{title} {criteria}"));
+        if identifiers.len() >= 2 {
+            let haystack =
+                format!("{summary}{evidence_block}").to_uppercase();
+            let missing: Vec<&str> = identifiers
+                .iter()
+                .map(String::as_str)
+                .filter(|i| !haystack.contains(*i))
+                .collect();
+            if missing.len() * 2 > identifiers.len() {
+                return Verdict {
+                    passed: false,
+                    reason: format!(
+                        "identifier check (deterministic): the goal names \
+                         {} but the deliverable and evidence never mention \
+                         {} — the artifact appears to address something \
+                         else entirely",
+                        identifiers.join(", "),
+                        missing.join(", "),
+                    ),
+                };
+            }
+        }
         let user = format!(
             "## Task\nTitle: {title}\nAcceptance criteria:\n{}\n\n## Agent's summary of what it did\n{}{evidence_block}\n\n\
              Are the acceptance criteria met (by the summary OR the evidence)? Reply PASS or FAIL with a brief reason.",
@@ -266,6 +300,28 @@ impl CompletionJudge {
     }
 }
 
+/// Extract the goal's UPPERCASE identifier tokens — 3-8 chars of A-Z/0-9
+/// with at least two letters (ICAO codes, tickers, part numbers…), deduped
+/// in first-appearance order. Ordinary prose contributes nothing: a token
+/// only matches when the goal's author deliberately wrote it in caps.
+fn extract_goal_identifiers(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in text.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let len = raw.len();
+        if !(3..=8).contains(&len) {
+            continue;
+        }
+        let all_upper_alnum = raw
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+        let letters = raw.chars().filter(|c| c.is_ascii_uppercase()).count();
+        if all_upper_alnum && letters >= 2 && !out.iter().any(|o| o == raw) {
+            out.push(raw.to_string());
+        }
+    }
+    out
+}
+
 fn fail_open(reason: &str) -> Verdict {
     eprintln!("aivyx loop: completion judge unavailable — allowing ({reason})");
     Verdict { passed: true, reason: format!("not verified ({reason})") }
@@ -342,6 +398,68 @@ mod tests {
             }
             Ok(Box::new(OneShot { text: Some(self.reply.clone()) }))
         }
+    }
+
+    #[test]
+    fn extract_goal_identifiers_finds_deliberate_caps_only() {
+        let ids = extract_goal_identifiers(
+            "Check the current flight category and METAR at YPJT, YMML and \
+             YSSY, then write a brief to the workspace as conditions-brief.md",
+        );
+        assert_eq!(ids, ["METAR", "YPJT", "YMML", "YSSY"]);
+        // Ordinary prose (and short/lowercase tokens) contribute nothing.
+        assert!(extract_goal_identifiers(
+            "write a summary of the meeting to memory"
+        )
+        .is_empty());
+        // Pure digits are not identifiers.
+        assert!(extract_goal_identifiers("check 12345 and 678").is_empty());
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_deterministically_when_goal_identifiers_missing() {
+        // The live rig failure (2026-07-05): the judge's SEVENTH sample
+        // hallucinated PASS over a brief about entirely different airports.
+        // The deterministic backstop must reject before any LLM opinion —
+        // the provider here would say PASS if consulted.
+        let seen = Arc::new(Mutex::new(String::new()));
+        let judge = CompletionJudge::new(
+            Arc::new(CapturingProvider {
+                reply: "PASS — looks great".into(),
+                seen: Arc::clone(&seen),
+            }),
+            "m",
+        );
+        let goal = "Check the current flight category and METAR at YPJT, \
+                    YMML and YSSY and write a conditions brief";
+        let summary = "## Conditions Brief\nKJFK: VFR, 10 SM. KLAX: IFR. \
+                       KORD: VFR, broken 4000-6000.";
+        let verdict = judge.verify(goal, goal, summary).await;
+        assert!(!verdict.passed, "must reject: {}", verdict.reason);
+        assert!(verdict.reason.contains("YPJT"), "{}", verdict.reason);
+        // The provider was never consulted (fail-open can't rescue fiction).
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn verify_passes_identifier_check_when_deliverable_matches() {
+        // A deliverable that DOES address the named identifiers sails through
+        // to the LLM judge as before.
+        let seen = Arc::new(Mutex::new(String::new()));
+        let judge = CompletionJudge::new(
+            Arc::new(CapturingProvider {
+                reply: "PASS — brief covers all three airports".into(),
+                seen: Arc::clone(&seen),
+            }),
+            "m",
+        );
+        let goal = "Check the current flight category and METAR at YPJT, \
+                    YMML and YSSY and write a conditions brief";
+        let summary = "YPJT VFR ceiling 4500; YMML VFR scattered 3400; \
+                       YSSY showers, METAR retrieved for all three.";
+        let verdict = judge.verify(goal, goal, summary).await;
+        assert!(verdict.passed, "{}", verdict.reason);
+        assert!(!seen.lock().unwrap().is_empty(), "LLM judge consulted");
     }
 
     #[tokio::test]

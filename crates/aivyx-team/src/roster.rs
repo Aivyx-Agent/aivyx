@@ -51,20 +51,28 @@ pub fn default_nonagon() -> TeamConfig {
             "Researcher",
             "You gather information from the web and project files and distill it into \
              structured, cited findings. You flag contradictions and note confidence per \
-             claim rather than picking one interpretation prematurely.",
+             claim rather than picking one interpretation prematurely. When the operator \
+             has connected domain tools (MCP servers), PREFER them over generic web \
+             fetching — they return structured, authoritative data.",
             // web.fetch ships in the daemon; web.search arrives with the toolkit pack.
-            &["web.fetch", "web.search", "fs.read", "memory.write"],
-            &["web.search", "net.fetch", "fs.read", "memory.write"],
+            // "mcp.call" is a MARKER, not a literal tool: `filter_tools` expands it
+            // to every bridged MCP tool, and `bind_lead_scopes` uses the declared
+            // base to flow the daemon floor's qualified per-server grants through
+            // (live rig 2026-07-05: with no mcp base declared anywhere, the whole
+            // team was structurally blind to the operator's aviation-weather
+            // server and a specialist confabulated the deliverable instead).
+            &["web.fetch", "web.search", "fs.read", "memory.write", "mcp.call"],
+            &["web.search", "net.fetch", "fs.read", "memory.write", "mcp.call"],
         ),
         member(
             "analyst",
             "Analyst",
             "You ingest data and code, surface patterns and anomalies, and produce clear \
              quantified findings. You pull the raw data yourself — fetching datasets, APIs, \
-             and reference pages with web.fetch — and separate what the data shows from what \
-             you infer.",
-            &["web.fetch", "web.search", "fs.read"],
-            &["net.fetch", "web.search", "fs.read"],
+             and reference pages with web.fetch, or the operator's connected domain tools \
+             (MCP) when they fit — and separate what the data shows from what you infer.",
+            &["web.fetch", "web.search", "fs.read", "mcp.call"],
+            &["net.fetch", "web.search", "fs.read", "mcp.call"],
         ),
         member(
             "coder",
@@ -112,8 +120,8 @@ pub fn default_nonagon() -> TeamConfig {
              its source — never by reading alone. You report a concrete PASS or FAIL with the \
              evidence (command, output, what you observed), and you never modify the work you \
              are validating.",
-            &["shell.exec", "fs.read", "web.fetch"],
-            &["shell.exec", "fs.read", "net.fetch"],
+            &["shell.exec", "fs.read", "web.fetch", "mcp.call"],
+            &["shell.exec", "fs.read", "net.fetch", "mcp.call"],
         ),
         member(
             "archivist",

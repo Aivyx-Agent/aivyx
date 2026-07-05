@@ -324,10 +324,15 @@ pub async fn drive_registered(
     // succeeds where the first missed) — re-drive from a cleared checkpoint once
     // before giving up. Only when verification is on; capped so a genuinely
     // impossible mission can't loop.
+    //
+    // The attempt counter is the PERSISTED `record.verify_attempts`, not a
+    // local: an approval gate pauses the mission by *returning* from this
+    // function, and the gate resolution re-enters it — a local counter reset
+    // on every operator approval, so a gated mission whose deliverable kept
+    // failing verification retried forever (live rig 2026-07-05: five
+    // "attempt 2/2" lines, four gate prompts at the operator).
     const MAX_MISSION_ATTEMPTS: u32 = 2;
-    let mut attempt = 0u32;
     loop {
-        attempt += 1;
         let config = shared
             .snapshot(id)
             .and_then(|r| r.config)
@@ -341,15 +346,22 @@ pub async fn drive_registered(
         }
         // Chapter Keystone — grade the deliverable against the goal.
         let verified = verify_mission_artifact(shared, deps, id).await;
-        if verified == TeamMissionPhase::Done || attempt >= MAX_MISSION_ATTEMPTS {
+        // Failed verifications so far, INCLUDING this one.
+        let attempts = shared
+            .snapshot(id)
+            .map(|r| r.verify_attempts)
+            .unwrap_or(0)
+            .saturating_add(1);
+        if verified == TeamMissionPhase::Done || attempts >= MAX_MISSION_ATTEMPTS {
             return Ok(verified);
         }
-        // Rejected + a retry remains — clear the checkpoint for a fresh run.
+        // Rejected + a retry remains — persist the count and clear the
+        // checkpoint for a fresh run.
         eprintln!(
             "aivyx team: mission {id} produced no deliverable — retrying (attempt {}/{MAX_MISSION_ATTEMPTS})",
-            attempt + 1,
+            attempts + 1,
         );
-        reset_mission_for_retry(shared, id).await?;
+        reset_mission_for_retry(shared, id, attempts).await?;
     }
 }
 
@@ -359,12 +371,16 @@ pub async fn drive_registered(
 async fn reset_mission_for_retry(
     shared: &SharedMissionState,
     id: &str,
+    verify_attempts: u32,
 ) -> Result<(), MissionDriverError> {
     if let Some(mut rec) = shared.snapshot(id) {
         rec.outputs.clear();
         rec.pending_gate = None;
         rec.halt_reason = None;
         rec.phase = TeamMissionPhase::Executing;
+        // Persist the failed-verification count so the Reprise cap
+        // survives gate pauses (see `drive_registered`).
+        rec.verify_attempts = verify_attempts;
         shared.put(rec).await?;
     }
     Ok(())
@@ -797,11 +813,19 @@ fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
                 .filter(|s| bases.contains(scope_base(s)))
                 .cloned()
                 .collect();
-            // …and keep the non-floor scopes the roster declared (the team bus
-            // and any MCP grants aren't in the daemon capability floor).
+            // …and keep the non-floor scopes the roster declared: the team bus,
+            // plus any QUALIFIED MCP grants a custom roster pinned. The bare
+            // "mcp.call" roster entry is a marker only — declaring the base
+            // makes the floor's qualified `mcp.call:<server>:*` grants flow
+            // through the filter above; pushing the bare form here would
+            // grant every server unqualified (D4 Rule 2), which is broader
+            // than the operator's configured set.
             for s in &m.capability_scopes {
                 let b = scope_base(s);
-                if b == "team.message" || b == "team.delegate" || b.starts_with("mcp.") {
+                if b == "team.message"
+                    || b == "team.delegate"
+                    || (b.starts_with("mcp.") && s.contains(':'))
+                {
                     caps.push(s.clone());
                 }
             }
@@ -1503,6 +1527,56 @@ mod tests {
         assert!(!r.iter().any(|s| s == "net.fetch"), "reviewer has no network");
     }
 
+    #[test]
+    fn bind_lead_scopes_flows_qualified_mcp_grants_to_declaring_roles() {
+        // The daemon floor carries qualified per-server MCP grants (d24b9c0).
+        // Roles that declare the bare `mcp.call` MARKER get those qualified
+        // grants; the bare marker itself must NOT survive (it would grant
+        // every server unqualified via D4 Rule 2), and non-declaring roles
+        // stay MCP-blind.
+        let floor: Vec<String> = [
+            "fs.read:/root/**",
+            "net.fetch",
+            "mcp.call:aviation-weather:*",
+            "mcp.call:web-search:*",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut config = default_nonagon();
+        bind_lead_scopes(&mut config, &floor);
+        let caps = |name: &str| -> Vec<String> {
+            config
+                .members
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap()
+                .capability_scopes
+                .clone()
+        };
+        for role in ["researcher", "analyst", "verifier"] {
+            let c = caps(role);
+            assert!(
+                c.contains(&"mcp.call:aviation-weather:*".to_string()),
+                "{role} should hold the qualified aviation-weather grant"
+            );
+            assert!(
+                c.contains(&"mcp.call:web-search:*".to_string()),
+                "{role} should hold the qualified web-search grant"
+            );
+            assert!(
+                !c.iter().any(|s| s == "mcp.call"),
+                "{role} must not keep the bare marker"
+            );
+        }
+        for role in ["writer", "reviewer", "planner"] {
+            assert!(
+                !caps(role).iter().any(|s| s.starts_with("mcp.call")),
+                "{role} does not declare mcp and stays MCP-blind"
+            );
+        }
+    }
+
     fn artifact_plan() -> MissionPlan {
         MissionPlan::new(
             "Write foo.md into the workspace",
@@ -1523,12 +1597,15 @@ mod tests {
         rec.outputs.insert("write".into(), "claimed done".into());
         shared.put(rec).await.unwrap();
 
-        reset_mission_for_retry(&shared, "r1").await.unwrap();
+        reset_mission_for_retry(&shared, "r1", 1).await.unwrap();
         let after = shared.snapshot("r1").unwrap();
         assert_eq!(after.phase, TeamMissionPhase::Executing, "re-armed for a fresh run");
         assert!(after.outputs.is_empty(), "checkpoint cleared so steps re-run");
         assert!(after.halt_reason.is_none());
         assert!(!after.plan.steps.is_empty(), "plan preserved");
+        // The failed-verification count is PERSISTED so the Reprise cap
+        // survives gate pauses (a driver-local reset on every approval).
+        assert_eq!(after.verify_attempts, 1);
     }
 
     #[tokio::test]

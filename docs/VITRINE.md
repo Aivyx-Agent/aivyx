@@ -256,10 +256,48 @@
   one-line summary was stored in memory, but no conditions-brief.md
   exists"); member envelopes are correctly attenuated per role (the
   writer holds workspace scopes, the researcher doesn't).
-- _(walkthrough note)_ no approval gate fired on this goal-run —
-  planning went straight to executing; confirm when the
-  AwaitingApproval phase is supposed to appear before judging the
-  gate UX._(section in progress)_
+- **P1 — the Reprise retry cap reset on every gate approval → infinite
+  retry loop. FIXED.** The attempt counter was a driver-local, but an
+  approval gate pauses a mission by RETURNING from `drive_registered`;
+  each operator approval re-entered the function and reset the count.
+  Live: five "attempt 2/2" retries, the same `gate_review_brief`
+  prompt at the operator four times (with no attempt context shown —
+  the gate label P3 stands). Fix: `verify_attempts` is persisted on
+  the mission record.
+- **P1 — the mission ended "done" with a confabulated deliverable: the
+  verdict judge itself hallucinated a PASS.** Six consecutive honest
+  rejections ("brief for KJFK instead of YPJT/YMML/YSSY", "placeholder
+  text for Atlanta"), then the seventh sample ACCEPTED with a false
+  rationale ("all required METARs were retrieved") over a file
+  mentioning none of the three airports. gpt-oss:20b as judge ≈ ~15%
+  false-PASS per sample here; unbounded retries made the false PASS
+  inevitable. FIXED twice over: the retry cap bounds the samples, and
+  a **deterministic identifier backstop** in the completion judge now
+  rejects — before any LLM opinion, immune to fail-open — when the
+  majority of the goal's uppercase identifiers (ICAO codes, tickers…)
+  appear nowhere in the deliverable or evidence.
+- **P1 — the whole team was structurally MCP-blind. FIXED.** No roster
+  role declared an `mcp.call` base, so `bind_lead_scopes` filtered the
+  daemon floor's per-server grants out of every specialist envelope,
+  and the exact-name tool allowlists could never admit server-native
+  MCP tool names anyway. The team spent 16 raw `web.fetch` calls
+  approximating what one `get_flight_category` call returns — and the
+  writer confabulated from the gaps. Fix: researcher/analyst/verifier
+  declare an `mcp.call` marker; `filter_tools` expands it to bridged
+  MCP tools by scope base; the binder flows the floor's QUALIFIED
+  per-server grants and drops the bare marker (least privilege).
+- **P2 (open) — the rejected-mission row shows no reason.** The
+  operator saw REJECTED with no explanation; `halt_reason` carries the
+  judge's precise verdict but the Missions row doesn't render it.
+- **P2 (open) — inter-specialist handoff remains prompt-level fragile**
+  even with tools fixed: the writer ignored the researcher's real
+  Australian METAR data sitting in mission memory and wrote from
+  priors. Plan prompts should state where each artifact lives; member
+  prompts should say inputs arrive in the message.
+- _(walkthrough note)_ the approval gate DID appear on the operator's
+  own run (`gate_review_brief`, Approve/Reject rendered and worked);
+  the earlier socket-launched run gated nothing — gate placement
+  varies with the planned steps._(section in progress)_
 
 ### 4 · Memory / Wiki / Graph
 _(pending)_

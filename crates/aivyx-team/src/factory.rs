@@ -165,8 +165,20 @@ impl SpecialistFactory {
 /// allowlist yields **no** tools — a specialist is given exactly the tools
 /// it lists (least privilege), unlike a default Role (absent ⇒ all).
 pub fn filter_tools(base: &[Arc<dyn Tool>], allowlist: &[String]) -> Vec<Arc<dyn Tool>> {
+    // "mcp.call" is a MARKER entry, not a tool name: MCP-bridged tools carry
+    // their server-native names (get_metar, web_search, …) which a static
+    // roster cannot enumerate, so an exact-name allowlist could never admit
+    // them (live rig 2026-07-05: the whole team was blind to the operator's
+    // configured MCP servers). The marker admits every tool whose required
+    // scope base is `mcp.call`.
+    let admit_mcp = allowlist.iter().any(|a| a == "mcp.call");
     base.iter()
-        .filter(|t| allowlist.iter().any(|a| a.as_str() == t.name()))
+        .filter(|t| {
+            allowlist.iter().any(|a| a.as_str() == t.name())
+                || (admit_mcp
+                    && t.required_scope(&serde_json::Value::Null).base()
+                        == "mcp.call")
+        })
         .cloned()
         .collect()
 }
@@ -263,6 +275,48 @@ mod tests {
         let base = vec![fake("a")];
         let kept = filter_tools(&base, &["a".into(), "nonexistent".into()]);
         assert_eq!(kept.len(), 1);
+    }
+
+    /// A fake MCP-bridged tool: server-native name, `mcp.call` scope.
+    struct FakeMcpTool(ToolId, &'static str);
+    #[async_trait]
+    impl Tool for FakeMcpTool {
+        fn id(&self) -> ToolId {
+            self.0
+        }
+        fn name(&self) -> &str {
+            self.1
+        }
+        fn description(&self) -> &str {
+            "fake mcp"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            use std::sync::OnceLock;
+            static S: OnceLock<serde_json::Value> = OnceLock::new();
+            S.get_or_init(|| serde_json::json!({ "type": "object" }))
+        }
+        fn required_scope(&self, _: &serde_json::Value) -> Scope {
+            Scope::parse("mcp.call:aviation-weather:get_metar").unwrap()
+        }
+        async fn execute(&self, _: serde_json::Value, _: &ToolContext<'_>) -> ToolOutcome {
+            unreachable!("filter tests never execute a tool")
+        }
+    }
+
+    #[test]
+    fn mcp_marker_admits_bridged_tools_without_naming_them() {
+        // MCP tool names are server-native and dynamic — the roster can't
+        // enumerate them; the "mcp.call" marker admits them by scope base.
+        let base: Vec<Arc<dyn Tool>> = vec![
+            fake("a"),
+            Arc::new(FakeMcpTool(ToolId::new(), "get_metar")),
+        ];
+        let with_marker = filter_tools(&base, &["mcp.call".into()]);
+        let kept: Vec<&str> = with_marker.iter().map(|t| t.name()).collect();
+        assert_eq!(kept, ["get_metar"]);
+        // Without the marker the bridged tool stays hidden (least privilege),
+        // and the marker never admits non-MCP tools.
+        assert!(filter_tools(&base, &["b".into()]).is_empty());
     }
 
     // --- build (construction) ---------------------------------------------

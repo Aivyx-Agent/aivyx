@@ -83,6 +83,15 @@ pub struct TeamMissionRecord {
     /// `#[serde(default)]` keeps pre-config records decoding.
     #[serde(default)]
     pub config: Option<TeamConfig>,
+    /// Chapter Reprise — how many times the Keystone artifact verdict has
+    /// rejected this mission's deliverable. PERSISTED (not a driver-local)
+    /// because an approval gate pauses the mission by returning from
+    /// `drive_registered`; a local counter reset on every gate resolution,
+    /// so a gated mission retried forever (live rig 2026-07-05: five
+    /// "attempt 2/2" retries, four gate prompts at the operator).
+    /// `#[serde(default)]` keeps pre-existing records decoding.
+    #[serde(default)]
+    pub verify_attempts: u32,
     pub started_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
 }
@@ -103,6 +112,7 @@ impl TeamMissionRecord {
             pending_gate: None,
             halt_reason: None,
             config: None,
+            verify_attempts: 0,
             started_at_unix_ms: now,
             updated_at_unix_ms: now,
         }
