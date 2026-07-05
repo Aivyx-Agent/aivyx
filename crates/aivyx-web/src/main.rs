@@ -4661,7 +4661,14 @@ fn FileViewer(file: DocFile, root: String) -> Element {
                         let (r, p) = (root.clone(), file.path.clone());
                         rsx! {
                             button { class: "btn btn-primary btn-xs",
-                                onclick: move |_| ws.send(write_file_query(&r, &p, edited(), true)),
+                                onclick: move |_| {
+                                    ws.send(write_file_query(&r, &p, edited(), true));
+                                    // Vitrine §8 — the bridge handles frames in
+                                    // order, so this re-read returns the
+                                    // post-write content and refreshes the open
+                                    // file in place (no screen reload needed).
+                                    ws.send(read_file_query(&r, &p));
+                                },
                                 "Save"
                             }
                         }
@@ -5007,9 +5014,13 @@ async fn read_task(
                     let mut d = documents.write();
                     d.entries = entries;
                     d.path = path;
-                    d.file = None;
                     d.loaded = true;
+                    // A *refresh* re-list (after a DW mutation) keeps the
+                    // outcome notice AND the open file — Vitrine §8: closing
+                    // the viewer out from under an edit read as data loss. A
+                    // navigation re-list clears both.
                     if !id.starts_with("mc-docs-refresh") {
+                        d.file = None;
                         d.notice = None;
                     }
                 }

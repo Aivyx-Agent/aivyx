@@ -651,7 +651,10 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   padding: 12px 14px; border-radius: 0.375rem;
   background: var(--color-bg-code); border: 1px solid var(--color-border-ghost);
   font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;
-  color: var(--color-text-primary); white-space: pre; overflow: auto;
+  /* Vitrine §8: wrap long lines like the read view (.doc-text) — the
+     editor used to force single-line horizontal scrolling. */
+  color: var(--color-text-primary); white-space: pre-wrap;
+  word-break: break-word; overflow-y: auto;
 }
 .doc-edit:focus { outline: none; border-color: var(--color-border-active); }
 .doc-viewer { display: flex; flex-direction: column; gap: 10px; }
