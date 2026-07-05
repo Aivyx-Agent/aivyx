@@ -24,6 +24,25 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::UserEvent;
 
 const WS_URL: &str = "ws://127.0.0.1:7843/ws";
+
+/// The daemon ws endpoint, derived from `AIVYX_STUDIO_URL` when set
+/// (remote appliance) — same override the webview honors in `main.rs`.
+fn ws_url() -> String {
+    match std::env::var("AIVYX_STUDIO_URL") {
+        Ok(u) => {
+            let host = u
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .trim_end_matches('/')
+                .split('/')
+                .next()
+                .unwrap_or("127.0.0.1:7843")
+                .to_string();
+            format!("ws://{host}/ws")
+        }
+        Err(_) => WS_URL.to_string(),
+    }
+}
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// Backoff between reconnect attempts when the daemon is down or drops us.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
@@ -41,7 +60,7 @@ pub async fn run(proxy: EventLoopProxy<UserEvent>) {
 /// One connection's lifetime: handshake, then poll missions and notify on each
 /// newly-seen gate until the socket drops.
 async fn watch_once(proxy: &EventLoopProxy<UserEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    let (ws, _resp) = tokio_tungstenite::connect_async(WS_URL).await?;
+    let (ws, _resp) = tokio_tungstenite::connect_async(ws_url()).await?;
     let (mut write, mut read) = ws.split();
 
     // Mirror the Studio's handshake (read-only queries may not require it, but

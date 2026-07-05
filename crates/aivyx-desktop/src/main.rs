@@ -34,6 +34,34 @@ mod gate_watch;
 const STUDIO_URL: &str = "http://127.0.0.1:7843/";
 const STUDIO_ADDR: &str = "127.0.0.1:7843";
 
+/// The Studio URL the shell wraps: `AIVYX_STUDIO_URL` when set (a remote
+/// Aivyx — the Harbor/server-appliance topology, e.g.
+/// `http://10.80.80.148:7843/`), else the local default. Vitrine §12 —
+/// the shell was hardcoded to localhost, which made it unusable against
+/// a rig-hosted Studio.
+fn studio_url() -> String {
+    std::env::var("AIVYX_STUDIO_URL").unwrap_or_else(|_| STUDIO_URL.to_string())
+}
+
+/// Host:port derived from [`studio_url`], for the reachability probe.
+fn studio_addr() -> String {
+    let url = studio_url();
+    url.trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_end_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or(STUDIO_ADDR)
+        .to_string()
+}
+
+/// Only a localhost Studio is ours to manage: spawning or stopping a
+/// daemon makes no sense against a remote appliance.
+fn studio_is_local() -> bool {
+    let a = studio_addr();
+    a.starts_with("127.0.0.1") || a.starts_with("localhost")
+}
+
 /// Events we route into the single tao event loop — from the tray's global
 /// channels and from the background gate watcher — so everything is handled in
 /// one place.
@@ -65,7 +93,7 @@ fn aivyx_bin() -> String {
 
 /// Is the daemon's Studio reachable right now?
 fn daemon_reachable() -> bool {
-    let Ok(addr) = STUDIO_ADDR.parse() else {
+    let Ok(addr) = studio_addr().parse() else {
         return false;
     };
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
@@ -85,6 +113,13 @@ fn wait_until_reachable() {
 /// so we can stop it on quit. A spawn failure is non-fatal.
 fn ensure_daemon() -> Option<Child> {
     if daemon_reachable() {
+        return None;
+    }
+    if !studio_is_local() {
+        eprintln!(
+            "aivyx-desktop: remote Studio {} is unreachable — check the appliance.",
+            studio_url()
+        );
         return None;
     }
     match Command::new(aivyx_bin())
@@ -254,7 +289,7 @@ fn main() -> wry::Result<()> {
                 } else if e.id == restart_id {
                     stop_owned_daemon(&mut daemon_child);
                     daemon_child = ensure_daemon();
-                    let _ = webview.load_url(STUDIO_URL);
+                    let _ = webview.load_url(&studio_url());
                 } else if e.id == autostart_id {
                     // The CheckMenuItem flipped its own checkmark; sync the
                     // platform autostart entry to the new state.
@@ -295,7 +330,7 @@ fn main() -> wry::Result<()> {
 /// the raw window handle.
 #[cfg(not(target_os = "linux"))]
 fn build_webview(window: &Window) -> wry::Result<wry::WebView> {
-    WebViewBuilder::new().with_url(STUDIO_URL).build(window)
+    WebViewBuilder::new().with_url(studio_url()).build(window)
 }
 
 #[cfg(target_os = "linux")]
@@ -305,5 +340,5 @@ fn build_webview(window: &Window) -> wry::Result<wry::WebView> {
     let vbox = window
         .default_vbox()
         .expect("tao window should expose a default GTK vbox on Linux");
-    WebViewBuilder::new().with_url(STUDIO_URL).build_gtk(vbox)
+    WebViewBuilder::new().with_url(studio_url()).build_gtk(vbox)
 }
