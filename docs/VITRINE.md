@@ -425,8 +425,14 @@ _(pending)_
   the §3 zombie page** (the v0.8.1 release deploy restarted the daemon
   under the operator's open tab; reads rendered cached state, writes
   vanished). Root-caused via journal silence + no team file on disk;
-  fixed by the reconnect work above. Roster save re-test pending after
-  one final manual reload.
+  fixed by the reconnect work above.
+- **Save verified post-fix:** the writer-soul edit round-tripped
+  byte-perfect into the conventional `~/team.toml` (first write on
+  this install), the save confirmation showed, and a mission launched
+  from the same fresh socket. Restart-required semantics noted: the
+  running mission uses the boot-time roster; edits drive missions
+  after the next daemon restart. **Section 7 complete** — findings are
+  UI-polish only beyond the (fixed) zombie page.
 
 ### 8 · Documents
 _(pending)_
