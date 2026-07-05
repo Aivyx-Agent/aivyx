@@ -475,7 +475,22 @@ _(pending)_
   divergence.
 
 ### 10 · MCP (Lantern) + Voice
-_(pending)_
+- **MCP — P2 (product, the operator's headline): the screen is
+  read-only.** No add, edit, update, or remove — MCP servers are
+  manageable only by hand-editing `[[mcp_server]]` in `aivyx.toml` +
+  restart. Operator wants full lifecycle management in the Studio.
+  Chapter candidate: the established write-half recipe (shared
+  toml_edit writer + server-side validation + restart-required UX,
+  proven by Settings/Teams/Roster) applied to `[[mcp_server]]`,
+  including `env`/`headers` with `${VAR}` interpolation (Conduit) and
+  ideally a "test connection" probe before save. Pairs with §9's
+  settings-coverage chapter — both are config-write surface area.
+- **MCP — data-side pre-flight was healthy** (both servers connected,
+  3 tools each, clean stderr). Known-limitation note stands: the
+  status is connection-level from the last daemon start — web-search
+  showed green all day while DuckDuckGo refused its queries; a
+  tool-level health signal (recent success/failure from the audit
+  chain) is the polish-wave candidate.
 
 ### 11 · `/classic` — panes worth porting vs deleting
 _(pending)_
