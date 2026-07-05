@@ -530,5 +530,22 @@ _(pending)_
   minimal no-bundle fallback page per the plan (item 7 is NOT a blind
   delete).
 
+## Operator product thoughts (2026-07-05 close-of-day, for next sessions)
+1. **Schedules screen** — create/edit crons from the Studio, for BOTH
+   halves: operator-created routines (the proven config-write recipe)
+   and agent-created ones (resolves the parked schedule-write
+   autonomy-gating item via the [autonomy] dial). Show per-cron
+   provenance (operator vs agent).
+2. **Create Agent nav placement** — Genesis "Create" only makes sense
+   pre-genesis; on a grown agent it's nav dead weight. Show Create
+   only when no agent exists; editing lives in the existing
+   Agents/Settings surfaces.
+3. **Nonagon identity + role-based team templates** — keep the fixed
+   9-member cap (already enforced) as a product identity; add a
+   guided "create your own Nonagon" flow that drafts a team shaped by
+   the agent's role (LLM-drafted like the persona seed, operator-
+   approved) — bridges naturally to vertical packs (Kitchen's brigade
+   is such a template).
+
 ## TUI + desktop shell
 _(pending — separate pass)_
