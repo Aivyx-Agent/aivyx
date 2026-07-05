@@ -121,6 +121,42 @@
   empty text instead of a silent void (routine turns also often end
   with `final_message: ""` on gpt-oss:20b — same phenomenon).
 
+### 2b · Chat stress round (2026-07-05, post-Thread piped sessions)
+- **Positives: the conversational fabric holds.** Three-turn pronoun
+  chain ("which of those… and what is ITS code?") resolves against the
+  agent's own prior answers; a correction turn ("sorry, I meant 2400")
+  recomputes correctly; a fresh session knows nothing of other sessions
+  (no replay leak) and says so honestly; "remember this" + "what did I
+  just ask you to remember?" round-trips through Etch + replay.
+- **P1 — the planner's pruning budget ignored the real context window.**
+  Ollama's planner budget was the provider-class default (8k) even with
+  an explicit `[ollama] num_ctx = 16384` — wrong in both directions
+  (premature pruning on normal turns, and no protection on fat ones).
+  FIXED: explicit num_ctx is now authoritative for the planner budget.
+- **P1 — a giant tool result was un-prunable and silently truncated the
+  system prompt.** One raw `web.fetch` of a full HTML page became a
+  single ~30k-token ToolResult message; the pruner can only drop whole
+  messages and must keep the tail, so the request sailed past the real
+  16k window and Ollama truncated server-side — from the front, where
+  the charter/security prompt lives. Audit showed a turn at 32,015
+  estimated tokens. FIXED: tool-result content is capped at ~half the
+  context window (floor 4k chars) with an explicit truncation marker.
+- **P2 (agent behavior, open) — tool-failure thrash.** With web_search
+  down (DDG re-blocked mid-test — the new honest error fired), the
+  model adapted well at first (pivoted to web_read on Wikipedia) but
+  then degenerated: 6 failed searches, raw web.fetch of duckduckgo.com
+  itself, and a final answer that was an inventory of a page's <img>
+  tags — off-task, no ICAO answer, no "search is unavailable" report.
+  Candidate: after N consecutive failures of one tool, inject a nudge
+  to stop and report the outage (Bridle's breaker only catches
+  identical repeats; these calls all differed).
+- **P2 (agent behavior, open) — no currency check on source data.** The
+  "GA airports near Perth" answer listed defunct 1930s aerodromes
+  (Langley Park, Maylands, Caversham) read off a Wikipedia list that
+  includes historical fields — and omitted Jandakot, the actual GA
+  airport. Evidence discipline needs a "is this source current?"
+  instinct; also feeds the never-invent P2 family.
+
 ### 2a · Daemon findings (from the same investigation, all fixed same-day)
 - **P1 — reflection proposals were scope-dead on a clean v0.8.0.** The
   reflection scheduler's prompt instructs the model to call

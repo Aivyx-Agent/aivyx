@@ -5564,6 +5564,23 @@ async fn run_async(
     let memory_topic_prefix: Option<String> = role.memory_topic_prefix.value;
 
     // ---- Provider -----------------------------------------------------
+    // Planner pruning budget = the REAL context, not the provider-class
+    // default. Vitrine chat testing (2026-07-05) caught the gap live:
+    // the Ollama default is a conservative 8k, so with `[ollama]
+    // num_ctx = 16384` the planner both pruned too early on normal
+    // turns AND let un-prunable fat turns sail past the actual window
+    // (Ollama truncates server-side — silently, from the front, where
+    // the system prompt lives). An explicit num_ctx is authoritative;
+    // auto-num_ctx (Chapter P) is negotiated per-request inside the
+    // provider where the binary can't see it, so the conservative
+    // default stands for that case.
+    let planner_context_window: usize = match provider_kind.value {
+        ProviderKind::Ollama => config_ollama_options
+            .num_ctx
+            .map(|n| n as usize)
+            .unwrap_or_else(|| provider_kind.value.default_context_window()),
+        _ => provider_kind.value.default_context_window(),
+    };
     // Track the Ollama base URL for tool registration (Phase 36).
     let mut ollama_base_url_for_tools: Option<String> = None;
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
@@ -7906,7 +7923,7 @@ async fn run_async(
             .with_system_prompt(child_system_prompt)
             .with_max_tokens(max_tokens_for_factory)
             .with_tool_allowlist(child_tool_allowlist.clone())
-            .with_context_window(provider_kind.value.default_context_window())
+            .with_context_window(planner_context_window)
             .with_prune_sink(Arc::new(
                 aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory_for_factory)),
             ))
@@ -8202,7 +8219,7 @@ async fn run_async(
             .with_system_prompt(system_prompt)
             .with_max_tokens(DEFAULT_MAX_TOKENS)
             .with_tool_allowlist(tool_allowlist)
-            .with_context_window(provider_kind.value.default_context_window())
+            .with_context_window(planner_context_window)
             .with_prune_sink(Arc::new(
                 aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
             ))
@@ -9081,7 +9098,7 @@ async fn run_async(
                 memory_topic_prefix,
                 role_overrides: Some(shared_role_overrides),
                 prompt_refresher: Some(prompt_refresher),
-                context_window_tokens: Some(provider_kind.value.default_context_window()),
+                context_window_tokens: Some(planner_context_window),
                 prune_sink: Some(Arc::new(
                     aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
                 )),
@@ -9537,9 +9554,7 @@ async fn run_async(
                     memory_topic_prefix,
                     role_overrides: Some(shared_role_overrides.clone()),
                     prompt_refresher: Some(prompt_refresher),
-                    context_window_tokens: Some(
-                        provider_kind.value.default_context_window(),
-                    ),
+                    context_window_tokens: Some(planner_context_window),
                     prune_sink: Some(Arc::new(
                         aivyx_channel::prune_sink::MemoryPruneSink::new(
                             Arc::clone(&memory),

@@ -1149,6 +1149,17 @@ impl TurnPlanner for LlmPlanner {
             .unwrap_or_else(|| "unknown-call".to_string());
 
         let (content, is_error) = render_tool_result(outcome);
+        // Vitrine chat testing (2026-07-05) — cap giant tool results
+        // BEFORE they enter history. The pruner can only drop whole
+        // messages and must keep the tail, so a single raw-HTML
+        // web.fetch (~30k tokens) was un-prunable and pushed the
+        // request past the real context window — the provider then
+        // truncated server-side, silently, from the front, where the
+        // system prompt lives.
+        let content = cap_tool_result_content(
+            content,
+            self.config.context_window_tokens,
+        );
         self.history.push(LlmMessage::ToolResult {
             call_id,
             content,
@@ -1184,6 +1195,43 @@ impl TurnPlanner for LlmPlanner {
 /// The `error` field is one of: `denied`, `not_in_role`, `rate_limited`,
 /// `failed`, `timed_out`, `requires_escalation`. It is stable across versions;
 /// new kinds land as new strings, never as renames.
+/// Floor on the tool-result cap so a small configured window can never
+/// cripple tool output entirely (~1k tokens of result is always
+/// allowed through).
+const TOOL_RESULT_CAP_FLOOR_CHARS: usize = 4_000;
+
+/// Cap a rendered tool-result string to roughly **half the context
+/// window**: budget = `window_tokens * 2` chars (at the pruner's ~4
+/// chars/token estimate, that's `window/2` tokens), floored at
+/// [`TOOL_RESULT_CAP_FLOOR_CHARS`]. `None` (pruning disabled) keeps
+/// the content untouched — byte-identical to the pre-cap behavior.
+///
+/// Truncation keeps the head (where structured output and page
+/// content start) and appends an explicit marker so the model knows
+/// it saw a partial result rather than a complete one.
+fn cap_tool_result_content(
+    content: String,
+    window_tokens: Option<usize>,
+) -> String {
+    let Some(window) = window_tokens else {
+        return content;
+    };
+    let max_chars =
+        (window * 2).max(TOOL_RESULT_CAP_FLOOR_CHARS);
+    let total = content.chars().count();
+    if total <= max_chars {
+        return content;
+    }
+    let mut capped: String =
+        content.chars().take(max_chars).collect();
+    capped.push_str(&format!(
+        "\n…[tool output truncated: showing {max_chars} of {total} \
+         chars — the result was too large for the model's context; \
+         request a narrower read if the missing part matters]"
+    ));
+    capped
+}
+
 fn render_tool_result(outcome: &ToolOutcome) -> (String, bool) {
     match outcome {
         ToolOutcome::Completed { output, .. } => {
@@ -1827,6 +1875,49 @@ mod tests {
             LlmMessage::User { ref content }
                 if content == &[ContentBlock::text("   ")]
         ));
+    }
+
+    // ---- Tool-result cap (Vitrine chat testing 2026-07-05) -----
+
+    #[test]
+    fn tool_result_cap_none_window_is_untouched() {
+        let big = "x".repeat(1_000_000);
+        assert_eq!(
+            cap_tool_result_content(big.clone(), None),
+            big
+        );
+    }
+
+    #[test]
+    fn tool_result_cap_under_budget_is_untouched() {
+        let s = "small output".to_string();
+        assert_eq!(
+            cap_tool_result_content(s.clone(), Some(16_384)),
+            s
+        );
+    }
+
+    #[test]
+    fn tool_result_cap_truncates_with_marker() {
+        // window 16384 → budget 32768 chars.
+        let big = "y".repeat(100_000);
+        let capped =
+            cap_tool_result_content(big, Some(16_384));
+        assert!(capped.starts_with("yyy"));
+        assert!(capped.contains("tool output truncated"));
+        assert!(capped.contains("100000"));
+        // Budget + marker, nowhere near the original size.
+        assert!(capped.chars().count() < 33_000);
+    }
+
+    #[test]
+    fn tool_result_cap_floor_protects_tiny_windows() {
+        // window 100 → raw budget 200, floored to 4000.
+        let content = "z".repeat(3_000);
+        assert_eq!(
+            cap_tool_result_content(content.clone(), Some(100)),
+            content
+        );
     }
 
     // ---- Chapter Thread — ConversationSeeder hook --------------
