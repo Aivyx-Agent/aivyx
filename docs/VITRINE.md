@@ -150,6 +150,23 @@
   Candidate: after N consecutive failures of one tool, inject a nudge
   to stop and report the outage (Bridle's breaker only catches
   identical repeats; these calls all differed).
+- **P2 (agent behavior, open) — tool-call-shaped JSON escapes as the
+  final answer.** Post-fix re-test: a turn ended with the final message
+  being a bare JSON object of tool ARGUMENTS
+  (`{"path":"…airports.csv","delimiter":",",…}`) — the model emitted a
+  call it never dispatched and the turn treated it as the reply; chat
+  would show naked JSON. Same family as the empty-completion issue
+  (gpt-oss:20b post-tool finishing; its `ollama_prompt_strategy` is
+  "none — family: undetected", so it gets no finishing scaffold the way
+  qwen3's few_shot strategy provides). Candidates: detect the gpt-oss
+  family and assign a strategy; a final-message floor ("model produced
+  no usable reply") when the completion is empty or is a bare
+  tool-args object; Studio-side "(no reply)" rendering (already
+  logged).
+- **Verified fixed in the same re-test:** with the num_ctx budget and
+  the tool-result cap deployed, per-call context estimates stay inside
+  the 16k window (peak summed-turn input 43k across 5 calls ≈ 8.6k
+  per call; no pruning storms, no server-side truncation).
 - **P2 (agent behavior, open) — no currency check on source data.** The
   "GA airports near Perth" answer listed defunct 1930s aerodromes
   (Langley Park, Maylands, Caversham) read off a Wikipedia list that
