@@ -1083,6 +1083,17 @@ pub struct AivyxConfig {
     /// (`A,B,A,B,…`). `None`/`Some(false)` → off (byte-identical loop). The
     /// binary maps `Some(true)` to `ConcreteAgent::with_cycle_detection`.
     pub cycle_detection: Option<bool>,
+    /// Chapter Thread — `[agent] conversation_history_turns`: the number
+    /// of the session's most recent prior **messages** (user and
+    /// assistant lines each count as one) replayed into the model's
+    /// context as real conversation history on interactive-session
+    /// turns, so follow-ups like "did you find it?" resolve.
+    /// Trigger-fired turns (cron / loop / reflection) are never
+    /// replayed — they aren't recorded in the per-session window at
+    /// all. Default [`DEFAULT_CONVERSATION_HISTORY_TURNS`] (`8`, the
+    /// last four exchanges); `0` disables replay and restores
+    /// fresh-context turns exactly.
+    pub conversation_history_turns: usize,
     /// Phase 135 — `[voice]` operator-configured options
     /// for the voice channel adapter. Empty when the
     /// operator doesn't run `--channel voice`.
@@ -2255,6 +2266,14 @@ pub const DEFAULT_RECALL_WINDOW_TURNS: usize = 1;
 /// short-circuits both auto-recall and adaptive Persona
 /// selection, both of which feed model output).
 pub const DEFAULT_RECALL_GATE_MIN_CHARS: usize = 0;
+/// Chapter Thread — default conversation-history replay depth, in
+/// messages (user and assistant lines each count as one): the last
+/// four exchanges. Default-ON by explicit operator decision
+/// (2026-07-05, Vitrine walkthrough P1): a chat surface that forgets
+/// its own previous turn violates the operator's baseline expectation,
+/// so the behaviour-change-is-opt-in discipline is deliberately
+/// overridden here. `0` restores fresh-context turns exactly.
+pub const DEFAULT_CONVERSATION_HISTORY_TURNS: usize = 8;
 
 /// Phase 96 — default ANN rebuild threshold (number of new
 /// vector writes that mark the index stale and trigger a
@@ -4351,6 +4370,10 @@ struct RawAgent {
     /// byte-identical). See `ConcreteAgent::with_cycle_detection`.
     #[serde(default)]
     cycle_detection: Option<bool>,
+    /// Chapter Thread — conversation-history replay depth in messages.
+    /// Unset → [`DEFAULT_CONVERSATION_HISTORY_TURNS`]; `0` disables.
+    #[serde(default)]
+    conversation_history_turns: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -7282,6 +7305,10 @@ impl AivyxConfig {
             mistralrs_options,
             turn_timeout_secs: toml.agent.turn_timeout_secs,
             cycle_detection: toml.agent.cycle_detection,
+            conversation_history_turns: toml
+                .agent
+                .conversation_history_turns
+                .unwrap_or(DEFAULT_CONVERSATION_HISTORY_TURNS),
             voice_options,
             ollama_prompt_strategies,
             pricing,

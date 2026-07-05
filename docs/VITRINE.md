@@ -92,10 +92,12 @@
   transcript replay), and the Phase 86 conversation window feeds only
   recall *relevance*, never the model prompt. Fine for headless
   automation; on a chat UI it breaks the most basic conversational
-  expectation (pronouns, ellipsis, "did you find it?"). Decision
-  needed: inject the conversation window as model context for
-  conversational channels (web chat / TUI REPL), or explicitly ship
-  "each message is a fresh ask" as the documented chat model.
+  expectation (pronouns, ellipsis, "did you find it?"). **DECIDED +
+  BUILT same-day (Chapter Thread, docs/THREAD.md): full history
+  replay, on by default** — the operator chose real user/assistant
+  message replay over block injection; `[agent]
+  conversation_history_turns` (default 8, 0 restores fresh-context).
+  Trigger turns structurally unaffected. Rig verification pending.
 - **P1 (2026-07-05 investigation) — the bundled web-search backend was
   silently dead all day.** DuckDuckGo answers bot-flagged traffic with
   HTTP **202** + a challenge page; the zero-config backend parsed that

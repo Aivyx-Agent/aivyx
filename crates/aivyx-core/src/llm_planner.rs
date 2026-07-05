@@ -147,6 +147,97 @@ pub trait SystemPromptRefiner: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// ConversationSeeder — prior-turn history replay (Chapter Thread)
+// ---------------------------------------------------------------------------
+
+/// One prior message of the session, as recorded by the channel
+/// layer's per-session conversation window. `is_user` selects the
+/// replayed role; `text` is the message's final text (tool calls and
+/// tool results are deliberately NOT replayed — only what the
+/// operator and the assistant actually said).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorTurn {
+    pub is_user: bool,
+    pub text: String,
+}
+
+/// Chapter Thread — per-turn conversation-history seeding. Sibling of
+/// [`ContextProvider`]: invoked once in `begin_turn`, it returns the
+/// session's prior messages (oldest first) and the planner seeds them
+/// into the turn's history as real `User`/`Assistant` messages before
+/// the current user message, so the model sees the conversation the
+/// operator sees. An empty vec is the universal no-op path — turns
+/// stay byte-identical to the pre-Thread fresh-context behavior.
+///
+/// Like every hook in this module it is **not** re-exported from
+/// `aivyx-core`'s `lib.rs` — consumers reach it via
+/// `aivyx_core::llm_planner::ConversationSeeder` (the documented
+/// `ContextProvider` precedent).
+#[async_trait]
+pub trait ConversationSeeder: Send + Sync {
+    /// Prior messages of this session, oldest first. Must never
+    /// panic and must swallow its own errors into an empty vec
+    /// (seeding is best-effort, never fatal).
+    async fn prior_turns(&self, session_id: crate::SessionId) -> Vec<PriorTurn>;
+}
+
+/// Normalize raw prior turns into a provider-safe message prefix:
+///
+/// 1. Blank entries are dropped.
+/// 2. Leading assistant entries are dropped — providers require the
+///    first message to be a user turn.
+/// 3. Consecutive same-role entries coalesce into one message
+///    (newline-joined) so strict-alternation providers never see
+///    `user, user` or `assistant, assistant`.
+/// 4. A trailing user entry (a prior turn whose completion was empty
+///    — the window records the operator's message but skips an empty
+///    assistant final) gets an honest `(no response was produced that
+///    turn)` assistant filler, both to preserve alternation against
+///    the current user message that follows and so the model can SEE
+///    that it never answered.
+fn seeded_history_messages(prior: Vec<PriorTurn>) -> Vec<LlmMessage> {
+    // Steps 1–3: drop blanks + leading assistants, coalesce runs.
+    let mut coalesced: Vec<PriorTurn> = Vec::with_capacity(prior.len());
+    for turn in prior {
+        if turn.text.trim().is_empty() {
+            continue;
+        }
+        if coalesced.is_empty() && !turn.is_user {
+            continue; // leading assistant — drop
+        }
+        match coalesced.last_mut() {
+            Some(last) if last.is_user == turn.is_user => {
+                last.text.push('\n');
+                last.text.push_str(&turn.text);
+            }
+            _ => coalesced.push(turn),
+        }
+    }
+    // Step 4: trailing user → alternation filler.
+    if coalesced.last().is_some_and(|t| t.is_user) {
+        coalesced.push(PriorTurn {
+            is_user: false,
+            text: "(no response was produced that turn)".to_string(),
+        });
+    }
+    coalesced
+        .into_iter()
+        .map(|t| {
+            if t.is_user {
+                LlmMessage::User {
+                    content: vec![ContentBlock::text(t.text)],
+                }
+            } else {
+                LlmMessage::Assistant {
+                    text: t.text,
+                    tool_calls: Vec::new(),
+                }
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -200,6 +291,13 @@ pub struct LlmPlannerConfig {
     /// means the base prompt is used unchanged (pre-Phase-79
     /// behavior exactly).
     pub system_prompt_refiner: Option<Arc<dyn SystemPromptRefiner>>,
+    /// Chapter Thread — optional conversation-history seeder. When
+    /// `Some`, `begin_turn` seeds the turn's history with the
+    /// session's prior user/assistant messages (normalized via
+    /// [`seeded_history_messages`]) before the current user message,
+    /// so conversational channels see real multi-turn context. `None`
+    /// means fresh-context turns (pre-Thread behavior exactly).
+    pub conversation_seeder: Option<Arc<dyn ConversationSeeder>>,
     /// Phase 120 — threshold for the planner's tool-name fuzzy-
     /// match recovery. Float in `[0.0, 1.0]`. Defaults to
     /// [`FUZZY_TOOL_NAME_THRESHOLD`] (0.80, matches Phase 112's
@@ -235,6 +333,10 @@ impl std::fmt::Debug for LlmPlannerConfig {
                 "system_prompt_refiner",
                 &self.system_prompt_refiner.as_ref().map(|_| ".."),
             )
+            .field(
+                "conversation_seeder",
+                &self.conversation_seeder.as_ref().map(|_| ".."),
+            )
             .finish()
     }
 }
@@ -251,6 +353,7 @@ impl LlmPlannerConfig {
             prune_sink: None,
             context_provider: None,
             system_prompt_refiner: None,
+            conversation_seeder: None,
             // Phase 120 — same default as the FUZZY_TOOL_NAME_THRESHOLD
             // const used at Task 4. Operators override via TOML.
             tool_name_auto_correct_threshold: FUZZY_TOOL_NAME_THRESHOLD,
@@ -319,6 +422,17 @@ impl LlmPlannerConfig {
         refiner: Arc<dyn SystemPromptRefiner>,
     ) -> Self {
         self.system_prompt_refiner = Some(refiner);
+        self
+    }
+
+    /// Chapter Thread — attach a [`ConversationSeeder`] for prior-turn
+    /// history replay. Mirrors [`Self::with_context_provider`]; `None`
+    /// (the default) preserves fresh-context turns exactly.
+    pub fn with_conversation_seeder(
+        mut self,
+        seeder: Arc<dyn ConversationSeeder>,
+    ) -> Self {
+        self.conversation_seeder = Some(seeder);
         self
     }
 
@@ -675,6 +789,23 @@ impl TurnPlanner for LlmPlanner {
                     .await
                 {
                     self.config.system_prompt = Some(refined);
+                }
+            }
+        }
+
+        // Chapter Thread — seed the session's prior conversation as
+        // real User/Assistant messages ahead of the current one, so
+        // the model sees the conversation the operator sees ("did you
+        // find it?" can resolve "it"). Runs only on a fresh history
+        // (one planner = one turn, but stay defensive), and only for
+        // planners built with a seeder — every other caller keeps
+        // fresh-context turns byte-identical. Seeded messages carry
+        // no tool_calls, so pending_call_ids stays consistent.
+        if let Some(seeder) = &self.config.conversation_seeder {
+            if self.history.is_empty() {
+                let prior = seeder.prior_turns(message.session_id).await;
+                if !prior.is_empty() {
+                    self.history.extend(seeded_history_messages(prior));
                 }
             }
         }
@@ -1695,6 +1826,186 @@ mod tests {
             planner.history()[0],
             LlmMessage::User { ref content }
                 if content == &[ContentBlock::text("   ")]
+        ));
+    }
+
+    // ---- Chapter Thread — ConversationSeeder hook --------------
+
+    fn u(text: &str) -> PriorTurn {
+        PriorTurn { is_user: true, text: text.to_string() }
+    }
+    fn a(text: &str) -> PriorTurn {
+        PriorTurn { is_user: false, text: text.to_string() }
+    }
+
+    #[test]
+    fn seeded_messages_basic_pair_replays_in_order() {
+        let msgs = seeded_history_messages(vec![u("hi"), a("hello!")]);
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(
+            &msgs[0],
+            LlmMessage::User { content } if content == &[ContentBlock::text("hi")]
+        ));
+        assert!(matches!(
+            &msgs[1],
+            LlmMessage::Assistant { text, tool_calls }
+                if text == "hello!" && tool_calls.is_empty()
+        ));
+    }
+
+    #[test]
+    fn seeded_messages_drops_leading_assistant() {
+        // Providers require the first message to be a user turn.
+        let msgs =
+            seeded_history_messages(vec![a("orphan"), u("q"), a("r")]);
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(
+            &msgs[0],
+            LlmMessage::User { content } if content == &[ContentBlock::text("q")]
+        ));
+    }
+
+    #[test]
+    fn seeded_messages_coalesces_consecutive_same_role() {
+        // Strict-alternation providers must never see user,user.
+        let msgs = seeded_history_messages(vec![
+            u("part one"),
+            u("part two"),
+            a("answer"),
+        ]);
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(
+            &msgs[0],
+            LlmMessage::User { content }
+                if content == &[ContentBlock::text("part one\npart two")]
+        ));
+    }
+
+    #[test]
+    fn seeded_messages_trailing_user_gets_honest_filler() {
+        // A prior turn whose completion was empty leaves a trailing
+        // user entry; the filler keeps alternation against the
+        // current user message AND shows the model it never answered.
+        let msgs = seeded_history_messages(vec![u("icao for jandakot?")]);
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(
+            &msgs[1],
+            LlmMessage::Assistant { text, .. }
+                if text == "(no response was produced that turn)"
+        ));
+    }
+
+    #[test]
+    fn seeded_messages_blank_entries_drop_to_empty() {
+        assert!(seeded_history_messages(vec![u("  "), a("")]).is_empty());
+        assert!(seeded_history_messages(vec![]).is_empty());
+    }
+
+    struct FakeSeeder {
+        prior: Vec<PriorTurn>,
+        seen_sessions: std::sync::Mutex<Vec<SessionId>>,
+    }
+
+    impl FakeSeeder {
+        fn new(prior: Vec<PriorTurn>) -> Arc<Self> {
+            Arc::new(Self {
+                prior,
+                seen_sessions: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ConversationSeeder for FakeSeeder {
+        async fn prior_turns(
+            &self,
+            session_id: crate::SessionId,
+        ) -> Vec<PriorTurn> {
+            self.seen_sessions.lock().unwrap().push(session_id);
+            self.prior.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn conversation_seeder_replays_prior_before_current() {
+        let seeder =
+            FakeSeeder::new(vec![u("first question"), a("first answer")]);
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_conversation_seeder(seeder.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "follow-up?"))
+            .await;
+        // Session id threaded through so the impl can find the window.
+        assert_eq!(
+            seeder.seen_sessions.lock().unwrap().clone(),
+            vec![channel.session]
+        );
+        // History: prior user, prior assistant, THEN the current turn.
+        let history = planner.history();
+        assert_eq!(history.len(), 3);
+        assert!(matches!(
+            &history[0],
+            LlmMessage::User { content }
+                if content == &[ContentBlock::text("first question")]
+        ));
+        assert!(matches!(
+            &history[1],
+            LlmMessage::Assistant { text, .. } if text == "first answer"
+        ));
+        assert!(matches!(
+            &history[2],
+            LlmMessage::User { content }
+                if content == &[ContentBlock::text("follow-up?")]
+        ));
+    }
+
+    #[tokio::test]
+    async fn conversation_seeder_empty_is_byte_identical() {
+        let seeder = FakeSeeder::new(vec![]);
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_conversation_seeder(seeder.clone()),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hello"))
+            .await;
+        let history = planner.history();
+        assert_eq!(history.len(), 1);
+        assert!(matches!(
+            &history[0],
+            LlmMessage::User { content }
+                if content == &[ContentBlock::text("hello")]
+        ));
+    }
+
+    #[tokio::test]
+    async fn conversation_seeder_composes_with_recall_block() {
+        // Seeded prior messages land as separate history entries; the
+        // recall block still folds into the CURRENT user message.
+        let seeder = FakeSeeder::new(vec![u("prior q"), a("prior a")]);
+        let provider = FakeContextProvider::new(Some("RECALL-BLOCK"));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_conversation_seeder(seeder)
+                .with_context_provider(provider),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "now?"))
+            .await;
+        let history = planner.history();
+        assert_eq!(history.len(), 3);
+        assert!(matches!(
+            &history[2],
+            LlmMessage::User { content }
+                if content == &[
+                    ContentBlock::text("RECALL-BLOCK"),
+                    ContentBlock::text("now?"),
+                ]
         ));
     }
 

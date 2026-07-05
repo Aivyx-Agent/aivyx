@@ -225,6 +225,73 @@ pub fn assemble_for(
     Some(w.assemble(window_turns, current))
 }
 
+// ---------------------------------------------------------------------------
+// Chapter Thread — conversation-history replay over the shared windows
+// ---------------------------------------------------------------------------
+
+/// [`ConversationSeeder`] implementation over the same
+/// [`SharedConversationWindows`] the daemon's turn-completion hook
+/// already writes. The planner calls `prior_turns` once per turn; we
+/// hand back the session's most recent `max_messages` window entries
+/// (oldest first), trimmed oldest-first to [`WINDOW_CHAR_BUDGET`] so a
+/// long-winded prior answer can't flood the prompt. Sessions with no
+/// window (first turn, trigger-fired turns — never recorded) return
+/// empty, which the planner treats as the fresh-context no-op.
+pub struct WindowConversationSeeder {
+    windows: SharedConversationWindows,
+    max_messages: usize,
+}
+
+impl WindowConversationSeeder {
+    pub fn new(
+        windows: SharedConversationWindows,
+        max_messages: usize,
+    ) -> Self {
+        Self { windows, max_messages }
+    }
+}
+
+#[async_trait::async_trait]
+impl aivyx_core::llm_planner::ConversationSeeder
+    for WindowConversationSeeder
+{
+    async fn prior_turns(
+        &self,
+        session_id: SessionId,
+    ) -> Vec<aivyx_core::llm_planner::PriorTurn> {
+        use aivyx_core::llm_planner::PriorTurn;
+        if self.max_messages == 0 {
+            return Vec::new();
+        }
+        let Ok(map) = self.windows.read() else {
+            return Vec::new();
+        };
+        let Some(w) = map.get(&session_id) else {
+            return Vec::new();
+        };
+        // Newest-first accumulation under the char budget, then
+        // reverse back to oldest-first — dropping from the OLD end
+        // keeps the most recent context when trimming.
+        let mut picked: Vec<PriorTurn> = Vec::new();
+        let mut budget = WINDOW_CHAR_BUDGET;
+        for (role, text) in
+            w.turns.iter().rev().take(self.max_messages)
+        {
+            let cost = text.chars().count();
+            if cost > budget {
+                break;
+            }
+            budget -= cost;
+            picked.push(PriorTurn {
+                is_user: matches!(role, Role::User),
+                text: text.clone(),
+            });
+        }
+        picked.reverse();
+        picked
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +376,68 @@ mod tests {
         let map = shared.read().unwrap();
         let w = map.get(&sid).unwrap();
         assert_eq!(w.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn seeder_returns_prior_turns_oldest_first() {
+        use aivyx_core::llm_planner::ConversationSeeder;
+        let shared = shared_conversation_windows();
+        let sid = SessionId::new();
+        record_turn(&shared, sid, "q1", "a1");
+        record_turn(&shared, sid, "q2", "a2");
+        let seeder = WindowConversationSeeder::new(shared, 8);
+        let prior = seeder.prior_turns(sid).await;
+        let texts: Vec<(bool, &str)> = prior
+            .iter()
+            .map(|t| (t.is_user, t.text.as_str()))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![(true, "q1"), (false, "a1"), (true, "q2"), (false, "a2")]
+        );
+    }
+
+    #[tokio::test]
+    async fn seeder_caps_at_max_messages_keeping_newest() {
+        use aivyx_core::llm_planner::ConversationSeeder;
+        let shared = shared_conversation_windows();
+        let sid = SessionId::new();
+        record_turn(&shared, sid, "q1", "a1");
+        record_turn(&shared, sid, "q2", "a2");
+        let seeder = WindowConversationSeeder::new(shared, 2);
+        let prior = seeder.prior_turns(sid).await;
+        let texts: Vec<&str> =
+            prior.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, vec!["q2", "a2"]);
+    }
+
+    #[tokio::test]
+    async fn seeder_unknown_session_and_zero_max_are_empty() {
+        use aivyx_core::llm_planner::ConversationSeeder;
+        let shared = shared_conversation_windows();
+        let sid = SessionId::new();
+        let seeder =
+            WindowConversationSeeder::new(shared.clone(), 8);
+        assert!(seeder.prior_turns(sid).await.is_empty());
+        record_turn(&shared, sid, "q", "a");
+        let disabled = WindowConversationSeeder::new(shared, 0);
+        assert!(disabled.prior_turns(sid).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn seeder_char_budget_drops_from_the_old_end() {
+        use aivyx_core::llm_planner::ConversationSeeder;
+        let shared = shared_conversation_windows();
+        let sid = SessionId::new();
+        let long = "x".repeat(WINDOW_CHAR_BUDGET);
+        record_turn(&shared, sid, &long, "short answer");
+        record_turn(&shared, sid, "recent q", "recent a");
+        let seeder = WindowConversationSeeder::new(shared, 8);
+        let prior = seeder.prior_turns(sid).await;
+        // The budget-blowing OLD entry is dropped; the newest
+        // survive.
+        assert!(prior.iter().all(|t| t.text != long));
+        assert!(prior.iter().any(|t| t.text == "recent a"));
     }
 
     #[test]

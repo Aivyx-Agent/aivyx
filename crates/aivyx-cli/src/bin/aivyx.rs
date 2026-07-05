@@ -5316,6 +5316,9 @@ async fn run_async(
         // `[agent] cycle_detection` — arm the small-cycle breaker; mapped to
         // an `Option<CycleConfig>` at each agent-construction site below.
         cycle_detection,
+        // Chapter Thread — `[agent] conversation_history_turns`; threaded
+        // into the daemon planner's WindowConversationSeeder below.
+        conversation_history_turns,
         // Phase 135 — [voice] section. Bound here so the
         // ChannelKind::Voice dispatch arm reads the operator's
         // ASR + TTS paths.
@@ -6107,15 +6110,17 @@ async fn run_async(
             aivyx_channel::memory_recall::shared_recall_cluster_stat()
         });
     // Phase 86 — daemon-scoped per-session conversation windows.
-    // Built iff the embedding substrate is configured (without
-    // embeddings there is nothing to feed the window into and no
-    // recall + Persona-selection path that would read it). The
-    // same Arc handle is attached to both relevance providers
-    // and to `DaemonConfig` so the turn loop's write site and
-    // the read sites share state.
-    let conversation_windows = embedding_provider.as_ref().map(|_| {
-        aivyx_channel::conversation_window::shared_conversation_windows()
-    });
+    // Originally built iff the embedding substrate was configured
+    // (the only readers were recall + Persona selection). Chapter
+    // Thread made the windows the source for conversation-history
+    // replay too, which must work on embedding-free installs — so
+    // they are now built unconditionally. The same Arc handle is
+    // attached to the relevance providers, the Thread seeder, and
+    // `DaemonConfig` so the turn loop's write site and every read
+    // site share state.
+    let conversation_windows = Some(
+        aivyx_channel::conversation_window::shared_conversation_windows(),
+    );
     let recall_context: Option<
         Arc<dyn aivyx_core::llm_planner::ContextProvider>,
     > = match (&embedding_provider, config_embedding.as_ref()) {
@@ -8217,6 +8222,25 @@ async fn run_async(
         if let Some(pr) = &persona_refiner {
             planner_config = planner_config
                 .with_system_prompt_refiner(Arc::clone(pr));
+        }
+        // Chapter Thread — conversation-history replay. The seeder
+        // reads the same shared windows the daemon turn loop writes
+        // on SubmitInput completion, so only interactive-session
+        // turns ever see prior history: trigger-fired turns (cron /
+        // loop / reflection) run under fresh per-fire sessions that
+        // have no window entry, and fall through to fresh-context.
+        // `0` disables replay entirely.
+        if conversation_history_turns > 0 {
+            if let Some(windows) = &conversation_windows {
+                planner_config = planner_config.with_conversation_seeder(
+                    Arc::new(
+                        aivyx_channel::conversation_window::WindowConversationSeeder::new(
+                            windows.clone(),
+                            conversation_history_turns,
+                        ),
+                    ),
+                );
+            }
         }
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);

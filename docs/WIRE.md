@@ -32,6 +32,15 @@ session — continuity flows through memory/recall (the Etch/charter
 Phase 86 window's relevance feed. Wire exposes the session semantics
 that exist; it does not add transcript injection.
 
+> **Revised by Chapter Thread (2026-07-05, docs/THREAD.md):** the
+> Vitrine walkthrough showed fresh-context turns break basic
+> conversational expectations on the chat surface, and the operator
+> chose full history replay (default-on, `[agent]
+> conversation_history_turns`). Daemon-routed session turns — including
+> Wire's piped multi-turn sessions — now replay the session's recent
+> window as real conversation history. Trigger-fired turns and the
+> durable-memory story are unchanged.
+
 ## 2. Architecture & decisions (locked)
 
 - **Invocation shape:** `aivyx --headless` with **no task argument** and
