@@ -79,6 +79,10 @@ pub struct ReportContext {
     pub digest: std::sync::Arc<crate::digest::WeeklyDigestBuilder>,
     pub notify:
         Option<std::sync::Arc<crate::notify_dispatcher::NotifyDispatcher>>,
+    /// Chapter Herald — see `TriggerDispatch::default_notify_target`;
+    /// same live fallback, for the deterministic digest path which
+    /// bypasses `TriggerDispatch::fire` entirely.
+    pub default_notify_target: Option<String>,
 }
 
 /// Run the scheduler loop. This future never returns normally — it
@@ -258,12 +262,14 @@ async fn run_digest_report(ctx: &ReportContext, sched: &ScheduleRecord) {
     // Deliver to notify targets (the digest text is always a real, non-empty,
     // successful completion). `OnFailed` opts out (a digest never fails);
     // `Always` / `OnCompletedNonEmpty` deliver the briefing.
-    if !sched.notify_targets.is_empty()
-        && sched.notify_when != aivyx_config::NotifyWhen::OnFailed
-    {
+    let targets: Vec<String> = crate::trigger::resolve_notify_targets(
+        &sched.notify_targets,
+        ctx.default_notify_target.as_deref(),
+    );
+    if !targets.is_empty() && sched.notify_when != aivyx_config::NotifyWhen::OnFailed {
         if let Some(notify) = &ctx.notify {
             let subject = format!("cron: {}", sched.schedule_id);
-            for target in &sched.notify_targets {
+            for target in &targets {
                 if let Err(e) = notify.dispatch(target, &text, Some(&subject)).await {
                     eprintln!(
                         "aivyx scheduler: digest notify to {target:?} failed: {e}"

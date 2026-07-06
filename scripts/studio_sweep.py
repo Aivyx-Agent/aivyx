@@ -59,7 +59,7 @@ time.sleep(20)
 # The operator's exact failure mode: booting straight into #schedules.
 print("boot-on-#schedules main:", str(ev("(document.querySelector('main')||{}).textContent"))[:120])
 
-for label in ["Command","Chat","Missions","Schedules","Memory","Skills","Agents","Teams","Settings"]:
+for label in ["Command","Chat","Missions","Schedules","Notifications","Memory","Skills","Agents","Teams","Settings"]:
     ok = ev(f"""
     (() => {{
       const els = [...document.querySelectorAll('.sidebar *')];

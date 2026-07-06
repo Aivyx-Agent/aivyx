@@ -641,6 +641,9 @@ pub enum TriggerKindSummary {
     /// iterations: every `TriggerSource::Loop` turn is one
     /// fresh-context pass over the backlog.
     Loop,
+    /// Chapter Herald — a team mission reached a terminal phase.
+    /// See `aivyx_channel::trigger::TriggerSource::Mission`.
+    Mission,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

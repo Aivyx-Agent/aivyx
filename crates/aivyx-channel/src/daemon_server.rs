@@ -143,6 +143,18 @@ pub struct DaemonConfig {
     /// configs with `notify_target = Some(name)` auto-push the
     /// turn's final response after firing.
     pub notify_dispatcher: Option<Arc<crate::notify_dispatcher::NotifyDispatcher>>,
+    /// Chapter Herald — the resolved `[[notify_target]] default = true`
+    /// name (possibly an in-memory-synthesized `webui` target — see
+    /// `aivyx.rs`), threaded into `TriggerDispatch` and `ReportContext`
+    /// so a schedule/mission with no explicit `notify_targets` still
+    /// notifies something instead of staying silent.
+    pub default_notify_target: Option<String>,
+    /// Chapter Herald — the resolved notify-target list (operator's
+    /// `[[notify_target]]` entries plus, when applicable, the
+    /// daemon's synthesized default "studio" target) for the
+    /// read-only `GetNotifyTargets` query. Never mutated from
+    /// Studio — targets stay TOML-managed.
+    pub notify_targets: Vec<aivyx_config::NotifyTargetConfig>,
     /// Optional encrypted storage domain for cron schedules.
     pub schedule_store: Option<DomainHandle>,
     /// Optional encrypted storage domain for webhook triggers.
@@ -591,6 +603,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         shutdown,
         mission_store,
         notify_dispatcher,
+        default_notify_target,
+        notify_targets,
         schedule_store,
         webhook_store,
         file_watch_store,
@@ -741,6 +755,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     }
     // Phase 63 Task 3 — auto-notify on trigger fire if the
     // operator configured `notify_target` on the trigger.
+    trigger_dispatch =
+        trigger_dispatch.with_default_notify_target(default_notify_target.clone());
     if let Some(ref nd) = notify_dispatcher {
         trigger_dispatch = trigger_dispatch.with_notify_dispatcher(Arc::clone(nd));
     }
@@ -777,6 +793,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             crate::daemon_scheduler::ReportContext {
                 digest: Arc::new(builder),
                 notify: notify_dispatcher.clone(),
+                default_notify_target: default_notify_target.clone(),
             }
         });
         tokio::spawn(async move {
@@ -1543,6 +1560,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
 
     let mission_store = mission_store.map(Arc::new);
     let query_schedule_store = query_schedule_store.map(Arc::new);
+    let notify_targets = Arc::new(notify_targets);
     let pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>> =
         Arc::new(std::sync::Mutex::new(recovery_notice));
     let mut handles = Vec::new();
@@ -1570,6 +1588,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             shutdown: shutdown.clone(),
             mission_store: mission_store.clone(),
             schedule_store: query_schedule_store.clone(),
+            notify_targets: Arc::clone(&notify_targets),
             pending_recovery: Arc::clone(&pending_recovery),
             daemon_state: Arc::clone(&daemon_state),
             audit_log: audit_log.clone(),
@@ -1649,6 +1668,9 @@ struct ConnectionContext {
     mission_store: Option<Arc<DomainHandle>>,
     /// Read-only clone of the schedule store for the `GetSchedules` query.
     schedule_store: Option<Arc<DomainHandle>>,
+    /// Chapter Herald — shared, read-only notify-target list for the
+    /// `GetNotifyTargets` query. `Arc` since every connection clones it.
+    notify_targets: Arc<Vec<aivyx_config::NotifyTargetConfig>>,
     pending_recovery: Arc<std::sync::Mutex<Option<DaemonState>>>,
     daemon_state: Arc<std::sync::Mutex<DaemonState>>,
     audit_log: Option<Arc<PersistentAuditLog>>,
@@ -1819,6 +1841,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         shutdown,
         mission_store,
         schedule_store,
+        notify_targets,
         pending_recovery,
         daemon_state,
         audit_log,
@@ -2578,6 +2601,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &daemon_state,
                                 mission_store.as_deref(),
                                 schedule_store.as_deref(),
+                                notify_targets.as_slice(),
                                 audit_log.as_deref(),
                                 &profile,
                                 persona_log.as_deref(),
@@ -3423,6 +3447,7 @@ async fn run_single_connection_daemon(
         shutdown,
         mission_store: None,
         schedule_store: None,
+        notify_targets: Arc::new(Vec::new()),
         pending_recovery: no_recovery,
         daemon_state: empty_state,
         audit_log: None,
@@ -3485,6 +3510,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         shutdown,
         mission_store: None,
         notify_dispatcher: None,
+        default_notify_target: None,
+        notify_targets: Vec::new(),
         schedule_store: None,
         webhook_store: None,
         file_watch_store: None,
@@ -3718,6 +3745,7 @@ async fn handle_query(
     daemon_state: &Arc<std::sync::Mutex<DaemonState>>,
     mission_store: Option<&DomainHandle>,
     schedule_store: Option<&DomainHandle>,
+    notify_targets: &[aivyx_config::NotifyTargetConfig],
     audit_log: Option<&PersistentAuditLog>,
     profile: &aivyx_config::Profile,
     persona_log: Option<&crate::persona::PersistentPersonaLog>,
@@ -4261,6 +4289,26 @@ async fn handle_query(
                 None => Vec::new(),
             };
             QueryResponsePayload::Schedules { schedules }
+        }
+        QueryPayload::GetNotifyTargets => {
+            // Chapter Herald — read-only view of configured notify targets
+            // (including the daemon's synthesized default "studio" one, if
+            // any) for the Studio Notifications screen.
+            let targets = notify_targets
+                .iter()
+                .map(|t| aivyx_ipc::protocol::NotifyTargetView {
+                    name: t.name.clone(),
+                    kind: match &t.kind {
+                        aivyx_config::NotifyTargetKind::Telegram { .. } => "telegram",
+                        aivyx_config::NotifyTargetKind::Webhook { .. } => "webhook",
+                        aivyx_config::NotifyTargetKind::Email { .. } => "email",
+                        aivyx_config::NotifyTargetKind::WebUi => "webui",
+                    }
+                    .to_string(),
+                    is_default: t.is_default,
+                })
+                .collect();
+            QueryResponsePayload::GetNotifyTargets { targets }
         }
         QueryPayload::ListDir { root, path } => {
             // Chapter Z — read-only directory listing, scoped + escape-guarded.

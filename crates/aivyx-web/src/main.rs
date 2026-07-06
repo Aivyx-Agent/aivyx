@@ -18,7 +18,8 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
-    McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, PersonaDeltaSummary,
+    McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, NotificationHistoryEntry,
+    NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, ScheduleView, SeedSkillWire, SettingsSnapshot, SkillView,
@@ -36,6 +37,9 @@ mod guide;
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
+/// Chapter Herald — how many recent notification-history entries the
+/// poll keeps in view (mirrors the audit feed's self-correcting window).
+const NOTIFICATION_FEED_N: u32 = 50;
 /// Page size for memory topic-entry and search queries.
 const MEMORY_LIMIT: u32 = 50;
 
@@ -74,6 +78,7 @@ const ICON_GUIDE: Asset = asset!("/assets/icons/guide.svg");
 const ICON_PLUGINS: Asset = asset!("/assets/icons/plugins.svg");
 const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
 const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
+const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -87,6 +92,10 @@ enum View {
     /// schedules, with create/toggle/delete + the agent-proposal
     /// approval flow.
     Schedules,
+    /// Chapter Herald — configured notify targets (read-only) +
+    /// dispatch history, for missions/schedules that notify outside
+    /// the Studio.
+    Notifications,
     Chat,
     Memory,
     /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
@@ -115,11 +124,12 @@ enum View {
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 16] = [
+    const ALL: [View; 17] = [
         View::Command,
         View::Chat,
         View::Missions,
         View::Schedules,
+        View::Notifications,
         View::Memory,
         View::Wiki,
         View::Lattice,
@@ -140,6 +150,7 @@ impl View {
             View::Command => "command",
             View::Missions => "missions",
             View::Schedules => "schedules",
+            View::Notifications => "notifications",
             View::Chat => "chat",
             View::Memory => "memory",
             View::Wiki => "wiki",
@@ -167,6 +178,7 @@ impl View {
             View::Command => "Command",
             View::Missions => "Missions",
             View::Schedules => "Schedules",
+            View::Notifications => "Notifications",
             View::Chat => "Chat",
             View::Memory => "Memory",
             View::Wiki => "Wiki",
@@ -367,6 +379,19 @@ struct Dashboard {
     loaded: bool,
 }
 
+/// Chapter Herald — Notifications screen + header-bell state. Targets
+/// and history are both polled every 5 s (the same cadence Schedules
+/// uses); `last_seen_seq` is purely client-side (never persisted) —
+/// visiting the Notifications screen clears the header badge by
+/// bumping it to the newest seq seen.
+#[derive(Clone, Default, PartialEq)]
+struct NotificationsState {
+    targets: Vec<NotifyTargetView>,
+    history: Vec<NotificationHistoryEntry>,
+    total_len: u64,
+    last_seen_seq: u64,
+}
+
 /// Chapter Chime — Schedules screen UI state (the list itself lives in
 /// `Dashboard::schedules`, already polled every 5 s).
 #[derive(Clone, Default, PartialEq)]
@@ -538,6 +563,7 @@ fn App() -> Element {
     let skills = use_signal(SkillsState::default);
     let mcp = use_signal(McpState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
+    let notifications = use_signal(NotificationsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -547,7 +573,8 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, dashboard, memory, wiki, lattice, settings, agents, teams, documents,
-            voice, skills, mcp, schedules_ui, connected, session, transcript, streaming, gate,
+            voice, skills, mcp, schedules_ui, notifications, connected, session, transcript,
+            streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -565,6 +592,7 @@ fn App() -> Element {
     use_context_provider(|| skills);
     use_context_provider(|| mcp);
     use_context_provider(|| schedules_ui);
+    use_context_provider(|| notifications);
     // Chapter Chime — the Schedules screen reads the routine list from
     // the dashboard snapshot (already polled every 5 s). Dashboard had
     // only ever been passed as a prop; the missing provider panicked
@@ -621,6 +649,24 @@ fn App() -> Element {
                 id: "mc-schedules".to_string(),
                 payload: QueryPayload::GetSchedules,
             });
+            // Chapter Herald — the notify-target list rarely changes (TOML-
+            // managed) but is cheap; history grows, so the header bell's
+            // unseen count stays live the same way the routines panel does.
+            ws.send(FrontendMessage::Query {
+                id: "mc-notify-targets".to_string(),
+                payload: QueryPayload::GetNotifyTargets,
+            });
+            let notify_from_seq = notifications()
+                .total_len
+                .saturating_sub(NOTIFICATION_FEED_N as u64);
+            ws.send(FrontendMessage::Query {
+                id: "mc-notify-history".to_string(),
+                payload: QueryPayload::ListNotificationHistory {
+                    from_seq: notify_from_seq,
+                    limit: NOTIFICATION_FEED_N,
+                    target_filter: None,
+                },
+            });
             TimeoutFuture::new(POLL_INTERVAL_MS).await;
         }
     });
@@ -652,6 +698,7 @@ fn App() -> Element {
         View::Command => "Command Center",
         View::Missions => "Mission Orchestration",
         View::Schedules => "Schedules",
+        View::Notifications => "Notifications",
         View::Chat => "Terminal",
         View::Memory => "Memory",
         View::Wiki => "Knowledge Wiki",
@@ -694,6 +741,7 @@ fn App() -> Element {
                         },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
                         View::Schedules => rsx! { SchedulesPanel {} },
+                        View::Notifications => rsx! { NotificationsPanel {} },
                         View::Chat => rsx! { ChatPanel {} },
                         View::Memory => rsx! { MemoryPanel {} },
                         View::Wiki => rsx! { WikiPanel {} },
@@ -851,6 +899,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             "System",
             vec![
                 (ICON_DOCUMENTS, "Documents", View::Documents),
+                (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_VOICE, "Voice", View::Voice),
                 (ICON_SETTINGS, "Settings", View::Settings),
@@ -964,6 +1013,16 @@ fn Topbar(
     mut view: Signal<View>,
     mut guide_page: Signal<usize>,
 ) -> Element {
+    // Chapter Herald — the unseen count is purely client-side: every
+    // history entry with a seq newer than the last time the operator
+    // opened the Notifications screen. Resets to 0 the moment they
+    // visit it (below), same "badge clears on view" convention as
+    // any notification center.
+    let mut notifications = use_context::<Signal<NotificationsState>>();
+    let unseen = {
+        let n = notifications();
+        n.history.iter().filter(|e| e.seq > n.last_seen_seq).count()
+    };
     rsx! {
         header { class: "topbar",
             // Hamburger — CSS shows it only below the shell breakpoint.
@@ -987,6 +1046,25 @@ fn Topbar(
                     view.set(View::Guide);
                 },
                 span { class: "ico", style: "--ico: url({ICON_GUIDE})" }
+            }
+            button {
+                class: "icon-btn notify-bell",
+                style: "position:relative;",
+                title: "Notifications",
+                "aria-label": if unseen > 0 { format!("{unseen} unread notifications") } else { "Notifications".to_string() },
+                onclick: move |_| {
+                    let max_seq = notifications().history.iter().map(|e| e.seq).max().unwrap_or(0);
+                    notifications.write().last_seen_seq = max_seq;
+                    view.set(View::Notifications);
+                },
+                span { class: "ico", style: "--ico: url({ICON_NOTIFICATIONS})" }
+                if unseen > 0 {
+                    span {
+                        class: "badge",
+                        style: "position:absolute; top:2px; right:2px; min-width:14px; height:14px; border-radius:7px; background:var(--danger, #b91c1c); color:#fff; font-size:9px; line-height:14px; text-align:center; padding:0 3px;",
+                        if unseen > 9 { "9+" } else { "{unseen}" }
+                    }
+                }
             }
             button {
                 class: "icon-btn",
@@ -1604,6 +1682,107 @@ fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
                         span { class: "when label-tech", "{rel_time(e.appended_at_unix_ms)}" }
                         span { class: "seq label-tech", "#{e.seq}" }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── Chapter Herald — the Notifications screen ───────────────────────────
+
+#[component]
+fn NotificationsPanel() -> Element {
+    let n = use_context::<Signal<NotificationsState>>();
+    let state = n();
+
+    rsx! {
+        div { class: "dash-grid",
+            div { class: "dash-main",
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Notification history" }
+                        span { class: "label-tech", "{state.total_len} total" }
+                    }
+                    if state.history.is_empty() {
+                        div { class: "glass-card empty",
+                            p { class: "label-tech",
+                                if state.targets.is_empty() {
+                                    "No notify targets configured yet — add a [[notify_target]] to aivyx.toml, or the Studio's own target arms automatically once one is running."
+                                } else {
+                                    "No notifications dispatched yet."
+                                }
+                            }
+                        }
+                    } else {
+                        div { class: "feed",
+                            // newest first (the query already returns the
+                            // newest window; oldest→newest within it).
+                            for e in state.history.iter().rev() {
+                                NotificationHistoryRow { entry: e.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            aside { class: "dash-rail",
+                section { class: "panel",
+                    div { class: "panel-head", h3 { "Targets" } }
+                    if state.targets.is_empty() {
+                        div { class: "glass-card empty",
+                            p { class: "label-tech", "None configured." }
+                        }
+                    } else {
+                        div { class: "feed",
+                            for t in state.targets.iter() {
+                                div { class: "glass-card routine-row",
+                                    div { class: "row1",
+                                        span { class: "dot live" }
+                                        span { class: "name", "{t.name}" }
+                                        span { class: "label-tech", style: "opacity:0.7;", "[{t.kind}]" }
+                                        if t.is_default {
+                                            span { class: "label-tech", style: "color: var(--ok, #16a34a);", "default" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                section { class: "panel",
+                    div { class: "panel-head", h3 { "About" } }
+                    div { class: "glass-card",
+                        p { class: "label-tech",
+                            "Targets are managed in aivyx.toml (not editable here yet). Any mission or schedule with no explicit notify target falls back to whichever target above is marked default."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One notification-history row: outcome-colored dot, target, trigger
+/// kind/id, relative time, and the outcome detail (error message /
+/// skip reason) when present.
+#[component]
+fn NotificationHistoryRow(entry: NotificationHistoryEntry) -> Element {
+    let tone = match entry.outcome_kind.as_str() {
+        "delivered" => "live",
+        "failed" => "off",
+        _ => "off",
+    };
+    rsx! {
+        div { class: "glass-card routine-row",
+            div { class: "row1",
+                span { class: if tone == "live" { "dot live" } else { "dot off" } }
+                span { class: "name", "{entry.target_name}" }
+                span { class: "label-tech", style: "opacity:0.7;", "[{entry.trigger_kind} · {entry.trigger_id}]" }
+                span { class: "label-tech", "{entry.outcome_kind}" }
+            }
+            div { class: "row2 label-tech",
+                span { "{rel_time(entry.dispatched_at_unix_ms)}" }
+                if !entry.outcome_detail.is_empty() {
+                    span { style: "opacity:0.8;", "{entry.outcome_detail}" }
                 }
             }
         }
@@ -5375,6 +5554,7 @@ async fn ws_task(
     skills: Signal<SkillsState>,
     mcp: Signal<McpState>,
     schedules_ui: Signal<SchedulesUi>,
+    notifications: Signal<NotificationsState>,
     mut connected: Signal<bool>,
     session: Signal<Option<String>>,
     transcript: Signal<Vec<ChatLine>>,
@@ -5412,8 +5592,8 @@ async fn ws_task(
 
         spawn(read_task(
             read, missions, dashboard, memory, wiki, lattice, settings, agents, teams,
-            documents, voice, skills, mcp, schedules_ui, connected, session, transcript,
-            streaming, gate,
+            documents, voice, skills, mcp, schedules_ui, notifications, connected, session,
+            transcript, streaming, gate,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -5504,6 +5684,7 @@ async fn read_task(
     mut skills: Signal<SkillsState>,
     mut mcp: Signal<McpState>,
     mut schedules_ui: Signal<SchedulesUi>,
+    mut notifications: Signal<NotificationsState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -5725,6 +5906,22 @@ async fn read_task(
                 // refreshes via the GetSchedules chase the sender fired
                 // right behind the mutation (the Documents write→read
                 // bridge pattern) plus the 5 s poll.
+                // Chapter Herald — notify targets + history feed the
+                // Notifications screen and the header bell's badge.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetNotifyTargets { targets },
+                    ..
+                } => {
+                    notifications.write().targets = targets;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListNotificationHistory { entries, total_len },
+                    ..
+                } => {
+                    let mut n = notifications.write();
+                    n.history = entries;
+                    n.total_len = total_len;
+                }
                 DaemonEnvelope::ScheduleMutated { ok, schedule_id, error, .. } => {
                     let mut ui = schedules_ui.write();
                     ui.confirm_delete = None;

@@ -2365,6 +2365,36 @@ fn parse_cli_args() -> Result<CliArgs, String> {
     parse_cli_args_from(&args)
 }
 
+/// Chapter Herald — decide whether to auto-provision a default
+/// in-Studio (`webui`-kind) notify target, and with what `is_default`
+/// value. Returns `None` when a `webui`-kind target already exists
+/// (the operator declared one explicitly — never duplicate it).
+/// Pure + independently testable; the caller gates this on the web
+/// UI actually being enabled (a `webui` target is meaningless
+/// without a running Web UI server) and pushes the result into the
+/// runtime target list — never written back to `aivyx.toml`.
+fn synthesize_default_webui_target(
+    existing: &[aivyx_config::NotifyTargetConfig],
+) -> Option<aivyx_config::NotifyTargetConfig> {
+    if existing
+        .iter()
+        .any(|t| matches!(t.kind, aivyx_config::NotifyTargetKind::WebUi))
+    {
+        return None;
+    }
+    let already_has_default = existing.iter().any(|t| t.is_default);
+    Some(aivyx_config::NotifyTargetConfig {
+        name: "studio".to_string(),
+        kind: aivyx_config::NotifyTargetKind::WebUi,
+        enabled: true,
+        is_default: !already_has_default,
+        retry_count: 0,
+        retry_backoff_ms_start: 500,
+        rate_limit_max: None,
+        rate_limit_window_secs: None,
+    })
+}
+
 /// Testable core of [`parse_cli_args`].
 fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Phase 61 Task 2 — `--version` / `-V` short-circuit. Matches
@@ -5256,7 +5286,7 @@ async fn run_async(
         file_watches: config_file_watches,
         // Phase 62 Task 8 — consumed below at the notify
         // dispatcher / NotifySendTool wiring site.
-        notify_targets: config_notify_targets,
+        notify_targets: mut config_notify_targets,
         // Phase 70 — P14 self-learning closure. Consumed by the
         // reflection-scheduler subsystem at the daemon startup
         // path below; reflection turns fire on the configured
@@ -7306,6 +7336,31 @@ async fn run_async(
         tool_list.push(Arc::new(pull_tool) as Arc<dyn Tool>);
     }
 
+    // ---- Chapter Herald — auto-provision a default in-Studio notify
+    // target -------------------------------------------------------
+    // An operator with no `[[notify_target]]` in aivyx.toml would
+    // otherwise have zero way to be told a mission or schedule
+    // finished short of watching the Studio's live poll. If the web
+    // UI is running and no `webui`-kind target is already declared,
+    // synthesize one in memory (never written back to disk). It only
+    // claims the "default" slot — and so only becomes the live
+    // fallback `fire()`/`run_digest_report()` resolve for triggers
+    // with no explicit `notify_targets` — when the operator hasn't
+    // already named their own default; an operator who set up
+    // Telegram as default keeps that behavior unchanged, and can
+    // still see Studio notifications by naming "studio" explicitly
+    // on a schedule.
+    let web_ui_enabled = cli_web_ui_port.or(config_web_ui_port).is_some();
+    if web_ui_enabled {
+        if let Some(synthesized) = synthesize_default_webui_target(&config_notify_targets) {
+            config_notify_targets.push(synthesized);
+        }
+    }
+    let default_notify_target_name: Option<String> = config_notify_targets
+        .iter()
+        .find(|t| t.is_default)
+        .map(|t| t.name.clone());
+
     // ---- Phase 62 — notify dispatcher + notify.send tool -------------
     // Build the dispatcher from the operator's `[[notify_target]]`
     // entries. For Telegram targets we share a single
@@ -7380,7 +7435,8 @@ async fn run_async(
     // `Arc<WebUiBroadcaster>` is shared between the notify
     // dispatcher (push side, below) and the Web UI WS handler
     // (subscribe side, threaded through `DaemonConfig`).
-    let web_ui_enabled = cli_web_ui_port.or(config_web_ui_port).is_some();
+    // (`web_ui_enabled` was already computed above, alongside the
+    // Chapter Herald default-target synthesis.)
     let web_ui_broadcaster: Option<Arc<aivyx_channel::notify_webui::WebUiBroadcaster>> =
         if web_ui_enabled {
             Some(Arc::new(aivyx_channel::notify_webui::WebUiBroadcaster::new()))
@@ -8463,6 +8519,11 @@ async fn run_async(
                 // lead can grant specialists the concrete scopes their tools
                 // need (bare roster scopes can't match the qualified floor).
                 lead_scopes: backcompat_floor.iter().map(|s| s.as_str().to_string()).collect(),
+                // Chapter Herald — a mission reaching Done/Rejected/Halted
+                // notifies through the same dispatcher schedules use.
+                notify_dispatcher: Some(Arc::clone(&notify_dispatcher)),
+                default_notify_target: default_notify_target_name.clone(),
+                audit_log: Some(Arc::clone(&persistent_audit_for_query)),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
@@ -8839,6 +8900,10 @@ async fn run_async(
             // trigger dispatch path can auto-notify on
             // trigger-fired turns.
             notify_dispatcher: Some(Arc::clone(&notify_dispatcher)),
+            // Chapter Herald — the resolved default target (operator's
+            // own default, or the synthesized "studio" one).
+            default_notify_target: default_notify_target_name.clone(),
+            notify_targets: config_notify_targets.clone(),
             schedule_store: Some(schedule_domain),
             webhook_store: Some(webhook_domain),
             file_watch_store: Some(file_watch_domain),
@@ -9766,6 +9831,46 @@ mod tests {
     use aivyx_config::Role;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    fn nt(name: &str, is_default: bool, kind: aivyx_config::NotifyTargetKind) -> aivyx_config::NotifyTargetConfig {
+        aivyx_config::NotifyTargetConfig {
+            name: name.to_string(),
+            kind,
+            enabled: true,
+            is_default,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        }
+    }
+
+    #[test]
+    fn synthesizes_a_default_webui_target_when_none_configured_and_no_other_default() {
+        let synthesized = synthesize_default_webui_target(&[]).expect("must synthesize");
+        assert_eq!(synthesized.name, "studio");
+        assert!(matches!(synthesized.kind, aivyx_config::NotifyTargetKind::WebUi));
+        assert!(synthesized.is_default, "no prior default ⇒ studio claims it");
+    }
+
+    #[test]
+    fn does_not_claim_default_when_operator_already_declared_one() {
+        let existing = vec![nt("telegram-ops", true, aivyx_config::NotifyTargetKind::Telegram {
+            chat_id: "123".to_string(),
+        })];
+        let synthesized =
+            synthesize_default_webui_target(&existing).expect("still synthesized");
+        assert!(!synthesized.is_default, "never overrides an operator's own default");
+    }
+
+    #[test]
+    fn never_duplicates_an_existing_webui_target() {
+        let existing = vec![nt("my-studio", false, aivyx_config::NotifyTargetKind::WebUi)];
+        assert!(
+            synthesize_default_webui_target(&existing).is_none(),
+            "an operator-declared webui target is never duplicated"
+        );
+    }
 
     struct Scratch {
         dir: PathBuf,

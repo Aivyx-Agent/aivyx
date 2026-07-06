@@ -21,6 +21,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
+use aivyx_audit::{AutoNotifyOutcomeSummary, PersistentAuditLog};
 use aivyx_capability::{Scope, TrustTier};
 use aivyx_core::{
     AivyxError, AuditHook, AuditTag, CancellationToken, ChannelContext, ChannelError,
@@ -120,6 +121,21 @@ pub struct TeamRunDeps {
     /// bare scopes can't match the qualified floor. Empty ⇒ pre-Ensemble
     /// behavior (specialists run on the roster's declared scopes alone).
     pub lead_scopes: Vec<String>,
+    /// Chapter Herald — same dispatcher schedules already use
+    /// (`TriggerDispatch`'s), shared so a mission reaching a
+    /// terminal phase (Done/Rejected/Halted) can notify too.
+    /// `None` ⇒ no notify targets are configured, or the daemon
+    /// wasn't built with one (mission-completion notify is a
+    /// no-op, same as a schedule with an empty dispatcher).
+    pub notify_dispatcher: Option<Arc<crate::notify_dispatcher::NotifyDispatcher>>,
+    /// Chapter Herald — the live default notify-target name (the
+    /// operator's own default, or the daemon's synthesized
+    /// "studio" one). See `crate::trigger::resolve_notify_targets`.
+    pub default_notify_target: Option<String>,
+    /// Chapter Herald — best-effort audit log; when set, a mission
+    /// notify dispatch lands an `AutoNotifyDispatched` entry, same
+    /// as the schedule/webhook/file-watch notify path.
+    pub audit_log: Option<Arc<PersistentAuditLog>>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -342,6 +358,9 @@ pub async fn drive_registered(
         let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
         // Only a completed mission is artifact-graded; anything else is terminal.
         if phase != TeamMissionPhase::Done || !deps.verify_missions {
+            if let Some(record) = shared.snapshot(id) {
+                notify_mission_result(deps, &record).await;
+            }
             return Ok(phase);
         }
         // Chapter Keystone — grade the deliverable against the goal.
@@ -353,6 +372,9 @@ pub async fn drive_registered(
             .unwrap_or(0)
             .saturating_add(1);
         if verified == TeamMissionPhase::Done || attempts >= MAX_MISSION_ATTEMPTS {
+            if let Some(record) = shared.snapshot(id) {
+                notify_mission_result(deps, &record).await;
+            }
             return Ok(verified);
         }
         // Rejected + a retry remains — persist the count and clear the
@@ -443,6 +465,87 @@ async fn verify_mission_artifact(
     TeamMissionPhase::Rejected
 }
 
+/// Chapter Herald — render a mission's terminal-phase result into a
+/// short notify body. Mirrors `trigger::render_notify_body`'s spirit
+/// (grounded, no invented detail) for missions instead of turn
+/// outcomes.
+fn render_mission_notify_body(record: &TeamMissionRecord) -> String {
+    match record.phase {
+        TeamMissionPhase::Done => {
+            format!("Mission done: {}", record.goal)
+        }
+        TeamMissionPhase::Rejected => format!(
+            "Mission rejected: {}{}",
+            record.goal,
+            record
+                .halt_reason
+                .as_ref()
+                .map(|r| format!(" — {r}"))
+                .unwrap_or_default()
+        ),
+        TeamMissionPhase::Halted => format!(
+            "Mission halted: {}{}",
+            record.goal,
+            record
+                .halt_reason
+                .as_ref()
+                .map(|r| format!(" — {r}"))
+                .unwrap_or_default()
+        ),
+        // Never called for a non-terminal phase — see `notify_mission_result`.
+        TeamMissionPhase::Planning
+        | TeamMissionPhase::Executing
+        | TeamMissionPhase::AwaitingApproval => String::new(),
+    }
+}
+
+/// Chapter Herald — dispatch a mission-result notification if the
+/// phase is genuinely terminal (never `AwaitingApproval`, a pause —
+/// not a result — nor the transient `Planning`/`Executing` phases) and
+/// a dispatcher + resolvable target exist. Single-attempt (missions are
+/// low-frequency; unlike the cron/webhook/file-watch triggers this
+/// mirrors, there's no per-mission retry/rate-limit policy to look up),
+/// but lands the SAME `AutoNotifyDispatched` audit event schedules do,
+/// so the Notifications screen's history table has one source, not two.
+async fn notify_mission_result(deps: &TeamRunDeps, record: &TeamMissionRecord) {
+    if !matches!(
+        record.phase,
+        TeamMissionPhase::Done | TeamMissionPhase::Rejected | TeamMissionPhase::Halted
+    ) {
+        return;
+    }
+    let Some(dispatcher) = &deps.notify_dispatcher else {
+        return;
+    };
+    let targets =
+        crate::trigger::resolve_notify_targets(&[], deps.default_notify_target.as_deref());
+    if targets.is_empty() {
+        return;
+    }
+    let body = render_mission_notify_body(record);
+    let subject = format!("mission: {}", record.id);
+    // A session id correlates the audit entry to a chat turn elsewhere;
+    // a mission has no single owning turn, so a fresh nil-adjacent id is
+    // used purely as a stable "not a turn" marker (mirrors how reflection
+    // fires — a system-originated event, not an operator turn — already
+    // mint a fresh SessionId rather than reusing one).
+    let session_id = SessionId::new();
+    for target in &targets {
+        let outcome = match dispatcher.dispatch(target, &body, Some(&subject)).await {
+            Ok(()) => AutoNotifyOutcomeSummary::Delivered,
+            Err(e) => crate::trigger::outcome_from_notify_error(&e),
+        };
+        crate::trigger::emit_auto_notify_audit(
+            deps.audit_log.as_deref(),
+            session_id,
+            crate::trigger::TriggerSource::Mission,
+            &record.id,
+            target,
+            outcome,
+        );
+    }
+}
+
 /// Resume (`approve`) or abort (`!approve`) a mission paused at a human gate.
 /// On approval the gate is recorded as passed and the runtime is re-driven
 /// from the checkpoint; on rejection the gate's dependents never run and the
@@ -463,7 +566,12 @@ pub async fn resolve_team_gate(
             drive_registered(shared, deps, config, id, GatePolicy::Interactive).await
         }
         // Reject is terminal; nothing left to drive.
-        terminal => Ok(terminal),
+        terminal => {
+            if let Some(record) = shared.snapshot(id) {
+                notify_mission_result(deps, &record).await;
+            }
+            Ok(terminal)
+        }
     }
 }
 
@@ -726,6 +834,8 @@ impl TeamMissionService {
         let phase = prepare_gate_resolution(&self.state, id, step, approve).await?;
         if phase == TeamMissionPhase::Executing {
             self.spawn_drive(id.to_string());
+        } else if let Some(record) = self.state.snapshot(id) {
+            notify_mission_result(&self.deps, &record).await;
         }
         Ok(phase)
     }
@@ -1348,6 +1458,9 @@ mod tests {
             workspace_root: None,
             verify_missions: false,
             lead_scopes: vec![],
+            notify_dispatcher: None,
+            default_notify_target: None,
+            audit_log: None,
         }
     }
 
@@ -1379,6 +1492,9 @@ mod tests {
             workspace_root: None,
             verify_missions: false,
             lead_scopes: vec![],
+            notify_dispatcher: None,
+            default_notify_target: None,
+            audit_log: None,
         }
     }
 
@@ -1931,6 +2047,100 @@ mod tests {
         assert!(!rec.outputs.contains_key("write"), "the dependent never ran");
         assert_eq!(rec.outputs["approve"], "rejected by operator");
         assert!(rec.pending_gate.is_none());
+    }
+
+    // --- Chapter Herald: mission-result notify ------------------------
+
+    /// Records every dispatched (message, subject) pair; always succeeds.
+    struct RecordingBackend {
+        calls: std::sync::Mutex<Vec<(String, Option<String>)>>,
+    }
+    impl RecordingBackend {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()) })
+        }
+    }
+    #[async_trait]
+    impl crate::notify_dispatcher::NotifyBackend for RecordingBackend {
+        fn kind(&self) -> &'static str {
+            "test"
+        }
+        async fn send(
+            &self,
+            message: &str,
+            subject: Option<&str>,
+        ) -> Result<(), crate::notify_dispatcher::NotifyError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((message.to_string(), subject.map(|s| s.to_string())));
+            Ok(())
+        }
+    }
+
+    fn deps_with_notify(
+        line: &str,
+        backend: Arc<RecordingBackend>,
+    ) -> TeamRunDeps {
+        let mut dispatcher = crate::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register("test-target", backend);
+        let mut d = deps(line);
+        d.notify_dispatcher = Some(Arc::new(dispatcher));
+        d.default_notify_target = Some("test-target".to_string());
+        d
+    }
+
+    #[tokio::test]
+    async fn mission_done_notifies_the_default_target() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let backend = RecordingBackend::new();
+        let d = deps_with_notify("ok", Arc::clone(&backend));
+        let plan = MissionPlan::new(
+            "ship the release",
+            vec![Step::delegate("write", "coder", "write it")],
+        );
+        let id = team_run(&shared, &d, default_nonagon(), plan, "m-notify")
+            .await
+            .unwrap();
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(rec.phase, TeamMissionPhase::Done);
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "exactly one notify on mission completion");
+        assert!(calls[0].0.contains("ship the release"));
+        assert_eq!(calls[0].1.as_deref(), Some(format!("mission: {id}").as_str()));
+    }
+
+    #[tokio::test]
+    async fn mission_gate_reject_notifies_too() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let backend = RecordingBackend::new();
+        let d = deps_with_notify("ok", Arc::clone(&backend));
+        let id = team_run(&shared, &d, default_nonagon(), gated_plan(), "m-notify-reject")
+            .await
+            .unwrap();
+        let phase = resolve_team_gate(&shared, &d, default_nonagon(), &id, "approve", false)
+            .await
+            .unwrap();
+        assert_eq!(phase, TeamMissionPhase::Rejected);
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "a gate rejection is a result worth notifying too");
+        assert!(calls[0].0.contains("rejected"));
+    }
+
+    #[tokio::test]
+    async fn no_dispatcher_configured_is_a_silent_noop() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let d = deps("ok"); // no notify_dispatcher / default_notify_target set
+        let plan = MissionPlan::new(
+            "quiet mission",
+            vec![Step::delegate("write", "coder", "write it")],
+        );
+        // Must not panic or error with no dispatcher configured.
+        let id = team_run(&shared, &d, default_nonagon(), plan, "m-quiet")
+            .await
+            .unwrap();
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(rec.phase, TeamMissionPhase::Done);
     }
 
     #[tokio::test]

@@ -46,6 +46,12 @@ pub enum TriggerSource {
     /// log lines can isolate the autonomous loop's per-iteration
     /// turns.
     Loop,
+    /// Chapter Herald — a team mission reached a terminal phase
+    /// (Done/Rejected/Halted). Distinct from the LLM-turn trigger
+    /// sources above: a mission notification fires once per
+    /// mission, not per turn, and never wraps a fresh turn itself
+    /// (the mission already ran).
+    Mission,
 }
 
 impl std::fmt::Display for TriggerSource {
@@ -56,6 +62,7 @@ impl std::fmt::Display for TriggerSource {
             TriggerSource::FileWatch => write!(f, "file-watch"),
             TriggerSource::Reflection => write!(f, "reflection"),
             TriggerSource::Loop => write!(f, "loop"),
+            TriggerSource::Mission => write!(f, "mission"),
         }
     }
 }
@@ -71,6 +78,7 @@ impl From<TriggerSource> for TriggerKindSummary {
             TriggerSource::FileWatch => TriggerKindSummary::FileWatch,
             TriggerSource::Reflection => TriggerKindSummary::Reflection,
             TriggerSource::Loop => TriggerKindSummary::Loop,
+            TriggerSource::Mission => TriggerKindSummary::Mission,
         }
     }
 }
@@ -128,6 +136,16 @@ pub struct TriggerDispatch {
     /// uses the zero-retry / no-rate-limit defaults (today's
     /// behavior).
     target_policies: Arc<std::collections::HashMap<String, TargetPolicy>>,
+    /// Chapter Herald — the operator's `[[notify_target]] default =
+    /// true` name, resolved ONCE at daemon startup from the same
+    /// target list `build_notify_dispatcher` used (which may include
+    /// an in-memory-only synthesized `webui` target — see
+    /// `aivyx.rs`'s daemon startup). A trigger whose caller passed an
+    /// EMPTY `notify_targets` falls back to this live default instead
+    /// of staying silent — covers Studio-created and agent-created
+    /// schedules, which (unlike `[[schedule]]` TOML entries) never go
+    /// through the config-load-time default-baking step.
+    default_notify_target: Option<String>,
     /// Phase 73 — in-memory rate-limit registry per Q3(a).
     /// `Arc<...>` because the dispatcher is `Clone` and the
     /// registry state needs to be shared across clones (the
@@ -246,6 +264,7 @@ impl TriggerDispatch {
             notify_dispatcher: None,
             audit_log: None,
             target_policies: Arc::new(std::collections::HashMap::new()),
+            default_notify_target: None,
             rate_limit_registry: Arc::new(RateLimitRegistry::new()),
             // Trigger fires are operator-absent → headless by default.
             gate_policy: GatePolicy::RejectAndAbort,
@@ -283,6 +302,12 @@ impl TriggerDispatch {
     /// Phase 63 Task 3 — attach a `NotifyDispatcher` so triggers
     /// with `notify_target = Some(name)` can auto-dispatch their
     /// turn's final response after completion.
+    /// Chapter Herald — set the live default-target fallback name.
+    pub fn with_default_notify_target(mut self, name: Option<String>) -> Self {
+        self.default_notify_target = name;
+        self
+    }
+
     pub fn with_notify_dispatcher(mut self, dispatcher: Arc<NotifyDispatcher>) -> Self {
         self.notify_dispatcher = Some(dispatcher);
         self
@@ -479,6 +504,13 @@ impl TriggerDispatch {
         // `AuditEvent::AutoNotifyDispatched` entry when an
         // audit log is configured. eprintln remains for live
         // debug visibility.
+        //
+        // Chapter Herald — an empty caller-supplied list falls back to
+        // the live default target (covers Studio/agent-created
+        // schedules and any trigger source that never had a chance to
+        // bake a default in at config-load time).
+        let notify_targets: Vec<String> =
+            resolve_notify_targets(notify_targets, self.default_notify_target.as_deref());
         if !notify_targets.is_empty() {
             if let Some(dispatcher) = self.notify_dispatcher.clone() {
                 let body = render_notify_body(&outcome);
@@ -497,7 +529,7 @@ impl TriggerDispatch {
                          {condition}) for {source} {trigger_id:?} → targets \
                          {notify_targets:?}",
                     );
-                    for target in notify_targets {
+                    for target in &notify_targets {
                         self.emit_auto_notify_audit(
                             session_id,
                             source,
@@ -516,7 +548,7 @@ impl TriggerDispatch {
                         "aivyx trigger: auto-notify skipped (empty response) \
                          for {source} {trigger_id:?} → targets {notify_targets:?}",
                     );
-                    for target in notify_targets {
+                    for target in &notify_targets {
                         self.emit_auto_notify_audit(
                             session_id,
                             source,
@@ -659,30 +691,53 @@ impl TriggerDispatch {
         target_name: &str,
         outcome: AutoNotifyOutcomeSummary,
     ) {
-        let Some(log) = &self.audit_log else {
-            return;
-        };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let event = AuditEvent::AutoNotifyDispatched {
+        emit_auto_notify_audit(
+            self.audit_log.as_deref(),
             session_id,
-            trigger_kind: TriggerKindSummary::from(trigger_source),
-            trigger_id: trigger_id.to_string(),
-            target_name: target_name.to_string(),
+            trigger_source,
+            trigger_id,
+            target_name,
             outcome,
-            dispatched_at_unix_ms: now_ms,
-        };
-        // PersistentAuditLog's AuditWriter::append is sync —
-        // the on-disk write is fire-and-forget via the
-        // persistent log's internal drain task.
-        if let Err(e) = log.append(event) {
-            eprintln!(
-                "aivyx trigger: audit log append failed for AutoNotifyDispatched \
-                 ({trigger_source} {trigger_id:?} → {target_name}): {e}"
-            );
-        }
+        );
+    }
+}
+
+/// Chapter Herald — free-function core of the `AutoNotifyDispatched`
+/// audit emission, extracted so a caller without a full
+/// `TriggerDispatch` (the team-mission driver) can still land the
+/// SAME audit event schedules do — the Notifications screen's
+/// history table has one source, not two.
+pub fn emit_auto_notify_audit(
+    audit_log: Option<&PersistentAuditLog>,
+    session_id: SessionId,
+    trigger_source: TriggerSource,
+    trigger_id: &str,
+    target_name: &str,
+    outcome: AutoNotifyOutcomeSummary,
+) {
+    let Some(log) = audit_log else {
+        return;
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let event = AuditEvent::AutoNotifyDispatched {
+        session_id,
+        trigger_kind: TriggerKindSummary::from(trigger_source),
+        trigger_id: trigger_id.to_string(),
+        target_name: target_name.to_string(),
+        outcome,
+        dispatched_at_unix_ms: now_ms,
+    };
+    // PersistentAuditLog's AuditWriter::append is sync — the
+    // on-disk write is fire-and-forget via the persistent log's
+    // internal drain task.
+    if let Err(e) = log.append(event) {
+        eprintln!(
+            "aivyx trigger: audit log append failed for AutoNotifyDispatched \
+             ({trigger_source} {trigger_id:?} → {target_name}): {e}"
+        );
     }
 }
 
@@ -798,6 +853,21 @@ pub fn condition_gate_passes(
 /// - `Cancelled` → "Turn cancelled".
 ///
 /// Empty string → caller should skip the dispatch (Q2(a)).
+/// Chapter Herald — resolve the effective notify-target list: the
+/// caller's explicit list if non-empty, else the live default (if
+/// any). Pure + independently testable; both `TriggerDispatch::fire`
+/// and the scheduler's deterministic-digest path share it so a
+/// schedule/mission with no explicit `notify_targets` still notifies
+/// something instead of staying silent — covers Studio-created and
+/// agent-created schedules, which never go through the config-load-
+/// time default-baking step `[[schedule]]` TOML entries get.
+pub fn resolve_notify_targets(explicit: &[String], default: Option<&str>) -> Vec<String> {
+    if !explicit.is_empty() {
+        return explicit.to_vec();
+    }
+    default.map(|d| vec![d.to_string()]).unwrap_or_default()
+}
+
 pub fn render_notify_body(outcome: &TurnOutcome) -> String {
     match outcome {
         TurnOutcome::Completed { final_message, .. } => final_message.clone(),
@@ -836,6 +906,29 @@ mod tests {
     use super::*;
     use aivyx_core::{AivyxError, ToolId};
     use std::time::Duration;
+
+    #[test]
+    fn resolve_notify_targets_prefers_explicit_list() {
+        let explicit = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(
+            resolve_notify_targets(&explicit, Some("studio")),
+            explicit,
+            "an explicit list is never overridden by the default"
+        );
+    }
+
+    #[test]
+    fn resolve_notify_targets_falls_back_to_default_when_empty() {
+        assert_eq!(
+            resolve_notify_targets(&[], Some("studio")),
+            vec!["studio".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_notify_targets_empty_with_no_default_stays_silent() {
+        assert!(resolve_notify_targets(&[], None).is_empty());
+    }
 
     #[test]
     fn render_completed_returns_final_message_verbatim() {

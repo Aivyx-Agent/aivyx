@@ -197,6 +197,12 @@ pub enum QueryPayload {
         limit: u32,
         target_filter: Option<String>,
     },
+    /// Chapter Herald — read-only list of configured notify targets
+    /// (name/kind/default), for the Studio Notifications screen.
+    /// Targets remain TOML-managed; this is a view, not a CRUD
+    /// surface — creating/editing a target still means editing
+    /// `aivyx.toml`.
+    GetNotifyTargets,
     /// Phase 74 — list every distinct memory topic. Drives the
     /// Web UI Memory pane's left-column topic list + the
     /// `aivyx memory list` CLI render.
@@ -789,6 +795,10 @@ pub enum QueryResponsePayload {
         entries: Vec<NotificationHistoryEntry>,
         total_len: u64,
     },
+    /// Chapter Herald — response to [`QueryPayload::GetNotifyTargets`].
+    GetNotifyTargets {
+        targets: Vec<NotifyTargetView>,
+    },
     /// Phase 74 — response to [`QueryPayload::ListMemoryTopics`].
     /// Distinct topic names sorted ascending.
     ListMemoryTopics {
@@ -1332,6 +1342,16 @@ pub struct NotificationHistoryEntry {
     pub target_name: String,
     pub outcome_kind: String,
     pub outcome_detail: String,
+}
+
+/// Chapter Herald — read-only wire view of one configured
+/// `[[notify_target]]` (or the daemon's synthesized default "studio"
+/// target). `kind` is `"telegram" | "webhook" | "email" | "webui"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotifyTargetView {
+    pub name: String,
+    pub kind: String,
+    pub is_default: bool,
 }
 
 /// Minimal per-session metadata returned by
