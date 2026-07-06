@@ -1228,9 +1228,45 @@ fn SchedulesPanel() -> Element {
     });
 
     let mut name = use_signal(String::new);
+    // Chime UX pass (operator finding): a raw 7-field cron is developer
+    // UX. The builder generates it from frequency + time + day; the raw
+    // field stays available as "Custom (advanced)".
+    let mut freq = use_signal(|| "daily".to_string());
+    let mut at_time = use_signal(|| "09:00".to_string());
+    let mut weekday = use_signal(|| "Mon".to_string());
+    let mut every_hours = use_signal(|| "6".to_string());
     let mut cron = use_signal(String::new);
     let mut prompt = use_signal(String::new);
     let mut start_enabled = use_signal(|| true);
+
+    // The generated cron + a human sentence, from the builder state.
+    let built = use_memo(move || {
+        let (h, m) = {
+            let t = at_time();
+            let mut it = t.splitn(2, ':');
+            let h = it.next().unwrap_or("9").trim_start_matches('0');
+            let m = it.next().unwrap_or("0").trim_start_matches('0');
+            (
+                if h.is_empty() { "0".to_string() } else { h.to_string() },
+                if m.is_empty() { "0".to_string() } else { m.to_string() },
+            )
+        };
+        match freq().as_str() {
+            "daily" => (
+                format!("0 {m} {h} * * * *"),
+                format!("fires daily at {}", at_time()),
+            ),
+            "weekly" => (
+                format!("0 {m} {h} * * {} *", weekday()),
+                format!("fires every {} at {}", weekday(), at_time()),
+            ),
+            "hourly" => (
+                format!("0 0 */{} * * * *", every_hours()),
+                format!("fires every {} hours", every_hours()),
+            ),
+            _ => (cron().trim().to_string(), "custom cron (advanced)".to_string()),
+        }
+    });
 
     let mut rows = dashboard().schedules.clone();
     rows.sort_by_key(schedule_sort_key);
@@ -1241,7 +1277,7 @@ fn SchedulesPanel() -> Element {
 
     let create = move |_| {
         let n = name().trim().to_string();
-        let c = cron().trim().to_string();
+        let c = built().0;
         let pr = prompt().trim().to_string();
         if n.is_empty() || c.is_empty() || pr.is_empty() {
             ui.write().notice =
@@ -1310,17 +1346,71 @@ fn SchedulesPanel() -> Element {
                             value: "{name}",
                             oninput: move |e| name.set(e.value()),
                         }
-                        label { class: "label-tech", "Cron (sec min hour dom month dow year — local time)" }
-                        input {
+                        label { class: "label-tech", "When" }
+                        select {
                             class: "input",
-                            placeholder: "0 0 9 * * * *",
-                            value: "{cron}",
-                            oninput: move |e| cron.set(e.value()),
+                            value: "{freq}",
+                            onchange: move |e| freq.set(e.value()),
+                            option { value: "daily", "Every day" }
+                            option { value: "weekly", "Once a week" }
+                            option { value: "hourly", "Every few hours" }
+                            option { value: "custom", "Custom (advanced)" }
                         }
-                        div { style: "display:flex; gap:6px; flex-wrap:wrap; margin: 6px 0;",
-                            button { class: "btn btn-glass", onclick: move |_| cron.set("0 0 9 * * * *".into()), "Daily 09:00" }
-                            button { class: "btn btn-glass", onclick: move |_| cron.set("0 0 * * * * *".into()), "Hourly" }
-                            button { class: "btn btn-glass", onclick: move |_| cron.set("0 0 8 * * Mon *".into()), "Mon 08:00" }
+                        if freq() == "daily" || freq() == "weekly" {
+                            div { style: "display:flex; gap:8px; align-items:center; margin:6px 0;",
+                                if freq() == "weekly" {
+                                    select {
+                                        class: "input",
+                                        style: "flex:1;",
+                                        value: "{weekday}",
+                                        onchange: move |e| weekday.set(e.value()),
+                                        option { value: "Mon", "Monday" }
+                                        option { value: "Tue", "Tuesday" }
+                                        option { value: "Wed", "Wednesday" }
+                                        option { value: "Thu", "Thursday" }
+                                        option { value: "Fri", "Friday" }
+                                        option { value: "Sat", "Saturday" }
+                                        option { value: "Sun", "Sunday" }
+                                    }
+                                }
+                                span { class: "label-tech", "at" }
+                                input {
+                                    class: "input",
+                                    style: "flex:1;",
+                                    r#type: "time",
+                                    value: "{at_time}",
+                                    oninput: move |e| at_time.set(e.value()),
+                                }
+                            }
+                        }
+                        if freq() == "hourly" {
+                            div { style: "display:flex; gap:8px; align-items:center; margin:6px 0;",
+                                span { class: "label-tech", "every" }
+                                select {
+                                    class: "input",
+                                    style: "flex:1;",
+                                    value: "{every_hours}",
+                                    onchange: move |e| every_hours.set(e.value()),
+                                    option { value: "1", "1 hour" }
+                                    option { value: "2", "2 hours" }
+                                    option { value: "3", "3 hours" }
+                                    option { value: "4", "4 hours" }
+                                    option { value: "6", "6 hours" }
+                                    option { value: "12", "12 hours" }
+                                }
+                            }
+                        }
+                        if freq() == "custom" {
+                            label { class: "label-tech", "Cron (sec min hour dom month dow year — local time)" }
+                            input {
+                                class: "input",
+                                placeholder: "0 0 9 * * * *",
+                                value: "{cron}",
+                                oninput: move |e| cron.set(e.value()),
+                            }
+                        }
+                        p { class: "label-tech", style: "opacity:0.7; margin:4px 0;",
+                            "{built().1} · cron: {built().0}"
                         }
                         label { class: "label-tech", "Prompt (what the agent should do when it fires)" }
                         textarea {

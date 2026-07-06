@@ -158,15 +158,20 @@ async fn tick(
 }
 
 /// Compute the anchor for next-fire-time: if the schedule has fired
-/// before, use that timestamp; otherwise use epoch so the first
-/// upcoming fire is found.
+/// before, use that timestamp; otherwise anchor at **creation time**.
+/// The old epoch anchor made every never-fired schedule instantly
+/// "overdue", so a schedule created at 15:18 for a 16:00 cron fired a
+/// spurious catch-up within seconds (Chime dogfood, 2026-07-06) — the
+/// reflection scheduler's boot-fire bug, same family. A `created_at`
+/// of 0 (hand-crafted records) still degrades to epoch harmlessly.
 fn last_fired_or_epoch(sched: &ScheduleRecord) -> chrono::DateTime<Utc> {
     match sched.last_fired_at {
         Some(ms) => {
             chrono::DateTime::from_timestamp_millis(ms as i64)
                 .unwrap_or(chrono::DateTime::UNIX_EPOCH)
         }
-        None => chrono::DateTime::UNIX_EPOCH,
+        None => chrono::DateTime::from_timestamp_millis(sched.created_at as i64)
+            .unwrap_or(chrono::DateTime::UNIX_EPOCH),
     }
 }
 
@@ -309,9 +314,18 @@ mod tests {
     }
 
     #[test]
-    fn last_fired_or_epoch_returns_epoch_for_none() {
+    fn never_fired_schedule_anchors_at_creation_not_epoch() {
+        // A schedule created NOW for a later tick must not be "overdue
+        // since 1970" — the epoch anchor fired a 16:00 schedule seconds
+        // after its 15:18 creation (Chime dogfood, 2026-07-06).
         let s = make_schedule("0 * * * * * *", None);
-        assert_eq!(last_fired_or_epoch(&s), chrono::DateTime::UNIX_EPOCH);
+        let anchor = last_fired_or_epoch(&s);
+        assert_eq!(anchor.timestamp_millis(), s.created_at as i64);
+        let next = s.next_fire_time_after(anchor).expect("has a next fire");
+        assert!(
+            next > anchor,
+            "first fire must be the next tick after creation"
+        );
     }
 
     #[test]
