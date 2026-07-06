@@ -19,6 +19,7 @@ use aivyx_ipc::protocol::{
 use aivyx_ipc::TeamMissionPhase;
 use futures_util::{SinkExt, StreamExt};
 use tao::event_loop::EventLoopProxy;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::UserEvent;
@@ -48,10 +49,26 @@ const POLL_INTERVAL: Duration = Duration::from_secs(3);
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 
 /// Run the watcher forever, reconnecting on any error or drop.
+/// A 401 is permanent (the Gatehouse wants a token we don't have or
+/// ours is wrong) — retrying can't fix it, so say why once and stop
+/// instead of hot-looping (Vitrine §13).
 pub async fn run(proxy: EventLoopProxy<UserEvent>) {
     loop {
         if let Err(e) = watch_once(&proxy).await {
-            eprintln!("aivyx-desktop: gate watcher disconnected ({e}); retrying…");
+            let msg = e.to_string();
+            if msg.contains("401") {
+                if std::env::var("AIVYX_STUDIO_TOKEN").is_ok() {
+                    eprintln!(
+                        "aivyx-desktop: gate watcher: the Studio rejected                          AIVYX_STUDIO_TOKEN (401) — check the token.                          Notifications disabled for this run."
+                    );
+                } else {
+                    eprintln!(
+                        "aivyx-desktop: gate watcher: the Studio requires a                          token (401) — set AIVYX_STUDIO_TOKEN to enable gate                          notifications. Disabled for this run."
+                    );
+                }
+                return;
+            }
+            eprintln!("aivyx-desktop: gate watcher disconnected ({msg}); retrying…");
         }
         tokio::time::sleep(RECONNECT_DELAY).await;
     }
@@ -60,7 +77,16 @@ pub async fn run(proxy: EventLoopProxy<UserEvent>) {
 /// One connection's lifetime: handshake, then poll missions and notify on each
 /// newly-seen gate until the socket drops.
 async fn watch_once(proxy: &EventLoopProxy<UserEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    let (ws, _resp) = tokio_tungstenite::connect_async(ws_url()).await?;
+    // `AIVYX_STUDIO_TOKEN` authenticates against a Gatehouse-protected
+    // Studio (the daemon accepts `Authorization: Bearer <token>`).
+    let mut request = ws_url().into_client_request()?;
+    if let Ok(token) = std::env::var("AIVYX_STUDIO_TOKEN") {
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {token}").parse()?,
+        );
+    }
+    let (ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     let (mut write, mut read) = ws.split();
 
     // Mirror the Studio's handshake (read-only queries may not require it, but

@@ -573,14 +573,36 @@ provide a quick summary" →
   surface twice — fold into the polish-wave planning.
 
 ### 13 · Desktop shell (wry/tao webview)
-_(walkthrough pending — checklist issued)_
 - **P2 FOUND + FIXED before launch (af9e8be):** the shell hardcoded
   `http://127.0.0.1:7843` and would spawn a *local* daemon when
   nothing listened — unusable against the rig/Harbor topology.
   `AIVYX_STUDIO_URL` now overrides the webview URL, reachability
   probe, and gate-watcher ws endpoint; daemon spawn/stop stays
-  local-only. Known limitation: the gate watcher can't pass the
-  Gatehouse token yet (remote notifications deferred).
+  local-only.
+- **Operator walkthrough (2026-07-06, launched from the dev machine
+  against the rig): 4/4 PASS.** Gatehouse Basic-auth popup →
+  token → cookie → live websocket → Command Center, all
+  screens identical to the browser; tray icon present;
+  `Ctrl+Shift+A` global toggle works; window close hides to tray
+  (process verified alive). The full remote-appliance path a Harbor
+  user will take works end-to-end.
+- **P3 FOUND + FIXED:** the gate watcher hot-looped 1/s against the
+  Gatehouse's permanent 401. Now: `AIVYX_STUDIO_TOKEN` authenticates
+  the watcher (`Authorization: Bearer` on the ws upgrade — remote
+  gate notifications enabled), and an unauthorized connection says
+  why once and stops instead of retrying forever.
+- Cosmetic (platform, not ours): libayatana-appindicator deprecation
+  warning from the distro tray library.
+- Operator UX note: the Gatehouse token had been forgotten — recovery
+  was reading it from the rig's `aivyx.toml`. A future
+  "reveal/regenerate token" affordance (CLI `aivyx doctor` hint or
+  Settings) would smooth this; backlog.
+
+**CHAPTER VITRINE WALKTHROUGH COMPLETE — sections 0–13 all walked
+live by the operator.** Follow-on work is planned in the polish
+waves (UI modernization, Web/TUI/Desktop parity, /classic port,
+Fleet panel) and the operator product asks (Schedules screen,
+Create-Agent nav, Nonagon role templates).
 
 **Comprehensive verification pass (operator + IPC-driven, 05:20–):**
 - **B ✅** clean single-intent request → `summarize-document` won at
