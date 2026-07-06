@@ -3106,6 +3106,73 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::CreateSchedule {
+                            id,
+                            name,
+                            cron,
+                            prompt,
+                            enabled,
+                        } => {
+                            // Chapter Chime — operator creates a schedule from
+                            // the Studio; the running scheduler arms it within
+                            // one tick, no restart.
+                            let resp = match schedule_store.as_deref() {
+                                None => schedule_mutated(id, &name, Err("daemon has no schedule store configured".into())),
+                                Some(store) => {
+                                    let res = crate::schedule::operator_create_schedule(
+                                        store, &name, &cron, &prompt, enabled,
+                                    )
+                                    .await
+                                    .map(|_| ());
+                                    if res.is_ok() {
+                                        audit_schedule_mutation(audit_log.as_deref(), "create", &name, "operator");
+                                    }
+                                    schedule_mutated(id, &name, res)
+                                }
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::UpdateSchedule {
+                            id,
+                            schedule_id,
+                            enabled,
+                            cron,
+                            prompt,
+                        } => {
+                            let resp = match schedule_store.as_deref() {
+                                None => schedule_mutated(id, &schedule_id, Err("daemon has no schedule store configured".into())),
+                                Some(store) => {
+                                    let res = crate::schedule::operator_update_schedule(
+                                        store, &schedule_id, enabled, cron, prompt,
+                                    )
+                                    .await;
+                                    if res.is_ok() {
+                                        audit_schedule_mutation(audit_log.as_deref(), "update", &schedule_id, "operator");
+                                    }
+                                    schedule_mutated(id, &schedule_id, res)
+                                }
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::DeleteSchedule { id, schedule_id } => {
+                            let resp = match schedule_store.as_deref() {
+                                None => schedule_mutated(id, &schedule_id, Err("daemon has no schedule store configured".into())),
+                                Some(store) => {
+                                    let res = crate::schedule::operator_delete_schedule(
+                                        store, &schedule_id,
+                                    )
+                                    .await;
+                                    if res.is_ok() {
+                                        audit_schedule_mutation(audit_log.as_deref(), "delete", &schedule_id, "operator");
+                                    }
+                                    schedule_mutated(id, &schedule_id, res)
+                                }
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::ApplyProfileHint {
                             id,
                             proposal_id,
@@ -4141,6 +4208,9 @@ async fn handle_query(
                             next_fire_unix_ms: r
                                 .next_fire_time()
                                 .map(|dt| dt.timestamp_millis() as u64),
+                            schedule_id: r.schedule_id.clone(),
+                            created_by: r.created_by.as_str().to_string(),
+                            prompt: r.prompt.clone(),
                         })
                         .collect(),
                     Err(_) => Vec::new(),
@@ -6204,6 +6274,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ConfigChanged { .. } => "ConfigChanged",
         aivyx_audit::AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
         aivyx_audit::AuditEvent::DocumentMutated { .. } => "DocumentMutated",
+        aivyx_audit::AuditEvent::ScheduleMutated { .. } => "ScheduleMutated",
     }
     .to_string();
 
@@ -6555,6 +6626,44 @@ fn audit_document_mutation(
             path: path.to_string(),
         }) {
             eprintln!("aivyx daemon: failed to audit document mutation: {e}");
+        }
+    }
+}
+
+/// Chapter Chime — build the [`DaemonMessage::ScheduleMutated`] ack.
+fn schedule_mutated(id: String, schedule_id: &str, res: Result<(), String>) -> DaemonMessage {
+    match res {
+        Ok(()) => DaemonMessage::ScheduleMutated {
+            id,
+            ok: true,
+            schedule_id: schedule_id.to_string(),
+            error: None,
+        },
+        Err(e) => DaemonMessage::ScheduleMutated {
+            id,
+            ok: false,
+            schedule_id: schedule_id.to_string(),
+            error: Some(e),
+        },
+    }
+}
+
+/// Chapter Chime — best-effort audit of a schedule mutation (the
+/// Documents-mutation precedent: a failed append logs, never derails).
+fn audit_schedule_mutation(
+    audit_log: Option<&PersistentAuditLog>,
+    op: &str,
+    schedule_id: &str,
+    actor: &str,
+) {
+    if let Some(log) = audit_log {
+        use aivyx_audit::AuditWriter;
+        if let Err(e) = log.append(aivyx_audit::AuditEvent::ScheduleMutated {
+            op: op.to_string(),
+            schedule_id: schedule_id.to_string(),
+            actor: actor.to_string(),
+        }) {
+            eprintln!("aivyx daemon: failed to audit schedule mutation: {e}");
         }
     }
 }

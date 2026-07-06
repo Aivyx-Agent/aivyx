@@ -674,6 +674,17 @@ pub struct ScheduleView {
     /// Next scheduled fire (unix ms); `None` if the cron yields no future time.
     #[serde(default)]
     pub next_fire_unix_ms: Option<u64>,
+    /// Chapter Chime — the full storage id (`cfg-`-prefixed for config
+    /// routines); mutation messages address schedules by this id.
+    #[serde(default)]
+    pub schedule_id: String,
+    /// Chapter Chime — creation provenance: `"config" | "operator" | "agent"`.
+    #[serde(default)]
+    pub created_by: String,
+    /// Chapter Chime — the prompt the routine fires (empty for
+    /// deterministic report routines).
+    #[serde(default)]
+    pub prompt: String,
 }
 
 /// Response payload mirroring [`QueryPayload`]. Wrapped in
@@ -1844,6 +1855,37 @@ pub enum FrontendMessage {
         id: String,
         name: String,
     },
+    /// Chapter Chime — operator creates a schedule from the Studio.
+    /// The daemon validates the cron expression, rejects id
+    /// collisions, stamps `Operator` provenance, and writes the
+    /// record; the running scheduler arms it within one tick
+    /// (≤60 s) — no restart. Acked by
+    /// [`DaemonEnvelope::ScheduleMutated`].
+    CreateSchedule {
+        id: String,
+        name: String,
+        cron: String,
+        prompt: String,
+        enabled: bool,
+    },
+    /// Chapter Chime — operator updates a schedule (enable/disable
+    /// toggle, cron, or prompt; `None` fields stay unchanged).
+    UpdateSchedule {
+        id: String,
+        schedule_id: String,
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[serde(default)]
+        cron: Option<String>,
+        #[serde(default)]
+        prompt: Option<String>,
+    },
+    /// Chapter Chime — operator deletes a schedule (the Studio
+    /// confirms first, like the Documents delete).
+    DeleteSchedule {
+        id: String,
+        schedule_id: String,
+    },
     /// Phase 119 — operator's act-on-approval gesture for a
     /// Phase 118 `ProfileHint` proposal. Carries the values
     /// the CLI already wrote to `aivyx.toml` via the Task 3
@@ -2098,6 +2140,17 @@ pub enum DaemonMessage {
         name: String,
         error: Option<String>,
     },
+    /// Chapter Chime — ack for the schedule mutations
+    /// ([`FrontendMessage::CreateSchedule`] / `UpdateSchedule` /
+    /// `DeleteSchedule`). `ok = false` carries the reason
+    /// (invalid cron, id collision, unknown id).
+    ScheduleMutated {
+        id: String,
+        ok: bool,
+        schedule_id: String,
+        error: Option<String>,
+    },
+
     /// Phase 119 — ack for [`FrontendMessage::ApplyProfileHint`].
     /// `ok = true` means the daemon recorded the
     /// `AuditEvent::ProfileHintApplied` entry; `ok = false`
@@ -2468,6 +2521,17 @@ pub enum DaemonEnvelope {
         name: String,
         error: Option<String>,
     },
+    /// Chapter Chime — ack for the schedule mutations
+    /// ([`FrontendMessage::CreateSchedule`] / `UpdateSchedule` /
+    /// `DeleteSchedule`). `ok = false` carries the reason
+    /// (invalid cron, id collision, unknown id).
+    ScheduleMutated {
+        id: String,
+        ok: bool,
+        schedule_id: String,
+        error: Option<String>,
+    },
+
     // Phase 119 — ProfileHint apply ack.
     ProfileHintApplyAcked {
         id: String,

@@ -427,6 +427,20 @@ pub enum AuditEvent {
         /// The relative path affected (for rename: `"old -> new"`).
         path: String,
     },
+
+    /// Chapter Chime — a schedule (cron routine) was created, updated,
+    /// or deleted outside the config file: by the operator from the
+    /// Studio's Schedules screen, or by the agent through the
+    /// `schedule.create` / `schedule.cancel` tools (whose `ToolCall`
+    /// events this complements with the *which schedule* detail).
+    ScheduleMutated {
+        /// `"create" | "update" | "delete"`.
+        op: String,
+        /// The storage id (`agt-`-prefixed when agent-created).
+        schedule_id: String,
+        /// `"operator"` or `"agent"`.
+        actor: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].

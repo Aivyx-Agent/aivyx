@@ -7619,16 +7619,24 @@ async fn run_async(
         // write half remains auto-proposer / role-declared.
         Scope::parse("skills.list").unwrap(),
         Scope::parse("skills.invoke").unwrap(),
-        // Phase 67 schedule tools — READ half only: enumerate the
+        // Phase 67 schedule tools — READ half: enumerate the
         // agent's own routines (self-knowledge, the skills.list class).
         // Fifth registered-but-unauthorized floor gap found (soak review
         // 2026-07-04): schedule.list was never callable by the default
         // role, so the agent couldn't see its own routines and Candor's
-        // "I've scheduled" rule could only ever fire unfulfilled. The
-        // WRITE half (schedule.create/update/delete = self-directed
-        // future autonomy) deliberately stays out pending an [autonomy]
-        // gating decision — do not add it here reflexively.
+        // "I've scheduled" rule could only ever fire unfulfilled.
         Scope::parse("schedule.list").unwrap(),
+        // Chapter Chime (2026-07-06) — the WRITE half's parked
+        // [autonomy] gating decision is resolved: the tools themselves
+        // enforce the Reins growth gradient (below policy_auto a
+        // creation lands DISABLED pending Studio approval — the
+        // governed-proposal posture), own-schedules-only authority, a
+        // 15-minute fire floor, and a 10-schedule cap. Granting the
+        // scopes is therefore governance-safe at every level, exactly
+        // like reflection.propose below.
+        Scope::parse("schedule.create").unwrap(),
+        Scope::parse("schedule.update").unwrap(),
+        Scope::parse("schedule.delete").unwrap(),
         // Reflection proposals — SIXTH registered-but-unauthorized floor
         // gap (Vitrine investigation 2026-07-05): the reflection
         // scheduler's system prompt instructs the model to call
@@ -8117,6 +8125,22 @@ async fn run_async(
              bug, should be called exactly once"
                 .to_string()
         })?;
+    // Chapter Chime — the schedule write tools follow the Reins growth
+    // gradient (resolved with the "schedules" domain so a per-domain
+    // [autonomy.overrides] entry can pin it independently): below
+    // policy_auto agent creations land disabled pending Studio approval.
+    let schedule_growth = aivyx_config::resolve_posture(
+        autonomy_level.value,
+        &autonomy_overrides,
+        Some("schedules"),
+    )
+    .growth;
+    schedule_create_tool
+        .set_growth(schedule_growth)
+        .map_err(|_| "schedule.create growth already set".to_string())?;
+    schedule_update_tool
+        .set_growth(schedule_growth)
+        .map_err(|_| "schedule.update growth already set".to_string())?;
 
     webhook_create_tool
         .set_webhook_store(storage.domain(KeyDomain::Webhooks))

@@ -73,6 +73,7 @@ const ICON_SKILLS: Asset = asset!("/assets/icons/skills.svg");
 const ICON_GUIDE: Asset = asset!("/assets/icons/guide.svg");
 const ICON_PLUGINS: Asset = asset!("/assets/icons/plugins.svg");
 const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
+const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -82,6 +83,10 @@ type Sender = Coroutine<FrontendMessage>;
 enum View {
     Command,
     Missions,
+    /// Chapter Chime — cron routines: config/operator/agent-created
+    /// schedules, with create/toggle/delete + the agent-proposal
+    /// approval flow.
+    Schedules,
     Chat,
     Memory,
     /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
@@ -110,10 +115,11 @@ enum View {
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 15] = [
+    const ALL: [View; 16] = [
         View::Command,
         View::Chat,
         View::Missions,
+        View::Schedules,
         View::Memory,
         View::Wiki,
         View::Lattice,
@@ -133,6 +139,7 @@ impl View {
         match self {
             View::Command => "command",
             View::Missions => "missions",
+            View::Schedules => "schedules",
             View::Chat => "chat",
             View::Memory => "memory",
             View::Wiki => "wiki",
@@ -159,6 +166,7 @@ impl View {
         match self {
             View::Command => "Command",
             View::Missions => "Missions",
+            View::Schedules => "Schedules",
             View::Chat => "Chat",
             View::Memory => "Memory",
             View::Wiki => "Wiki",
@@ -344,6 +352,16 @@ struct Dashboard {
     loaded: bool,
 }
 
+/// Chapter Chime — Schedules screen UI state (the list itself lives in
+/// `Dashboard::schedules`, already polled every 5 s).
+#[derive(Clone, Default, PartialEq)]
+struct SchedulesUi {
+    /// `(ok, text)` outcome of the last mutation ack.
+    notice: Option<(bool, String)>,
+    /// Two-step delete: the schedule_id awaiting its confirm click.
+    confirm_delete: Option<String>,
+}
+
 /// One rendered chat transcript line.
 #[derive(Clone, PartialEq)]
 struct ChatLine {
@@ -504,6 +522,7 @@ fn App() -> Element {
     let voice = use_signal(VoiceState::default);
     let skills = use_signal(SkillsState::default);
     let mcp = use_signal(McpState::default);
+    let schedules_ui = use_signal(SchedulesUi::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -513,7 +532,7 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, dashboard, memory, wiki, lattice, settings, agents, teams, documents,
-            voice, skills, mcp, connected, session, transcript, streaming, gate,
+            voice, skills, mcp, schedules_ui, connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -530,6 +549,7 @@ fn App() -> Element {
     use_context_provider(|| voice);
     use_context_provider(|| skills);
     use_context_provider(|| mcp);
+    use_context_provider(|| schedules_ui);
     // Chapter Repertoire — the Skills screen's "review in Agents" pointer
     // switches the active view.
     use_context_provider(|| view);
@@ -594,6 +614,7 @@ fn App() -> Element {
     let title = match view() {
         View::Command => "Command Center",
         View::Missions => "Mission Orchestration",
+        View::Schedules => "Schedules",
         View::Chat => "Terminal",
         View::Memory => "Memory",
         View::Wiki => "Knowledge Wiki",
@@ -635,6 +656,7 @@ fn App() -> Element {
                             CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected() }
                         },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
+                        View::Schedules => rsx! { SchedulesPanel {} },
                         View::Chat => rsx! { ChatPanel {} },
                         View::Memory => rsx! { MemoryPanel {} },
                         View::Wiki => rsx! { WikiPanel {} },
@@ -742,6 +764,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             vec![
                 (ICON_CHAT, "Chat", View::Chat),
                 (ICON_MISSIONS, "Missions", View::Missions),
+                (ICON_SCHEDULES, "Schedules", View::Schedules),
             ],
         ),
         (
@@ -1160,6 +1183,255 @@ fn RoutineRow(routine: ScheduleView) -> Element {
             div { class: "row2 label-tech",
                 span { "next " span { class: "v", "{next}" } }
                 span { "last " span { class: "v", "{last}" } }
+            }
+        }
+    }
+}
+
+// ── Chapter Chime — the Schedules screen ────────────────────────────────
+
+fn schedules_refresh_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-schedules".to_string(),
+        payload: QueryPayload::GetSchedules,
+    }
+}
+
+/// Sort key: agent proposals awaiting approval first, then enabled
+/// routines, then the rest, each bucket alphabetical.
+fn schedule_sort_key(v: &ScheduleView) -> (u8, String) {
+    let bucket = if v.created_by == "agent" && !v.enabled {
+        0
+    } else if v.enabled {
+        1
+    } else {
+        2
+    };
+    (bucket, v.name.clone())
+}
+
+#[component]
+fn SchedulesPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let dashboard = use_context::<Signal<Dashboard>>();
+    let mut ui = use_context::<Signal<SchedulesUi>>();
+    let connected = use_context::<Signal<bool>>();
+
+    // Fresh list on open (the 5 s poll keeps it live afterwards).
+    use_future(move || async move {
+        ws.send(schedules_refresh_query());
+    });
+
+    let mut name = use_signal(String::new);
+    let mut cron = use_signal(String::new);
+    let mut prompt = use_signal(String::new);
+    let mut start_enabled = use_signal(|| true);
+
+    let mut rows = dashboard().schedules.clone();
+    rows.sort_by_key(schedule_sort_key);
+    let pending: usize = rows
+        .iter()
+        .filter(|r| r.created_by == "agent" && !r.enabled)
+        .count();
+
+    let create = move |_| {
+        let n = name().trim().to_string();
+        let c = cron().trim().to_string();
+        let pr = prompt().trim().to_string();
+        if n.is_empty() || c.is_empty() || pr.is_empty() {
+            ui.write().notice =
+                Some((false, "name, cron, and prompt are all required".into()));
+            return;
+        }
+        ws.send(FrontendMessage::CreateSchedule {
+            id: format!("mc-sched-create-{n}"),
+            name: n,
+            cron: c,
+            prompt: pr,
+            enabled: start_enabled(),
+        });
+        ws.send(schedules_refresh_query());
+        name.set(String::new());
+        cron.set(String::new());
+        prompt.set(String::new());
+    };
+
+    rsx! {
+        if let Some((ok, text)) = ui().notice {
+            div {
+                class: "glass-card",
+                style: if ok {
+                    "border-left: 3px solid var(--ok, #16a34a); margin-bottom: 12px; padding: 8px 12px;"
+                } else {
+                    "border-left: 3px solid var(--danger, #b91c1c); margin-bottom: 12px; padding: 8px 12px;"
+                },
+                p { class: "label-tech", "{text}" }
+            }
+        }
+        div { class: "dash-grid",
+            div { class: "dash-main",
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Schedules" }
+                        span { class: "label-tech",
+                            if pending > 0 {
+                                "{rows.len()} total · {pending} awaiting approval"
+                            } else {
+                                "{rows.len()} total"
+                            }
+                        }
+                    }
+                    if rows.is_empty() {
+                        div { class: "glass-card empty",
+                            p { class: "label-tech", "No schedules yet — create one below, or ask the agent to schedule something." }
+                        }
+                    } else {
+                        div { class: "feed",
+                            for r in rows.iter() {
+                                ScheduleAdminRow { schedule: r.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            aside { class: "dash-rail",
+                section { class: "panel",
+                    div { class: "panel-head", h3 { "New schedule" } }
+                    div { class: "glass-card",
+                        label { class: "label-tech", "Name" }
+                        input {
+                            class: "input",
+                            placeholder: "coffee-stock-check",
+                            value: "{name}",
+                            oninput: move |e| name.set(e.value()),
+                        }
+                        label { class: "label-tech", "Cron (sec min hour dom month dow year — local time)" }
+                        input {
+                            class: "input",
+                            placeholder: "0 0 9 * * * *",
+                            value: "{cron}",
+                            oninput: move |e| cron.set(e.value()),
+                        }
+                        div { style: "display:flex; gap:6px; flex-wrap:wrap; margin: 6px 0;",
+                            button { class: "btn btn-glass", onclick: move |_| cron.set("0 0 9 * * * *".into()), "Daily 09:00" }
+                            button { class: "btn btn-glass", onclick: move |_| cron.set("0 0 * * * * *".into()), "Hourly" }
+                            button { class: "btn btn-glass", onclick: move |_| cron.set("0 0 8 * * Mon *".into()), "Mon 08:00" }
+                        }
+                        label { class: "label-tech", "Prompt (what the agent should do when it fires)" }
+                        textarea {
+                            class: "input",
+                            rows: "4",
+                            placeholder: "Check the workspace journal and summarize anything new.",
+                            value: "{prompt}",
+                            oninput: move |e| prompt.set(e.value()),
+                        }
+                        label { class: "label-tech", style: "display:flex; align-items:center; gap:6px; margin:6px 0;",
+                            input {
+                                r#type: "checkbox",
+                                checked: start_enabled(),
+                                onchange: move |e| start_enabled.set(e.checked()),
+                            }
+                            "start enabled"
+                        }
+                        button {
+                            class: "btn btn-primary btn-xs",
+                            disabled: !connected(),
+                            onclick: create,
+                            "Create schedule"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One admin row: provenance badge + live timing + approve / pause /
+/// resume / delete controls. Deleting is a two-step confirm; config
+/// routines expose pause/resume only (the daemon refuses their delete —
+/// the boot sync would resurrect them).
+#[component]
+fn ScheduleAdminRow(schedule: ScheduleView) -> Element {
+    let ws = use_context::<Sender>();
+    let mut ui = use_context::<Signal<SchedulesUi>>();
+    let sid = schedule.schedule_id.clone();
+    let awaiting = schedule.created_by == "agent" && !schedule.enabled;
+    let confirm_armed = ui().confirm_delete.as_deref() == Some(sid.as_str());
+    let next = if schedule.enabled {
+        schedule
+            .next_fire_unix_ms
+            .map(until_time)
+            .unwrap_or_else(|| "—".to_string())
+    } else {
+        "paused".to_string()
+    };
+    let last = schedule
+        .last_fired_unix_ms
+        .map(rel_time)
+        .unwrap_or_else(|| "never".to_string());
+
+    let toggle_id = sid.clone();
+    let toggle_to = !schedule.enabled;
+    let delete_id = sid.clone();
+    let confirm_id = sid.clone();
+
+    rsx! {
+        div { class: "glass-card routine-row",
+            div { class: "row1",
+                span { class: if schedule.enabled { "dot live" } else { "dot off" } }
+                span { class: "name", "{schedule.name}" }
+                span { class: "label-tech", style: "opacity:0.7;", "[{schedule.created_by}]" }
+                if awaiting {
+                    span { class: "label-tech", style: "color: var(--warn, #d97706);", "awaiting approval" }
+                }
+                span { class: "label-tech cron", "{schedule.cron}" }
+            }
+            if !schedule.prompt.is_empty() {
+                div { class: "row2 label-tech", style: "opacity:0.8;",
+                    "{schedule.prompt}"
+                }
+            }
+            div { class: "row2 label-tech",
+                span { "next " span { class: "v", "{next}" } }
+                span { "last " span { class: "v", "{last}" } }
+                span { style: "margin-left:auto; display:flex; gap:6px;",
+                    button {
+                        class: "btn btn-glass",
+                        onclick: move |_| {
+                            ws.send(FrontendMessage::UpdateSchedule {
+                                id: format!("mc-sched-toggle-{toggle_id}"),
+                                schedule_id: toggle_id.clone(),
+                                enabled: Some(toggle_to),
+                                cron: None,
+                                prompt: None,
+                            });
+                            ws.send(schedules_refresh_query());
+                        },
+                        if awaiting { "Approve" } else if schedule.enabled { "Pause" } else { "Resume" }
+                    }
+                    if schedule.created_by != "config" {
+                        if confirm_armed {
+                            button {
+                                class: "btn btn-glass",
+                                style: "color: var(--danger, #b91c1c);",
+                                onclick: move |_| {
+                                    ws.send(FrontendMessage::DeleteSchedule {
+                                        id: format!("mc-sched-delete-{delete_id}"),
+                                        schedule_id: delete_id.clone(),
+                                    });
+                                    ws.send(schedules_refresh_query());
+                                },
+                                "Confirm delete"
+                            }
+                        } else {
+                            button {
+                                class: "btn btn-glass",
+                                onclick: move |_| ui.write().confirm_delete = Some(confirm_id.clone()),
+                                "Delete"
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -4866,6 +5138,7 @@ async fn ws_task(
     voice: Signal<VoiceState>,
     skills: Signal<SkillsState>,
     mcp: Signal<McpState>,
+    schedules_ui: Signal<SchedulesUi>,
     mut connected: Signal<bool>,
     session: Signal<Option<String>>,
     transcript: Signal<Vec<ChatLine>>,
@@ -4903,7 +5176,8 @@ async fn ws_task(
 
         spawn(read_task(
             read, missions, dashboard, memory, wiki, lattice, settings, agents, teams,
-            documents, voice, skills, mcp, connected, session, transcript, streaming, gate,
+            documents, voice, skills, mcp, schedules_ui, connected, session, transcript,
+            streaming, gate,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -4993,6 +5267,7 @@ async fn read_task(
     mut voice: Signal<VoiceState>,
     mut skills: Signal<SkillsState>,
     mut mcp: Signal<McpState>,
+    mut schedules_ui: Signal<SchedulesUi>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -5209,6 +5484,19 @@ async fn read_task(
                     ..
                 } => {
                     dashboard.write().schedules = schedules;
+                }
+                // Chapter Chime — schedule mutation acks. The list itself
+                // refreshes via the GetSchedules chase the sender fired
+                // right behind the mutation (the Documents write→read
+                // bridge pattern) plus the 5 s poll.
+                DaemonEnvelope::ScheduleMutated { ok, schedule_id, error, .. } => {
+                    let mut ui = schedules_ui.write();
+                    ui.confirm_delete = None;
+                    ui.notice = Some(if ok {
+                        (true, format!("Schedule {schedule_id} saved."))
+                    } else {
+                        (false, error.unwrap_or_else(|| "schedule change failed".into()))
+                    });
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::SettingsApplied { settings: snap, restart_required },

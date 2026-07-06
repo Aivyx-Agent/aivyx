@@ -17,7 +17,48 @@ use aivyx_capability::Scope;
 use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 use aivyx_storage::{DomainHandle, KeyDomain};
 
-use crate::schedule::{self, ScheduleRecord};
+use aivyx_config::GrowthAdoption;
+
+use crate::schedule::{self, ScheduleProvenance, ScheduleRecord};
+
+// ---------------------------------------------------------------------------
+// Chapter Chime — agent self-scheduling rules
+// ---------------------------------------------------------------------------
+//
+// The WRITE half (create/update/delete) was registered at Phase 26 but never
+// granted, parked on an [autonomy] gating decision. Chapter Chime resolves it
+// (operator sign-off 2026-07-06):
+// - creations follow the Reins growth gradient: below `policy_auto` they land
+//   DISABLED pending operator approval in the Studio; at `policy_auto`/
+//   `broad_auto` they arm directly (audited);
+// - the agent may only update/delete schedules it created (`agt-` ids);
+//   an update below `policy_auto` re-disables the schedule (an edit
+//   invalidates the operator's approval);
+// - guardrails: no agent schedule may fire more often than every 15 minutes,
+//   and at most 10 agent-created schedules may exist.
+
+/// Minimum gap between consecutive fires of an agent-created schedule.
+const MIN_FIRE_GAP_SECS: i64 = 15 * 60;
+/// Cap on concurrently existing agent-created schedules.
+const MAX_AGENT_SCHEDULES: usize = 10;
+
+/// Two consecutive future fires closer than the floor ⇒ too frequent.
+/// A cron with no second fire (one-shot with a year field) passes.
+fn fires_too_frequently(cron: &str) -> bool {
+    let now = chrono::Utc::now();
+    let Some(first) = schedule::next_fire_after(cron, now) else {
+        return false;
+    };
+    let Some(second) = schedule::next_fire_after(cron, first) else {
+        return false;
+    };
+    (second - first).num_seconds() < MIN_FIRE_GAP_SECS
+}
+
+/// Whether the growth gradient lets agent creations arm without approval.
+fn growth_arms_directly(growth: GrowthAdoption) -> bool {
+    matches!(growth, GrowthAdoption::PolicyAuto | GrowthAdoption::BroadAuto)
+}
 
 // ---------------------------------------------------------------------------
 // schedule.create
@@ -27,6 +68,9 @@ pub struct ScheduleCreateTool {
     id: ToolId,
     schema: Value,
     store: OnceLock<DomainHandle>,
+    /// Chapter Chime — the resolved growth gradient; unset is treated
+    /// as `ProposeOnly` (the safe default).
+    growth: OnceLock<GrowthAdoption>,
 }
 
 impl std::fmt::Debug for ScheduleCreateTool {
@@ -66,12 +110,18 @@ impl ScheduleCreateTool {
                 "required": ["cron", "prompt"]
             }),
             store: OnceLock::new(),
+            growth: OnceLock::new(),
         }
     }
 
     pub fn set_schedule_store(&self, handle: DomainHandle) -> Result<(), DomainHandle> {
         assert_eq!(handle.domain(), KeyDomain::Schedules);
         self.store.set(handle)
+    }
+
+    /// Chapter Chime — wire the resolved growth gradient at daemon startup.
+    pub fn set_growth(&self, growth: GrowthAdoption) -> Result<(), GrowthAdoption> {
+        self.growth.set(growth)
     }
 }
 
@@ -137,14 +187,63 @@ impl Tool for ScheduleCreateTool {
             });
         }
 
-        let schedule_id = format!("sched-{}", uuid::Uuid::new_v4().as_simple());
-        let record = match ScheduleRecord::new(
+        // Chapter Chime guardrails — gradient, frequency floor, count cap.
+        let growth = self
+            .growth
+            .get()
+            .copied()
+            .unwrap_or(GrowthAdoption::ProposeOnly);
+        if growth == GrowthAdoption::None {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.create: the autonomy level does not permit \
+                         self-scheduling"
+                    .to_string(),
+            });
+        }
+        if fires_too_frequently(&cron) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "schedule.create: agent schedules may not fire more often \
+                     than every {} minutes",
+                    MIN_FIRE_GAP_SECS / 60
+                ),
+            });
+        }
+        match schedule::list_schedules(store).await {
+            Ok(all) => {
+                let agent_count = all
+                    .iter()
+                    .filter(|r| r.created_by == ScheduleProvenance::Agent)
+                    .count();
+                if agent_count >= MAX_AGENT_SCHEDULES {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!(
+                            "schedule.create: the agent-created schedule cap \
+                             ({MAX_AGENT_SCHEDULES}) is reached — cancel one \
+                             first (schedule.list, then schedule.delete)"
+                        ),
+                    });
+                }
+            }
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("failed to list schedules: {e}"),
+                });
+            }
+        }
+
+        let schedule_id = format!("agt-{}", uuid::Uuid::new_v4().as_simple());
+        let mut record = match ScheduleRecord::new(
             schedule_id.clone(),
             cron,
             role,
             prompt,
         ) {
-            Ok(r) => r,
+            Ok(r) => r.with_provenance(ScheduleProvenance::Agent),
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
@@ -152,6 +251,9 @@ impl Tool for ScheduleCreateTool {
                 });
             }
         };
+        let armed = growth_arms_directly(growth);
+        record.enabled = armed;
+        record.wrap_mission = true;
 
         if let Err(e) = schedule::create_schedule(store, &record).await {
             return ToolOutcome::Failed(AivyxError::Tool {
@@ -160,8 +262,22 @@ impl Tool for ScheduleCreateTool {
             });
         }
 
+        let output = if armed {
+            json!({
+                "schedule_id": schedule_id,
+                "status": "armed",
+                "next_fire": record.next_fire_time().map(|dt| dt.to_rfc3339()),
+            })
+        } else {
+            json!({
+                "schedule_id": schedule_id,
+                "status": "pending_approval",
+                "note": "created disabled — the operator enables it in the \
+                         Studio Schedules screen",
+            })
+        };
         ToolOutcome::Completed {
-            output: json!({ "schedule_id": schedule_id }),
+            output,
             verified: Verification::NotApplicable,
         }
     }
@@ -363,9 +479,9 @@ impl Tool for ScheduleDeleteTool {
             });
         }
 
-        let exists = match schedule::get_schedule(store, &schedule_id).await {
-            Ok(Some(_)) => true,
-            Ok(None) => false,
+        let record = match schedule::get_schedule(store, &schedule_id).await {
+            Ok(Some(r)) => Some(r),
+            Ok(None) => None,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
@@ -374,7 +490,7 @@ impl Tool for ScheduleDeleteTool {
             }
         };
 
-        if !exists {
+        let Some(record) = record else {
             return ToolOutcome::Completed {
                 output: json!({
                     "deleted": false,
@@ -382,6 +498,20 @@ impl Tool for ScheduleDeleteTool {
                 }),
                 verified: Verification::NotApplicable,
             };
+        };
+        // Chapter Chime — own-schedules-only authority: the agent may
+        // delete what it created, never config routines or the
+        // operator's.
+        if record.created_by != ScheduleProvenance::Agent {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "schedule.delete: {schedule_id} was created by the \
+                     {} — only agent-created schedules (agt-…) may be \
+                     deleted; ask the operator",
+                    record.created_by.as_str()
+                ),
+            });
         }
 
         if let Err(e) = schedule::delete_schedule(store, &schedule_id).await {
@@ -406,6 +536,8 @@ pub struct ScheduleUpdateTool {
     id: ToolId,
     schema: Value,
     store: OnceLock<DomainHandle>,
+    /// Chapter Chime — see [`ScheduleCreateTool::set_growth`].
+    growth: OnceLock<GrowthAdoption>,
 }
 
 impl std::fmt::Debug for ScheduleUpdateTool {
@@ -453,12 +585,18 @@ impl ScheduleUpdateTool {
                 "required": ["schedule_id"]
             }),
             store: OnceLock::new(),
+            growth: OnceLock::new(),
         }
     }
 
     pub fn set_schedule_store(&self, handle: DomainHandle) -> Result<(), DomainHandle> {
         assert_eq!(handle.domain(), KeyDomain::Schedules);
         self.store.set(handle)
+    }
+
+    /// Chapter Chime — wire the resolved growth gradient at daemon startup.
+    pub fn set_growth(&self, growth: GrowthAdoption) -> Result<(), GrowthAdoption> {
+        self.growth.set(growth)
     }
 }
 
@@ -524,6 +662,19 @@ impl Tool for ScheduleUpdateTool {
             }
         };
 
+        // Chapter Chime — own-schedules-only authority.
+        if record.created_by != ScheduleProvenance::Agent {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "schedule.update: {schedule_id} was created by the {} — \
+                     only agent-created schedules (agt-…) may be updated; \
+                     ask the operator",
+                    record.created_by.as_str()
+                ),
+            });
+        }
+
         if let Some(enabled) = input.get("enabled").and_then(|v| v.as_bool()) {
             record.enabled = enabled;
         }
@@ -552,6 +703,30 @@ impl Tool for ScheduleUpdateTool {
             record.role_name = role.to_string();
         }
 
+        // Chime guardrails apply to edits too: the frequency floor, and
+        // below `policy_auto` any edit re-disables the schedule — an
+        // agent edit invalidates the operator's approval (and blocks the
+        // self-approval bypass of setting `enabled: true` directly).
+        if fires_too_frequently(&record.cron_expr) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "schedule.update: agent schedules may not fire more often \
+                     than every {} minutes",
+                    MIN_FIRE_GAP_SECS / 60
+                ),
+            });
+        }
+        let growth = self
+            .growth
+            .get()
+            .copied()
+            .unwrap_or(GrowthAdoption::ProposeOnly);
+        let reapproval_needed = !growth_arms_directly(growth) && record.enabled;
+        if reapproval_needed {
+            record.enabled = false;
+        }
+
         if let Err(e) = schedule::update_schedule(store, &record).await {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -560,15 +735,22 @@ impl Tool for ScheduleUpdateTool {
         }
 
         let next = record.next_fire_time().map(|dt| dt.to_rfc3339());
+        let mut output = json!({
+            "schedule_id": record.schedule_id,
+            "cron": record.cron_expr,
+            "role": record.role_name,
+            "prompt": record.prompt,
+            "enabled": record.enabled,
+            "next_fire": next,
+        });
+        if reapproval_needed {
+            output["note"] = json!(
+                "edit saved but disabled — the operator re-approves it in \
+                 the Studio Schedules screen"
+            );
+        }
         ToolOutcome::Completed {
-            output: json!({
-                "schedule_id": record.schedule_id,
-                "cron": record.cron_expr,
-                "role": record.role_name,
-                "prompt": record.prompt,
-                "enabled": record.enabled,
-                "next_fire": next,
-            }),
+            output,
             verified: Verification::NotApplicable,
         }
     }

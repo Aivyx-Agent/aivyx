@@ -16,6 +16,29 @@ use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
 // Data model
 // ---------------------------------------------------------------------------
 
+/// Chapter Chime — who created a schedule. Governs mutation authority
+/// (the agent may only modify or cancel its own) and the Studio
+/// provenance badge. Serde-defaults to `Config` so every pre-Chime
+/// record — all of which were config-synced — deserializes unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleProvenance {
+    #[default]
+    Config,
+    Operator,
+    Agent,
+}
+
+impl ScheduleProvenance {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ScheduleProvenance::Config => "config",
+            ScheduleProvenance::Operator => "operator",
+            ScheduleProvenance::Agent => "agent",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleRecord {
     pub schedule_id: String,
@@ -49,6 +72,9 @@ pub struct ScheduleRecord {
     /// LLM-prompt routine, so every pre-Ledger record deserializes unchanged.
     #[serde(default)]
     pub report_kind: Option<String>,
+    /// Chapter Chime — creation provenance. See [`ScheduleProvenance`].
+    #[serde(default)]
+    pub created_by: ScheduleProvenance,
 }
 
 impl ScheduleRecord {
@@ -72,7 +98,14 @@ impl ScheduleRecord {
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
             report_kind: None,
+            created_by: ScheduleProvenance::Config,
         })
+    }
+
+    /// Builder-style provenance override for operator/agent creations.
+    pub fn with_provenance(mut self, created_by: ScheduleProvenance) -> Self {
+        self.created_by = created_by;
+        self
     }
 
     pub fn next_fire_time(&self) -> Option<DateTime<Utc>> {
@@ -188,12 +221,142 @@ fn now_millis() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// Chapter Chime — operator mutation rules (Studio Create/Update/Delete)
+// ---------------------------------------------------------------------------
+
+/// Reserved id prefixes: `cfg-` marks config-synced routines and
+/// `agt-` marks agent-created ones; operator creations may use neither.
+const RESERVED_PREFIXES: &[&str] = &["cfg-", "agt-"];
+
+/// Create an operator-authored schedule. The `name` doubles as the
+/// storage id (config routines are namespaced by their `cfg-` prefix,
+/// agent ones by `agt-`, so bare names can never collide with either
+/// silently — but an exact-id collision is still rejected).
+pub async fn operator_create_schedule(
+    handle: &DomainHandle,
+    name: &str,
+    cron: &str,
+    prompt: &str,
+    enabled: bool,
+) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("schedule name must not be empty".into());
+    }
+    if let Some(p) = RESERVED_PREFIXES.iter().find(|p| name.starts_with(**p)) {
+        return Err(format!("the {p:?} prefix is reserved"));
+    }
+    if get_schedule(handle, name)
+        .await
+        .map_err(|e| format!("schedule lookup: {e}"))?
+        .is_some()
+    {
+        return Err(format!("a schedule named {name:?} already exists"));
+    }
+    let mut record = ScheduleRecord::new(
+        name.to_string(),
+        cron.to_string(),
+        "default".to_string(),
+        prompt.to_string(),
+    )?
+    .with_provenance(ScheduleProvenance::Operator);
+    record.enabled = enabled;
+    record.wrap_mission = true;
+    create_schedule(handle, &record)
+        .await
+        .map_err(|e| format!("schedule create: {e}"))?;
+    Ok(name.to_string())
+}
+
+/// Update a schedule (operator authority — any provenance; enabling an
+/// agent-created disabled schedule IS the approval gesture). `None`
+/// fields stay unchanged.
+pub async fn operator_update_schedule(
+    handle: &DomainHandle,
+    schedule_id: &str,
+    enabled: Option<bool>,
+    cron: Option<String>,
+    prompt: Option<String>,
+) -> Result<(), String> {
+    let mut record = get_schedule(handle, schedule_id)
+        .await
+        .map_err(|e| format!("schedule lookup: {e}"))?
+        .ok_or_else(|| format!("no schedule named {schedule_id:?}"))?;
+    if let Some(c) = cron {
+        validate_cron(&c)?;
+        record.cron_expr = c;
+    }
+    if let Some(p) = prompt {
+        record.prompt = p;
+    }
+    if let Some(e) = enabled {
+        record.enabled = e;
+    }
+    update_schedule(handle, &record)
+        .await
+        .map_err(|e| format!("schedule update: {e}"))
+}
+
+/// Delete a schedule. Config-defined routines are refused — the boot
+/// sync would resurrect them, so the honest gesture is disable (or
+/// removing the `[[schedule]]` entry from `aivyx.toml`).
+pub async fn operator_delete_schedule(
+    handle: &DomainHandle,
+    schedule_id: &str,
+) -> Result<(), String> {
+    let record = get_schedule(handle, schedule_id)
+        .await
+        .map_err(|e| format!("schedule lookup: {e}"))?
+        .ok_or_else(|| format!("no schedule named {schedule_id:?}"))?;
+    if record.created_by == ScheduleProvenance::Config {
+        return Err(
+            "config-defined routines come back at restart — disable it instead, \
+             or remove its [[schedule]] entry from aivyx.toml"
+                .into(),
+        );
+    }
+    delete_schedule(handle, schedule_id)
+        .await
+        .map_err(|e| format!("schedule delete: {e}"))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pre_chime_record_json_defaults_to_config_provenance() {
+        // A record serialized before the created_by field existed must
+        // deserialize as Config (all pre-Chime records were config-synced).
+        let old_json = r#"{
+            "schedule_id": "cfg-nightly",
+            "cron_expr": "0 0 2 * * * *",
+            "role_name": "default",
+            "prompt": "reflect",
+            "enabled": true,
+            "wrap_mission": true,
+            "created_at": 0,
+            "last_fired_at": null
+        }"#;
+        let r: ScheduleRecord = serde_json::from_str(old_json).expect("backcompat");
+        assert_eq!(r.created_by, ScheduleProvenance::Config);
+        // And the builder override round-trips through serde.
+        let agent = ScheduleRecord::new(
+            "agt-x".into(),
+            "0 0 9 * * * *".into(),
+            "default".into(),
+            "p".into(),
+        )
+        .unwrap()
+        .with_provenance(ScheduleProvenance::Agent);
+        let back: ScheduleRecord =
+            serde_json::from_slice(&serde_json::to_vec(&agent).unwrap()).unwrap();
+        assert_eq!(back.created_by, ScheduleProvenance::Agent);
+    }
 
     #[test]
     fn valid_cron_expr_passes_validation() {
