@@ -511,7 +511,21 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         Msg::ScrollToBottom => state.scroll = 0,
 
         Msg::TurnFinished { events, .. } => {
-            for event in &events {
+            // Coalesce consecutive Text events first: the daemon
+            // streams token-level chunks ("Hi", " there", "!"), and
+            // rendering each as its own ChatLine put one word per
+            // line (Vitrine §12).
+            let mut merged: Vec<StreamEventPayload> = Vec::with_capacity(events.len());
+            for event in events {
+                if let StreamEventPayload::Text { text } = &event {
+                    if let Some(StreamEventPayload::Text { text: prev }) = merged.last_mut() {
+                        prev.push_str(text);
+                        continue;
+                    }
+                }
+                merged.push(event);
+            }
+            for event in &merged {
                 for line in lines_from_event(event) {
                     state.push_line(line);
                 }
@@ -778,6 +792,32 @@ mod tests {
         assert!(!s.status.working);
         assert_eq!(s.history.last().unwrap().kind, LineKind::Agent);
         assert_eq!(s.history.last().unwrap().text, "an answer");
+    }
+
+    #[test]
+    fn turn_finished_coalesces_token_level_text_events() {
+        // Vitrine §12 — the daemon streams token-level Text chunks;
+        // they must render as one chat line, not one word per line.
+        let mut s = typed(AppState::new(), "q");
+        s = update(s, Msg::Submit);
+        s = update(
+            s,
+            Msg::TurnFinished {
+                events: vec![
+                    StreamEventPayload::Text { text: "Hi".into() },
+                    StreamEventPayload::Text { text: " there".into() },
+                    StreamEventPayload::Text { text: "!".into() },
+                ],
+                outcome: "completed: Hi there!".into(),
+            },
+        );
+        let agent_lines: Vec<_> = s
+            .history
+            .iter()
+            .filter(|l| l.kind == LineKind::Agent)
+            .collect();
+        assert_eq!(agent_lines.len(), 1);
+        assert_eq!(agent_lines[0].text, "Hi there!");
     }
 
     #[test]

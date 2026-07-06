@@ -355,21 +355,59 @@ fn placeholder_lines(desc: &str) -> Vec<Line<'_>> {
 }
 
 fn render_chat(frame: &mut Frame, area: Rect, state: &AppState) {
-    let lines: Vec<Line> = state
-        .history
-        .iter()
-        .map(|cl| {
-            let (prefix, style) = kind_style(cl.kind);
-            Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(cl.text.clone(), style),
-            ])
-        })
-        .collect();
+    // Wrap each history line to the pane width (coalesced agent
+    // replies are full paragraphs now — Vitrine §12); continuation
+    // rows indent under the prefix so provenance stays scannable.
+    // Wrapping here (not via Paragraph::wrap) keeps the scroll
+    // offset math operating on real visual-line counts.
+    let width = area.width.max(1) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for cl in &state.history {
+        let (prefix, style) = kind_style(cl.kind);
+        let avail = width.saturating_sub(prefix.chars().count()).max(1);
+        for (i, chunk) in wrap_line(&cl.text, avail).into_iter().enumerate() {
+            let lead = if i == 0 {
+                prefix.to_string()
+            } else {
+                " ".repeat(prefix.chars().count())
+            };
+            lines.push(Line::from(vec![
+                Span::styled(lead, style),
+                Span::styled(chunk, style),
+            ]));
+        }
+    }
 
-    let top = chat_scroll_offset(state.history.len(), area.height as usize, state.scroll);
+    let top = chat_scroll_offset(lines.len(), area.height as usize, state.scroll);
     let para = Paragraph::new(Text::from(lines)).scroll((top, 0));
     frame.render_widget(para, area);
+}
+
+/// Greedy width-wrap, breaking at the last space when one exists in
+/// the overflowing line (words longer than the width hard-break).
+/// Empty text yields one empty chunk so intended blank lines survive.
+fn wrap_line(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    let mut count = 0usize;
+    for ch in text.chars() {
+        line.push(ch);
+        count += 1;
+        if count >= width {
+            if let Some(pos) = line.rfind(' ') {
+                let rest = line.split_off(pos + 1);
+                out.push(std::mem::take(&mut line));
+                line = rest;
+            } else {
+                out.push(std::mem::take(&mut line));
+            }
+            count = line.chars().count();
+        }
+    }
+    if !line.is_empty() || out.is_empty() {
+        out.push(line);
+    }
+    out
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -712,6 +750,20 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("no missions running"), "empty-state hint shown");
         assert!(text.contains("aivyx team run"), "points at the command");
+    }
+
+    #[test]
+    fn wrap_line_breaks_at_spaces_and_preserves_content() {
+        let chunks = wrap_line("the quick brown fox jumps over the lazy dog", 12);
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 12));
+        assert_eq!(chunks.concat(), "the quick brown fox jumps over the lazy dog");
+        // Blank lines survive as one empty chunk.
+        assert_eq!(wrap_line("", 12), vec![String::new()]);
+        // Overlong single words hard-break instead of overflowing.
+        let long = wrap_line("abcdefghijklmnop", 5);
+        assert!(long.iter().all(|c| c.chars().count() <= 5));
+        assert_eq!(long.concat(), "abcdefghijklmnop");
     }
 
     #[test]

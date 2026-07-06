@@ -535,10 +535,32 @@ provide a quick summary" →
   session id and `TurnStarted` the divergent one.)
 
 ### 12 · TUI (`aivyx tui` on the rig)
-_(walkthrough pending — checklist issued)_
 - 5 views (Chat / Missions / Dashboard / Audit / Tools); Chat +
   Missions live, Dashboard minimal-live, **Audit + Tools are known
   placeholders** (the /classic-port backlog — not new findings).
+- **Operator walkthrough findings (2026-07-06):**
+  - **P2 — one word per line. FIXED:** the daemon streams
+    token-level `Text` events and `TurnFinished` rendered each as
+    its own ChatLine. Consecutive Text events now coalesce into one
+    line, and the chat pane word-wraps to its width (manual wrap so
+    the scroll-offset math keeps operating on real visual lines);
+    continuation rows indent under the provenance prefix. Regression
+    tests for both.
+  - **P3 — stray trailing "assistant" below the reply:** not a TUI
+    bug per se — a raw token in the model's own stream (the logged
+    gpt-oss finishing-warts family; the turn had no skill injection
+    and recall was normal). The per-token rendering made it a
+    prominent standalone line; post-coalesce it renders inline. Not
+    reproduced in an identical IPC-driven turn. Watch.
+  - **Bonus proof:** the operator's "Hello Jarvis" scored below the
+    0.50 trigger floor — no skill injected on a bare greeting
+    (precision holding), while recall injected 4 memories. And all
+    three routines since the §6 fix (06:00/07:00/07:30) fired with
+    zero injected skills — suppression proven 3×.
+- **Operator product direction:** defer deeper TUI work (the empty
+  panes) to the end-of-week polish waves, and pursue
+  **Web/TUI/Desktop parity** deliberately rather than building each
+  surface twice — fold into the polish-wave planning.
 
 ### 13 · Desktop shell (wry/tao webview)
 _(walkthrough pending — checklist issued)_
