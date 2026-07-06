@@ -488,6 +488,22 @@ decision), roster back to the 7 pre-existing skills
 (`overall_condition` gone), 0 pending. **Approve → land → review →
 forget round-trips cleanly; section 6 complete.** Findings above
 (P1 injection hijack, P2 fact-baking) move to same-day fixes.
+
+**Follow-on organic proposal, 2026-07-07 morning — the fact-baking
+fix holds up in the wild.** The 02:30 reflection authored a second
+skill, `ymml` (Melbourne Airport VFR status), from the same knowledge
+pipeline as the rejected `overall_condition` specimen. Unlike that
+one, `ymml`'s procedure is a genuine method: look up the typed
+relation → verify against a real VFR rule (visibility ≥10 km + light
+wind) → **explicit fallback to searching other relations if the
+first lookup misses → explicit "METAR data unavailable" if nothing
+is found at all.** Real branching, a real "I don't know" path, no
+self-contradiction. Residual nitpick: step 2 still echoes today's
+specific snapshot values as illustrative wording even though the
+actual check in step 3 is a live comparison, not a hardcoded
+assertion — improved, not perfect. **Operator approved it live;
+verified on the chain (`skill-author:ymml → Approved`) and the skill
+is now live in the roster (8 skills).**
 - **P2 — Approve is not dynamically reflected (operator finding):**
   approving the proposal did not refresh the UI; the new skill only
   appeared after a manual screen reload. Same family as the §8
