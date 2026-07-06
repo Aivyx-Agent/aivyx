@@ -567,6 +567,23 @@ fn App() -> Element {
     // Reflect the theme signal onto `<html data-theme>`.
     use_effect(move || apply_theme(light()));
 
+    // First-run routing: when the profile snapshot says pre-genesis and
+    // the operator hasn't navigated anywhere yet, land on the Create
+    // wizard (its nav entry only exists pre-genesis, so the wizard must
+    // present itself). One-shot — never hijacks later navigation.
+    let mut genesis_routed = use_signal(|| false);
+    use_effect(move || {
+        let pre_genesis = agents()
+            .profile
+            .as_ref()
+            .is_some_and(|p| p.assistant_name_source != "toml");
+        if pre_genesis && !genesis_routed() && view() == View::Command {
+            genesis_routed.set(true);
+            let mut v = view;
+            v.set(View::Onboarding);
+        }
+    });
+
     // Live poll: mission feed + the newest audit tail, every interval. The audit
     // window self-corrects to the newest entries once `audit_total` is known.
     use_future(move || async move {
@@ -692,11 +709,20 @@ fn App() -> Element {
 fn CommandPalette(view: Signal<View>, open: Signal<bool>) -> Element {
     let mut query = use_signal(String::new);
     let mut selected = use_signal(|| 0usize);
+    // Post-genesis the Create wizard leaves the jump list too (it
+    // mirrors the sidebar — operator nav-cleanup ask, 2026-07-06).
+    let agents = use_context::<Signal<AgentsState>>();
+    let genesis_done = agents()
+        .profile
+        .as_ref()
+        .map(|p| p.assistant_name_source == "toml")
+        .unwrap_or(true);
 
     // The filtered screen list (case-insensitive label contains).
     let q = query().to_lowercase();
     let results: Vec<View> = View::ALL
         .into_iter()
+        .filter(|v| !(genesis_done && *v == View::Onboarding))
         .filter(|v| q.is_empty() || v.label().to_lowercase().contains(&q))
         .collect();
     let sel = selected().min(results.len().saturating_sub(1));
@@ -762,6 +788,31 @@ type NavGroup = (&'static str, Vec<NavEntry>);
 /// click. An empty group header (`""`) renders no label (the lone Command item).
 #[component]
 fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
+    // Operator ask (2026-07-06): the Create wizard is a pre-genesis
+    // surface — once an agent exists (an operator-declared Profile),
+    // the nav entry is dead weight; editing lives in Agents/Settings.
+    // While the snapshot is loading we assume post-genesis (the common
+    // case) so the entry doesn't flash in and out.
+    let agents = use_context::<Signal<AgentsState>>();
+    let genesis_done = agents()
+        .profile
+        .as_ref()
+        .map(|p| p.assistant_name_source == "toml")
+        .unwrap_or(true);
+    let agent_group: Vec<NavEntry> = if genesis_done {
+        vec![
+            (ICON_AGENTS, "Agents", View::Agents),
+            (ICON_SKILLS, "Skills", View::Skills),
+            (ICON_TEAMS, "Teams", View::Teams),
+        ]
+    } else {
+        vec![
+            (ICON_CREATE, "Create", View::Onboarding),
+            (ICON_AGENTS, "Agents", View::Agents),
+            (ICON_SKILLS, "Skills", View::Skills),
+            (ICON_TEAMS, "Teams", View::Teams),
+        ]
+    };
     let groups: Vec<NavGroup> = vec![
         ("", vec![(ICON_COMMAND, "Command", View::Command)]),
         (
@@ -780,15 +831,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 (ICON_GRAPH, "Graph", View::Lattice),
             ],
         ),
-        (
-            "Agent",
-            vec![
-                (ICON_CREATE, "Create", View::Onboarding),
-                (ICON_AGENTS, "Agents", View::Agents),
-                (ICON_SKILLS, "Skills", View::Skills),
-                (ICON_TEAMS, "Teams", View::Teams),
-            ],
-        ),
+        ("Agent", agent_group),
         (
             "System",
             vec![
