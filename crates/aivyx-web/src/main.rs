@@ -550,6 +550,11 @@ fn App() -> Element {
     use_context_provider(|| skills);
     use_context_provider(|| mcp);
     use_context_provider(|| schedules_ui);
+    // Chapter Chime — the Schedules screen reads the routine list from
+    // the dashboard snapshot (already polled every 5 s). Dashboard had
+    // only ever been passed as a prop; the missing provider panicked
+    // the whole app on first navigate (operator-found, 2026-07-06).
+    use_context_provider(|| dashboard);
     // Chapter Repertoire — the Skills screen's "review in Agents" pointer
     // switches the active view.
     use_context_provider(|| view);
