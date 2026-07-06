@@ -760,4 +760,71 @@ Create-Agent nav, Nonagon role templates).
    is such a template).
 
 ## TUI + desktop shell
-_(pending — separate pass)_
+Done — see §12 and §13 above.
+
+## Chapter Herald — mission/schedule result notifications (2026-07-07)
+
+Operator noticed: "when the agent runs a mission or a schedule, is
+there a way for the agent to communicate the result to the end
+user?" Investigation found real infrastructure already existed (4
+notify backends: Telegram/Webhook/Email/WebUi) but it was invisible
+and half-wired: TOML-only configuration, schedules-only dispatch, no
+Studio surface at all.
+
+**Amusing callback:** the operator product-thought above (#3) said
+the Nonagon's 9-member cap was "already enforced" — it wasn't (it
+allowed 10); the scoping conversation for Herald is what led me back
+into that code and found it.
+
+**Three locked decisions:** read-only target view for now (no
+credentials in the web form — deliberately deferred), wire missions
+into the SAME dispatcher schedules already use, auto-provision a
+default in-Studio target so the feature works with zero TOML
+editing.
+
+**What shipped (cf178e2):**
+- `synthesize_default_webui_target` — a fresh install gets an
+  in-memory "studio" (`webui`-kind) target if none exists; never
+  claims `is_default` over an operator's own declared default; never
+  persisted to disk.
+- **The real bug this surfaced**: the pre-existing default-target
+  mechanism only baked a default name into `[[schedule]]` TOML
+  entries at config-LOAD time — Studio-created (Chime) and
+  agent-created schedules never went through that step, so they'd
+  silently never notify even with a default configured. Fixed with
+  a live, fire-time resolution (`resolve_notify_targets`) both
+  `TriggerDispatch::fire` and the digest path now call — covers
+  every schedule provenance, forever, not just config ones.
+- Team missions wired into the identical `NotifyDispatcher` +
+  `AutoNotifyDispatched` audit event schedules use (new
+  `TriggerSource::Mission`). Took tracing FOUR separate
+  mission-termination code paths to find all the spots that needed
+  the hook — two are inside `drive_registered`, but two more
+  (`resolve_team_gate` and `TeamMissionService::resolve`'s reject
+  arms) bypass `drive_registered` entirely and were easy to miss.
+- New Studio **Notifications** screen (targets + history — the
+  history query has existed since Phase 73 but was never consumed by
+  any frontend until now) + a header bell with an unseen-count
+  badge.
+
+**Verified:** synthesized "studio" target confirmed live over IPC
+(`is_default: true`); Notifications screen renders live target +
+history data; 10/10 Studio screens pass `scripts/studio_sweep.py`
+(added "Notifications" to its permanent click list). 19 new/updated
+tests; full workspace suite + clippy green.
+
+**Operator dogfood — next session:** run a mission (or wait for
+Coffee Bean / the agent's 16:00 journal-check schedule) and confirm
+(a) the Studio's header bell badge appears, (b) the Notifications
+screen shows the dispatch in history with a `delivered` outcome, and
+(c) visiting the screen clears the badge.
+
+**Deliberately deferred:** full notify-target CRUD in Studio
+(creating/editing Telegram bot tokens, webhook URLs, SMTP creds from
+the web form) — no precedent yet in this codebase for handling
+credentials in a web form. Correction to an earlier memory note:
+the "MCP screen → full mcp_server lifecycle mgmt in Studio" line
+from the 2026-07-05 evening session was a noted future ask, not a
+shipped chapter — grepped for `AddMcpServer`/`UpdateMcpServer` and
+found nothing. Same shape of gap as notify-target CRUD; both are
+real candidates for a future "credentials in Studio" design pass.
