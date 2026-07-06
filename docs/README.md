@@ -32,6 +32,11 @@ documents in the repo root:
   sibling of `ROADMAP.md`, listing forward product-shape milestones
   derived from `PRODUCT.md`'s commitments. Milestones are named, not
   numbered, and may span one or more technical phases.
+- **`docs/POST_V1_ROADMAP.md`** is the **post-v1.0.0 idea parking
+  lot** — things explicitly *not* being built now, each with a reason
+  and a trigger condition for revisiting. Not a schedule; an idea
+  graduates into `ROADMAP.md`/`PRODUCT_ROADMAP.md` once its trigger
+  fires.
 - **`docs/amendments/`** (created when first needed) holds one file per
   contract change. An amendment is the *only* legal way to modify a
   locked `DESIGN.md` *or* `PRODUCT.md` decision from inside a later
