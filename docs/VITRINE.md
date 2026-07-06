@@ -546,12 +546,22 @@ provide a quick summary" →
     the scroll-offset math keeps operating on real visual lines);
     continuation rows indent under the provenance prefix. Regression
     tests for both.
-  - **P3 — stray trailing "assistant" below the reply:** not a TUI
-    bug per se — a raw token in the model's own stream (the logged
-    gpt-oss finishing-warts family; the turn had no skill injection
-    and recall was normal). The per-token rendering made it a
-    prominent standalone line; post-coalesce it renders inline. Not
-    reproduced in an identical IPC-driven turn. Watch.
+  - **P3 — stray trailing "assistant" below the reply: RESOLVED —
+    terminal remnant, not a bug.** Never present in 6 instrumented
+    reproductions (4 raw-socket dumps + a full TUI-in-pty screen
+    capture with byte-level search); the decisive operator test — a
+    Dashboard→Chat view switch forcing a state-driven repaint —
+    cleared it. The word was a leftover painted frame from the
+    pre-fix session's alternate screen over ssh (its last frame
+    genuinely ended with a standalone "assistant" line under the
+    old per-token rendering). No code change; fresh terminals are
+    unaffected.
+  - **Operator verdict: chat fix verified** — "the interface
+    displayed correctly and information ordered and formatted
+    well"; the briefing reply rendered as wrapped, structured
+    paragraphs with tool provenance lines. **Section 12 complete**
+    (deeper pane work deferred to polish waves per the parity
+    decision above).
   - **Bonus proof:** the operator's "Hello Jarvis" scored below the
     0.50 trigger floor — no skill injected on a bare greeting
     (precision holding), while recall injected 4 memories. And all
