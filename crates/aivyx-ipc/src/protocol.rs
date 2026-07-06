@@ -1727,6 +1727,21 @@ pub enum FrontendMessage {
         id: String,
         description: String,
     },
+    /// Chapter Nonagon Templates — ask the daemon to **draft** a full
+    /// 9-member Nonagon (a coordinator lead + 8 specialists) tailored to
+    /// the operator's declared role/use-cases (+ optional free-text
+    /// `description`), using the configured model. Read-only: the draft
+    /// lands in the Studio's existing roster-edit-and-approve draft state
+    /// (the same one manual edits use) and is only persisted when the
+    /// operator sends [`FrontendMessage::SetTeamRoster`]. LLM-assisted, so
+    /// it can fail — the UI falls back to the stock default / manual
+    /// editing.
+    ///
+    /// Reply: [`DaemonMessage::TeamTemplateDrafted`] with the same `id`.
+    DraftTeamTemplate {
+        id: String,
+        description: String,
+    },
     /// Chapter Genesis — ask the daemon to **draft** the declared P13
     /// Profile from the operator's short onboarding answers (what they
     /// want the assistant to be, the role it plays, how it should talk,
@@ -2045,6 +2060,18 @@ pub enum DaemonMessage {
     PersonaSeedDrafted {
         id: String,
         draft: Option<PersonaSeedWire>,
+        error: Option<String>,
+    },
+    /// Chapter Nonagon Templates — response to
+    /// [`FrontendMessage::DraftTeamTemplate`]. `draft` is `Some` with the
+    /// LLM-drafted, already-clamped-and-validated
+    /// [`aivyx_team_types::TeamConfig`] (exactly 9 members: a lead + 8
+    /// specialists, each specialist's capabilities assigned in code from a
+    /// fixed archetype — never LLM-authored scope strings); `None` with
+    /// `error` when no model is configured or the draft failed.
+    TeamTemplateDrafted {
+        id: String,
+        draft: Option<aivyx_team_types::TeamConfig>,
         error: Option<String>,
     },
     /// Chapter Genesis — response to [`FrontendMessage::DraftProfile`].
@@ -2453,6 +2480,18 @@ pub enum DaemonEnvelope {
     PersonaSeedDrafted {
         id: String,
         draft: Option<PersonaSeedWire>,
+        error: Option<String>,
+    },
+    /// Chapter Nonagon Templates — response to
+    /// [`FrontendMessage::DraftTeamTemplate`]. `draft` is `Some` with the
+    /// LLM-drafted, already-clamped-and-validated
+    /// [`aivyx_team_types::TeamConfig`] (exactly 9 members: a lead + 8
+    /// specialists, each specialist's capabilities assigned in code from a
+    /// fixed archetype — never LLM-authored scope strings); `None` with
+    /// `error` when no model is configured or the draft failed.
+    TeamTemplateDrafted {
+        id: String,
+        draft: Option<aivyx_team_types::TeamConfig>,
         error: Option<String>,
     },
     // Chapter Genesis — LLM-drafted declared Profile.

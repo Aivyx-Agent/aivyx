@@ -2825,6 +2825,49 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::DraftTeamTemplate { id, description } => {
+                            // Chapter Nonagon Templates — one-shot LLM draft
+                            // of a role-tailored 9-member Nonagon from the
+                            // operator's declared Profile. Read-only: the
+                            // draft lands in the Studio's existing roster
+                            // draft state; SetTeamRoster is what persists.
+                            let resp = match seed_draft_llm.as_ref() {
+                                Some(llm) => {
+                                    match crate::team_template_draft::draft_team_template(
+                                        &llm.provider,
+                                        &llm.model,
+                                        profile.operator_profile.as_deref(),
+                                        &profile.primary_use_cases,
+                                        &description,
+                                    )
+                                    .await
+                                    {
+                                        Some(draft) => DaemonMessage::TeamTemplateDrafted {
+                                            id,
+                                            draft: Some(draft),
+                                            error: None,
+                                        },
+                                        None => DaemonMessage::TeamTemplateDrafted {
+                                            id,
+                                            draft: None,
+                                            error: Some(
+                                                "the model couldn't draft a team — \
+                                                 try the default Nonagon or edit \
+                                                 manually instead"
+                                                    .to_string(),
+                                            ),
+                                        },
+                                    }
+                                }
+                                None => DaemonMessage::TeamTemplateDrafted {
+                                    id,
+                                    draft: None,
+                                    error: Some("no model is configured for drafting".to_string()),
+                                },
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                         FrontendMessage::DraftProfile {
                             id,
                             intent,

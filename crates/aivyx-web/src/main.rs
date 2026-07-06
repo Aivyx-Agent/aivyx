@@ -264,6 +264,21 @@ struct TeamsState {
     /// True after a successful save — the team file is written but the running
     /// daemon won't adopt it until it restarts (the team service is boot-built).
     restart_required: bool,
+    /// Chapter Nonagon Templates — true while a DraftTeamTemplate round
+    /// trip is in flight (drives the button's spinner/disabled state).
+    drafting: bool,
+    /// Chapter Nonagon Templates — the last draft outcome: `(ok, message)`.
+    /// Separate from `notice` (a save outcome) so the two don't clobber
+    /// each other on screen.
+    draft_notice: Option<(bool, String)>,
+    /// Chapter Nonagon Templates — the drafted roster, handed off to the
+    /// panel's local edit-draft signal via `draft_resp` (the same
+    /// tick-and-consume pattern the Onboarding seed/profile drafts use).
+    drafted_roster: Option<TeamConfig>,
+    /// Bumped once per `TeamTemplateDrafted` response so the panel's
+    /// effect fires exactly once per draft, even if the config is
+    /// identical to a previous one.
+    draft_resp: u64,
 }
 
 /// Agents screen state — Chapter V. The operator-declared Profile half (V.3)
@@ -4613,7 +4628,7 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
 fn TeamsPanel() -> Element {
     let ws = use_context::<Sender>();
     let connected = use_context::<Signal<bool>>();
-    let teams = use_context::<Signal<TeamsState>>();
+    let mut teams = use_context::<Signal<TeamsState>>();
     let missions = use_context::<Signal<Vec<TeamMissionView>>>();
 
     // The edit draft, seeded once from the loaded roster.
@@ -4625,6 +4640,24 @@ fn TeamsPanel() -> Element {
         if let Some(r) = teams().roster {
             if draft.peek().is_none() {
                 draft.set(Some(r));
+            }
+        }
+    });
+
+    // Chapter Nonagon Templates — "Draft from my role" card state.
+    let mut show_draft_box = use_signal(|| false);
+    let mut draft_description = use_signal(String::new);
+    // A drafted roster REPLACES the edit draft (the operator reviews/edits
+    // it in the exact same form manual edits use — no separate preview
+    // UI). Fires once per response via the tick, not on every unrelated
+    // TeamsState write.
+    let draft_tick = use_memo(move || teams().draft_resp);
+    use_effect(move || {
+        let t = draft_tick();
+        if t > 0 {
+            if let Some(r) = teams().drafted_roster {
+                draft.set(Some(r));
+                show_draft_box.set(false);
             }
         }
     });
@@ -4653,7 +4686,10 @@ fn TeamsPanel() -> Element {
         .count();
     let member_names: Vec<String> = team.members.iter().map(|m| m.name.clone()).collect();
     let dirty = st.roster.as_ref() != Some(&team);
-    let can_add = specialist_count < 9;
+    // Chapter Nonagon Templates — the cap was specialists-only
+    // (lead + 9 = 10 total), one over the shape the name promises.
+    // 9 total = lead + 8 specialists.
+    let can_add = specialist_count < 8;
 
     rsx! {
         div { class: "teams",
@@ -4668,6 +4704,58 @@ fn TeamsPanel() -> Element {
             }
             if let Some((ok, msg)) = st.notice.clone() {
                 div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+            if let Some((ok, msg)) = st.draft_notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+
+            // Chapter Nonagon Templates — draft a role-tailored roster.
+            // The result REPLACES the edit draft below; nothing saves
+            // until the operator reviews it and clicks Save team, same
+            // as any manual edit.
+            div { class: "glass-card settings-section",
+                div { class: "panel-head",
+                    h3 { "Draft a team for my role" }
+                    span { class: "label-tech",
+                        "generates all 8 specialists from your Profile role + use cases"
+                    }
+                }
+                if show_draft_box() {
+                    div { class: "field-row",
+                        label { class: "label-tech", "Extra context (optional)" }
+                        textarea {
+                            class: "input",
+                            rows: "3",
+                            placeholder: "e.g. we run 15 kitchens and care most about food safety and cost control",
+                            value: "{draft_description}",
+                            oninput: move |e| draft_description.set(e.value()),
+                        }
+                    }
+                    div { style: "display:flex; gap:6px;",
+                        button {
+                            class: "btn btn-primary btn-xs",
+                            disabled: !connected() || st.drafting,
+                            onclick: move |_| {
+                                teams.write().drafting = true;
+                                ws.send(draft_team_template_query(draft_description()));
+                            },
+                            if st.drafting { "Drafting…" } else { "Generate" }
+                        }
+                        button {
+                            class: "btn btn-glass",
+                            disabled: st.drafting,
+                            onclick: move |_| show_draft_box.set(false),
+                            "Cancel"
+                        }
+                    }
+                } else {
+                    button {
+                        class: "btn btn-glass",
+                        disabled: !connected(),
+                        onclick: move |_| show_draft_box.set(true),
+                        "Draft from my role"
+                    }
+                }
             }
 
             // Team identity.
@@ -4791,7 +4879,7 @@ fn TeamsPanel() -> Element {
                             });
                         }
                     },
-                    {if can_add { "Add specialist" } else { "Max 9 specialists" }}
+                    {if can_add { "Add specialist" } else { "Nonagon full (9 members)" }}
                 }
                 button { class: "btn btn-primary", disabled: !dirty || !connected(),
                     onclick: move |_| { if let Some(t) = draft() { ws.send(set_team_roster_query(&t)); } },
@@ -4818,6 +4906,16 @@ fn set_team_roster_query(roster: &TeamConfig) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-teams-set".to_string(),
         payload: QueryPayload::SetTeamRoster { roster: roster.clone() },
+    }
+}
+
+/// Chapter Nonagon Templates — ask the daemon to draft a role-tailored
+/// Nonagon. `description` is optional extra context beyond the operator's
+/// declared Profile role/use-cases.
+fn draft_team_template_query(description: String) -> FrontendMessage {
+    FrontendMessage::DraftTeamTemplate {
+        id: "mc-teams-draft".to_string(),
+        description,
     }
 }
 
@@ -5717,6 +5815,25 @@ async fn read_task(
                 // X.3 — LLM seed draft arrived (or failed). The onboarding card
                 // watches `seed_draft_resp` to clear its spinner + re-seed its
                 // form from `seed_draft`.
+                // Chapter Nonagon Templates — role-tailored roster draft
+                // arrived (or failed). The Teams panel's effect watches
+                // draft_resp to pick up drafted_roster into its local edit
+                // state exactly once per response.
+                DaemonEnvelope::TeamTemplateDrafted { draft, error, .. } => {
+                    let mut t = teams.write();
+                    t.drafting = false;
+                    t.draft_resp = t.draft_resp.wrapping_add(1);
+                    if draft.is_some() {
+                        t.drafted_roster = draft;
+                        t.draft_notice = None;
+                    } else {
+                        t.drafted_roster = None;
+                        t.draft_notice = Some((
+                            false,
+                            error.unwrap_or_else(|| "couldn't draft a team".to_string()),
+                        ));
+                    }
+                }
                 DaemonEnvelope::PersonaSeedDrafted { draft, error, .. } => {
                     let mut a = agents.write();
                     a.seed_draft_resp += 1;

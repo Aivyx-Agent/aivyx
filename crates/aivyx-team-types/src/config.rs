@@ -10,8 +10,16 @@ use std::path::Path;
 use aivyx_capability::{CapabilitySet, Scope, TrustTier};
 use serde::{Deserialize, Serialize};
 
-/// The Nonagon bound: a lead coordinates **at most 9 specialists**.
-pub const MAX_SPECIALISTS: usize = 9;
+/// The Nonagon bound: 9 members TOTAL — a lead plus at most 8
+/// specialists (nine-sided figure, nine seats). Was originally
+/// specialists-only (lead + 9 = 10 total), letting a 10th member
+/// break the shape the name promises; corrected alongside Chapter
+/// Nonagon Templates (2026-07-06, operator-confirmed) once the
+/// Studio's own "Max 9 specialists" button made the mismatch visible.
+pub const MAX_SPECIALISTS: usize = 8;
+/// Total members including the lead — the number the "Nonagon" name
+/// actually refers to.
+pub const MAX_TOTAL_MEMBERS: usize = MAX_SPECIALISTS + 1;
 
 /// Errors loading or validating a team config.
 #[derive(Debug, thiserror::Error)]
@@ -200,7 +208,10 @@ impl TeamConfig {
         let specialist_count = self.members.len() - 1; // lead is one member
         if specialist_count > MAX_SPECIALISTS {
             return Err(TeamError::Config(format!(
-                "a Nonagon allows at most {MAX_SPECIALISTS} specialists, got {specialist_count}"
+                "a Nonagon allows at most {MAX_SPECIALISTS} specialists (9 total \
+                 with the lead), got {specialist_count} specialists \
+                 ({} total)",
+                self.members.len()
             )));
         }
 
@@ -321,21 +332,23 @@ trust_ceiling = "Trusted"
     }
 
     #[test]
-    fn rejects_more_than_nine_specialists() {
-        let mut members = vec![member("lead", &[], TrustTier::Trusted)];
-        for i in 0..10 {
-            members.push(member(&format!("s{i}"), &[], TrustTier::Trusted));
-        }
-        let err = team(members, "lead").validate().unwrap_err();
-        assert!(matches!(err, TeamError::Config(m) if m.contains("at most 9")));
-    }
-
-    #[test]
-    fn exactly_nine_specialists_is_allowed() {
+    fn rejects_more_than_eight_specialists() {
+        // 9 specialists + lead = 10 total, one over the Nonagon's 9 seats.
         let mut members = vec![member("lead", &[], TrustTier::Trusted)];
         for i in 0..9 {
             members.push(member(&format!("s{i}"), &[], TrustTier::Trusted));
         }
+        let err = team(members, "lead").validate().unwrap_err();
+        assert!(matches!(err, TeamError::Config(m) if m.contains("at most 8")));
+    }
+
+    #[test]
+    fn exactly_eight_specialists_is_nine_total_and_allowed() {
+        let mut members = vec![member("lead", &[], TrustTier::Trusted)];
+        for i in 0..8 {
+            members.push(member(&format!("s{i}"), &[], TrustTier::Trusted));
+        }
+        assert_eq!(members.len(), MAX_TOTAL_MEMBERS);
         assert!(team(members, "lead").validate().is_ok());
     }
 
