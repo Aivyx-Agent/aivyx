@@ -117,3 +117,41 @@ retrofit later.
 **Trigger:** either real Strix Halo/Ryzen AI NPU test hardware becomes
 available to this project, or an operator/customer with that hardware
 actually asks for it.
+
+---
+
+## Persistent interactive terminal sessions (Chapter Tether)
+
+**What:** a real interactive shell session the agent can keep talking
+to across multiple turns — open it, send input, read accumulated
+output, close it — distinct from the existing `shell.exec`, which is
+deliberately one-shot (spawn, run, capture, die; no persistent cwd,
+no surviving background process, no warm REPL).
+
+**Why it came up:** operator asked "should the agent have their own
+terminal?", then confirmed they meant a real interactive session, not
+just a Studio view watching `shell.exec` calls happen live.
+
+**Status:** scoped, not started — see the full design doc,
+[`docs/TETHER.md`](TETHER.md), written 2026-07-07. Not a quick
+addition: needs a new daemon-owned pty-session registry (mirroring
+`TeamMissionService`/`LoopDriver`), a small tool family
+(`terminal.open/send/read/close/list`), and its own Trusted-tier
+capability base (P10 amendment-gated, the same process `git.read`/
+`git.write` and `team.run` went through). The lifecycle question —
+does a session die at turn-end, session-end, or survive a daemon
+restart? — gates almost everything else and isn't resolved.
+
+**Why not now:** it's real, non-trivial design work touching the core
+containment model, not a bolt-on. Ward/Portcullis's sensitive-path
+guard is a one-shot pre-execution text scan; it doesn't extend cleanly
+to a persistent shell where the agent can drop into an arbitrary REPL
+mid-session (see `TETHER.md` §3 for why this is an honestly-named
+residual risk, not a gap to paper over, and why it's qualitatively the
+same risk `shell.exec` already carries today — just open-ended instead
+of one call). Also off the locked v0.9/v1.0 phasing.
+
+**Trigger:** a real dogfood workflow one-shot `shell.exec` genuinely
+can't serve — e.g. the operator wants Jarvis to start and keep
+monitoring a long-running dev server or watch-build across a
+conversation — not speculative "this would be nice."
