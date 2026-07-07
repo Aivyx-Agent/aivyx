@@ -988,13 +988,26 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "net.dns",
         "shell.exec",
         "shell.spawn",
+        // Amendment A12 (Phase 109) — `git.read` gates `git.status` /
+        // `git.diff`, framed in the amendment doc as "the same category
+        // as fs.read, fs.write, and net.fetch": ordinary substrate
+        // reads, Trusted-tier like its siblings. The A12 commit added
+        // the base to KNOWN_BASES only and never added this ceiling
+        // entry — found 2026-07-07 via Chapter Almanac's tier audit
+        // (the FG.2 comment below used to claim this omission was
+        // deliberate ["reachable at the operator/Kernel tier the Local
+        // CLI runs under"], but `local.rs`'s real `trust_tier()` returns
+        // `Trusted` for the Local CLI, and no real channel anywhere
+        // ever returns `Kernel` — so that claim was itself mistaken,
+        // not a verified design decision). Until this fix, no
+        // Trusted-tier channel could invoke `git.status`/`git.diff`.
+        "git.read",
         // Chapter Forge (FG.2) — `git.write` gates the destructive
         // `git.commit` tool. Trusted-tier only (like shell.exec /
         // fs.delete): writing repo history is sensitive, so a remote
-        // SemiTrusted adapter must not hold it by default. The read
-        // sibling `git.read` is reachable at the operator/Kernel tier
-        // the Local CLI runs under; the write base is pinned here so a
-        // future role grant can never lift it past Trusted.
+        // SemiTrusted adapter must not hold it by default; the write
+        // base is pinned here so a future role grant can never lift it
+        // past Trusted.
         "git.write",
         "llm.call",
         "llm.embed",
@@ -1984,6 +1997,29 @@ mod tests {
         assert!(TrustTier::Kernel.default_ceiling().grants(&s("team.run")));
         assert_eq!(
             TrustTier::min_for_scope(&s("team.run")),
+            TrustTier::Trusted
+        );
+    }
+
+    #[test]
+    fn git_read_is_in_trusted_ceiling_only() {
+        // Regression for a second real bug of the same shape (found
+        // 2026-07-07 via Chapter Almanac's full-93-base tier audit,
+        // triggered by the team.run fix above): Amendment A12
+        // (fc5ec30) added `git.read` to KNOWN_BASES only, never to
+        // CEILING_TRUSTED, so `git.status`/`git.diff` — two of the
+        // "thirteen tools forever" locked substrate tools — were
+        // unreachable from any Trusted-tier channel since Phase 109
+        // (2026-05-28). docs/TOOLS.md always documented them as
+        // Trusted with no caveat.
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s("git.read")));
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("git.read")));
+        assert!(!TrustTier::Untrusted.default_ceiling().grants(&s("git.read")));
+        assert!(TrustTier::Kernel.default_ceiling().grants(&s("git.read")));
+        assert_eq!(
+            TrustTier::min_for_scope(&s("git.read")),
             TrustTier::Trusted
         );
     }
