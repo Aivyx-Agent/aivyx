@@ -5,6 +5,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-07-07
+
+### Added
+
+- **Studio Gallery — view images your assistant generates.** A new screen
+  renders images produced through a `comfyui`-named `[[mcp_server]]`
+  (e.g. the community `comfyui-mcp-server` bridge in front of a local
+  ComfyUI instance). The daemon reads ComfyUI's own `/history` API
+  directly and serves bytes to the browser through a new authenticated
+  `/studio-asset` proxy route — no MCP-call plumbing involved, and the
+  browser never needs to reach ComfyUI's own (loopback-only) port
+  directly. Each image shows the prompt that produced it (traced through
+  the submitted workflow graph, not guessed by node order) and when it
+  was made, newest first, with a click-to-enlarge view. The screen is a
+  no-op empty state when no `comfyui` server is configured.
+
 ## [0.8.1] — 2026-07-05
 
 **The Vitrine harvest: one day of live operator walkthrough, fifteen-plus
