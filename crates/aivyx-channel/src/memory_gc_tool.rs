@@ -7,6 +7,12 @@
 //! This tool lives in the channel layer (not `aivyx-memory::tools`)
 //! to preserve the lib.rs byte-identity streak. It follows the same
 //! `Tool` trait pattern as `OllamaListTool` and `ReflectionTool`.
+//!
+//! Found missing 2026-07-07 via Chapter Almanac's guard-coverage audit:
+//! `memory.write`/`memory.forget` both refuse a topic starting with the
+//! reserved `\x01` session-namespace sentinel
+//! (`aivyx_memory::topic_uses_reserved_prefix`), but this tool didn't —
+//! now checked at both `required_scope` and `execute`, matching them.
 
 use std::sync::Arc;
 
@@ -94,6 +100,7 @@ impl Tool for MemoryGcTool {
         let topic = input
             .get("topic")
             .and_then(Value::as_str)
+            .filter(|t| !aivyx_memory::topic_uses_reserved_prefix(t))
             .unwrap_or("\x00denied");
         let qualifier = format!("topic:{topic}");
         Scope::parse(&format!("memory.gc:{qualifier}")).unwrap_or_else(|| {
@@ -103,11 +110,11 @@ impl Tool for MemoryGcTool {
 
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let topic = match input.get("topic").and_then(Value::as_str) {
-            Some(t) if !t.is_empty() => t,
+            Some(t) if !t.is_empty() && !aivyx_memory::topic_uses_reserved_prefix(t) => t,
             _ => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "missing or empty `topic` field".to_string(),
+                    detail: "missing, empty, or reserved-prefix `topic` field".to_string(),
                 });
             }
         };
@@ -224,6 +231,35 @@ mod tests {
         let input = json!({ "max_entries": 5 });
         let scope = tool.required_scope(&input);
         assert!(scope.to_string().contains("denied"));
+    }
+
+    #[test]
+    fn required_scope_deny_on_reserved_prefix_topic() {
+        // Regression for a real gap (found 2026-07-07 via Chapter
+        // Almanac's guard-coverage audit): memory.write/memory.forget
+        // both refuse the reserved `\x01` session-namespace sentinel,
+        // but memory.gc never did.
+        let tool = make_tool();
+        let input = json!({ "topic": "\x01internal", "max_entries": 5 });
+        let scope = tool.required_scope(&input);
+        assert!(scope.to_string().contains("denied"));
+    }
+
+    #[tokio::test]
+    async fn execute_refuses_reserved_prefix_topic() {
+        let mem: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let tool = MemoryGcTool::new(mem);
+        let ch = NoopChannel { session: SessionId::new(), token: CancellationToken::new() };
+        let audit = NoopAudit;
+        let ctx = make_ctx(&ch, &audit);
+        let input = json!({ "topic": "\x01internal", "max_entries": 5 });
+        let outcome = tool.execute(input, &ctx).await;
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("reserved-prefix"), "{detail}");
+            }
+            other => panic!("expected refusal for a reserved-prefix topic, got {other:?}"),
+        }
     }
 
     #[tokio::test]

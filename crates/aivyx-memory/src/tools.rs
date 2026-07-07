@@ -282,7 +282,13 @@ fn namespaced_topic(session: Option<&str>, topic: &str) -> String {
 /// call that would have collided with a physical-topic name. Phase 8
 /// Task 2 makes this a hard validation at both `required_scope` and
 /// `execute`.
-fn topic_uses_reserved_prefix(topic: &str) -> bool {
+///
+/// `pub` (re-exported at the crate root) so other crates' memory-
+/// adjacent tools can share this one source of truth instead of
+/// re-deriving the `\x01` sentinel — `aivyx_channel::memory_gc_tool`
+/// picked it up 2026-07-07 after a guard-coverage audit found
+/// `memory.gc` was the only mutating memory tool that didn't check it.
+pub fn topic_uses_reserved_prefix(topic: &str) -> bool {
     topic.starts_with('\x01')
 }
 

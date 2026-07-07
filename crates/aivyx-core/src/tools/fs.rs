@@ -1009,6 +1009,7 @@ fn delete_input_schema_value() -> Value {
 pub struct FsDeleteToolConfig {
     sandbox_root: PathBuf,
     confirm_destructive: bool,
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsDeleteToolConfig {
@@ -1016,12 +1017,29 @@ impl FsDeleteToolConfig {
         FsDeleteToolConfig {
             sandbox_root: sandbox_root.into(),
             confirm_destructive: false,
+            // Default disabled ⇒ byte-identical to pre-Portcullis behavior
+            // until the binary wires in the operator's policy.
+            sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
         }
     }
 
     /// Chapter N — require `confirmed: true` on every delete. Off by default.
     pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
         self.confirm_destructive = confirm;
+        self
+    }
+
+    /// Chapter Portcullis — install the sensitive-write guard. Found missing
+    /// 2026-07-07 via Chapter Almanac's guard-coverage audit: `FsReadTool`
+    /// and `FsWriteTool` both check `SensitivePolicy`, but `FsDeleteTool`
+    /// never did — a canonical secret/persistence path was one un-guarded
+    /// `fs.delete` call away from permanent destruction, `confirm_destructive`
+    /// notwithstanding (that's a self-declared flag, not a categorical block).
+    pub fn with_sensitive_policy(
+        mut self,
+        policy: Arc<crate::sensitive_paths::SensitivePolicy>,
+    ) -> Self {
+        self.sensitive = policy;
         self
     }
 
@@ -1046,6 +1064,7 @@ impl FsDeleteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: delete_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
+            sensitive: self.sensitive,
         })
     }
 }
@@ -1061,6 +1080,10 @@ pub struct FsDeleteTool {
     schema: Value,
     /// Chapter N — when true, every delete needs `confirmed: true`.
     confirm_destructive: bool,
+    /// Chapter Portcullis — the sensitive-path write guard, checked
+    /// alongside the sandbox fence so a protected path can't be deleted
+    /// even inside the sandbox root.
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsDeleteTool {
@@ -1204,6 +1227,26 @@ impl Tool for FsDeleteTool {
         }
         let target = canonical_parent.join(&file_name);
 
+        // ---- Chapter Portcullis — sensitive-write guard -----------
+        //
+        // Found missing 2026-07-07 (Chapter Almanac guard-coverage audit):
+        // FsWriteTool checks this on the identical resolved-parent-+-name
+        // shape, but FsDeleteTool never did, so a secret/persistence path
+        // was one delete call away from permanent destruction even though
+        // Ward/Portcullis already refuse to read or overwrite it.
+        // `confirm_destructive` alone doesn't cover this — it's a
+        // self-declared `confirmed: true` flag, not a categorical block.
+        if let Some(reason) = self.sensitive.classify_write(&target) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to delete {} — {reason}. Add it to `[access] \
+                     allow_sensitive_paths` if you intend the agent to delete it.",
+                    target.display()
+                ),
+            });
+        }
+
         // ---- Classify the entry without following a final symlink -
         let meta = match std::fs::symlink_metadata(&target) {
             Ok(m) => m,
@@ -1306,13 +1349,30 @@ fn metadata_input_schema_value() -> Value {
 /// the other filesystem tools.
 pub struct FsMetadataToolConfig {
     sandbox_root: PathBuf,
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsMetadataToolConfig {
     pub fn new(sandbox_root: impl Into<PathBuf>) -> Self {
         FsMetadataToolConfig {
             sandbox_root: sandbox_root.into(),
+            // Default disabled ⇒ byte-identical to pre-Ward behavior until
+            // the binary wires in the operator's policy.
+            sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
         }
+    }
+
+    /// Chapter Ward — install the sensitive-path read guard. Found missing
+    /// 2026-07-07 via Chapter Almanac's guard-coverage audit: `FsReadTool`
+    /// checks this, but `FsMetadataTool` never did, so stat-ing a secret
+    /// path (or listing a protected directory's filenames) was reachable
+    /// at SemiTrusted even though reading its *content* is Ward-refused.
+    pub fn with_sensitive_policy(
+        mut self,
+        policy: Arc<crate::sensitive_paths::SensitivePolicy>,
+    ) -> Self {
+        self.sensitive = policy;
+        self
     }
 
     /// Canonicalize the sandbox root and return a ready-to-register
@@ -1334,6 +1394,7 @@ impl FsMetadataToolConfig {
             id: ToolId::new(),
             sandbox_root: Arc::from(canonical),
             schema: metadata_input_schema_value(),
+            sensitive: self.sensitive,
         })
     }
 }
@@ -1346,6 +1407,10 @@ pub struct FsMetadataTool {
     id: ToolId,
     sandbox_root: Arc<Path>,
     schema: Value,
+    /// Chapter Ward — the sensitive-path read guard, checked alongside
+    /// the sandbox fence so a protected path can't be stat'd or have its
+    /// directory entries listed even inside the sandbox root.
+    sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
 
 impl FsMetadataTool {
@@ -1437,6 +1502,25 @@ impl Tool for FsMetadataTool {
                     "path {canonical:?} escapes sandbox root {:?} after \
                      symlink resolution",
                     self.sandbox_root
+                ),
+            });
+        }
+
+        // ---- Chapter Ward — sensitive-path guard -------------------
+        //
+        // Found missing 2026-07-07 (Chapter Almanac guard-coverage audit):
+        // FsReadTool checks this on the identical canonical path, but
+        // FsMetadataTool never did — size/mtime/permissions of a secret
+        // file, or the filenames inside a protected directory, leaked at
+        // SemiTrusted even though the read-only guard is Trusted+.
+        if let Some(reason) = self.sensitive.classify(&canonical) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to inspect {} — {reason}. This is a protected \
+                     location; add it to `[access] allow_sensitive_paths` if \
+                     you intend the agent to inspect it.",
+                    canonical.display()
                 ),
             });
         }
@@ -2449,6 +2533,42 @@ mod tests {
         assert!(schema["properties"]["path"].is_object());
     }
 
+    #[test]
+    fn portcullis_refuses_deleting_persistence_and_secret_paths() {
+        // Regression for a real gap (found 2026-07-07 via Chapter
+        // Almanac's guard-coverage audit): FsReadTool/FsWriteTool both
+        // checked SensitivePolicy, but FsDeleteTool never did — a
+        // protected path was one delete call away from permanent
+        // destruction even though reading/overwriting it was refused.
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new();
+        sandbox.write_file(".bashrc", b"evil() { :; }");
+        sandbox.write_file(".netrc", b"machine x");
+        sandbox.write_file("notes.md", b"hello");
+        let tool = FsDeleteToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(SensitivePolicy::new(vec![], vec![])))
+            .build()
+            .expect("build guarded delete tool");
+
+        // A persistence-path delete (shell rc) is refused…
+        match run_execute(&tool, json!({ "path": ".bashrc" })) {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("refusing to delete"), "{detail}");
+            }
+            other => panic!("expected refusal for .bashrc, got {other:?}"),
+        }
+        // …and a secret-path delete too.
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": ".netrc" })),
+            ToolOutcome::Failed(AivyxError::Tool { .. })
+        ));
+        // An ordinary delete still succeeds.
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": "notes.md" })),
+            ToolOutcome::Completed { .. }
+        ));
+    }
+
     // ---- FsDeleteTool: required_scope (lexical layer) -------------
 
     #[test]
@@ -2747,6 +2867,34 @@ mod tests {
         assert_eq!(schema["type"], json!("object"));
         assert_eq!(schema["required"], json!(["path"]));
         assert!(schema["properties"]["path"].is_object());
+    }
+
+    #[test]
+    fn ward_refuses_inspecting_a_sensitive_file_inside_the_sandbox() {
+        // Regression for a real gap (found 2026-07-07 via Chapter
+        // Almanac's guard-coverage audit): FsReadTool checked
+        // SensitivePolicy, but FsMetadataTool never did — size/mtime/
+        // permissions of a secret, or a protected directory's entry
+        // listing, leaked without ever needing the read-content scope.
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new();
+        sandbox.write_file(".env", b"API_KEY=super-secret\n");
+        sandbox.write_file("notes.md", b"hello\n");
+        let tool = FsMetadataToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(SensitivePolicy::new(vec![], vec![])))
+            .build()
+            .expect("build guarded metadata tool");
+
+        match run_execute(&tool, json!({ "path": ".env" })) {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("protected"), "reason: {detail}");
+            }
+            other => panic!("expected Failed for .env, got {other:?}"),
+        }
+        assert!(matches!(
+            run_execute(&tool, json!({ "path": "notes.md" })),
+            ToolOutcome::Completed { .. }
+        ));
     }
 
     // ---- FsMetadataTool: required_scope (lexical layer) -----------

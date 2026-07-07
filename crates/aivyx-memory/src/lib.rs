@@ -87,8 +87,8 @@ pub use crate::redb::RedbMemory;
 
 mod tools;
 pub use crate::tools::{
-    MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool,
-    DEFAULT_MAX_PER_TOPIC,
+    topic_uses_reserved_prefix, MemoryForgetTool, MemoryReadTool, MemorySearchTool,
+    MemoryWriteTool, DEFAULT_MAX_PER_TOPIC,
 };
 
 /// Phase 89 — topic canonicalization helper. Public so the

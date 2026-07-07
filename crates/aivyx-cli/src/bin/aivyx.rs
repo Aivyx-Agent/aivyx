@@ -336,6 +336,7 @@ fn build_fs_delete_for_channel(
     channel_kind: ChannelKind,
     fs_root: &std::path::Path,
     confirm_destructive: bool,
+    sensitive_policy: &Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice shares the Local Trusted
@@ -343,6 +344,10 @@ fn build_fs_delete_for_channel(
         ChannelKind::Local | ChannelKind::Voice => {
             let tool = FsDeleteToolConfig::new(fs_root.to_path_buf())
                 .with_confirm_destructive(confirm_destructive)
+                // Chapter Portcullis — same guard as fs.write: refuse to
+                // delete secret + persistence locations even inside the
+                // sandbox. Found missing 2026-07-07 (guard-coverage audit).
+                .with_sensitive_policy(Arc::clone(sensitive_policy))
                 .build()
                 .map_err(|e| format!("failed to build fs.delete tool: {e}"))?;
             let canonical_root = tool.sandbox_root().to_path_buf();
@@ -5914,6 +5919,9 @@ async fn run_async(
     // built behind a Local-only trust gate further down
     // (`build_fs_delete_for_channel`).
     let fs_metadata = FsMetadataToolConfig::new(fs_root.clone())
+        // Chapter Ward — same guard as fs.read: stat-ing or listing a
+        // protected path is refused even inside the sandbox root.
+        .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy))
         .build()
         .map_err(|e| format!("failed to build fs.metadata tool: {e}"))?;
 
@@ -6619,7 +6627,12 @@ async fn run_async(
     // `fs.metadata` is already in `tool_list` above (every channel);
     // `fs.delete` is registered only when the gate returns it.
     let fs_delete_scope: Option<Scope> =
-        match build_fs_delete_for_channel(channel_kind, &fs_root, confirm_destructive)? {
+        match build_fs_delete_for_channel(
+            channel_kind,
+            &fs_root,
+            confirm_destructive,
+            &sensitive_policy,
+        )? {
             Some((fs_delete, scope)) => {
                 tool_list.push(fs_delete);
                 Some(scope)
@@ -10072,8 +10085,13 @@ mod tests {
     #[test]
     fn channel_local_receives_fs_delete() {
         let scratch = Scratch::new();
-        let result = build_fs_delete_for_channel(ChannelKind::Local, &scratch.dir, false)
-            .expect("local branch must build fs.delete cleanly");
+        let result = build_fs_delete_for_channel(
+            ChannelKind::Local,
+            &scratch.dir,
+            false,
+            &std::sync::Arc::new(aivyx_core::sensitive_paths::SensitivePolicy::disabled()),
+        )
+        .expect("local branch must build fs.delete cleanly");
         let (tool, scope) = result.expect("local must receive fs.delete");
         assert_eq!(tool.name(), "fs.delete");
         assert_eq!(scope.base(), "fs.delete");
@@ -10091,8 +10109,13 @@ mod tests {
         // dispatch registry entirely, the same registration-time
         // strictness `shell.exec` gets. PHASE_100.md Q3.
         let scratch = Scratch::new();
-        let result = build_fs_delete_for_channel(ChannelKind::Telegram, &scratch.dir, false)
-            .expect("telegram branch must not error — it's a no-op");
+        let result = build_fs_delete_for_channel(
+            ChannelKind::Telegram,
+            &scratch.dir,
+            false,
+            &std::sync::Arc::new(aivyx_core::sensitive_paths::SensitivePolicy::disabled()),
+        )
+        .expect("telegram branch must not error — it's a no-op");
         assert!(
             result.is_none(),
             "Telegram channel must NOT receive fs.delete"
