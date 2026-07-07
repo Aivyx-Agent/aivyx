@@ -1988,6 +1988,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_chapter_f_integration_base_reaches_its_documented_trusted_tier() {
+        // Audit triggered by the team.run finding above: every Chapter F
+        // third-party-tool-process base (Gmail/Calendar/Drive/Notion/
+        // Obsidian/n8n/Contacts) carries a KNOWN_BASES doc comment
+        // promising "Trusted-tier only by default" — the same promise
+        // team.run's comment made and didn't keep. Checked each one
+        // against `min_for_scope` (2026-07-07): all 15 land on Trusted
+        // exactly as documented, so this chapter has no team.run-style
+        // gap today. Kept as a permanent regression guard — a future
+        // integration base that repeats the missing-ceiling-entry
+        // mistake fails here immediately instead of silently landing at
+        // Kernel until someone happens to look at the live catalog.
+        for base in [
+            "email.read",
+            "email.write",
+            "email.send",
+            "calendar.read",
+            "calendar.write",
+            "drive.read",
+            "drive.write",
+            "notion.read",
+            "notion.write",
+            "obsidian.read",
+            "obsidian.write",
+            "n8n.read",
+            "n8n.write",
+            "contacts.read",
+            "contacts.write",
+        ] {
+            assert_eq!(
+                TrustTier::min_for_scope(&s(base)),
+                TrustTier::Trusted,
+                "{base} should reach Trusted tier per its KNOWN_BASES doc comment"
+            );
+        }
+    }
+
     // ---- Phase 62 Task 2: `notify.send` scope base ----
 
     #[test]
