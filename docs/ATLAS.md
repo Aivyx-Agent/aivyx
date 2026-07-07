@@ -162,9 +162,15 @@ leaves it **legible**. Findings:
 
 **The next chapter is breadth, not refinement:** the §6 backlog (`git.write`, a
 utilities pack, `web.extract`, structured-data readers, and new integrations) is
-the recorded "new tools" follow-on. *Recommended adoption:* integration
+the recorded "new tools" follow-on. ~~*Recommended adoption:* integration
 tool-process crates should call `check_tool_quality` in their own tests (the
-helper is `pub`), extending the AT.3 guard to the out-of-process tiers.
+helper is `pub`), extending the AT.3 guard to the out-of-process tiers.~~ **DONE
+(2026-07-07):** all 7 in-workspace Chapter-F integration crates — Gmail,
+Calendar, Drive, Contacts, Notion, Obsidian, n8n — now run this sweep in their
+own `tests/tool_quality.rs`, using a fake client (no real credentials/network)
+to construct each tool and check its metadata. Kitchen is out of scope: it now
+ships as a private, packaged `.aivyxpack` (Chapter Freight), not an
+in-workspace crate.
 
 ## 8. Open questions (resolved in-phase / deferred)
 
