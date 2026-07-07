@@ -88,6 +88,52 @@ fn resolve_in_workspace(root: &Path, path: &str) -> Option<PathBuf> {
     lexical_resolve(root, Path::new(path))
 }
 
+/// Chapter O.2 hardening (found missing 2026-07-07 via Chapter Almanac's
+/// guard-coverage audit) — the canonical layer `fs.*` pairs with its lexical
+/// resolve (see `fs.rs`'s module doc: "two independent layers"), which
+/// `workspace.*` never had despite its own comment claiming parity. Without
+/// this, a symlink planted inside the workspace *after* construction (e.g.
+/// via a chained `shell.exec` call: `ln -s /etc/shadow escape`) would be
+/// followed straight through by `workspace.read`/`.list` — the lexical
+/// layer alone cannot see it.
+///
+/// For a path that must already exist (read, list): canonicalize and verify
+/// the result is still under the canonical workspace root.
+fn canonical_fence(root: &Path, lexical_abs: &Path) -> Result<PathBuf, String> {
+    let canonical = std::fs::canonicalize(lexical_abs)
+        .map_err(|e| format!("cannot canonicalize {lexical_abs:?}: {e}"))?;
+    if !canonical.starts_with(root) {
+        return Err(format!(
+            "path {canonical:?} escapes workspace root {root:?} after symlink resolution"
+        ));
+    }
+    Ok(canonical)
+}
+
+/// Same fence for a path that may not exist yet (write, delete, note):
+/// canonicalize the *parent* (which must exist), verify containment, then
+/// rejoin the final component. The final component is deliberately not
+/// canonicalize-followed, so a symlink planted as the final component is
+/// unlinked/overwritten as itself rather than followed through — mirrors
+/// `FsWriteTool`/`FsDeleteTool`'s identical parent-then-rejoin shape.
+fn canonical_fence_parent(root: &Path, lexical_abs: &Path) -> Result<PathBuf, String> {
+    let parent = lexical_abs
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| format!("path {lexical_abs:?} has no parent directory"))?;
+    let file_name = lexical_abs
+        .file_name()
+        .ok_or_else(|| format!("path {lexical_abs:?} has no final component"))?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|e| format!("cannot canonicalize parent {parent:?}: {e}"))?;
+    if !canonical_parent.starts_with(root) {
+        return Err(format!(
+            "parent {canonical_parent:?} escapes workspace root {root:?} after symlink resolution"
+        ));
+    }
+    Ok(canonical_parent.join(file_name))
+}
+
 /// `workspace:<abs>` scope for a resolved path, or the deny scope.
 fn scope_for(abs: &Path) -> Scope {
     Scope::parse(&format!("{WORKSPACE_SCOPE_BASE}:{}", abs.display()))
@@ -204,8 +250,12 @@ impl Tool for WorkspaceReadTool {
             Ok(p) => p,
             Err(e) => return tool_fail(self.id, e),
         };
-        let Some(abs) = resolve_in_workspace(&self.root, &path) else {
+        let Some(lexical_abs) = resolve_in_workspace(&self.root, &path) else {
             return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
+        };
+        let abs = match canonical_fence(&self.root, &lexical_abs) {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
         };
         match std::fs::read(&abs) {
             Ok(bytes) => {
@@ -252,13 +302,39 @@ impl Tool for WorkspaceWriteTool {
         if content.len() > MAX_WORKSPACE_BYTES {
             return tool_fail(self.id, format!("content exceeds {MAX_WORKSPACE_BYTES} bytes"));
         }
-        let Some(abs) = resolve_in_workspace(&self.root, &path) else {
+        let Some(lexical_abs) = resolve_in_workspace(&self.root, &path) else {
             return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
         };
-        if let Some(parent) = abs.parent() {
+        if let Some(parent) = lexical_abs.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return tool_fail(self.id, format!("cannot create parent of {path:?}: {e}"));
             }
+        }
+        let abs = match canonical_fence_parent(&self.root, &lexical_abs) {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        // A pre-existing symlink at the write target is refused outright —
+        // checked via `is_symlink` (an `lstat`, not `stat`), not `exists()`,
+        // so a *dangling* symlink (pointing at a destination that doesn't
+        // exist yet) is still caught: `exists()` follows the link and
+        // would report `false` for a dangling one, silently skipping this
+        // check while `std::fs::write` itself would still follow it and
+        // create the destination file wherever the link points — even one
+        // outside the workspace, since we cannot canonicalize a
+        // not-yet-existing destination to check containment the way the
+        // `abs.exists()` case can. Refusing outright (rather than trying
+        // to unlink first, which would need that same containment check
+        // to be safe) sidesteps the ambiguity entirely: a symlink has no
+        // legitimate reason to already sit at a workspace write target.
+        if abs.is_symlink() {
+            return tool_fail(
+                self.id,
+                format!(
+                    "refusing to write through an existing symlink at {abs:?} — \
+                     delete it first with workspace.delete if you intend to replace it"
+                ),
+            );
         }
         match std::fs::write(&abs, content.as_bytes()) {
             Ok(()) => ToolOutcome::Completed {
@@ -288,8 +364,12 @@ impl Tool for WorkspaceListTool {
     }
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let Some(abs) = resolve_in_workspace(&self.root, path) else {
+        let Some(lexical_abs) = resolve_in_workspace(&self.root, path) else {
             return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
+        };
+        let abs = match canonical_fence(&self.root, &lexical_abs) {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
         };
         match std::fs::read_dir(&abs) {
             Ok(rd) => {
@@ -335,12 +415,16 @@ impl Tool for WorkspaceDeleteTool {
             Ok(p) => p,
             Err(e) => return tool_fail(self.id, e),
         };
-        let Some(abs) = resolve_in_workspace(&self.root, &path) else {
+        let Some(lexical_abs) = resolve_in_workspace(&self.root, &path) else {
             return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
         };
-        if abs.as_path() == &*self.root {
+        if lexical_abs.as_path() == &*self.root {
             return tool_fail(self.id, "cannot delete the workspace root itself");
         }
+        let abs = match canonical_fence_parent(&self.root, &lexical_abs) {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
+        };
         let md = match std::fs::symlink_metadata(&abs) {
             Ok(m) => m,
             Err(e) => return tool_fail(self.id, format!("cannot stat {path:?}: {e}")),
@@ -385,11 +469,30 @@ impl Tool for WorkspaceNoteTool {
         let category = if category.is_empty() { "journal" } else { category };
         let (date, secs) = current_date_and_unix();
         let rel = format!("{category}/{date}.md");
-        let Some(abs) = resolve_in_workspace(&self.root, &rel) else {
+        let Some(lexical_abs) = resolve_in_workspace(&self.root, &rel) else {
             return tool_fail(self.id, "internal: journal path escaped workspace");
         };
-        if let Some(parent) = abs.parent() {
+        if let Some(parent) = lexical_abs.parent() {
             let _ = std::fs::create_dir_all(parent);
+        }
+        let abs = match canonical_fence_parent(&self.root, &lexical_abs) {
+            Ok(p) => p,
+            Err(e) => return tool_fail(self.id, e),
+        };
+        // A pre-existing symlink at the journal path is refused outright —
+        // checked via `is_symlink` so a *dangling* symlink is caught too
+        // (see `WorkspaceWriteTool`'s identical check for why `exists()`
+        // alone would miss it). A journal file is always created as a
+        // plain file by a prior `workspace.note` call; it never
+        // legitimately becomes a symlink, so there is no "safe" case to
+        // preserve — refusing is unambiguous and never destroys real
+        // journal history (append mode's whole point is reusing the
+        // *same regular file* across calls, not tolerating a link there).
+        if abs.is_symlink() {
+            return tool_fail(
+                self.id,
+                format!("refusing to append through an existing symlink at {abs:?}"),
+            );
         }
         let entry = format!("\n## {date} (t={secs})\n\n{content}\n");
         use std::io::Write as _;
@@ -584,5 +687,134 @@ mod tests {
         let ok = read.required_scope(&json!({"path":"journal/x.md"}));
         assert!(ok.as_str().starts_with("workspace:") && !ok.as_str().contains("__deny__"));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ---- Chapter O.2 hardening: the canonical layer (2026-07-07) -----
+    //
+    // Regression for a real gap (found via Chapter Almanac's guard-coverage
+    // audit): workspace.rs's own comment claimed "the same lexical fence
+    // fs.* uses", but fs.* pairs that lexical layer with a canonical
+    // re-check at execute time specifically to catch a symlink planted
+    // after construction — workspace.* never had that second layer. These
+    // tests plant exactly that symlink and confirm each tool now refuses it.
+
+    #[test]
+    #[cfg(unix)]
+    fn read_refuses_a_symlink_escaping_the_workspace() {
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("read-escape");
+        let outside = tmp("read-escape-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "outside content").unwrap();
+        symlink(outside.join("secret.txt"), root.join("escape")).unwrap();
+
+        let outcome = run_execute(named(&tools, "workspace.read"), json!({"path":"escape"}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("escapes workspace root"), "{detail}");
+            }
+            other => panic!("symlink escape must be refused, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn list_refuses_a_symlink_escaping_the_workspace() {
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("list-escape");
+        let outside = tmp("list-escape-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("escape_dir")).unwrap();
+
+        let outcome = run_execute(named(&tools, "workspace.list"), json!({"path":"escape_dir"}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("escapes workspace root"), "{detail}");
+            }
+            other => panic!("symlink escape must be refused, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_refuses_a_symlink_escaping_the_workspace() {
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("write-escape");
+        let outside = tmp("write-escape-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        // A pre-existing symlink at the write target, pointing outside.
+        symlink(outside.join("clobbered.txt"), root.join("escape.md")).unwrap();
+
+        let outcome = run_execute(
+            named(&tools, "workspace.write"),
+            json!({"path":"escape.md","content":"pwned"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("existing symlink"), "{detail}");
+            }
+            other => panic!("symlink escape must be refused, got {other:?}"),
+        }
+        assert!(
+            !outside.join("clobbered.txt").exists(),
+            "the write must never have followed the symlink through"
+        );
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn delete_refuses_a_symlink_escaping_the_workspace() {
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("delete-escape");
+        let outside = tmp("delete-escape-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("escape_dir")).unwrap();
+
+        let outcome = run_execute(
+            named(&tools, "workspace.delete"),
+            json!({"path":"escape_dir/anything"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("escapes workspace root"), "{detail}");
+            }
+            other => panic!("symlink escape must be refused, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn note_refuses_a_symlink_escaping_the_workspace() {
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("note-escape");
+        let outside = tmp("note-escape-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        // Plant the escaping symlink at the exact category/date path
+        // workspace.note would write to.
+        let (date, _) = current_date_and_unix();
+        std::fs::create_dir_all(root.join("journal")).unwrap();
+        symlink(outside.join("clobbered.md"), root.join("journal").join(format!("{date}.md"))).unwrap();
+
+        let outcome = run_execute(named(&tools, "workspace.note"), json!({"content":"pwned"}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("existing symlink"), "{detail}");
+            }
+            other => panic!("symlink escape must be refused, got {other:?}"),
+        }
+        assert!(
+            !outside.join("clobbered.md").exists(),
+            "the note must never have followed the symlink through"
+        );
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 }
