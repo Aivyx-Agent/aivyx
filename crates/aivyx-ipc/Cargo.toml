@@ -13,6 +13,10 @@ readme.workspace = true
 [dependencies]
 # The mission DAG + roster types the wire carries (TeamRun { plan, config }).
 aivyx-team-types = { path = "../aivyx-team-types" }
+# Chapter Almanac — `TrustTier` embedded directly in `ToolCatalogEntry`.
+# No storage/network/async deps of its own (serde + globset only), so it
+# stays wasm32-clean like the rest of this crate.
+aivyx-capability = { path = "../aivyx-capability" }
 serde = { workspace = true }
 # LearnedSkill::{to,from}_json_value (persona) serialize through serde_json.
 serde_json = { workspace = true }

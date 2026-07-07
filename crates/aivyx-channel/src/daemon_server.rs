@@ -4852,6 +4852,13 @@ async fn handle_query(
                 .unwrap_or(0);
             QueryResponsePayload::GetSkills { skills, pending_proposals }
         }
+        QueryPayload::GetToolCatalog => {
+            // Chapter Almanac — a pure registry snapshot. Cheap —
+            // `tool_descriptors` is captured once at daemon construction.
+            QueryResponsePayload::GetToolCatalog {
+                tools: build_tool_catalog(tool_descriptors),
+            }
+        }
         QueryPayload::GetMemoryTopicEntries { topic, limit } => {
             let Some(mem) = memory else {
                 return QueryResponsePayload::QueryError {
@@ -6477,6 +6484,32 @@ fn fold_tool_stats(
     tools
 }
 
+/// Chapter Almanac — build the `GetToolCatalog` response rows from the
+/// registered-tool snapshot: no audit-chain read, unlike `fold_tool_stats`
+/// above (this is a pure registry catalog, not observability). `min_tier`
+/// is derived from the *bare* form of each tool's scope base — a base
+/// that fails to parse (should not happen; `scope_base` always comes from
+/// a real `Scope`) falls back to `TrustTier::Kernel`, the safe over-
+/// estimate.
+fn build_tool_catalog(
+    tool_descriptors: &[ToolDescriptor],
+) -> Vec<crate::daemon_ipc::ToolCatalogEntry> {
+    tool_descriptors
+        .iter()
+        .map(|d| {
+            let min_tier = aivyx_capability::Scope::parse(&d.scope_base)
+                .map(|s| aivyx_capability::TrustTier::min_for_scope(&s))
+                .unwrap_or(aivyx_capability::TrustTier::Kernel);
+            crate::daemon_ipc::ToolCatalogEntry {
+                name: d.name.clone(),
+                description: d.description.clone(),
+                scope_base: d.scope_base.clone(),
+                min_tier,
+            }
+        })
+        .collect()
+}
+
 fn mission_state_label(state: mission::MissionState) -> &'static str {
     match state {
         mission::MissionState::Created => "Created",
@@ -7562,6 +7595,31 @@ mod tests {
             description: format!("{name} tool"),
             scope_base: scope_base.to_string(),
         }
+    }
+
+    #[test]
+    fn build_tool_catalog_derives_min_tier_per_scope_base() {
+        let descs = vec![
+            desc("fs.read", "fs.read"),
+            desc("fs.metadata", "fs.metadata"),
+            desc("role.switch", "role.switch"),
+        ];
+        let rows = build_tool_catalog(&descs);
+        assert_eq!(rows.len(), 3);
+        let tier_of = |name: &str| {
+            rows.iter()
+                .find(|r| r.name == name)
+                .map(|r| r.min_tier)
+                .unwrap()
+        };
+        assert_eq!(tier_of("fs.read"), aivyx_capability::TrustTier::Trusted);
+        assert_eq!(
+            tier_of("fs.metadata"),
+            aivyx_capability::TrustTier::SemiTrusted
+        );
+        // Chapter Almanac's own finding: role.switch is Trusted-tier per
+        // the ceiling code, not Kernel (docs/TOOLS.md corrected to match).
+        assert_eq!(tier_of("role.switch"), aivyx_capability::TrustTier::Trusted);
     }
 
     #[test]

@@ -29,9 +29,14 @@ computes the capability the call needs, which the daemon enforces **before**
   **SemiTrusted** bases: `fs.metadata`, `net.fetch`, `net.dns`, `llm.call`,
   `llm.embed`, `memory.read`, `memory.write`, `config.read`. **Untrusted** sees only
   public `memory.read` + `audit.read`. Everything else is **Trusted+** by default
-  (write/personal-data/management surfaces), and a handful are **Kernel**-only
-  (`config.write`, `tool.allowlist`, `role.switch`, `role.update`). Operators can
-  narrow per role; they cannot widen past the tier ceiling.
+  (write/personal-data/management surfaces — including `config.write`, `role.switch`,
+  `role.update`, all deliberately Trusted-tier per PRODUCT.md P1, not Kernel). The one
+  genuine **Kernel**-only base is `tool.allowlist`, a synthetic dispatch-layer label no
+  real tier's ceiling ever holds (see `aivyx-capability`'s
+  `tool_allowlist_parses_and_is_absent_from_real_ceilings`). Operators can narrow per
+  role; they cannot widen past the tier ceiling. (Corrected 2026-07-07 — Chapter
+  Almanac's `TrustTier::min_for_scope` surfaced that this section had drifted from the
+  ceiling tables; the three rows below were "Kernel" here but Trusted in code.)
 
 ---
 
@@ -132,7 +137,7 @@ base, Trusted-tier only. See the Lattice addendum in
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
 | `config.read` | `config.read` | SemiTrusted | read effective config |
-| `config.write` | `config.write` | Kernel | rewrite a config section |
+| `config.write` | `config.write` | Trusted | rewrite a config section (no registered `Tool` — gates the Settings-screen write IPC path only, so it never appears in a live tool catalog) |
 | *(allowlist)* | `tool.allowlist` | Kernel | per-role tool allowlist (synthetic) |
 
 ## Skills, reflection & persona (infrastructure)
@@ -143,8 +148,8 @@ base, Trusted-tier only. See the Lattice addendum in
 | `skills.teach` / `skills.update` / `skills.forget` / `skills.propose` | `skills.write`, `skills.propose` | Trusted | manage learned skills |
 | `reflection.propose` / `reflection.apply` | `reflection.propose`, `reflection.apply` | Trusted | self-improvement proposals |
 | `persona.propose` | `persona.propose` | Trusted | persona-evolution proposals |
-| `role.switch` | `role.switch` | Kernel | sub-agent role switching |
-| `role.update` | `role.update` | Kernel | update a role definition |
+| `role.switch` | `role.switch` | Trusted | sub-agent role switching |
+| `role.update` | `role.update` | Trusted | update a role definition |
 
 ## Missions, scheduling & automation (infrastructure)
 

@@ -445,6 +445,7 @@ dependencies = [
 name = "aivyx-ipc"
 version = "0.8.1"
 dependencies = [
+ "aivyx-capability",
  "aivyx-team-types",
  "serde",
  "serde_json",

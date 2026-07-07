@@ -918,6 +918,24 @@ impl TrustTier {
     pub fn is_more_trusted_than(self, other: TrustTier) -> bool {
         self > other
     }
+
+    /// The least-trusted tier whose default ceiling grants `scope` — the
+    /// minimum tier a channel needs before a tool requiring this scope
+    /// becomes reachable. Checks tiers in ascending trust order
+    /// (Untrusted → SemiTrusted → Trusted → Kernel); if no non-Kernel
+    /// ceiling grants it, the scope is Kernel-only.
+    pub fn min_for_scope(scope: &Scope) -> TrustTier {
+        const ASCENDING: [TrustTier; 4] = [
+            TrustTier::Untrusted,
+            TrustTier::SemiTrusted,
+            TrustTier::Trusted,
+            TrustTier::Kernel,
+        ];
+        ASCENDING
+            .into_iter()
+            .find(|tier| tier.default_ceiling().grants(scope))
+            .unwrap_or(TrustTier::Kernel)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,6 +1616,39 @@ mod tests {
     fn trust_tier_is_more_trusted_than() {
         assert!(TrustTier::Kernel.is_more_trusted_than(TrustTier::Untrusted));
         assert!(!TrustTier::Untrusted.is_more_trusted_than(TrustTier::Kernel));
+    }
+
+    #[test]
+    fn min_for_scope_matches_the_documented_tiers() {
+        // Chapter Almanac — cross-checked against docs/TOOLS.md's own
+        // "how to read the tier column" prose, corrected in the same
+        // chapter after this helper caught it drifting from the ceiling
+        // tables (config.write / role.switch / role.update had been
+        // documented as Kernel; the ceiling code has always held them
+        // bare in CEILING_TRUSTED).
+        assert_eq!(TrustTier::min_for_scope(&s("fs.read")), TrustTier::Trusted);
+        assert_eq!(
+            TrustTier::min_for_scope(&s("fs.metadata")),
+            TrustTier::SemiTrusted
+        );
+        assert_eq!(
+            TrustTier::min_for_scope(&s("memory.read")),
+            TrustTier::SemiTrusted
+        );
+        assert_eq!(
+            TrustTier::min_for_scope(&s("role.switch")),
+            TrustTier::Trusted
+        );
+        assert_eq!(
+            TrustTier::min_for_scope(&s("role.update")),
+            TrustTier::Trusted
+        );
+        // The one genuinely Kernel-only base: no real tier's ceiling
+        // holds it (`tool_allowlist_parses_and_is_absent_from_real_ceilings`).
+        assert_eq!(
+            TrustTier::min_for_scope(&s("tool.allowlist")),
+            TrustTier::Kernel
+        );
     }
 
     #[test]

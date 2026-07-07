@@ -272,6 +272,12 @@ pub enum QueryPayload {
     /// (decayed EWMA + samples), plus the count of pending skill proposals.
     /// Read-only. Responds with [`QueryResponsePayload::GetSkills`].
     GetSkills,
+    /// Chapter Almanac — the Studio Tools screen: the daemon's full
+    /// registered tool catalog (name, description, capability base,
+    /// minimum trust tier), independent of audit history — a pure
+    /// registry snapshot, not observability. Read-only. Responds with
+    /// [`QueryResponsePayload::GetToolCatalog`].
+    GetToolCatalog,
     /// Chapter Lantern — the Studio MCP screen: each configured MCP
     /// server's last-start health (connected + tool count, or failed +
     /// reason + captured stderr), read from the daemon's status
@@ -597,6 +603,20 @@ pub struct SkillView {
     pub invocations: u32,
 }
 
+/// Chapter Almanac — one row in the Studio Tools library: a registered
+/// tool's name, description, and the capability it gates on. `min_tier`
+/// is the least-trusted `TrustTier` whose default ceiling grants
+/// `scope_base` unqualified (see `TrustTier::min_for_scope`) — the
+/// tier a channel needs before this tool becomes reachable at all.
+/// Wasm-clean (the Studio renders it directly).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCatalogEntry {
+    pub name: String,
+    pub description: String,
+    pub scope_base: String,
+    pub min_tier: aivyx_capability::TrustTier,
+}
+
 /// Chapter Tutor — which operator-authoring action [`FrontendMessage::AuthorSkill`]
 /// performs against the persona chain. This is the **operator** channel
 /// (CLI / Studio), distinct from the agent's scope-gated `skills.teach` tool:
@@ -846,6 +866,13 @@ pub enum QueryResponsePayload {
     GetSkills {
         skills: Vec<SkillView>,
         pending_proposals: usize,
+    },
+    /// Chapter Almanac — response to [`QueryPayload::GetToolCatalog`]:
+    /// every tool in the daemon's live registry, for the Studio's
+    /// read-only browse/search screen. Unordered — the Studio sorts
+    /// client-side.
+    GetToolCatalog {
+        tools: Vec<ToolCatalogEntry>,
     },
     /// Chapter Lantern — response to [`QueryPayload::GetMcpStatus`]: each
     /// configured MCP server's last-start health, plus the unix time the
@@ -3666,6 +3693,29 @@ mod tests {
         let frame = encode_frame(&resp).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resp, "skill view + effectiveness survive the frame");
+    }
+
+    #[test]
+    fn get_tool_catalog_query_and_response_round_trip() {
+        let req = FrontendMessage::Query {
+            id: "tc".into(),
+            payload: QueryPayload::GetToolCatalog,
+        };
+        let frame = encode_frame(&req).expect("encode");
+        let (back, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, req);
+
+        let resp = QueryResponsePayload::GetToolCatalog {
+            tools: vec![ToolCatalogEntry {
+                name: "fs.read".into(),
+                description: "Read a file under the sandbox root.".into(),
+                scope_base: "fs.read".into(),
+                min_tier: aivyx_capability::TrustTier::Trusted,
+            }],
+        };
+        let frame = encode_frame(&resp).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resp, "tool catalog entries survive the frame");
     }
 
     #[test]

@@ -108,6 +108,10 @@ edited freely when a new adapter or subsystem teaches us something new.
   (substrate / infrastructure / tool-process / MCP) + the name→scope mapping.
   Drift-guarded against `KNOWN_BASES`; the agent enumerates its own tools at
   runtime via `tools.list`. ✅ shipped.
+- [`ALMANAC.md`](ALMANAC.md) — the **Studio Tools screen** (Chapter Almanac): a
+  read-only, searchable browse of the daemon's registered tool catalog — name,
+  description, capability base, minimum trust tier — grouped by domain. The
+  Studio-side companion to `TOOLS.md`'s static catalog. 🟡 in progress.
 - [`SECURITY_POSTURE.md`](SECURITY_POSTURE.md) — **what an autonomous agent can
   and cannot do**: the four-layer containment model (access level →
   `confirm_destructive` → loop caps → Kernel-tier no-self-escalation) over the

@@ -470,6 +470,17 @@ a { color: var(--color-primary); text-decoration: none; }
 .skill-proc summary { cursor: pointer; }
 .skill-proc .mem-body { margin-top: 6px; }
 
+/* Chapter Almanac — Tools screen. Read-only catalog, grouped by domain. */
+.tools { display: flex; flex-direction: column; gap: 12px; }
+.tools-search { display: flex; gap: 10px; }
+.tools-search .input { flex: 1; }
+.tools-group { display: flex; flex-direction: column; gap: 8px; }
+.tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.tool-card { display: flex; flex-direction: column; gap: 6px; }
+.tool-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tool-name { font-weight: 600; font-size: 14px; font-family: var(--font-mono); }
+.tool-desc { margin: 0; color: var(--color-text-primary); font-size: 13px; line-height: 1.5; }
+
 /* ── Chat / Terminal view ──────────────────────────────────────────────────── */
 .chat { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .transcript {

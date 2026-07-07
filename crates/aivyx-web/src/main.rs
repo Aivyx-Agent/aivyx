@@ -23,7 +23,7 @@ use aivyx_ipc::protocol::{
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, ScheduleView, SeedSkillWire, SettingsSnapshot, SkillView,
-    StreamEventPayload, VoiceSettingsSnapshot,
+    StreamEventPayload, ToolCatalogEntry, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
@@ -79,6 +79,7 @@ const ICON_PLUGINS: Asset = asset!("/assets/icons/plugins.svg");
 const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
 const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
+const ICON_TOOLS: Asset = asset!("/assets/icons/tools.svg");
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -113,6 +114,10 @@ enum View {
     /// Chapter Lantern — the MCP screen: each configured MCP server's
     /// last-start health (connected + tool count, or failed + reason).
     Mcp,
+    /// Chapter Almanac — the Tools screen: a read-only, searchable
+    /// catalog of every registered tool (name, capability base, minimum
+    /// trust tier, description).
+    Tools,
     Voice,
     /// The in-app end-user guide — the `docs/guide/*.md` pages rendered in the
     /// Studio (see `guide.rs`). Pure static content, no daemon IPC.
@@ -124,7 +129,7 @@ enum View {
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 17] = [
+    const ALL: [View; 18] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -139,6 +144,7 @@ impl View {
         View::Teams,
         View::Documents,
         View::Mcp,
+        View::Tools,
         View::Voice,
         View::Settings,
         View::Guide,
@@ -161,6 +167,7 @@ impl View {
             View::Teams => "teams",
             View::Documents => "documents",
             View::Mcp => "mcp",
+            View::Tools => "tools",
             View::Voice => "voice",
             View::Guide => "guide",
             View::Onboarding => "create",
@@ -189,6 +196,7 @@ impl View {
             View::Teams => "Teams",
             View::Documents => "Documents",
             View::Mcp => "MCP",
+            View::Tools => "Tools",
             View::Voice => "Voice",
             View::Guide => "Guide",
             View::Onboarding => "Create",
@@ -248,6 +256,17 @@ struct GraphKnowledgeState {
 struct McpState {
     servers: Vec<McpServerStatusView>,
     captured_unix: u64,
+    loaded: bool,
+}
+
+/// Chapter Almanac — Tools screen state: the daemon's registered tool
+/// catalog (name, description, capability base, minimum trust tier).
+/// Read-only snapshot fanned in by `ws_task`. `loaded` distinguishes
+/// "still loading" from "the daemon reports zero tools" (should never
+/// happen, but the same defensive convention as `SkillsState`/`McpState`).
+#[derive(Clone, Default, PartialEq)]
+struct ToolsState {
+    tools: Vec<ToolCatalogEntry>,
     loaded: bool,
 }
 
@@ -562,6 +581,7 @@ fn App() -> Element {
     let voice = use_signal(VoiceState::default);
     let skills = use_signal(SkillsState::default);
     let mcp = use_signal(McpState::default);
+    let tools = use_signal(ToolsState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
@@ -573,7 +593,7 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, dashboard, memory, wiki, lattice, settings, agents, teams, documents,
-            voice, skills, mcp, schedules_ui, notifications, connected, session, transcript,
+            voice, skills, mcp, tools, schedules_ui, notifications, connected, session, transcript,
             streaming, gate,
         )
     });
@@ -591,6 +611,7 @@ fn App() -> Element {
     use_context_provider(|| voice);
     use_context_provider(|| skills);
     use_context_provider(|| mcp);
+    use_context_provider(|| tools);
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
     // Chapter Chime — the Schedules screen reads the routine list from
@@ -709,6 +730,7 @@ fn App() -> Element {
         View::Teams => "Teams",
         View::Documents => "Documents",
         View::Mcp => "MCP Servers",
+        View::Tools => "Tools",
         View::Voice => "Voice",
         View::Guide => "Guide",
         View::Onboarding => "Create your agent",
@@ -752,6 +774,7 @@ fn App() -> Element {
                         View::Teams => rsx! { TeamsPanel {} },
                         View::Documents => rsx! { DocumentsPanel {} },
                         View::Mcp => rsx! { McpPanel {} },
+                        View::Tools => rsx! { ToolsPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
                         View::Guide => rsx! { GuidePanel { page: guide_page } },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
@@ -901,6 +924,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 (ICON_DOCUMENTS, "Documents", View::Documents),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_PLUGINS, "MCP", View::Mcp),
+                (ICON_TOOLS, "Tools", View::Tools),
                 (ICON_VOICE, "Voice", View::Voice),
                 (ICON_SETTINGS, "Settings", View::Settings),
                 (ICON_GUIDE, "Guide", View::Guide),
@@ -2663,6 +2687,148 @@ fn McpServerCard(view: McpServerStatusView) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tools screen — Chapter Almanac. A read-only, searchable catalog of every
+// tool the daemon has registered: name, description, capability base, and
+// the minimum trust tier a channel needs before the tool becomes reachable
+// at all (see `TrustTier::min_for_scope` in aivyx-capability). Distinct
+// from the MCP screen (server health) and from `aivyx tools` / GetToolStats
+// (audit-derived call counts) — this is a pure registry browse, grouped by
+// domain (the tool name's leading segment: `fs.read` → `fs`).
+// ---------------------------------------------------------------------------
+
+fn tool_catalog_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-tool-catalog".to_string(),
+        payload: QueryPayload::GetToolCatalog,
+    }
+}
+
+fn tool_domain(name: &str) -> &str {
+    name.split('.').next().unwrap_or(name)
+}
+
+fn tier_label(t: TrustTier) -> &'static str {
+    match t {
+        TrustTier::Kernel => "kernel",
+        TrustTier::Trusted => "trusted",
+        TrustTier::SemiTrusted => "semi-trusted",
+        TrustTier::Untrusted => "untrusted",
+    }
+}
+
+fn tier_chip_class(t: TrustTier) -> &'static str {
+    match t {
+        TrustTier::Kernel => "chip error",
+        TrustTier::Trusted => "chip sage",
+        TrustTier::SemiTrusted => "chip amber",
+        TrustTier::Untrusted => "chip muted",
+    }
+}
+
+#[component]
+fn ToolsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let tools = use_context::<Signal<ToolsState>>();
+    let mut query = use_signal(String::new);
+
+    // Load the snapshot each time the view opens (the registry only
+    // changes on a daemon restart or an MCP hot-swap, so on-open + a
+    // manual refresh is enough — no poll, mirrors the MCP screen).
+    use_future(move || async move {
+        ws.send(tool_catalog_query());
+    });
+
+    let t = tools();
+    let q = query().to_lowercase();
+    let mut filtered: Vec<ToolCatalogEntry> = t
+        .tools
+        .iter()
+        .filter(|e| {
+            q.is_empty()
+                || e.name.to_lowercase().contains(&q)
+                || e.description.to_lowercase().contains(&q)
+                || e.scope_base.to_lowercase().contains(&q)
+        })
+        .cloned()
+        .collect();
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut groups: Vec<(String, Vec<ToolCatalogEntry>)> = Vec::new();
+    for entry in filtered {
+        let domain = tool_domain(&entry.name).to_string();
+        match groups.iter_mut().find(|(d, _)| *d == domain) {
+            Some((_, rows)) => rows.push(entry),
+            None => groups.push((domain, vec![entry])),
+        }
+    }
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+    rsx! {
+        div { class: "tools",
+            div { class: "panel-head",
+                h3 { "Tools" }
+                if t.loaded {
+                    span { class: "label-tech", "{t.tools.len()}" }
+                }
+                button {
+                    class: "btn-ghost",
+                    onclick: move |_| ws.send(tool_catalog_query()),
+                    "Refresh"
+                }
+            }
+            div { class: "tools-search",
+                input {
+                    class: "input",
+                    "aria-label": "Search tools",
+                    placeholder: "search tools by name, description, or scope…",
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                }
+            }
+            if !t.loaded {
+                SkeletonCards { cards: 4 }
+            } else if t.tools.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech", "No tools reported by the daemon." }
+                }
+            } else if groups.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech", "No tools match \"{query}\"." }
+                }
+            } else {
+                for (domain, rows) in groups.iter() {
+                    div { class: "tools-group", key: "{domain}",
+                        div { class: "panel-head",
+                            h3 { class: "label-tech", "{domain}" }
+                            span { class: "label-tech", "{rows.len()}" }
+                        }
+                        div { class: "tools-grid",
+                            for entry in rows.iter() {
+                                { rsx! { ToolCard { key: "{entry.name}", entry: entry.clone() } } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ToolCard(entry: ToolCatalogEntry) -> Element {
+    rsx! {
+        div { class: "glass-card tool-card",
+            div { class: "tool-card-head",
+                span { class: "tool-name", "{entry.name}" }
+                span { class: tier_chip_class(entry.min_tier), "{tier_label(entry.min_tier)}" }
+            }
+            p { class: "label-tech", "{entry.scope_base}" }
+            p { class: "tool-desc", "{entry.description}" }
         }
     }
 }
@@ -5553,6 +5719,7 @@ async fn ws_task(
     voice: Signal<VoiceState>,
     skills: Signal<SkillsState>,
     mcp: Signal<McpState>,
+    tools: Signal<ToolsState>,
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
     mut connected: Signal<bool>,
@@ -5592,7 +5759,7 @@ async fn ws_task(
 
         spawn(read_task(
             read, missions, dashboard, memory, wiki, lattice, settings, agents, teams,
-            documents, voice, skills, mcp, schedules_ui, notifications, connected, session,
+            documents, voice, skills, mcp, tools, schedules_ui, notifications, connected, session,
             transcript, streaming, gate,
         ));
 
@@ -5683,6 +5850,7 @@ async fn read_task(
     mut voice: Signal<VoiceState>,
     mut skills: Signal<SkillsState>,
     mut mcp: Signal<McpState>,
+    mut tools: Signal<ToolsState>,
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
     mut connected: Signal<bool>,
@@ -5867,6 +6035,15 @@ async fn read_task(
                     m.servers = servers;
                     m.captured_unix = captured_unix;
                     m.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetToolCatalog { tools: entries },
+                    ..
+                } => {
+                    // Chapter Almanac — the Tools screen's registry snapshot.
+                    let mut t = tools.write();
+                    t.tools = entries;
+                    t.loaded = true;
                 }
                 DaemonEnvelope::SkillForgotten { ok, removed, name, .. } if ok && removed => {
                     // Chapter Repertoire — drop the forgotten skill locally.
