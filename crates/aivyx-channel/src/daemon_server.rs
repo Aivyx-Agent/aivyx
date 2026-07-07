@@ -24,10 +24,10 @@ use aivyx_core::{
 use aivyx_storage::DomainHandle;
 
 use crate::daemon_ipc::{
-    decode_frame, encode_frame, AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError,
-    FrontendMessage, FrontendType, GateSummary, MissionDetail, MissionSummary,
-    NotificationHistoryEntry, ProfileSummary, QueryPayload, QueryResponsePayload, SessionSummary,
-    StreamEventPayload, PROTOCOL_VERSION,
+    AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
+    FrontendType, GalleryImage, GateSummary, MissionDetail, MissionSummary,
+    NotificationHistoryEntry, PROTOCOL_VERSION, ProfileSummary, QueryPayload, QueryResponsePayload,
+    SessionSummary, StreamEventPayload, decode_frame, encode_frame,
 };
 use crate::mission;
 
@@ -176,6 +176,12 @@ pub struct DaemonConfig {
     /// `None` (default) → no auth. When set, `/ws` requires the token and static
     /// routes prompt via HTTP Basic.
     pub web_ui_auth_token: Option<String>,
+    /// Studio Gallery — base URL of the `comfyui`-named `[[mcp_server]]`'s
+    /// backing ComfyUI instance (its `COMFYUI_URL` env entry, defaulting to
+    /// `http://localhost:8188` when the entry exists but doesn't set that
+    /// key). `None` when no `comfyui` server is configured — the Gallery
+    /// query and the `/studio-asset` route both no-op in that case.
+    pub comfyui_base_url: Option<String>,
     /// Optional shared memory instance for background GC.
     pub memory: Option<Arc<dyn aivyx_memory::Memory>>,
     /// If set, entries older than this many seconds are expired by a
@@ -221,8 +227,7 @@ pub struct DaemonConfig {
     /// (on approve) appends a PersonaDelta to `persona_log`.
     /// `None` is the test-fixture path — proposal queries
     /// return empty / not-wired responses.
-    pub persona_proposal_log:
-        Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
+    pub persona_proposal_log: Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
     /// Phase 71 — validated `[[reflection_schedule]]` entries
     /// from the config loader. When non-empty AND an audit log
     /// is configured, the daemon spawns
@@ -246,33 +251,25 @@ pub struct DaemonConfig {
     /// hourly lazy-backfill pass in the memory-GC timer; it is
     /// the same provider the write tool's embedding hook wraps.
     /// `None` = semantic search disabled, no backfill spawned.
-    pub embedding_provider:
-        Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
+    pub embedding_provider: Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
     /// Phase 77 — the recall-feedback log. `Some` iff
     /// auto-recall is configured; the reflection scheduler
     /// reads/clamps it on its cadence to close the
     /// recall→learning loop. `None` → the feedback pass is
     /// skipped (pre-Phase-77 behavior).
-    pub recall_log:
-        Option<Arc<crate::recall_log::PersistentRecallLog>>,
+    pub recall_log: Option<Arc<crate::recall_log::PersistentRecallLog>>,
     /// Phase 82 — the durable helpfulness ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
     /// pass folds each window into it. `None` → no fold (a
     /// passive add-on; recall-feedback is unaffected).
-    pub helpfulness_ledger: Option<
-        Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
-    >,
+    pub helpfulness_ledger: Option<Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>>,
     /// Phase 83 — the durable cross-session co-occurrence
     /// ledger. `Some` iff the recall substrate is configured
     /// (zero-config, built alongside the recall log); the
     /// reflection pass folds each window's pairs into it.
     /// `None` → no fold (a passive add-on).
-    pub cooccurrence_ledger: Option<
-        Arc<
-            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
-        >,
-    >,
+    pub cooccurrence_ledger: Option<Arc<crate::cooccurrence_ledger::PersistentCooccurrenceLedger>>,
     /// Chapter Codex (CX.3) — knowledge-wiki sweep. `Some` when
     /// `[wiki].enabled` + an LLM provider are configured: the daemon
     /// spawns a periodic stale-page sweep on its maintenance cadence.
@@ -297,29 +294,24 @@ pub struct DaemonConfig {
     /// `GetMemoryConflicts` filter + `DismissMemoryConflict` handler. Built
     /// whenever storage is available; `None` ⇒ dismissal is a no-op and
     /// nothing is filtered.
-    pub conflict_dismissals:
-        Option<Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
+    pub conflict_dismissals: Option<Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
     /// Phase 172 — the durable correction ledger. `Some` iff
     /// the recall substrate is configured (zero-config, built
     /// alongside the recall log); the reflection recall-feedback
     /// pass folds each window's per-topic correction counts into
     /// it, and the consolidation pass reads it. `None` → no fold
     /// (a passive add-on).
-    pub correction_ledger: Option<
-        Arc<crate::correction_ledger::PersistentCorrectionLedger>,
-    >,
+    pub correction_ledger: Option<Arc<crate::correction_ledger::PersistentCorrectionLedger>>,
     /// Phase 79 (Q4a) — shared last-Persona-selection stat the
     /// adaptive refiner writes and `GetLearningInsights` reads.
     /// `None` → adaptive Persona not configured (the surface
     /// reports no selection).
-    pub persona_selection_stat:
-        Option<crate::persona_context::SharedPersonaSelectionStat>,
+    pub persona_selection_stat: Option<crate::persona_context::SharedPersonaSelectionStat>,
     /// Phase 84 (Q4a) — shared last-turn cluster-recall stat
     /// the recall provider writes and `GetLearningInsights`
     /// reads. `None` → cluster expansion not armed (the
     /// surface reports none).
-    pub recall_cluster_stat:
-        Option<crate::memory_recall::SharedRecallClusterStat>,
+    pub recall_cluster_stat: Option<crate::memory_recall::SharedRecallClusterStat>,
     /// Phase 80 — `[proactive]` config. `None` (no section) →
     /// proactive surfacing is off; even `Some` no-ops unless
     /// `enabled`.
@@ -327,25 +319,20 @@ pub struct DaemonConfig {
     /// Phase 80 — proactive dedup log. `Some` iff proactive is
     /// armed; the reflection cron pass uses it for cross-cycle
     /// dedup + the per-window cap.
-    pub proactive_log:
-        Option<Arc<crate::proactive_log::PersistentProactiveLog>>,
+    pub proactive_log: Option<Arc<crate::proactive_log::PersistentProactiveLog>>,
     /// Phase 80 (Q4a) — shared last-proactive-cycle stat the
     /// pass writes and `GetLearningInsights` reads. `None` →
     /// proactive not armed (the surface reports none).
-    pub proactive_stat:
-        Option<crate::proactive_detect::SharedProactiveStat>,
+    pub proactive_stat: Option<crate::proactive_detect::SharedProactiveStat>,
     /// Phase 81 — `[persona_lifecycle]` config. `None` (no
     /// section) → the Persona never self-consolidates or
     /// decays; even `Some` no-ops unless `enabled`.
-    pub persona_lifecycle_config:
-        Option<aivyx_config::PersonaLifecycleConfig>,
+    pub persona_lifecycle_config: Option<aivyx_config::PersonaLifecycleConfig>,
     /// Phase 81 (Q4a) — shared last-lifecycle-cycle stat the
     /// pass writes and `GetLearningInsights` reads. `None` →
     /// the lifecycle pass is not armed (the surface reports
     /// none).
-    pub persona_lifecycle_stat: Option<
-        crate::persona_lifecycle::SharedPersonaLifecycleStat,
-    >,
+    pub persona_lifecycle_stat: Option<crate::persona_lifecycle::SharedPersonaLifecycleStat>,
     /// Phase 86 — daemon-scoped, per-session conversation
     /// windows. `Some` iff the recall substrate is configured
     /// (built alongside the recall log at daemon startup, same
@@ -356,91 +343,68 @@ pub struct DaemonConfig {
     /// via `assemble_for` when `recall_window_turns` is greater
     /// than 1. `None` → the Phase 86 window is off (every
     /// recall query is byte-identical to pre-Phase-86).
-    pub conversation_windows:
-        Option<crate::conversation_window::SharedConversationWindows>,
+    pub conversation_windows: Option<crate::conversation_window::SharedConversationWindows>,
     /// Phase 87 — `[persona_consolidation]` config. `None` (no
     /// section) → pattern-driven proposals are off; even
     /// `Some` no-ops unless `enabled`. The reflection pass
     /// reads this alongside the co-occurrence + helpfulness
     /// ledgers + the proposal chain.
-    pub persona_consolidation_config:
-        Option<aivyx_config::PersonaConsolidationConfig>,
+    pub persona_consolidation_config: Option<aivyx_config::PersonaConsolidationConfig>,
     /// Phase 87 (Q4a) — shared last-cycle consolidation stat
     /// the pass writes and `GetLearningInsights` reads. `None`
     /// → consolidation not armed (the surface reports none).
-    pub persona_consolidation_stat: Option<
-        crate::persona_consolidation::SharedPersonaConsolidationStat,
-    >,
+    pub persona_consolidation_stat:
+        Option<crate::persona_consolidation::SharedPersonaConsolidationStat>,
     /// Phase 87 — production `PairPhraser` for the
     /// LLM-summarized facet phrasing (Q2b). `None` → the pass
     /// has no LLM access and skips the cycle (the actuator
     /// stays best-effort).
-    pub persona_consolidation_phraser: Option<
-        std::sync::Arc<
-            dyn crate::persona_consolidation::PairPhraser,
-        >,
-    >,
+    pub persona_consolidation_phraser:
+        Option<std::sync::Arc<dyn crate::persona_consolidation::PairPhraser>>,
     /// Phase 172 — `[correction_consolidation]` config. `None`
     /// (no section) → correction-driven proposals are off (the
     /// correction ledger still accumulates passively); `Some`
     /// arms the reflection-cron pass only when `enabled = true`.
-    pub correction_consolidation_config:
-        Option<aivyx_config::CorrectionConsolidationConfig>,
+    pub correction_consolidation_config: Option<aivyx_config::CorrectionConsolidationConfig>,
     /// Phase 172 — shared last-cycle correction-consolidation
     /// stat the pass writes and `GetLearningInsights` reads.
     /// `None` → not armed (the surface reports none).
-    pub correction_consolidation_stat: Option<
-        crate::correction_consolidation::SharedCorrectionConsolidationStat,
-    >,
+    pub correction_consolidation_stat:
+        Option<crate::correction_consolidation::SharedCorrectionConsolidationStat>,
     /// Phase 172 — production `TopicPhraser` for the correction
     /// facet phrasing. `None` → the pass has no LLM access and
     /// skips the cycle (the actuator stays best-effort).
-    pub correction_consolidation_phraser: Option<
-        std::sync::Arc<
-            dyn crate::correction_consolidation::TopicPhraser,
-        >,
-    >,
+    pub correction_consolidation_phraser:
+        Option<std::sync::Arc<dyn crate::correction_consolidation::TopicPhraser>>,
     /// Phase 91 — `[recall_judgment]` config. `None` (no
     /// section) → LLM-judged recall is off; `Some` arms the
     /// reflection-cron pass only when `enabled = true`.
-    pub recall_judgment_config:
-        Option<aivyx_config::RecallJudgmentConfig>,
+    pub recall_judgment_config: Option<aivyx_config::RecallJudgmentConfig>,
     /// Phase 91 (Q4a) — shared last-cycle judgment stat the
     /// pass writes and `GetLearningInsights` reads. `None` →
     /// the pass has not run this daemon lifetime.
-    pub recall_judgment_stat: Option<
-        crate::recall_judgment::SharedRecallJudgmentStat,
-    >,
+    pub recall_judgment_stat: Option<crate::recall_judgment::SharedRecallJudgmentStat>,
     /// Phase 91 — production `RecallJudge` for the
     /// LLM-judged classification (Q2a). `None` → the pass
     /// has no LLM access and skips every cycle (the actuator
     /// stays best-effort).
-    pub recall_judge: Option<
-        std::sync::Arc<dyn crate::recall_judgment::RecallJudge>,
-    >,
+    pub recall_judge: Option<std::sync::Arc<dyn crate::recall_judgment::RecallJudge>>,
     /// Phase 178 — `[correction_judgment]` config + judge + stat
     /// for the LLM-judged correction fold. All `None` → the
     /// Phase 172 structural correction fold.
-    pub correction_judgment_config:
-        Option<aivyx_config::CorrectionJudgmentConfig>,
-    pub correction_judge: Option<
-        std::sync::Arc<dyn crate::correction_judgment::CorrectionJudge>,
-    >,
-    pub correction_judgment_stat: Option<
-        crate::correction_judgment::SharedCorrectionJudgmentStat,
-    >,
+    pub correction_judgment_config: Option<aivyx_config::CorrectionJudgmentConfig>,
+    pub correction_judge: Option<std::sync::Arc<dyn crate::correction_judgment::CorrectionJudge>>,
+    pub correction_judgment_stat: Option<crate::correction_judgment::SharedCorrectionJudgmentStat>,
     /// Phase 179 — `[correction_signal]` config (tool correction
     /// attribution toggle). `None` → topic-only (Phase 172).
-    pub correction_signal_config:
-        Option<aivyx_config::CorrectionSignalConfig>,
+    pub correction_signal_config: Option<aivyx_config::CorrectionSignalConfig>,
     /// Phase 93 — `[recall_feedback]` config. `None` (no
     /// section) → `correlate_detailed` runs with the
     /// pre-Phase-93 structural-only behaviour. `Some` with
     /// `use_judgment_signal = true` flips the correlator to
     /// per-hit judgment override (un-judged hits keep the
     /// structural fallback).
-    pub recall_feedback_config:
-        Option<aivyx_config::RecallFeedbackConfig>,
+    pub recall_feedback_config: Option<aivyx_config::RecallFeedbackConfig>,
     /// Phase 102 — a static snapshot of the registered tool set,
     /// captured from the `ToolRegistry` at daemon construction.
     /// The `GetToolStats` query joins it against the audit chain
@@ -457,8 +421,7 @@ pub struct DaemonConfig {
     /// proposal log, and shared persona handle that already
     /// live on this struct — only the LLM provider and the
     /// proposer config are bundled here.
-    pub skill_auto_proposer:
-        Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
+    pub skill_auto_proposer: Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
 
     /// Phase 116 — Tool/skill relevance ledger handle.
     /// `None` disables the feature; `Some(handle)` wires the
@@ -478,19 +441,16 @@ pub struct DaemonConfig {
     /// production refinement drafter. Both `Some` (with the ledger +
     /// persona/proposal logs) arm the reflection-cadence refinement pass.
     pub skill_refinement_config: Option<aivyx_config::SkillRefinementConfig>,
-    pub skill_refinement_drafter:
-        Option<Arc<dyn crate::skill_refinement::RefinementDrafter>>,
+    pub skill_refinement_drafter: Option<Arc<dyn crate::skill_refinement::RefinementDrafter>>,
     /// Chapter Praxis (PX.2) — `[skill_authoring]` config + the production
     /// specialization drafter. Both `Some` (with the wiki/graph stores +
     /// proposal/persona logs) arm the reflection-cadence authoring pass.
     pub skill_authoring_config: Option<aivyx_config::SkillAuthoringConfig>,
-    pub skill_authoring_drafter:
-        Option<Arc<dyn crate::skill_authoring::SpecializationDrafter>>,
+    pub skill_authoring_drafter: Option<Arc<dyn crate::skill_authoring::SpecializationDrafter>>,
     /// Phase 173 — the autonomous-loop backlog (zero-config,
     /// always built when storage is configured) for the loop
     /// IPC handlers + the driver.
-    pub loop_backlog:
-        Option<Arc<crate::loop_backlog::PersistentLoopBacklog>>,
+    pub loop_backlog: Option<Arc<crate::loop_backlog::PersistentLoopBacklog>>,
     /// Phase 173 — shared loop run state. `Some` only when the
     /// `[loop]` section is armed; the daemon spawns the loop
     /// driver and the IPC `loop start/stop/status` handlers
@@ -613,6 +573,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         web_ui_host,
         web_ui_allowed_origins,
         web_ui_auth_token,
+        comfyui_base_url,
         memory,
         memory_ttl_secs,
         audit_log,
@@ -707,8 +668,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let _ = std::fs::remove_file(socket_path);
 
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| DaemonError::Bind { path: parent.display().to_string(), source: e })?;
+        std::fs::create_dir_all(parent).map_err(|e| DaemonError::Bind {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
     }
 
     // Phase 95 — shared per-schedule cadence stats (fired /
@@ -716,18 +679,21 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // Created once here; cloned into both the reflection-
     // scheduler spawn (writer) and per-connection contexts
     // (reader for `GetLearningInsights`).
-    let cadence_stats =
-        crate::reflection_scheduler::shared_recent_reflection_stats();
+    let cadence_stats = crate::reflection_scheduler::shared_recent_reflection_stats();
 
-    let listener = UnixListener::bind(socket_path)
-        .map_err(|e| DaemonError::Bind { path: socket_path.display().to_string(), source: e })?;
+    let listener = UnixListener::bind(socket_path).map_err(|e| DaemonError::Bind {
+        path: socket_path.display().to_string(),
+        source: e,
+    })?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(socket_path, perms)
-            .map_err(|e| DaemonError::Bind { path: socket_path.display().to_string(), source: e })?;
+        std::fs::set_permissions(socket_path, perms).map_err(|e| DaemonError::Bind {
+            path: socket_path.display().to_string(),
+            source: e,
+        })?;
     }
 
     let pid_path = socket_path.with_extension("pid");
@@ -755,8 +721,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     }
     // Phase 63 Task 3 — auto-notify on trigger fire if the
     // operator configured `notify_target` on the trigger.
-    trigger_dispatch =
-        trigger_dispatch.with_default_notify_target(default_notify_target.clone());
+    trigger_dispatch = trigger_dispatch.with_default_notify_target(default_notify_target.clone());
     if let Some(ref nd) = notify_dispatcher {
         trigger_dispatch = trigger_dispatch.with_notify_dispatcher(Arc::clone(nd));
     }
@@ -813,13 +778,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         let wh_shutdown = shutdown.clone();
         let port = webhook_port.unwrap_or(crate::webhook_listener::DEFAULT_WEBHOOK_PORT);
         tokio::spawn(async move {
-            if let Err(e) = crate::webhook_listener::run_webhook_listener(
-                wh_dispatch,
-                store,
-                port,
-                wh_shutdown,
-            )
-            .await
+            if let Err(e) =
+                crate::webhook_listener::run_webhook_listener(wh_dispatch, store, port, wh_shutdown)
+                    .await
             {
                 eprintln!("aivyx webhook listener error: {e}");
             }
@@ -850,20 +811,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             // Phase 174 — build the gate runner from the armed
             // `[loop]` config (gate_command + working_dir +
             // timeout). `None` → no driver-side verification.
-            let ld_gate: Option<
-                Arc<dyn crate::loop_gate::GateRunner>,
-            > = loop_config.as_ref().and_then(|c| {
-                c.gate_command.as_ref().map(|cmd| {
-                    Arc::new(crate::loop_gate::ShellGateRunner::new(
-                        cmd.clone(),
-                        c.working_dir.as_ref().map(std::path::PathBuf::from),
-                        std::time::Duration::from_secs(c.gate_timeout_secs),
-                    ))
-                        as Arc<dyn crate::loop_gate::GateRunner>
-                })
-            });
-            let ld_max_run_secs =
-                loop_config.as_ref().and_then(|c| c.max_run_secs);
+            let ld_gate: Option<Arc<dyn crate::loop_gate::GateRunner>> =
+                loop_config.as_ref().and_then(|c| {
+                    c.gate_command.as_ref().map(|cmd| {
+                        Arc::new(crate::loop_gate::ShellGateRunner::new(
+                            cmd.clone(),
+                            c.working_dir.as_ref().map(std::path::PathBuf::from),
+                            std::time::Duration::from_secs(c.gate_timeout_secs),
+                        )) as Arc<dyn crate::loop_gate::GateRunner>
+                    })
+                });
+            let ld_max_run_secs = loop_config.as_ref().and_then(|c| c.max_run_secs);
             // Phase 175 — the progress log: the driver reads
             // recent notes from the shared memory handle and
             // injects them into each iteration's prompt.
@@ -875,10 +833,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             eprintln!(
                 "aivyx loop: driver armed (max_iterations ceiling={}, \
                  gate={}, max_run_secs={:?}, progress_inject={})",
-                loop_config
-                    .as_ref()
-                    .map(|c| c.max_iterations)
-                    .unwrap_or(0),
+                loop_config.as_ref().map(|c| c.max_iterations).unwrap_or(0),
                 if ld_gate.is_some() { "on" } else { "off" },
                 ld_max_run_secs,
                 ld_progress_inject,
@@ -887,11 +842,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             // TurnEnded usage from the audit chain over the run
             // window. No audit log → no budget enforcement.
             let ld_audit = audit_log.clone();
-            let ld_max_run_tokens =
-                loop_config.as_ref().and_then(|c| c.max_run_tokens);
+            let ld_max_run_tokens = loop_config.as_ref().and_then(|c| c.max_run_tokens);
             // Chapter K — the per-run dollar cap.
-            let ld_max_run_usd =
-                loop_config.as_ref().and_then(|c| c.max_run_usd);
+            let ld_max_run_usd = loop_config.as_ref().and_then(|c| c.max_run_usd);
             // K.4.2 — the override-aware rate table prices the run-window
             // spend, so a `[pricing.<model>]` custom rate advances the cap
             // instead of the under-counting built-in default.
@@ -909,9 +862,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 loop_config.as_ref().and_then(|c| c.delegate_above),
                 &team_missions,
             ) {
-                (Some(threshold), Some(svc)) => {
-                    Some((std::sync::Arc::new(svc.clone()), threshold))
-                }
+                (Some(threshold), Some(svc)) => Some((std::sync::Arc::new(svc.clone()), threshold)),
                 _ => None,
             };
             // Verdict for delegated stories — when `[loop] verify_completion` is on,
@@ -919,7 +870,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             // gated against the story's acceptance criteria (parity with solo
             // `loop.complete`). Built from the team service's own provider/model.
             let ld_judge = match (
-                loop_config.as_ref().map(|c| c.verify_completion).unwrap_or(false),
+                loop_config
+                    .as_ref()
+                    .map(|c| c.verify_completion)
+                    .unwrap_or(false),
                 &team_missions,
             ) {
                 (true, Some(svc)) => Some(std::sync::Arc::new(svc.completion_judge())),
@@ -956,17 +910,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // "runs for days" agent under `Restart=on-failure` keeps working instead
     // of silently stalling. The just-spawned driver picks up `request_start`'s
     // notify. Best-effort: any miss just means the operator runs `loop start`.
-    if let (Some(state), Some(backlog), Some(cfg)) =
-        (&loop_state, &loop_backlog, &loop_config)
-    {
+    if let (Some(state), Some(backlog), Some(cfg)) = (&loop_state, &loop_backlog, &loop_config) {
         if cfg.resume_on_boot {
             let marker_active = state.persisted_run_active().await;
             let pending = backlog.remaining_count();
-            if crate::loop_resume::should_resume_on_boot(
-                cfg.resume_on_boot,
-                marker_active,
-                pending,
-            ) {
+            if crate::loop_resume::should_resume_on_boot(cfg.resume_on_boot, marker_active, pending)
+            {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
@@ -1035,19 +984,16 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         recall_log: rl,
                         memory: mem,
                         proposal_log: pl,
-                        gc_retain_secs:
-                            crate::recall_feedback::RECALL_LOG_RETAIN_SECS,
+                        gc_retain_secs: crate::recall_feedback::RECALL_LOG_RETAIN_SECS,
                         // Phase 82 — fold each window into the
                         // durable ledger when the substrate is
                         // present (zero-config, like the recall
                         // log itself).
-                        helpfulness_ledger:
-                            helpfulness_ledger.clone(),
+                        helpfulness_ledger: helpfulness_ledger.clone(),
                         // Phase 83 — fold each window's pairs
                         // into the durable co-occurrence
                         // ledger (zero-config, same substrate).
-                        cooccurrence_ledger:
-                            cooccurrence_ledger.clone(),
+                        cooccurrence_ledger: cooccurrence_ledger.clone(),
                         // Phase 172 — fold each window's per-topic
                         // correction counts into the durable
                         // correction ledger (zero-config, same
@@ -1066,20 +1012,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         } else {
                             None
                         },
-                        correction_judgment_max:
-                            correction_judgment_config
-                                .as_ref()
-                                .map(|c| c.max_corrections_per_cycle)
-                                .unwrap_or(0),
-                        correction_judgment_stat:
-                            correction_judgment_stat.clone(),
+                        correction_judgment_max: correction_judgment_config
+                            .as_ref()
+                            .map(|c| c.max_corrections_per_cycle)
+                            .unwrap_or(0),
+                        correction_judgment_stat: correction_judgment_stat.clone(),
                         // Phase 179 — opt-in tool correction
                         // attribution from `[correction_signal]`.
-                        attribute_tool_corrections:
-                            correction_signal_config
-                                .as_ref()
-                                .map(|c| c.attribute_tools)
-                                .unwrap_or(false),
+                        attribute_tool_corrections: correction_signal_config
+                            .as_ref()
+                            .map(|c| c.attribute_tools)
+                            .unwrap_or(false),
                         // Phase 93 — per-hit judgment override
                         // when `[recall_feedback].use_judgment_signal
                         // = true`. Absent section → `false`
@@ -1100,9 +1043,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 proactive_log.clone(),
                 notify_dispatcher.clone(),
             ) {
-                (Some(cfg), Some(mem), Some(plog), Some(nd))
-                    if cfg.enabled =>
-                {
+                (Some(cfg), Some(mem), Some(plog), Some(nd)) if cfg.enabled => {
                     Some(crate::reflection_scheduler::ProactiveDeps {
                         config: cfg,
                         memory: mem,
@@ -1110,8 +1051,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         notify: nd,
                         recall_log: recall_log.clone(),
                         memory_ttl_secs,
-                        gc_retain_secs:
-                            crate::proactive_log::PROACTIVE_LOG_RETAIN_SECS,
+                        gc_retain_secs: crate::proactive_log::PROACTIVE_LOG_RETAIN_SECS,
                         stat: proactive_stat.clone(),
                     })
                 }
@@ -1128,30 +1068,24 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 persona_proposal_log.clone(),
                 embedding_provider.clone(),
             ) {
-                (Some(cfg), Some(plog), Some(pplog), Some(emb))
-                    if cfg.enabled =>
-                {
-                    Some(
-                        crate::reflection_scheduler::PersonaLifecycleDeps {
-                            config: cfg,
-                            persona_log: plog,
-                            proposal_log: pplog,
-                            embedding: emb,
-                            // Phase 85 — gate decay by durable
-                            // topic helpfulness when available
-                            // (already wired for Phase 82).
-                            helpfulness_ledger:
-                                helpfulness_ledger.clone(),
-                            // Phase 88 — gate decay by durable
-                            // pair affinity when available
-                            // (already wired for Phase 83);
-                            // `None` → pure age-only fallback
-                            // for `consolidate-pair:` facets.
-                            cooccurrence_ledger:
-                                cooccurrence_ledger.clone(),
-                            stat: persona_lifecycle_stat.clone(),
-                        },
-                    )
+                (Some(cfg), Some(plog), Some(pplog), Some(emb)) if cfg.enabled => {
+                    Some(crate::reflection_scheduler::PersonaLifecycleDeps {
+                        config: cfg,
+                        persona_log: plog,
+                        proposal_log: pplog,
+                        embedding: emb,
+                        // Phase 85 — gate decay by durable
+                        // topic helpfulness when available
+                        // (already wired for Phase 82).
+                        helpfulness_ledger: helpfulness_ledger.clone(),
+                        // Phase 88 — gate decay by durable
+                        // pair affinity when available
+                        // (already wired for Phase 83);
+                        // `None` → pure age-only fallback
+                        // for `consolidate-pair:` facets.
+                        cooccurrence_ledger: cooccurrence_ledger.clone(),
+                        stat: persona_lifecycle_stat.clone(),
+                    })
                 }
                 _ => None,
             };
@@ -1170,14 +1104,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 persona_proposal_log.clone(),
                 persona_consolidation_phraser.clone(),
             ) {
-                (
-                    Some(cfg),
-                    Some(cooc),
-                    Some(helps),
-                    Some(plog),
-                    Some(phraser),
-                ) if cfg.enabled => Some(
-                    crate::reflection_scheduler::PersonaConsolidationDeps {
+                (Some(cfg), Some(cooc), Some(helps), Some(plog), Some(phraser)) if cfg.enabled => {
+                    Some(crate::reflection_scheduler::PersonaConsolidationDeps {
                         config: cfg,
                         cooccurrence_ledger: cooc,
                         helpfulness_ledger: helps,
@@ -1200,11 +1128,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         pair_below_affinity: persona_lifecycle_config
                             .as_ref()
                             .map(|c| c.decay_pair_below_affinity)
-                            .unwrap_or(
-                                aivyx_config::DEFAULT_PL_DECAY_PAIR_BELOW_AFFINITY,
-                            ),
-                    },
-                ),
+                            .unwrap_or(aivyx_config::DEFAULT_PL_DECAY_PAIR_BELOW_AFFINITY),
+                    })
+                }
                 _ => None,
             };
             // Phase 172 — correction-consolidation deps: armed
@@ -1219,19 +1145,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 persona_proposal_log.clone(),
                 correction_consolidation_phraser.clone(),
             ) {
-                (Some(cfg), Some(ledger), Some(plog), Some(phraser))
-                    if cfg.enabled =>
-                {
-                    Some(
-                        crate::reflection_scheduler::CorrectionConsolidationDeps {
-                            config: cfg,
-                            correction_ledger: ledger,
-                            proposal_log: plog,
-                            phraser,
-                            stat: correction_consolidation_stat
-                                .clone(),
-                        },
-                    )
+                (Some(cfg), Some(ledger), Some(plog), Some(phraser)) if cfg.enabled => {
+                    Some(crate::reflection_scheduler::CorrectionConsolidationDeps {
+                        config: cfg,
+                        correction_ledger: ledger,
+                        proposal_log: plog,
+                        phraser,
+                        stat: correction_consolidation_stat.clone(),
+                    })
                 }
                 _ => None,
             };
@@ -1249,18 +1170,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 memory.clone(),
                 recall_judge.clone(),
             ) {
-                (Some(cfg), Some(rlog), Some(mem), Some(judge))
-                    if cfg.enabled =>
-                {
-                    Some(
-                        crate::reflection_scheduler::RecallJudgmentDeps {
-                            config: cfg,
-                            recall_log: rlog,
-                            memory: mem,
-                            judge,
-                            stat: recall_judgment_stat.clone(),
-                        },
-                    )
+                (Some(cfg), Some(rlog), Some(mem), Some(judge)) if cfg.enabled => {
+                    Some(crate::reflection_scheduler::RecallJudgmentDeps {
+                        config: cfg,
+                        recall_log: rlog,
+                        memory: mem,
+                        judge,
+                        stat: recall_judgment_stat.clone(),
+                    })
                 }
                 _ => None,
             };
@@ -1285,9 +1202,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                         proposal_log: plog,
                         persona_log: persona,
                         drafter,
-                        retrofold_watermark: std::sync::Mutex::new(
-                            std::collections::HashMap::new(),
-                        ),
+                        retrofold_watermark: std::sync::Mutex::new(std::collections::HashMap::new()),
                     })
                 }
                 _ => None,
@@ -1303,14 +1218,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let mut sa_excluded_topics: std::collections::HashSet<String> =
                 rs_schedules.iter().map(|s| s.name.clone()).collect();
             if let Some(store) = query_schedule_store.as_ref() {
-                if let Ok(records) =
-                    crate::schedule::list_schedules(store).await
-                {
+                if let Ok(records) = crate::schedule::list_schedules(store).await {
                     for r in records {
-                        let name = r
-                            .schedule_id
-                            .strip_prefix("cfg-")
-                            .unwrap_or(&r.schedule_id);
+                        let name = r.schedule_id.strip_prefix("cfg-").unwrap_or(&r.schedule_id);
                         sa_excluded_topics.insert(name.to_string());
                     }
                 }
@@ -1336,18 +1246,16 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     Some(plog),
                     Some(persona),
                     Some(drafter),
-                ) if cfg.enabled => {
-                    Some(crate::reflection_scheduler::SkillAuthoringDeps {
-                        config: cfg,
-                        wiki_store: wiki,
-                        graph_store: graph,
-                        memory: mem,
-                        proposal_log: plog,
-                        persona_log: persona,
-                        drafter,
-                        excluded_topics: sa_excluded_topics,
-                    })
-                }
+                ) if cfg.enabled => Some(crate::reflection_scheduler::SkillAuthoringDeps {
+                    config: cfg,
+                    wiki_store: wiki,
+                    graph_store: graph,
+                    memory: mem,
+                    proposal_log: plog,
+                    persona_log: persona,
+                    drafter,
+                    excluded_topics: sa_excluded_topics,
+                }),
                 _ => None,
             };
             for sched in &rs_schedules {
@@ -1395,6 +1303,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         let web_broadcaster = web_ui_broadcaster.clone();
         let web_origins = web_ui_allowed_origins.clone();
         let web_auth_token = web_ui_auth_token.clone();
+        let web_comfyui_base_url = comfyui_base_url.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::web_ui::run_web_ui_server(
                 web_socket_path,
@@ -1402,6 +1311,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 port,
                 web_origins,
                 web_auth_token,
+                web_comfyui_base_url,
                 web_shutdown,
                 web_broadcaster,
             )
@@ -1422,8 +1332,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // original Phase 42 behavior, every entry checked against
     // the single global cutoff.
     let _memory_gc_handle = {
-        let needs_gc =
-            memory_ttl_secs.is_some() || !memory_retention.is_empty();
+        let needs_gc = memory_ttl_secs.is_some() || !memory_retention.is_empty();
         // Phase 75 — the same hourly timer also drives the
         // embedding backfill, so it must spawn when a provider
         // is configured even if no TTL/retention GC is.
@@ -1439,8 +1348,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let ttl = memory_ttl_secs;
             let backfill_provider = embedding_provider.clone();
             Some(tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(std::time::Duration::from_secs(3600));
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
                 // The first tick fires immediately — skip it so the
                 // first GC runs after one hour of uptime, not at
                 // startup.
@@ -1610,12 +1518,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             proactive_stat: proactive_stat.clone(),
             persona_lifecycle_stat: persona_lifecycle_stat.clone(),
             conversation_windows: conversation_windows.clone(),
-            persona_consolidation_stat:
-                persona_consolidation_stat.clone(),
-            correction_consolidation_stat:
-                correction_consolidation_stat.clone(),
-            correction_judgment_stat:
-                correction_judgment_stat.clone(),
+            persona_consolidation_stat: persona_consolidation_stat.clone(),
+            correction_consolidation_stat: correction_consolidation_stat.clone(),
+            correction_judgment_stat: correction_judgment_stat.clone(),
             recall_judgment_stat: recall_judgment_stat.clone(),
             recall_feedback_config: recall_feedback_config.clone(),
             cadence_stats: cadence_stats.clone(),
@@ -1632,6 +1537,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             team_config_write_path: team_config_write_path.clone(),
             seed_draft_llm: seed_draft_llm.clone(),
             document_roots: document_roots.clone(),
+            comfyui_base_url: comfyui_base_url.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -1688,8 +1594,7 @@ struct ConnectionContext {
     /// `ListPersonaProposals` / `GetPersonaProposal` queries +
     /// `ResolvePersonaProposal` status transitions. `None` in
     /// test fixtures.
-    persona_proposal_log:
-        Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
+    persona_proposal_log: Option<Arc<crate::persona_proposal::PersistentPersonaProposalLog>>,
     /// Phase 74 — memory substrate handle for the
     /// `ListMemoryTopics` / `GetMemoryTopicEntries` /
     /// `SearchMemory` queries + the `EvictMemoryTopic`
@@ -1699,8 +1604,7 @@ struct ConnectionContext {
     /// semantic path. `None` = `[embedding]` not configured;
     /// a `mode = "semantic"` request transparently falls back
     /// to keyword.
-    embedding_provider:
-        Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
+    embedding_provider: Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
     /// Phase 78 — recall-feedback log for the read-only
     /// `GetLearningInsights` query. `None` = no auto-recall
     /// configured (the query returns an empty digest).
@@ -1708,17 +1612,11 @@ struct ConnectionContext {
     /// Phase 82 — durable helpfulness ledger for the read-only
     /// `GetLearningInsights` longitudinal view. `None` = no
     /// auto-recall configured (no accumulated view).
-    helpfulness_ledger: Option<
-        Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
-    >,
+    helpfulness_ledger: Option<Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>>,
     /// Phase 83 — durable co-occurrence ledger for the
     /// read-only `GetLearningInsights` cross-session pattern
     /// view. `None` = no auto-recall configured.
-    cooccurrence_ledger: Option<
-        Arc<
-            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
-        >,
-    >,
+    cooccurrence_ledger: Option<Arc<crate::cooccurrence_ledger::PersistentCooccurrenceLedger>>,
     /// Chapter Codex (CX.4) — read handle on the knowledge-wiki page
     /// store for the `ListWikiPages` / `GetWikiPage` read-only IPC.
     wiki_store: Option<Arc<crate::knowledge_wiki::PersistentWikiStore>>,
@@ -1727,58 +1625,43 @@ struct ConnectionContext {
     graph_store: Option<Arc<crate::knowledge_graph::PersistentGraphStore>>,
     /// Chapter Concord — dismissed-conflict set for the `GetMemoryConflicts`
     /// filter + `DismissMemoryConflict` handler.
-    conflict_dismissals:
-        Option<Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
+    conflict_dismissals: Option<Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
     /// Phase 172 — durable correction ledger for the read-only
     /// `GetLearningInsights` accumulated-corrections view.
     /// `None` = no auto-recall configured.
-    correction_ledger: Option<
-        Arc<crate::correction_ledger::PersistentCorrectionLedger>,
-    >,
+    correction_ledger: Option<Arc<crate::correction_ledger::PersistentCorrectionLedger>>,
     /// Phase 79 (Q4a) — last-Persona-selection stat for the
     /// `GetLearningInsights` surface.
-    persona_selection_stat:
-        Option<crate::persona_context::SharedPersonaSelectionStat>,
+    persona_selection_stat: Option<crate::persona_context::SharedPersonaSelectionStat>,
     /// Phase 84 (Q4a) — last-turn cluster-recall stat for the
     /// `GetLearningInsights` surface.
-    recall_cluster_stat:
-        Option<crate::memory_recall::SharedRecallClusterStat>,
+    recall_cluster_stat: Option<crate::memory_recall::SharedRecallClusterStat>,
     /// Phase 80 (Q4a) — last-proactive-cycle stat for the
     /// `GetLearningInsights` surface.
-    proactive_stat:
-        Option<crate::proactive_detect::SharedProactiveStat>,
+    proactive_stat: Option<crate::proactive_detect::SharedProactiveStat>,
     /// Phase 81 (Q4a) — last-persona-lifecycle-cycle stat for
     /// the `GetLearningInsights` surface.
-    persona_lifecycle_stat: Option<
-        crate::persona_lifecycle::SharedPersonaLifecycleStat,
-    >,
+    persona_lifecycle_stat: Option<crate::persona_lifecycle::SharedPersonaLifecycleStat>,
     /// Phase 86 — per-session conversation windows. `Some` →
     /// the turn loop appends `(user, assistant)` pairs on
     /// `TurnOutcome::Completed` so both relevance providers can
     /// embed a multi-turn query.
-    conversation_windows:
-        Option<crate::conversation_window::SharedConversationWindows>,
+    conversation_windows: Option<crate::conversation_window::SharedConversationWindows>,
     /// Phase 87 (Q4a) — last-reflection-cycle pattern-driven
     /// Persona consolidation stat for the
     /// `GetLearningInsights` surface.
-    persona_consolidation_stat: Option<
-        crate::persona_consolidation::SharedPersonaConsolidationStat,
-    >,
+    persona_consolidation_stat:
+        Option<crate::persona_consolidation::SharedPersonaConsolidationStat>,
     /// Phase 172 (Q4a) — last-reflection-cycle correction-driven
     /// consolidation stat for the `GetLearningInsights` surface.
-    correction_consolidation_stat: Option<
-        crate::correction_consolidation::SharedCorrectionConsolidationStat,
-    >,
+    correction_consolidation_stat:
+        Option<crate::correction_consolidation::SharedCorrectionConsolidationStat>,
     /// Phase 178 — last-cycle correction-judgment stat for the
     /// `GetLearningInsights` surface.
-    correction_judgment_stat: Option<
-        crate::correction_judgment::SharedCorrectionJudgmentStat,
-    >,
+    correction_judgment_stat: Option<crate::correction_judgment::SharedCorrectionJudgmentStat>,
     /// Phase 91 (Q4a) — last-reflection-cycle LLM-judged
     /// recall stat for the `GetLearningInsights` surface.
-    recall_judgment_stat: Option<
-        crate::recall_judgment::SharedRecallJudgmentStat,
-    >,
+    recall_judgment_stat: Option<crate::recall_judgment::SharedRecallJudgmentStat>,
     /// Phase 93 — `[recall_feedback]` config for the
     /// `GetLearningInsights` surface so the insights view
     /// reflects the same per-hit judgment override that the
@@ -1794,21 +1677,17 @@ struct ConnectionContext {
     tool_descriptors: Arc<[ToolDescriptor]>,
     /// Phase 112 — Skill Auto-Proposer dependency bundle.
     /// `None` disables the post-turn auto-proposer spawn.
-    skill_auto_proposer:
-        Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
+    skill_auto_proposer: Option<Arc<crate::skill_auto_proposer::SkillAutoProposerContext>>,
     /// Phase 116 — tool/skill relevance ledger handle.
     /// `None` disables the recording hook + prompt section.
-    tool_relevance_ledger:
-        Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
+    tool_relevance_ledger: Option<Arc<crate::tool_relevance_ledger::PersistentToolRelevanceLedger>>,
     /// Chapter Whetstone (WH.3b) — per-skill effectiveness ledger handle.
     /// `None` disables the per-turn fold.
-    skill_effectiveness_ledger:
-        Option<Arc<crate::skill_effectiveness::SkillEffectivenessLedger>>,
+    skill_effectiveness_ledger: Option<Arc<crate::skill_effectiveness::SkillEffectivenessLedger>>,
     /// Phase 173 — the autonomous-loop backlog (always `Some`
     /// when storage is configured) for the `loop add/list/status`
     /// IPC handlers.
-    loop_backlog:
-        Option<Arc<crate::loop_backlog::PersistentLoopBacklog>>,
+    loop_backlog: Option<Arc<crate::loop_backlog::PersistentLoopBacklog>>,
     /// Phase 173 — shared loop run state for `loop start/stop/
     /// status`. `Some` only when the `[loop]` section is armed
     /// (the driver was spawned).
@@ -1831,6 +1710,9 @@ struct ConnectionContext {
     seed_draft_llm: Option<SeedDraftLlm>,
     /// Chapter Z — the canonical roots the Documents browser may reach.
     document_roots: DocumentRoots,
+    /// Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s
+    /// backing ComfyUI instance, for the `GetGallery` query handler.
+    comfyui_base_url: Option<String>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -1882,6 +1764,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         team_config_write_path,
         seed_draft_llm,
         document_roots,
+        comfyui_base_url,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -1937,7 +1820,10 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                 Ok((msg, consumed)) => {
                     buf.drain(..consumed);
                     match msg {
-                        FrontendMessage::StartSession { role: _, frontend_type } => {
+                        FrontendMessage::StartSession {
+                            role: _,
+                            frontend_type,
+                        } => {
                             let ft = frontend_type.unwrap_or(FrontendType::Local);
                             channel = Some(channel_factory(ft));
 
@@ -2008,11 +1894,12 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     Ok(data) if text.is_empty() => {
                                         Message::image(session, &att.media_type, data)
                                     }
-                                    Ok(data) => {
-                                        Message::text_with_image(
-                                            session, &text, &att.media_type, data,
-                                        )
-                                    }
+                                    Ok(data) => Message::text_with_image(
+                                        session,
+                                        &text,
+                                        &att.media_type,
+                                        data,
+                                    ),
                                     Err(_) => {
                                         // Bad base64 — fall back to text-only.
                                         Message::text(session, text)
@@ -2049,9 +1936,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // can read the turn's per-tool-call entries
                             // (via `entries_range(pre_len, len -
                             // pre_len)`) without locking.
-                            let audit_pre_turn_len = audit_log
-                                .as_ref()
-                                .map(|l| l.len());
+                            let audit_pre_turn_len = audit_log.as_ref().map(|l| l.len());
 
                             let outcome = agent.turn(msg, &bridge).await;
 
@@ -2072,10 +1957,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // intentionally excluded. Best-effort —
                             // a missed write costs one cycle of
                             // signal, never the turn.
-                            if let (
-                                Some(windows),
-                                TurnOutcome::Completed { final_message, .. },
-                            ) = (&conversation_windows, &outcome)
+                            if let (Some(windows), TurnOutcome::Completed { final_message, .. }) =
+                                (&conversation_windows, &outcome)
                             {
                                 crate::conversation_window::record_turn(
                                     windows,
@@ -2094,15 +1977,10 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // against the user input's keyword key.
                             // Detached `tokio::spawn` so it never
                             // blocks the next turn. Failure-isolated.
-                            if let (Some(ledger), Some(pre_len), Some(audit)) = (
-                                &tool_relevance_ledger,
-                                audit_pre_turn_len,
-                                &audit_log,
-                            ) {
-                                let keyword_key =
-                                    aivyx_core::relevance::keyword_key(
-                                        &user_text, 5,
-                                    );
+                            if let (Some(ledger), Some(pre_len), Some(audit)) =
+                                (&tool_relevance_ledger, audit_pre_turn_len, &audit_log)
+                            {
+                                let keyword_key = aivyx_core::relevance::keyword_key(&user_text, 5);
                                 if !keyword_key.is_empty() {
                                     let ledger_clone = Arc::clone(ledger);
                                     let audit_clone = Arc::clone(audit);
@@ -2125,9 +2003,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             }
                                         };
                                         let now_ms = std::time::SystemTime::now()
-                                            .duration_since(
-                                                std::time::UNIX_EPOCH,
-                                            )
+                                            .duration_since(std::time::UNIX_EPOCH)
                                             .map(|d| d.as_millis() as u64)
                                             .unwrap_or(0);
                                         crate::tool_relevance_ledger::record_turn_outcomes(
@@ -2152,15 +2028,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // negative instead of drifting every score
                             // positive. Fires only when [skill_refinement]
                             // is configured (the ledger is `Some`).
-                            if let (Some(skill_ledger), Some(pre_len), Some(audit)) = (
-                                &skill_effectiveness_ledger,
-                                audit_pre_turn_len,
-                                &audit_log,
-                            ) {
+                            if let (Some(skill_ledger), Some(pre_len), Some(audit)) =
+                                (&skill_effectiveness_ledger, audit_pre_turn_len, &audit_log)
+                            {
                                 let helpful =
-                                    crate::skill_effectiveness::turn_folds_helpful(
-                                        &outcome,
-                                    );
+                                    crate::skill_effectiveness::turn_folds_helpful(&outcome);
                                 let ledger_clone = Arc::clone(skill_ledger);
                                 let audit_clone = Arc::clone(audit);
                                 tokio::spawn(async move {
@@ -2169,12 +2041,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     if limit == 0 {
                                         return;
                                     }
-                                    let entries = match audit_clone
-                                        .entries_range(pre_len as u64, limit)
-                                    {
-                                        Ok(e) => e,
-                                        Err(_) => return,
-                                    };
+                                    let entries =
+                                        match audit_clone.entries_range(pre_len as u64, limit) {
+                                            Ok(e) => e,
+                                            Err(_) => return,
+                                        };
                                     let now_secs = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .map(|d| d.as_secs())
@@ -2210,137 +2081,139 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 };
 
                                 // Classify the outcome into (signals, source).
-                                let dispatch: Option<(
-                                    sap::TurnSignals,
-                                    ProposalSource,
-                                )> = match &outcome {
-                                    TurnOutcome::Completed {
-                                        tool_calls_made,
-                                        duration,
-                                        ..
-                                    } => Some((
-                                        sap::TurnSignals {
-                                            tool_calls_made: *tool_calls_made as u32,
-                                            distinct_tool_id_count:
-                                                (*tool_calls_made as u32).min(4),
-                                            duration: *duration,
-                                            had_successful_gate_resolve: false,
-                                            // Phase 118 — Task 3 ships the
-                                            // type substrate; the actual
-                                            // ledger/audit-walk sourcing
-                                            // for these signals is wired in
-                                            // Task 6. Default-zero until
-                                            // then.
-                                            ..sap::TurnSignals::default()
-                                        },
-                                        ProposalSource::CompletedTurn,
-                                    )),
-                                    other => {
-                                        // Phase 115 — non-Completed outcomes
-                                        // gate on the operator's
-                                        // from_failed_turns + failure_outcomes
-                                        // config.
-                                        let cfg = &proposer_ctx.config;
-                                        if !cfg.from_failed_turns {
-                                            None
-                                        } else {
-                                            let kind = match other {
-                                                TurnOutcome::Failed(_)
-                                                | TurnOutcome::MaxStepsExceeded { .. }
-                                                | TurnOutcome::Looping { .. } =>
-                                                    FailureKind::Failed,
-                                                TurnOutcome::Cancelled { .. } =>
-                                                    FailureKind::Cancelled,
-                                                TurnOutcome::TimedOut { .. } =>
-                                                    FailureKind::TimedOut,
-                                                TurnOutcome::Escalated { .. } =>
-                                                    FailureKind::Escalated,
-                                                TurnOutcome::Completed { .. } =>
-                                                    unreachable!(),
-                                            };
-                                            if !sap::is_failure_candidate(
-                                                kind,
-                                                &cfg.failure_outcomes,
-                                            ) {
+                                let dispatch: Option<(sap::TurnSignals, ProposalSource)> =
+                                    match &outcome {
+                                        TurnOutcome::Completed {
+                                            tool_calls_made,
+                                            duration,
+                                            ..
+                                        } => Some((
+                                            sap::TurnSignals {
+                                                tool_calls_made: *tool_calls_made as u32,
+                                                distinct_tool_id_count: (*tool_calls_made as u32)
+                                                    .min(4),
+                                                duration: *duration,
+                                                had_successful_gate_resolve: false,
+                                                // Phase 118 — Task 3 ships the
+                                                // type substrate; the actual
+                                                // ledger/audit-walk sourcing
+                                                // for these signals is wired in
+                                                // Task 6. Default-zero until
+                                                // then.
+                                                ..sap::TurnSignals::default()
+                                            },
+                                            ProposalSource::CompletedTurn,
+                                        )),
+                                        other => {
+                                            // Phase 115 — non-Completed outcomes
+                                            // gate on the operator's
+                                            // from_failed_turns + failure_outcomes
+                                            // config.
+                                            let cfg = &proposer_ctx.config;
+                                            if !cfg.from_failed_turns {
                                                 None
                                             } else {
-                                                // For failure paths the
-                                                // signals are degenerate; the
-                                                // failure heuristic + judge
-                                                // are the real gates.
-                                                // Phase 118 — degenerate
-                                                // signals for the failure
-                                                // path; the new Profile/Role
-                                                // signals default to zero.
-                                                let signals = sap::TurnSignals::default();
-                                                // Exhaustive on purpose — no
-                                                // `_` arm. `MaxStepsExceeded` /
-                                                // `Looping` reach here too (a
-                                                // local model that runs away
-                                                // and trips the step cap or the
-                                                // cycle breaker), and the prior
-                                                // `_ => unreachable!()` panicked
-                                                // the daemon on exactly that. An
-                                                // exhaustive match makes the
-                                                // compiler force every future
-                                                // outcome to be handled here, so
-                                                // a single turn can never kill a
-                                                // 24/7 daemon.
-                                                let summary = match other {
-                                                    TurnOutcome::Failed(e) =>
-                                                        format!("planner/agent error: {e}"),
-                                                    TurnOutcome::MaxStepsExceeded {
-                                                        max_steps, ..
-                                                    } => format!(
-                                                        "planner exceeded {max_steps} steps"
-                                                    ),
-                                                    TurnOutcome::Looping {
-                                                        repeat_limit, ..
-                                                    } => format!(
-                                                        "stopped after {repeat_limit} \
-                                                         repeated tool calls"
-                                                    ),
-                                                    TurnOutcome::Cancelled { .. } =>
-                                                        "operator cancelled mid-turn".into(),
-                                                    TurnOutcome::TimedOut {
-                                                        elapsed, ..
-                                                    } => format!(
-                                                        "exceeded turn budget after {}ms",
-                                                        elapsed.as_millis()
-                                                    ),
-                                                    TurnOutcome::Escalated {
-                                                        reason, ..
-                                                    } => format!(
-                                                        "agent escalated: {reason}"
-                                                    ),
-                                                    // Peeled off by the outer
-                                                    // match; a benign string
-                                                    // rather than a panic keeps
-                                                    // the daemon alive if the
-                                                    // invariant ever shifts.
-                                                    TurnOutcome::Completed { .. } =>
-                                                        "turn completed".into(),
+                                                let kind = match other {
+                                                    TurnOutcome::Failed(_)
+                                                    | TurnOutcome::MaxStepsExceeded { .. }
+                                                    | TurnOutcome::Looping { .. } => {
+                                                        FailureKind::Failed
+                                                    }
+                                                    TurnOutcome::Cancelled { .. } => {
+                                                        FailureKind::Cancelled
+                                                    }
+                                                    TurnOutcome::TimedOut { .. } => {
+                                                        FailureKind::TimedOut
+                                                    }
+                                                    TurnOutcome::Escalated { .. } => {
+                                                        FailureKind::Escalated
+                                                    }
+                                                    TurnOutcome::Completed { .. } => unreachable!(),
                                                 };
-                                                Some((
-                                                    signals,
-                                                    ProposalSource::FailedTurn {
-                                                        kind,
-                                                        summary,
-                                                    },
-                                                ))
+                                                if !sap::is_failure_candidate(
+                                                    kind,
+                                                    &cfg.failure_outcomes,
+                                                ) {
+                                                    None
+                                                } else {
+                                                    // For failure paths the
+                                                    // signals are degenerate; the
+                                                    // failure heuristic + judge
+                                                    // are the real gates.
+                                                    // Phase 118 — degenerate
+                                                    // signals for the failure
+                                                    // path; the new Profile/Role
+                                                    // signals default to zero.
+                                                    let signals = sap::TurnSignals::default();
+                                                    // Exhaustive on purpose — no
+                                                    // `_` arm. `MaxStepsExceeded` /
+                                                    // `Looping` reach here too (a
+                                                    // local model that runs away
+                                                    // and trips the step cap or the
+                                                    // cycle breaker), and the prior
+                                                    // `_ => unreachable!()` panicked
+                                                    // the daemon on exactly that. An
+                                                    // exhaustive match makes the
+                                                    // compiler force every future
+                                                    // outcome to be handled here, so
+                                                    // a single turn can never kill a
+                                                    // 24/7 daemon.
+                                                    let summary = match other {
+                                                        TurnOutcome::Failed(e) => {
+                                                            format!("planner/agent error: {e}")
+                                                        }
+                                                        TurnOutcome::MaxStepsExceeded {
+                                                            max_steps,
+                                                            ..
+                                                        } => format!(
+                                                            "planner exceeded {max_steps} steps"
+                                                        ),
+                                                        TurnOutcome::Looping {
+                                                            repeat_limit,
+                                                            ..
+                                                        } => format!(
+                                                            "stopped after {repeat_limit} \
+                                                         repeated tool calls"
+                                                        ),
+                                                        TurnOutcome::Cancelled { .. } => {
+                                                            "operator cancelled mid-turn".into()
+                                                        }
+                                                        TurnOutcome::TimedOut {
+                                                            elapsed, ..
+                                                        } => format!(
+                                                            "exceeded turn budget after {}ms",
+                                                            elapsed.as_millis()
+                                                        ),
+                                                        TurnOutcome::Escalated {
+                                                            reason, ..
+                                                        } => format!("agent escalated: {reason}"),
+                                                        // Peeled off by the outer
+                                                        // match; a benign string
+                                                        // rather than a panic keeps
+                                                        // the daemon alive if the
+                                                        // invariant ever shifts.
+                                                        TurnOutcome::Completed { .. } => {
+                                                            "turn completed".into()
+                                                        }
+                                                    };
+                                                    Some((
+                                                        signals,
+                                                        ProposalSource::FailedTurn {
+                                                            kind,
+                                                            summary,
+                                                        },
+                                                    ))
+                                                }
                                             }
                                         }
-                                    }
-                                };
+                                    };
 
                                 if let Some((signals, source)) = dispatch {
-                                    let summary =
-                                        sap::build_turn_summary(&user_text, &outcome);
+                                    let summary = sap::build_turn_summary(&user_text, &outcome);
                                     let proposer_ctx = Arc::clone(proposer_ctx);
                                     let audit_clone = audit_log.clone();
                                     let persona_clone = persona_log.clone();
-                                    let proposal_clone =
-                                        persona_proposal_log.clone();
+                                    let proposal_clone = persona_proposal_log.clone();
                                     let shared_clone = shared_persona.clone();
                                     let cancel = shutdown.clone();
                                     tokio::spawn(async move {
@@ -2362,7 +2235,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             }
 
                             writer = Arc::try_unwrap(bridge.writer)
-                                .map_err(|_| DaemonError::Internal("writer arc still shared".into()))?
+                                .map_err(|_| {
+                                    DaemonError::Internal("writer arc still shared".into())
+                                })?
                                 .into_inner();
 
                             // Chapter H — only an *interactive* run parks an
@@ -2381,13 +2256,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     let mut record = mission::get_mission(store, mission_id)
                                         .await
                                         .map_err(|e| format!("get mission: {e}"))?
-                                        .ok_or_else(|| {
-                                            format!("mission {mission_id} not found")
-                                        })?;
-                                    let gate_id = format!(
-                                        "gate-{}",
-                                        uuid::Uuid::new_v4().as_hyphenated()
-                                    );
+                                        .ok_or_else(|| format!("mission {mission_id} not found"))?;
+                                    let gate_id =
+                                        format!("gate-{}", uuid::Uuid::new_v4().as_hyphenated());
                                     mission::add_gate(
                                         &mut record,
                                         gate_id.clone(),
@@ -2404,16 +2275,15 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
 
                                 match gate_result {
                                     Ok(gate_id) => {
-                                        let gate_event =
-                                            DaemonMessage::StreamEvent {
-                                                session_id: sid.clone(),
-                                                event: StreamEventPayload::ApprovalGate {
-                                                    mission_id: mission_id.clone(),
-                                                    gate_id,
-                                                    reason: reason.clone(),
-                                                    scope: None,
-                                                },
-                                            };
+                                        let gate_event = DaemonMessage::StreamEvent {
+                                            session_id: sid.clone(),
+                                            event: StreamEventPayload::ApprovalGate {
+                                                mission_id: mission_id.clone(),
+                                                gate_id,
+                                                reason: reason.clone(),
+                                                scope: None,
+                                            },
+                                        };
                                         let frame = encode_frame(&gate_event)?;
                                         writer.write_all(&frame).await?;
                                     }
@@ -2491,7 +2361,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let Some(store) = &mission_store else {
                                 let err = DaemonMessage::Error {
                                     code: "no_mission_store".into(),
-                                    message: "ResolveGate received but no mission store configured".into(),
+                                    message: "ResolveGate received but no mission store configured"
+                                        .into(),
                                 };
                                 let frame = encode_frame(&err).unwrap_or_default();
                                 let _ = writer.write_all(&frame).await;
@@ -2508,7 +2379,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     .await
                                     .map_err(|e| format!("persist mission: {e}"))?;
                                 Ok::<(), String>(())
-                            }.await;
+                            }
+                            .await;
                             match result {
                                 Ok(()) => {
                                     let resp = DaemonMessage::GateResolved {
@@ -2532,9 +2404,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             let sid = session_id.clone().unwrap_or_default();
                                             let bridge = IpcChannelBridge {
                                                 inner: ch,
-                                                writer: Arc::new(
-                                                    tokio::sync::Mutex::new(writer),
-                                                ),
+                                                writer: Arc::new(tokio::sync::Mutex::new(writer)),
                                                 session_id: sid.clone(),
                                             };
 
@@ -2546,9 +2416,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             let resume_outcome = agent.turn(msg, &bridge).await;
 
                                             writer = Arc::try_unwrap(bridge.writer)
-                                                .map_err(|_| DaemonError::Internal(
-                                                    "writer arc still shared".into(),
-                                                ))?
+                                                .map_err(|_| {
+                                                    DaemonError::Internal(
+                                                        "writer arc still shared".into(),
+                                                    )
+                                                })?
                                                 .into_inner();
 
                                             let outcome_str = format_outcome(&resume_outcome);
@@ -2572,7 +2444,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             }
                         }
                         FrontendMessage::Shutdown => {
-                            send_shutting_down(&mut writer, "operator requested via daemon stop").await;
+                            send_shutting_down(&mut writer, "operator requested via daemon stop")
+                                .await;
                             shutdown.cancel();
                             return Ok(());
                         }
@@ -2637,6 +2510,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 team_config_write_path.as_deref(),
                                 &document_roots,
                                 seed_draft_llm.as_ref(),
+                                comfyui_base_url.as_deref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -2646,7 +2520,10 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        FrontendMessage::RevertPersonaDelta { id, target_delta_id } => {
+                        FrontendMessage::RevertPersonaDelta {
+                            id,
+                            target_delta_id,
+                        } => {
                             // Phase 60 — operator-initiated revert
                             // (P14 commit 4). Append a `Revert` op
                             // delta to the persona chain; on
@@ -2678,7 +2555,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        FrontendMessage::ResolveSoulConflict { id, category, value } => {
+                        FrontendMessage::ResolveSoulConflict {
+                            id,
+                            category,
+                            value,
+                        } => {
                             // Chapter Accord — operator removes the losing
                             // facet of a detected contradiction. Appends a
                             // `RemoveList` persona delta (operator-authored,
@@ -2856,33 +2737,31 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // draft lands in the Studio's existing roster
                             // draft state; SetTeamRoster is what persists.
                             let resp = match seed_draft_llm.as_ref() {
-                                Some(llm) => {
-                                    match crate::team_template_draft::draft_team_template(
-                                        &llm.provider,
-                                        &llm.model,
-                                        profile.operator_profile.as_deref(),
-                                        &profile.primary_use_cases,
-                                        &description,
-                                    )
-                                    .await
-                                    {
-                                        Some(draft) => DaemonMessage::TeamTemplateDrafted {
-                                            id,
-                                            draft: Some(draft),
-                                            error: None,
-                                        },
-                                        None => DaemonMessage::TeamTemplateDrafted {
-                                            id,
-                                            draft: None,
-                                            error: Some(
-                                                "the model couldn't draft a team — \
+                                Some(llm) => match crate::team_template_draft::draft_team_template(
+                                    &llm.provider,
+                                    &llm.model,
+                                    profile.operator_profile.as_deref(),
+                                    &profile.primary_use_cases,
+                                    &description,
+                                )
+                                .await
+                                {
+                                    Some(draft) => DaemonMessage::TeamTemplateDrafted {
+                                        id,
+                                        draft: Some(draft),
+                                        error: None,
+                                    },
+                                    None => DaemonMessage::TeamTemplateDrafted {
+                                        id,
+                                        draft: None,
+                                        error: Some(
+                                            "the model couldn't draft a team — \
                                                  try the default Nonagon or edit \
                                                  manually instead"
-                                                    .to_string(),
-                                            ),
-                                        },
-                                    }
-                                }
+                                                .to_string(),
+                                        ),
+                                    },
+                                },
                                 None => DaemonMessage::TeamTemplateDrafted {
                                     id,
                                     draft: None,
@@ -3032,14 +2911,12 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                         deleted: Some(n as u64),
                                         error: None,
                                     },
-                                    Err(e) => {
-                                        DaemonMessage::MemoryEvictResolved {
-                                            id,
-                                            ok: false,
-                                            deleted: None,
-                                            error: Some(e.to_string()),
-                                        }
-                                    }
+                                    Err(e) => DaemonMessage::MemoryEvictResolved {
+                                        id,
+                                        ok: false,
+                                        deleted: None,
+                                        error: Some(e.to_string()),
+                                    },
                                 },
                             };
                             let frame = encode_frame(&resp)?;
@@ -3066,34 +2943,25 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             .into(),
                                     ),
                                 },
-                                Some(mem) => {
-                                    match mem.delete_entry(&topic, archive_seq).await {
-                                        Ok(removed) => {
-                                            DaemonMessage::MemoryConflictResolved {
-                                                id,
-                                                ok: true,
-                                                removed,
-                                                error: None,
-                                            }
-                                        }
-                                        Err(e) => {
-                                            DaemonMessage::MemoryConflictResolved {
-                                                id,
-                                                ok: false,
-                                                removed: false,
-                                                error: Some(e.to_string()),
-                                            }
-                                        }
-                                    }
-                                }
+                                Some(mem) => match mem.delete_entry(&topic, archive_seq).await {
+                                    Ok(removed) => DaemonMessage::MemoryConflictResolved {
+                                        id,
+                                        ok: true,
+                                        removed,
+                                        error: None,
+                                    },
+                                    Err(e) => DaemonMessage::MemoryConflictResolved {
+                                        id,
+                                        ok: false,
+                                        removed: false,
+                                        error: Some(e.to_string()),
+                                    },
+                                },
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        FrontendMessage::DismissMemoryConflict {
-                            id,
-                            conflict_id,
-                        } => {
+                        FrontendMessage::DismissMemoryConflict { id, conflict_id } => {
                             // Chapter Concord — "keep both": record the
                             // conflict id so future detection passes suppress
                             // this pair. Nothing is deleted.
@@ -3111,24 +2979,18 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             .into(),
                                     ),
                                 },
-                                Some(store) => {
-                                    match store.dismiss(&conflict_id, now).await {
-                                        Ok(()) => {
-                                            DaemonMessage::MemoryConflictDismissed {
-                                                id,
-                                                ok: true,
-                                                error: None,
-                                            }
-                                        }
-                                        Err(e) => {
-                                            DaemonMessage::MemoryConflictDismissed {
-                                                id,
-                                                ok: false,
-                                                error: Some(e.to_string()),
-                                            }
-                                        }
-                                    }
-                                }
+                                Some(store) => match store.dismiss(&conflict_id, now).await {
+                                    Ok(()) => DaemonMessage::MemoryConflictDismissed {
+                                        id,
+                                        ok: true,
+                                        error: None,
+                                    },
+                                    Err(e) => DaemonMessage::MemoryConflictDismissed {
+                                        id,
+                                        ok: false,
+                                        error: Some(e.to_string()),
+                                    },
+                                },
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
@@ -3142,10 +3004,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     id,
                                     ok: false,
                                     removed: false,
-                                        name: name.clone(),
-                                    error: Some(
-                                        "daemon has no persona log configured".into(),
-                                    ),
+                                    name: name.clone(),
+                                    error: Some("daemon has no persona log configured".into()),
                                 },
                                 Some(log) => match crate::skill_edit::operator_forget_skill(
                                     log,
@@ -3184,7 +3044,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // the Studio; the running scheduler arms it within
                             // one tick, no restart.
                             let resp = match schedule_store.as_deref() {
-                                None => schedule_mutated(id, &name, Err("daemon has no schedule store configured".into())),
+                                None => schedule_mutated(
+                                    id,
+                                    &name,
+                                    Err("daemon has no schedule store configured".into()),
+                                ),
                                 Some(store) => {
                                     let res = crate::schedule::operator_create_schedule(
                                         store, &name, &cron, &prompt, enabled,
@@ -3192,7 +3056,12 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     .await
                                     .map(|_| ());
                                     if res.is_ok() {
-                                        audit_schedule_mutation(audit_log.as_deref(), "create", &name, "operator");
+                                        audit_schedule_mutation(
+                                            audit_log.as_deref(),
+                                            "create",
+                                            &name,
+                                            "operator",
+                                        );
                                     }
                                     schedule_mutated(id, &name, res)
                                 }
@@ -3208,14 +3077,27 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             prompt,
                         } => {
                             let resp = match schedule_store.as_deref() {
-                                None => schedule_mutated(id, &schedule_id, Err("daemon has no schedule store configured".into())),
+                                None => schedule_mutated(
+                                    id,
+                                    &schedule_id,
+                                    Err("daemon has no schedule store configured".into()),
+                                ),
                                 Some(store) => {
                                     let res = crate::schedule::operator_update_schedule(
-                                        store, &schedule_id, enabled, cron, prompt,
+                                        store,
+                                        &schedule_id,
+                                        enabled,
+                                        cron,
+                                        prompt,
                                     )
                                     .await;
                                     if res.is_ok() {
-                                        audit_schedule_mutation(audit_log.as_deref(), "update", &schedule_id, "operator");
+                                        audit_schedule_mutation(
+                                            audit_log.as_deref(),
+                                            "update",
+                                            &schedule_id,
+                                            "operator",
+                                        );
                                     }
                                     schedule_mutated(id, &schedule_id, res)
                                 }
@@ -3225,14 +3107,24 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                         }
                         FrontendMessage::DeleteSchedule { id, schedule_id } => {
                             let resp = match schedule_store.as_deref() {
-                                None => schedule_mutated(id, &schedule_id, Err("daemon has no schedule store configured".into())),
+                                None => schedule_mutated(
+                                    id,
+                                    &schedule_id,
+                                    Err("daemon has no schedule store configured".into()),
+                                ),
                                 Some(store) => {
                                     let res = crate::schedule::operator_delete_schedule(
-                                        store, &schedule_id,
+                                        store,
+                                        &schedule_id,
                                     )
                                     .await;
                                     if res.is_ok() {
-                                        audit_schedule_mutation(audit_log.as_deref(), "delete", &schedule_id, "operator");
+                                        audit_schedule_mutation(
+                                            audit_log.as_deref(),
+                                            "delete",
+                                            &schedule_id,
+                                            "operator",
+                                        );
                                     }
                                     schedule_mutated(id, &schedule_id, res)
                                 }
@@ -3257,10 +3149,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 None => DaemonMessage::ProfileHintApplyAcked {
                                     id,
                                     ok: false,
-                                    error: Some(
-                                        "daemon has no audit log configured"
-                                            .into(),
-                                    ),
+                                    error: Some("daemon has no audit log configured".into()),
                                 },
                                 Some(al) => {
                                     let event = aivyx_audit::AuditEvent::ProfileHintApplied {
@@ -3299,10 +3188,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 None => DaemonMessage::RoleDraftImportAcked {
                                     id,
                                     ok: false,
-                                    error: Some(
-                                        "daemon has no audit log configured"
-                                            .into(),
-                                    ),
+                                    error: Some("daemon has no audit log configured".into()),
                                 },
                                 Some(al) => {
                                     let event = aivyx_audit::AuditEvent::RoleDraftImported {
@@ -3415,11 +3301,10 @@ async fn run_single_connection_daemon(
         std::fs::create_dir_all(parent)?;
     }
 
-    let listener = UnixListener::bind(socket_path)
-        .map_err(|source| DaemonError::Bind {
-            path: socket_path.display().to_string(),
-            source,
-        })?;
+    let listener = UnixListener::bind(socket_path).map_err(|source| DaemonError::Bind {
+        path: socket_path.display().to_string(),
+        source,
+    })?;
 
     #[cfg(unix)]
     {
@@ -3428,9 +3313,7 @@ async fn run_single_connection_daemon(
         std::fs::set_permissions(socket_path, perms)?;
     }
 
-    let (stream, _addr) = listener.accept()
-        .await
-        .map_err(DaemonError::Accept)?;
+    let (stream, _addr) = listener.accept().await.map_err(DaemonError::Accept)?;
 
     let shutdown = CancellationToken::new();
     let no_recovery = Arc::new(std::sync::Mutex::new(None));
@@ -3490,6 +3373,7 @@ async fn run_single_connection_daemon(
         team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
+        comfyui_base_url: None,
     })
     .await
 }
@@ -3520,6 +3404,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         web_ui_host: None,
         web_ui_allowed_origins: Vec::new(),
         web_ui_auth_token: None,
+        comfyui_base_url: None,
         memory: None,
         memory_ttl_secs: None,
         audit_log: None,
@@ -3584,7 +3469,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         document_roots: Default::default(),
         wiki_sweep: None,
         graph_sweep: None,
-    }).await
+    })
+    .await
 }
 
 async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {
@@ -3627,12 +3513,13 @@ struct PidGuard {
 impl PidGuard {
     fn write(path: &Path) -> Result<Self, DaemonError> {
         let pid = std::process::id();
-        std::fs::write(path, pid.to_string())
-            .map_err(|source| DaemonError::PidFile {
-                path: path.display().to_string(),
-                source,
-            })?;
-        Ok(PidGuard { path: path.to_path_buf() })
+        std::fs::write(path, pid.to_string()).map_err(|source| DaemonError::PidFile {
+            path: path.display().to_string(),
+            source,
+        })?;
+        Ok(PidGuard {
+            path: path.to_path_buf(),
+        })
     }
 }
 
@@ -3752,53 +3639,27 @@ async fn handle_query(
     shared_persona: &crate::persona::SharedEffectivePersona,
     persona_proposal_log: Option<&crate::persona_proposal::PersistentPersonaProposalLog>,
     memory: Option<&Arc<dyn aivyx_memory::Memory>>,
-    embedding_provider: Option<
-        &Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
-    >,
+    embedding_provider: Option<&Arc<dyn aivyx_llm::embedding::EmbeddingProvider>>,
     recall_log: Option<&Arc<crate::recall_log::PersistentRecallLog>>,
-    helpfulness_ledger: Option<
-        &Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>,
-    >,
-    cooccurrence_ledger: Option<
-        &Arc<
-            crate::cooccurrence_ledger::PersistentCooccurrenceLedger,
-        >,
-    >,
+    helpfulness_ledger: Option<&Arc<crate::helpfulness_ledger::PersistentHelpfulnessLedger>>,
+    cooccurrence_ledger: Option<&Arc<crate::cooccurrence_ledger::PersistentCooccurrenceLedger>>,
     wiki_store: Option<&Arc<crate::knowledge_wiki::PersistentWikiStore>>,
     graph_store: Option<&Arc<crate::knowledge_graph::PersistentGraphStore>>,
-    conflict_dismissals: Option<
-        &Arc<crate::conflict_dismissals::PersistentConflictDismissals>,
-    >,
-    skill_effectiveness_ledger: Option<
-        &Arc<crate::skill_effectiveness::SkillEffectivenessLedger>,
-    >,
-    correction_ledger: Option<
-        &Arc<crate::correction_ledger::PersistentCorrectionLedger>,
-    >,
-    persona_selection_stat: Option<
-        &crate::persona_context::SharedPersonaSelectionStat,
-    >,
-    recall_cluster_stat: Option<
-        &crate::memory_recall::SharedRecallClusterStat,
-    >,
-    proactive_stat: Option<
-        &crate::proactive_detect::SharedProactiveStat,
-    >,
-    persona_lifecycle_stat: Option<
-        &crate::persona_lifecycle::SharedPersonaLifecycleStat,
-    >,
+    conflict_dismissals: Option<&Arc<crate::conflict_dismissals::PersistentConflictDismissals>>,
+    skill_effectiveness_ledger: Option<&Arc<crate::skill_effectiveness::SkillEffectivenessLedger>>,
+    correction_ledger: Option<&Arc<crate::correction_ledger::PersistentCorrectionLedger>>,
+    persona_selection_stat: Option<&crate::persona_context::SharedPersonaSelectionStat>,
+    recall_cluster_stat: Option<&crate::memory_recall::SharedRecallClusterStat>,
+    proactive_stat: Option<&crate::proactive_detect::SharedProactiveStat>,
+    persona_lifecycle_stat: Option<&crate::persona_lifecycle::SharedPersonaLifecycleStat>,
     persona_consolidation_stat: Option<
         &crate::persona_consolidation::SharedPersonaConsolidationStat,
     >,
     correction_consolidation_stat: Option<
         &crate::correction_consolidation::SharedCorrectionConsolidationStat,
     >,
-    correction_judgment_stat: Option<
-        &crate::correction_judgment::SharedCorrectionJudgmentStat,
-    >,
-    recall_judgment_stat: Option<
-        &crate::recall_judgment::SharedRecallJudgmentStat,
-    >,
+    correction_judgment_stat: Option<&crate::correction_judgment::SharedCorrectionJudgmentStat>,
+    recall_judgment_stat: Option<&crate::recall_judgment::SharedRecallJudgmentStat>,
     recall_feedback_config: Option<&aivyx_config::RecallFeedbackConfig>,
     cadence_stats: &crate::reflection_scheduler::SharedRecentReflectionStats,
     tool_descriptors: &[ToolDescriptor],
@@ -3822,6 +3683,9 @@ async fn handle_query(
     // `GetMemoryConflicts` detection pass. `None` ⇒ no provider, so
     // detection returns an empty set (needs an LLM to judge).
     contradiction_llm: Option<&SeedDraftLlm>,
+    // Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s backing
+    // ComfyUI instance. `None` ⇒ no `comfyui` server configured.
+    comfyui_base_url: Option<&str>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -3834,7 +3698,9 @@ async fn handle_query(
                 let sessions = st
                     .sessions
                     .iter()
-                    .map(|s| SessionSummary { session_id: s.clone() })
+                    .map(|s| SessionSummary {
+                        session_id: s.clone(),
+                    })
                     .collect();
                 QueryResponsePayload::ListSessions { sessions }
             }
@@ -3892,8 +3758,10 @@ async fn handle_query(
             let capped = limit.min(AUDIT_QUERY_MAX_LIMIT) as usize;
             match log.entries_range(from_seq, capped) {
                 Ok(rows) => {
-                    let entries: Vec<AuditEntrySummary> =
-                        rows.into_iter().map(audit_entry_summary_from_signed).collect();
+                    let entries: Vec<AuditEntrySummary> = rows
+                        .into_iter()
+                        .map(audit_entry_summary_from_signed)
+                        .collect();
                     QueryResponsePayload::ListAuditEntries {
                         entries,
                         total_len: log.len() as u64,
@@ -3937,8 +3805,7 @@ async fn handle_query(
             // chain. A clock that cannot subtract `secs` (absurdly
             // large window) just yields `None` → whole chain.
             let cutoff = window_secs.and_then(|secs| {
-                std::time::SystemTime::now()
-                    .checked_sub(std::time::Duration::from_secs(secs))
+                std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(secs))
             });
             // The whole chain is loaded — an observability query,
             // not a hot path, and the chain is bounded (Phase 53).
@@ -3956,16 +3823,12 @@ async fn handle_query(
             let Some(ledger) = tool_relevance_ledger else {
                 return QueryResponsePayload::QueryError {
                     code: "no_tool_relevance_ledger".into(),
-                    message:
-                        "daemon has no tool-relevance ledger configured \
+                    message: "daemon has no tool-relevance ledger configured \
                          (enable `[tool_relevance]` in aivyx.toml)"
-                            .into(),
+                        .into(),
                 };
             };
-            let entries = match ledger
-                .list_all_entries(keyword_key_filter.as_deref())
-                .await
-            {
+            let entries = match ledger.list_all_entries(keyword_key_filter.as_deref()).await {
                 Ok(e) => e,
                 Err(e) => {
                     return QueryResponsePayload::QueryError {
@@ -3989,7 +3852,11 @@ async fn handle_query(
             }
             // Stable column ordering for the operator-facing table.
             rows.sort_by(|a, b| {
-                (a.keyword_key.as_str(), a.surface_kind.as_str(), a.identifier.as_str())
+                (
+                    a.keyword_key.as_str(),
+                    a.surface_kind.as_str(),
+                    a.identifier.as_str(),
+                )
                     .cmp(&(
                         b.keyword_key.as_str(),
                         b.surface_kind.as_str(),
@@ -4019,8 +3886,7 @@ async fn handle_query(
                     .map(|c| c.default_priority)
                     .unwrap_or(aivyx_config::DEFAULT_LOOP_PRIORITY)
             });
-            let story_id =
-                format!("ls-{}", uuid::Uuid::new_v4().as_simple());
+            let story_id = format!("ls-{}", uuid::Uuid::new_v4().as_simple());
             match backlog
                 .add_story(story_id.clone(), now_ms, priority, title, body)
                 .await
@@ -4040,8 +3906,7 @@ async fn handle_query(
                 };
             };
             QueryResponsePayload::LoopBacklog {
-                stories: backlog
-                    .list(crate::loop_backlog::StoryStatusFilter::All),
+                stories: backlog.list(crate::loop_backlog::StoryStatusFilter::All),
             }
         }
         QueryPayload::LoopStart { max_iterations } => {
@@ -4071,9 +3936,7 @@ async fn handle_query(
                 state.persist_run_marker(true).await;
                 QueryResponsePayload::LoopControl {
                     ok: true,
-                    message: format!(
-                        "loop run started (max_iterations={requested})"
-                    ),
+                    message: format!("loop run started (max_iterations={requested})"),
                 }
             } else {
                 QueryResponsePayload::LoopControl {
@@ -4107,12 +3970,8 @@ async fn handle_query(
             }
         }
         QueryPayload::LoopStatus => {
-            let remaining = loop_backlog
-                .map(|b| b.remaining_count())
-                .unwrap_or(0);
-            let state = loop_state
-                .map(|s| s.snapshot())
-                .unwrap_or_default();
+            let remaining = loop_backlog.map(|b| b.remaining_count()).unwrap_or(0);
+            let state = loop_state.map(|s| s.snapshot()).unwrap_or_default();
             QueryResponsePayload::LoopStatus {
                 state,
                 remaining,
@@ -4121,26 +3980,18 @@ async fn handle_query(
                     .map(|c| c.gate_command.is_some())
                     .unwrap_or(false),
                 max_run_secs: loop_config.and_then(|c| c.max_run_secs),
-                max_run_tokens: loop_config
-                    .and_then(|c| c.max_run_tokens),
+                max_run_tokens: loop_config.and_then(|c| c.max_run_tokens),
                 max_run_usd: loop_config.and_then(|c| c.max_run_usd),
-                max_idle_iterations: loop_config
-                    .map(|c| c.max_idle_iterations)
-                    .unwrap_or(0),
+                max_idle_iterations: loop_config.map(|c| c.max_idle_iterations).unwrap_or(0),
             }
         }
         QueryPayload::LoopLog { limit } => {
             let limit = limit.unwrap_or(50).max(1) as usize;
             let notes = match memory {
                 Some(m) => m
-                    .get_recent(
-                        crate::loop_tool::LOOP_PROGRESS_TOPIC,
-                        limit,
-                    )
+                    .get_recent(crate::loop_tool::LOOP_PROGRESS_TOPIC, limit)
                     .await
-                    .map(|entries| {
-                        entries.into_iter().map(|e| e.body).collect()
-                    })
+                    .map(|entries| entries.into_iter().map(|e| e.body).collect())
                     .unwrap_or_default(),
                 None => Vec::new(),
             };
@@ -4150,8 +4001,7 @@ async fn handle_query(
             let Some(backlog) = loop_backlog else {
                 return QueryResponsePayload::LoopControl {
                     ok: false,
-                    message: "daemon has no loop backlog configured"
-                        .into(),
+                    message: "daemon has no loop backlog configured".into(),
                 };
             };
             // Guard: only a pending story can be skipped — give a
@@ -4161,12 +4011,7 @@ async fn handle_query(
                     ok: false,
                     message: format!("unknown story `{story_id}`"),
                 },
-                Some(s)
-                    if !matches!(
-                        s.status,
-                        crate::loop_backlog::StoryStatus::Pending
-                    ) =>
-                {
+                Some(s) if !matches!(s.status, crate::loop_backlog::StoryStatus::Pending) => {
                     QueryResponsePayload::LoopControl {
                         ok: false,
                         message: format!(
@@ -4181,11 +4026,7 @@ async fn handle_query(
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
                     match backlog
-                        .mark_skipped(
-                            story_id.clone(),
-                            now_ms,
-                            Some("operator skip".into()),
-                        )
+                        .mark_skipped(story_id.clone(), now_ms, Some("operator skip".into()))
                         .await
                     {
                         Ok(_) => QueryResponsePayload::LoopControl {
@@ -4228,7 +4069,9 @@ async fn handle_query(
             let Some(svc) = team_missions else {
                 return no_team_missions();
             };
-            QueryResponsePayload::TeamMissionList { missions: svc.list() }
+            QueryResponsePayload::TeamMissionList {
+                missions: svc.list(),
+            }
         }
         QueryPayload::TeamMissionStatus { mission_id } => {
             let Some(svc) = team_missions else {
@@ -4255,7 +4098,10 @@ async fn handle_query(
             let (captured_unix, servers) = snapshot
                 .map(|s| (s.captured_unix, s.servers))
                 .unwrap_or((0, Vec::new()));
-            QueryResponsePayload::GetMcpStatus { captured_unix, servers }
+            QueryResponsePayload::GetMcpStatus {
+                captured_unix,
+                servers,
+            }
         }
         QueryPayload::GetSchedules => {
             // Command Center — the agent's scheduled background routines.
@@ -4331,7 +4177,12 @@ async fn handle_query(
                 Err(e) => map_browse_error(e),
             }
         }
-        QueryPayload::WriteFile { root, path, content, overwrite } => {
+        QueryPayload::WriteFile {
+            root,
+            path,
+            content,
+            overwrite,
+        } => {
             // Chapter DW — create/save a file (atomic, escape-guarded).
             let dir = match resolve_document_root(document_roots, &root) {
                 Ok(d) => d,
@@ -4343,7 +4194,11 @@ async fn handle_query(
             }
             fs_mutation_result(res)
         }
-        QueryPayload::DeleteFile { root, path, confirm } => {
+        QueryPayload::DeleteFile {
+            root,
+            path,
+            confirm,
+        } => {
             // Hard gate: a Documents delete always needs an explicit confirm.
             if !confirm {
                 return QueryResponsePayload::FsMutation {
@@ -4361,14 +4216,23 @@ async fn handle_query(
             }
             fs_mutation_result(res)
         }
-        QueryPayload::RenamePath { root, path, new_path } => {
+        QueryPayload::RenamePath {
+            root,
+            path,
+            new_path,
+        } => {
             let dir = match resolve_document_root(document_roots, &root) {
                 Ok(d) => d,
                 Err(resp) => return resp,
             };
             let res = crate::document_browse::rename_path(dir, &path, &new_path);
             if res.is_ok() {
-                audit_document_mutation(audit_log, "rename", &root, &format!("{path} -> {new_path}"));
+                audit_document_mutation(
+                    audit_log,
+                    "rename",
+                    &root,
+                    &format!("{path} -> {new_path}"),
+                );
             }
             fs_mutation_result(res)
         }
@@ -4383,7 +4247,11 @@ async fn handle_query(
             }
             fs_mutation_result(res)
         }
-        QueryPayload::ResolveTeamGate { mission_id, step, approve } => {
+        QueryPayload::ResolveTeamGate {
+            mission_id,
+            step,
+            approve,
+        } => {
             let Some(svc) = team_missions else {
                 return no_team_missions();
             };
@@ -4400,9 +4268,10 @@ async fn handle_query(
                 return no_team_missions();
             };
             match svc.abort(&mission_id) {
-                Ok(message) => {
-                    QueryResponsePayload::TeamMissionAborted { mission_id, message }
-                }
+                Ok(message) => QueryResponsePayload::TeamMissionAborted {
+                    mission_id,
+                    message,
+                },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "abort_team_mission_failed".into(),
                     message: e.to_string(),
@@ -4717,9 +4586,7 @@ async fn handle_query(
                     // tool bookkeeping) the extractor learned to skip only
                     // recently, so triples synthesized before the fix vanish
                     // from the CLI + Studio without a store migration.
-                    use crate::knowledge_graph::{
-                        is_mechanical_entity, is_mechanical_predicate,
-                    };
+                    use crate::knowledge_graph::{is_mechanical_entity, is_mechanical_predicate};
                     edges.retain(|e| {
                         !is_mechanical_entity(&e.subject)
                             && !is_mechanical_entity(&e.object)
@@ -4770,11 +4637,17 @@ async fn handle_query(
             // the current effective persona snapshot. Needs an LLM; missing ⇒
             // an empty set (not an error).
             let Some(llm) = contradiction_llm else {
-                return QueryResponsePayload::SoulConflicts { conflicts: Vec::new() };
+                return QueryResponsePayload::SoulConflicts {
+                    conflicts: Vec::new(),
+                };
             };
             let snapshot = match shared_persona.read() {
                 Ok(p) => p.clone(),
-                Err(_) => return QueryResponsePayload::SoulConflicts { conflicts: Vec::new() },
+                Err(_) => {
+                    return QueryResponsePayload::SoulConflicts {
+                        conflicts: Vec::new(),
+                    };
+                }
             };
             let detector = crate::soul_contradiction::SoulContradictionDetector::new(
                 Arc::clone(&llm.provider),
@@ -4818,8 +4691,7 @@ async fn handle_query(
             }
             let mut skills = Vec::new();
             for raw in &raws {
-                let Some(skill) = crate::persona::LearnedSkill::from_json_value(raw)
-                else {
+                let Some(skill) = crate::persona::LearnedSkill::from_json_value(raw) else {
                     continue;
                 };
                 let (ewma_score, samples) = match skill_effectiveness_ledger {
@@ -4850,7 +4722,10 @@ async fn handle_query(
                         .count()
                 })
                 .unwrap_or(0);
-            QueryResponsePayload::GetSkills { skills, pending_proposals }
+            QueryResponsePayload::GetSkills {
+                skills,
+                pending_proposals,
+            }
         }
         QueryPayload::GetToolCatalog => {
             // Chapter Almanac — a pure registry snapshot. Cheap —
@@ -4871,10 +4746,7 @@ async fn handle_query(
             let capped = limit.clamp(1, MEMORY_QUERY_MAX_LIMIT) as usize;
             match mem.get_recent(&topic, capped).await {
                 Ok(entries) => QueryResponsePayload::GetMemoryTopicEntries {
-                    entries: entries
-                        .into_iter()
-                        .map(memory_entry_summary)
-                        .collect(),
+                    entries: entries.into_iter().map(memory_entry_summary).collect(),
                 },
                 Err(e) => QueryResponsePayload::QueryError {
                     code: "memory_get_failed".into(),
@@ -4905,12 +4777,10 @@ async fn handle_query(
             // flag lets the operator/agent see it happened.
             if semantic {
                 let qvec = match embedding_provider {
-                    Some(p) => {
-                        match p.embed(std::slice::from_ref(&query)).await {
-                            Ok(mut v) if !v.is_empty() => Some(v.remove(0)),
-                            _ => None,
-                        }
-                    }
+                    Some(p) => match p.embed(std::slice::from_ref(&query)).await {
+                        Ok(mut v) if !v.is_empty() => Some(v.remove(0)),
+                        _ => None,
+                    },
                     None => None,
                 };
                 let has_vectors = mem
@@ -4923,11 +4793,7 @@ async fn handle_query(
                         Ok(matches) => QueryResponsePayload::SearchMemory {
                             matches: matches
                                 .into_iter()
-                                .filter(|m| {
-                                    !crate::prune_sink::is_internal_topic(
-                                        &m.topic,
-                                    )
-                                })
+                                .filter(|m| !crate::prune_sink::is_internal_topic(&m.topic))
                                 .map(memory_entry_summary)
                                 .collect(),
                             fell_back_to_keyword: false,
@@ -4941,10 +4807,7 @@ async fn handle_query(
                 // Fallback to keyword, flagged.
                 return match mem.search(&query, capped).await {
                     Ok(matches) => QueryResponsePayload::SearchMemory {
-                        matches: matches
-                            .into_iter()
-                            .map(memory_entry_summary)
-                            .collect(),
+                        matches: matches.into_iter().map(memory_entry_summary).collect(),
                         fell_back_to_keyword: true,
                     },
                     Err(e) => QueryResponsePayload::QueryError {
@@ -4959,9 +4822,7 @@ async fn handle_query(
                 Ok(matches) => QueryResponsePayload::SearchMemory {
                     matches: matches
                         .into_iter()
-                        .filter(|m| {
-                            !crate::prune_sink::is_internal_topic(&m.topic)
-                        })
+                        .filter(|m| !crate::prune_sink::is_internal_topic(&m.topic))
                         .map(memory_entry_summary)
                         .collect(),
                     fell_back_to_keyword: false,
@@ -4973,9 +4834,7 @@ async fn handle_query(
             }
         }
         QueryPayload::GetLearningInsights { window_secs } => {
-            let window = window_secs.unwrap_or(
-                crate::recall_feedback::RECALL_LOG_RETAIN_SECS,
-            );
+            let window = window_secs.unwrap_or(crate::recall_feedback::RECALL_LOG_RETAIN_SECS);
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -4985,42 +4844,37 @@ async fn handle_query(
             // Phase 79 (Q4a) — last adaptive-Persona selection.
             // Independent of the recall substrate, so resolved
             // once and included in every LearningInsights return.
-            let persona_selection = persona_selection_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let persona_selection =
+                persona_selection_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 84 (Q4a) — last-turn cluster-recall stat
             // (same shared-handle pattern as persona_selection).
-            let cluster_recall = recall_cluster_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
-            let proactive = proactive_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
-            let persona_lifecycle = persona_lifecycle_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let cluster_recall =
+                recall_cluster_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let proactive = proactive_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let persona_lifecycle =
+                persona_lifecycle_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 87 (Q4a) — last reflection cycle's
             // pattern-driven consolidation outcome (same
             // shared-handle pattern as persona_selection /
             // cluster_recall).
-            let persona_consolidation = persona_consolidation_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let persona_consolidation =
+                persona_consolidation_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 91 (Q4a) — last reflection cycle's
             // LLM-judged recall outcome.
-            let recall_judgment = recall_judgment_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let recall_judgment =
+                recall_judgment_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 82 — durable accumulated helpfulness (the
             // longitudinal view). Best-effort: a ledger error
             // collapses to `None`, never breaking the surface;
             // an empty ledger is reported as "none yet."
-            let accumulated_helpfulness =
-                match helpfulness_ledger {
-                    Some(l) => l
-                        .accumulated(now_secs, 5)
-                        .await
-                        .ok()
-                        .filter(|a| {
-                            !a.top_helpful.is_empty()
-                                || !a.top_unhelpful.is_empty()
-                        }),
-                    None => None,
-                };
+            let accumulated_helpfulness = match helpfulness_ledger {
+                Some(l) => l
+                    .accumulated(now_secs, 5)
+                    .await
+                    .ok()
+                    .filter(|a| !a.top_helpful.is_empty() || !a.top_unhelpful.is_empty()),
+                None => None,
+            };
             // Phase 83 — durable cross-session co-occurrence
             // patterns. Best-effort: ledger error → None,
             // empty → None (never breaks the surface).
@@ -5046,30 +4900,23 @@ async fn handle_query(
             // Phase 172 (Q4a) — last reflection cycle's
             // correction-driven consolidation outcome.
             let correction_consolidation =
-                correction_consolidation_stat.and_then(|s| {
-                    s.read().ok().and_then(|g| g.clone())
-                });
+                correction_consolidation_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
             // Phase 178 — last cycle's correction-judgment stat.
-            let correction_judgment = correction_judgment_stat
-                .and_then(|s| s.read().ok().and_then(|g| g.clone()));
+            let correction_judgment =
+                correction_judgment_stat.and_then(|s| s.read().ok().and_then(|g| g.clone()));
 
             // Phase 95 — snapshot per-schedule cadence stats.
             // Sorted by schedule name for stable rendering.
-            let cadence: Vec<(
-                String,
-                crate::reflection_scheduler::RecentReflectionStat,
-            )> = cadence_stats
-                .read()
-                .ok()
-                .map(|g| {
-                    let mut v: Vec<_> = g
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    v.sort_by(|a, b| a.0.cmp(&b.0));
-                    v
-                })
-                .unwrap_or_default();
+            let cadence: Vec<(String, crate::reflection_scheduler::RecentReflectionStat)> =
+                cadence_stats
+                    .read()
+                    .ok()
+                    .map(|g| {
+                        let mut v: Vec<_> = g.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        v.sort_by(|a, b| a.0.cmp(&b.0));
+                        v
+                    })
+                    .unwrap_or_default();
 
             // No recall substrate → an empty digest is the
             // valid "nothing learned yet" answer, not an error.
@@ -5080,8 +4927,7 @@ async fn handle_query(
                         &crate::recall_feedback::HelpfulnessTally::default(),
                         &[],
                         &[],
-                        recall_feedback_config
-                            .map(|c| c.use_judgment_signal),
+                        recall_feedback_config.map(|c| c.use_judgment_signal),
                     ),
                     proposals: Vec::new(),
                     persona_selection,
@@ -5125,29 +4971,22 @@ async fn handle_query(
                         Err(e) => {
                             return QueryResponsePayload::QueryError {
                                 code: "audit_read_failed".into(),
-                                message: format!(
-                                    "audit chain read failed: {e}"
-                                ),
+                                message: format!("audit chain read failed: {e}"),
                             };
                         }
                     }
                 }
                 None => Vec::new(),
             };
-            let (tally, detail) =
-                crate::recall_feedback::correlate_detailed(
-                    &recalls,
-                    &outcomes,
-                    recall_feedback_config
-                        .map(|c| c.use_judgment_signal)
-                        .unwrap_or(false),
-                );
+            let (tally, detail) = crate::recall_feedback::correlate_detailed(
+                &recalls,
+                &outcomes,
+                recall_feedback_config
+                    .map(|c| c.use_judgment_signal)
+                    .unwrap_or(false),
+            );
             let proposals = persona_proposal_log
-                .map(|l| {
-                    l.list(
-                        crate::persona_proposal::ProposalStatusFilter::All,
-                    )
-                })
+                .map(|l| l.list(crate::persona_proposal::ProposalStatusFilter::All))
                 .unwrap_or_default();
             QueryResponsePayload::LearningInsights {
                 digest: crate::recall_insights::build_digest(
@@ -5155,12 +4994,9 @@ async fn handle_query(
                     &tally,
                     &detail,
                     &proposals,
-                    recall_feedback_config
-                        .map(|c| c.use_judgment_signal),
+                    recall_feedback_config.map(|c| c.use_judgment_signal),
                 ),
-                proposals: crate::recall_insights::build_provenance(
-                    &detail, &proposals,
-                ),
+                proposals: crate::recall_insights::build_provenance(&detail, &proposals),
                 persona_selection,
                 proactive,
                 persona_lifecycle,
@@ -5195,7 +5031,11 @@ async fn handle_query(
                 },
             }
         }
-        QueryPayload::SetAccessLevel { level, root, confirm } => {
+        QueryPayload::SetAccessLevel {
+            level,
+            root,
+            confirm,
+        } => {
             let path = match config_toml_path {
                 Some(p) => p,
                 None => return no_config_file_error(),
@@ -5209,7 +5049,7 @@ async fn handle_query(
                             "unknown access level `{level}` \
                              (sandbox | workspace | home | full | custom)"
                         ),
-                    }
+                    };
                 }
             };
             // Confirm-first gate (Chapter N) — enforced SERVER-SIDE, not just
@@ -5236,7 +5076,12 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
-        QueryPayload::SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at } => {
+        QueryPayload::SetBudget {
+            per_run_usd,
+            per_day_usd,
+            on_exceeded,
+            alert_at,
+        } => {
             let path = match config_toml_path {
                 Some(p) => p,
                 None => return no_config_file_error(),
@@ -5247,10 +5092,8 @@ async fn handle_query(
                 Some(other) => {
                     return QueryResponsePayload::QueryError {
                         code: "invalid_budget".into(),
-                        message: format!(
-                            "unknown on_exceeded `{other}` (expected alert | deny)"
-                        ),
-                    }
+                        message: format!("unknown on_exceeded `{other}` (expected alert | deny)"),
+                    };
                 }
             };
             // Chapter Ballast — per-mission caps are not edited from this
@@ -5311,7 +5154,7 @@ async fn handle_query(
                             "unknown autonomy level `{level}` (manual | assisted | \
                              supervised | autonomous | unleashed)"
                         ),
-                    }
+                    };
                 }
             };
             // Confirm-first gate — enforced SERVER-SIDE, not just in the UI. The
@@ -5438,14 +5281,134 @@ async fn handle_query(
                     team_roster_applied(path)
                 }
                 Err(crate::team_config_write::TeamConfigWriteError::Invalid(message)) => {
-                    QueryResponsePayload::QueryError { code: "invalid_roster".into(), message }
+                    QueryResponsePayload::QueryError {
+                        code: "invalid_roster".into(),
+                        message,
+                    }
                 }
                 Err(crate::team_config_write::TeamConfigWriteError::Write(message)) => {
-                    QueryResponsePayload::QueryError { code: "team_write_failed".into(), message }
+                    QueryResponsePayload::QueryError {
+                        code: "team_write_failed".into(),
+                        message,
+                    }
                 }
             }
         }
+        QueryPayload::GetGallery => match comfyui_base_url {
+            None => QueryResponsePayload::Gallery {
+                available: false,
+                images: Vec::new(),
+            },
+            Some(base_url) => fetch_gallery(base_url).await,
+        },
     }
+}
+
+/// Studio Gallery — read ComfyUI's own `/history` API directly (not the MCP
+/// tool surface — see [[comfyui-mcp-integration]]) and shape it into
+/// `GalleryImage`s, newest first. Best-effort throughout: a request/parse
+/// failure yields an empty (but `available: true`) list rather than a
+/// `QueryError` — a ComfyUI hiccup shouldn't break the Studio screen.
+async fn fetch_gallery(base_url: &str) -> QueryResponsePayload {
+    const GALLERY_MAX_IMAGES: usize = 40;
+
+    let empty = || QueryResponsePayload::Gallery {
+        available: true,
+        images: Vec::new(),
+    };
+
+    let url = format!("{}/history", base_url.trim_end_matches('/'));
+    let Ok(resp) = reqwest::get(&url).await else {
+        return empty();
+    };
+    let Ok(body) = resp.text().await else {
+        return empty();
+    };
+    let Ok(history) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return empty();
+    };
+    let Some(entries) = history.as_object() else {
+        return empty();
+    };
+
+    let mut images: Vec<GalleryImage> = entries
+        .iter()
+        .filter_map(|(prompt_id, entry)| gallery_image_from_history_entry(prompt_id, entry))
+        .collect();
+    images.sort_by_key(|img| std::cmp::Reverse(img.created_unix));
+    images.truncate(GALLERY_MAX_IMAGES);
+
+    QueryResponsePayload::Gallery {
+        available: true,
+        images,
+    }
+}
+
+/// One `/history/{prompt_id}` entry → a `GalleryImage`, or `None` if it has
+/// no image output (e.g. an audio/failed generation).
+fn gallery_image_from_history_entry(
+    prompt_id: &str,
+    entry: &serde_json::Value,
+) -> Option<GalleryImage> {
+    let outputs = entry.get("outputs")?.as_object()?;
+    let image = outputs
+        .values()
+        .find_map(|out| out.get("images")?.as_array()?.first())?;
+    let filename = image.get("filename")?.as_str()?.to_string();
+    let subfolder = image
+        .get("subfolder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let folder_type = image
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("output")
+        .to_string();
+
+    // Prefer the completion timestamp; fall back to the start timestamp for
+    // an entry with no `execution_success` message (e.g. a failed run).
+    let created_unix = entry
+        .get("status")?
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find_map(|msg| {
+            let arr = msg.as_array()?;
+            match arr.first()?.as_str()? {
+                "execution_success" | "execution_start" => arr.get(1)?.get("timestamp")?.as_u64(),
+                _ => None,
+            }
+        })
+        .map(|ms| ms / 1000);
+
+    Some(GalleryImage {
+        prompt_id: prompt_id.to_string(),
+        filename,
+        subfolder,
+        folder_type,
+        created_unix,
+        caption: gallery_caption(entry),
+    })
+}
+
+/// Best-effort caption: the text feeding the `KSampler` node's `positive`
+/// input, traced through the submitted node graph. `None` when the graph
+/// doesn't have that shape (a custom/non-standard workflow).
+fn gallery_caption(entry: &serde_json::Value) -> Option<String> {
+    let nodes = entry.get("prompt")?.get(2)?.as_object()?;
+    let ksampler = nodes
+        .values()
+        .find(|n| n.get("class_type").and_then(|c| c.as_str()) == Some("KSampler"))?;
+    let positive_link = ksampler.get("inputs")?.get("positive")?.as_array()?;
+    let node_id = positive_link.first()?.as_str()?;
+    nodes
+        .get(node_id)?
+        .get("inputs")?
+        .get("text")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Chapter U — `QueryError` for a Settings write/read when the daemon was
@@ -5499,7 +5462,10 @@ fn settings_applied(toml_path: &Path, embeddings_available: bool) -> QueryRespon
 /// running daemon (mirrors `settings_applied`).
 fn team_roster_applied(team_path: &Path) -> QueryResponsePayload {
     match aivyx_team::TeamConfig::load(team_path) {
-        Ok(roster) => QueryResponsePayload::TeamRosterApplied { roster, restart_required: true },
+        Ok(roster) => QueryResponsePayload::TeamRosterApplied {
+            roster,
+            restart_required: true,
+        },
         Err(e) => QueryResponsePayload::QueryError {
             code: "config_reload_failed".into(),
             message: format!("team roster written, but reloading it failed: {e}"),
@@ -5598,7 +5564,9 @@ fn voice_snapshot(cfg: &aivyx_config::AivyxConfig) -> aivyx_ipc::protocol::Voice
 /// `"unset"` (no dir configured), `"present"` (the dir holds an entry matching
 /// `pred`), or `"missing"` (no dir, or no matching entry).
 fn model_dir_status(dir: Option<&Path>, pred: impl Fn(&str) -> bool) -> String {
-    let Some(dir) = dir else { return "unset".to_string() };
+    let Some(dir) = dir else {
+        return "unset".to_string();
+    };
     let found = std::fs::read_dir(dir).is_ok_and(|rd| {
         rd.flatten()
             .any(|e| e.file_name().to_str().is_some_and(&pred))
@@ -5612,12 +5580,12 @@ fn path_status(p: Option<&Path>, want_dir: bool) -> String {
     match p {
         None => "unset",
         Some(path) => {
-            let ok = if want_dir { path.is_dir() } else { path.is_file() };
-            if ok {
-                "present"
+            let ok = if want_dir {
+                path.is_dir()
             } else {
-                "missing"
-            }
+                path.is_file()
+            };
+            if ok { "present" } else { "missing" }
         }
     }
     .to_string()
@@ -5691,11 +5659,7 @@ fn settings_snapshot(
 /// Best-effort: a write with no audit log (test fixture) is silently
 /// unaudited; an append failure is logged but does not fail the write (the
 /// file change already landed).
-fn audit_config_change(
-    audit_log: Option<&PersistentAuditLog>,
-    section: &str,
-    summary: &str,
-) {
+fn audit_config_change(audit_log: Option<&PersistentAuditLog>, section: &str, summary: &str) {
     if let Some(log) = audit_log {
         if let Err(e) = log.append(aivyx_audit::AuditEvent::ConfigChanged {
             section: section.to_string(),
@@ -5745,19 +5709,19 @@ fn budget_action_label(a: aivyx_cost::BudgetAction) -> &'static str {
 
 /// Chapter U — render an optional dollar cap for an audit summary.
 fn opt_usd(v: Option<f64>) -> String {
-    v.map(|n| format!("{n}")).unwrap_or_else(|| "none".to_string())
+    v.map(|n| format!("{n}"))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Chapter U — render an optional alert fraction for an audit summary.
 fn opt_frac(v: Option<f64>) -> String {
-    v.map(|n| format!("{n}")).unwrap_or_else(|| "none".to_string())
+    v.map(|n| format!("{n}"))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Phase 74 — convert an `aivyx_memory::MemoryEntry` into the
 /// flat wire `MemoryEntrySummary`.
-fn memory_entry_summary(
-    e: aivyx_memory::MemoryEntry,
-) -> crate::daemon_ipc::MemoryEntrySummary {
+fn memory_entry_summary(e: aivyx_memory::MemoryEntry) -> crate::daemon_ipc::MemoryEntrySummary {
     crate::daemon_ipc::MemoryEntrySummary {
         topic: e.topic,
         body: e.body,
@@ -5840,9 +5804,7 @@ fn render_notify_outcome_for_history(
     use aivyx_audit::AutoNotifyOutcomeSummary;
     match summary {
         AutoNotifyOutcomeSummary::Delivered => ("delivered", String::new()),
-        AutoNotifyOutcomeSummary::SkippedEmptyResponse => {
-            ("skipped_empty_response", String::new())
-        }
+        AutoNotifyOutcomeSummary::SkippedEmptyResponse => ("skipped_empty_response", String::new()),
         AutoNotifyOutcomeSummary::Failed {
             error_kind,
             error_message,
@@ -5850,22 +5812,16 @@ fn render_notify_outcome_for_history(
         AutoNotifyOutcomeSummary::SkippedByCondition { condition } => {
             ("skipped_by_condition", condition.clone())
         }
-        AutoNotifyOutcomeSummary::SkippedByRateLimit {
-            limit,
-            window_secs,
-        } => (
-            "skipped_by_rate_limit",
-            format!("{limit}/{window_secs}s"),
-        ),
+        AutoNotifyOutcomeSummary::SkippedByRateLimit { limit, window_secs } => {
+            ("skipped_by_rate_limit", format!("{limit}/{window_secs}s"))
+        }
     }
 }
 
 /// Phase 70 — parse the wire-format status filter string into
 /// the typed enum. Unknown values fall through to `Pending` per
 /// the IPC contract documented at `QueryPayload::ListPersonaProposals`.
-fn parse_proposal_status_filter(
-    s: &str,
-) -> crate::persona_proposal::ProposalStatusFilter {
+fn parse_proposal_status_filter(s: &str) -> crate::persona_proposal::ProposalStatusFilter {
     use crate::persona_proposal::ProposalStatusFilter;
     match s.to_ascii_lowercase().as_str() {
         "all" => ProposalStatusFilter::All,
@@ -5884,53 +5840,46 @@ fn proposal_summary_from_view(
     use crate::persona_proposal::ProposalStatus;
     let category = format!("{:?}", view.proposed_op.category);
     let proposed_reason = view.proposed_op.reason.clone();
-    let proposed_op = serde_json::to_value(&view.proposed_op.op)
-        .unwrap_or(serde_json::Value::Null);
+    let proposed_op = serde_json::to_value(&view.proposed_op.op).unwrap_or(serde_json::Value::Null);
     // Phase 92 → Phase 94 — lift the linkage onto the
     // summary so the surface grouping helper doesn't need
     // to re-parse `proposed_op` JSON.
-    let supersedes_proposal_id =
-        view.proposed_op.supersedes_proposal_id.clone();
-    let (status, applied_op, applied_seq, rejected_reason, resolved_at_unix_ms) =
-        match view.status {
-            ProposalStatus::Pending => {
-                ("Pending".to_string(), None, None, None, None)
-            }
-            ProposalStatus::Approved {
-                applied_op,
-                applied_seq,
-                resolved_at_unix_ms,
-            } => (
-                "Approved".to_string(),
-                Some(
-                    serde_json::to_value(&applied_op.op)
-                        .unwrap_or(serde_json::Value::Null),
-                ),
-                Some(applied_seq),
-                None,
-                Some(resolved_at_unix_ms),
-            ),
-            ProposalStatus::Rejected {
-                reason,
-                resolved_at_unix_ms,
-            } => (
-                "Rejected".to_string(),
-                None,
-                None,
-                reason,
-                Some(resolved_at_unix_ms),
-            ),
-            ProposalStatus::Superseded {
-                by_proposal_id: _,
-                resolved_at_unix_ms,
-            } => (
-                "Superseded".to_string(),
-                None,
-                None,
-                None,
-                Some(resolved_at_unix_ms),
-            ),
-        };
+    let supersedes_proposal_id = view.proposed_op.supersedes_proposal_id.clone();
+    let (status, applied_op, applied_seq, rejected_reason, resolved_at_unix_ms) = match view.status
+    {
+        ProposalStatus::Pending => ("Pending".to_string(), None, None, None, None),
+        ProposalStatus::Approved {
+            applied_op,
+            applied_seq,
+            resolved_at_unix_ms,
+        } => (
+            "Approved".to_string(),
+            Some(serde_json::to_value(&applied_op.op).unwrap_or(serde_json::Value::Null)),
+            Some(applied_seq),
+            None,
+            Some(resolved_at_unix_ms),
+        ),
+        ProposalStatus::Rejected {
+            reason,
+            resolved_at_unix_ms,
+        } => (
+            "Rejected".to_string(),
+            None,
+            None,
+            reason,
+            Some(resolved_at_unix_ms),
+        ),
+        ProposalStatus::Superseded {
+            by_proposal_id: _,
+            resolved_at_unix_ms,
+        } => (
+            "Superseded".to_string(),
+            None,
+            None,
+            None,
+            Some(resolved_at_unix_ms),
+        ),
+    };
     crate::daemon_ipc::PersonaProposalSummary {
         id: view.id,
         proposed_at_unix_ms: view.proposed_at_unix_ms,
@@ -6012,8 +5961,8 @@ async fn resolve_persona_revert(
     shared_persona: &crate::persona::SharedEffectivePersona,
     target_delta_id: &str,
 ) -> Result<u64, String> {
-    let persona_log = persona_log
-        .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    let persona_log =
+        persona_log.ok_or_else(|| "daemon has no persona log configured".to_string())?;
     // Validate the target exists in the chain before appending the
     // revert. Forward-pointing targets are rejected at fold time,
     // but rejecting them at append time gives a better operator
@@ -6022,9 +5971,7 @@ async fn resolve_persona_revert(
     let target = entries
         .iter()
         .find(|e| e.delta.delta_id == target_delta_id)
-        .ok_or_else(|| {
-            format!("no persona delta found with id `{target_delta_id}`")
-        })?;
+        .ok_or_else(|| format!("no persona delta found with id `{target_delta_id}`"))?;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -6063,8 +6010,8 @@ async fn resolve_soul_conflict(
     value: &str,
 ) -> Result<u64, String> {
     use aivyx_ipc::persona::PersonaDeltaCategory as Cat;
-    let persona_log = persona_log
-        .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    let persona_log =
+        persona_log.ok_or_else(|| "daemon has no persona log configured".to_string())?;
     if value.trim().is_empty() {
         return Err("no facet value to remove".to_string());
     }
@@ -6072,8 +6019,8 @@ async fn resolve_soul_conflict(
     // (its stored value is JSON, not a plain list string), reusing the same
     // operator-forget primitive the Repertoire screen uses.
     if category == aivyx_ipc::soul_conflict::SoulFacet::LEARNED_SKILL {
-        let removed = crate::skill_edit::operator_forget_skill(persona_log, shared_persona, value)
-            .await?;
+        let removed =
+            crate::skill_edit::operator_forget_skill(persona_log, shared_persona, value).await?;
         if !removed {
             return Err(format!("no learned skill named `{value}` to remove"));
         }
@@ -6098,7 +6045,11 @@ async fn resolve_soul_conflict(
                     .to_string(),
             );
         }
-        other => return Err(format!("`{other}` is not a removable persona facet category")),
+        other => {
+            return Err(format!(
+                "`{other}` is not a removable persona facet category"
+            ));
+        }
     };
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -6196,8 +6147,7 @@ async fn author_skill_live(
             vec![crate::skill_edit::teach_op(&skill)]
         }
         SkillAuthorOp::Update => {
-            let existing =
-                existing.ok_or_else(|| format!("no skill named {name:?} to update"))?;
+            let existing = existing.ok_or_else(|| format!("no skill named {name:?} to update"))?;
             if trigger.is_none() && procedure.is_none() {
                 return Err("update needs a new trigger and/or procedure".into());
             }
@@ -6205,8 +6155,7 @@ async fn author_skill_live(
             crate::skill_edit::update_ops(existing, &merged).to_vec()
         }
         SkillAuthorOp::Forget => {
-            let existing =
-                existing.ok_or_else(|| format!("no skill named {name:?} to forget"))?;
+            let existing = existing.ok_or_else(|| format!("no skill named {name:?} to forget"))?;
             vec![crate::skill_edit::forget_op(existing)]
         }
     };
@@ -6279,8 +6228,8 @@ async fn resolve_persona_import(
     deltas: Vec<crate::identity_export::DeltaExport>,
     force: bool,
 ) -> Result<crate::daemon_ipc::PersonaImportSuccess, String> {
-    let persona_log = persona_log
-        .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+    let persona_log =
+        persona_log.ok_or_else(|| "daemon has no persona log configured".to_string())?;
 
     // Re-validate each delta server-side — defense against the
     // CLI sending us a frame that bypassed parse_and_validate
@@ -6442,9 +6391,7 @@ fn fold_tool_stats(
             aivyx_core::ToolOutcomeSummary::Denied => "denied",
             aivyx_core::ToolOutcomeSummary::NotInRole => "not_in_role",
             aivyx_core::ToolOutcomeSummary::RateLimited => "rate_limited",
-            aivyx_core::ToolOutcomeSummary::RequiresEscalation => {
-                "requires_escalation"
-            }
+            aivyx_core::ToolOutcomeSummary::RequiresEscalation => "requires_escalation",
             aivyx_core::ToolOutcomeSummary::Failed => "failed",
         };
         *a.outcomes.entry(label.to_string()).or_insert(0) += 1;
@@ -6575,11 +6522,19 @@ async fn persona_approve_coherence_block(
         .detect_for_candidate(&snapshot, op.category, &value)
         .await?;
     // Operator already said "keep both" for this pair → allow.
-    if dismissals.is_soul_dismissed(&conflict.id).await.unwrap_or(false) {
+    if dismissals
+        .is_soul_dismissed(&conflict.id)
+        .await
+        .unwrap_or(false)
+    {
         return None;
     }
     // Name the EXISTING facet (the side that isn't the candidate).
-    let existing = if conflict.a.value == value { &conflict.b } else { &conflict.a };
+    let existing = if conflict.a.value == value {
+        &conflict.b
+    } else {
+        &conflict.a
+    };
     Some(format!(
         "coherence: approving \"{value}\" would contradict existing {} \"{}\" — {}. \
          Reject it, resolve the existing facet (`aivyx persona resolve {id}`), or \
@@ -6592,9 +6547,7 @@ async fn persona_approve_coherence_block(
 }
 
 async fn resolve_persona_proposal(
-    persona_proposal_log: Option<
-        &crate::persona_proposal::PersistentPersonaProposalLog,
-    >,
+    persona_proposal_log: Option<&crate::persona_proposal::PersistentPersonaProposalLog>,
     persona_log: Option<&crate::persona::PersistentPersonaLog>,
     shared_persona: &crate::persona::SharedEffectivePersona,
     _request_id: &str,
@@ -6626,9 +6579,9 @@ async fn resolve_persona_proposal(
         | crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit { .. } => {
             // Resolve the op the operator actually wants applied.
             let applied_op = match &resolution {
-                crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit {
-                    edited_op,
-                } => edited_op.clone(),
+                crate::daemon_ipc::PersonaProposalResolution::ApproveWithEdit { edited_op } => {
+                    edited_op.clone()
+                }
                 _ => view.proposed_op.clone(),
             };
             applied_op
@@ -6636,8 +6589,8 @@ async fn resolve_persona_proposal(
                 .map_err(|reason| format!("edited op invalid: {reason}"))?;
             // Append to the persona log first; if that fails the
             // proposal stays Pending so the operator can retry.
-            let persona_log = persona_log
-                .ok_or_else(|| "daemon has no persona log configured".to_string())?;
+            let persona_log =
+                persona_log.ok_or_else(|| "daemon has no persona log configured".to_string())?;
             let delta_id = format!("pd-approved-{proposal_id}");
             let delta = crate::persona::PersonaDelta {
                 delta_id,
@@ -6659,13 +6612,8 @@ async fn resolve_persona_proposal(
             // Recompute shared persona state so the next turn sees
             // the new effective persona.
             let entries_after = persona_log.entries();
-            if !crate::persona::recompute_shared_from_entries(
-                shared_persona,
-                &entries_after,
-            ) {
-                return Err(
-                    "shared persona state lock poisoned during recompute".into(),
-                );
+            if !crate::persona::recompute_shared_from_entries(shared_persona, &entries_after) {
+                return Err("shared persona state lock poisoned during recompute".into());
             }
             Ok(crate::daemon_ipc::PersonaProposalResolveSuccess {
                 proposal_status: "Approved".into(),
@@ -6725,7 +6673,10 @@ fn fs_mutation_result(
     res: Result<(), crate::document_browse::BrowseError>,
 ) -> QueryResponsePayload {
     match res {
-        Ok(()) => QueryResponsePayload::FsMutation { ok: true, error: None },
+        Ok(()) => QueryResponsePayload::FsMutation {
+            ok: true,
+            error: None,
+        },
         Err(e) => QueryResponsePayload::FsMutation {
             ok: false,
             error: Some(e.to_string()),
@@ -6795,11 +6746,17 @@ fn audit_schedule_mutation(
 fn map_browse_error(e: crate::document_browse::BrowseError) -> QueryResponsePayload {
     use crate::document_browse::BrowseError as E;
     let (code, message) = match e {
-        E::PathEscape => ("path_escape", "path is outside the allowed root".to_string()),
+        E::PathEscape => (
+            "path_escape",
+            "path is outside the allowed root".to_string(),
+        ),
         E::NotFound => ("not_found", "no such file or directory".to_string()),
         E::NotADir => ("not_a_dir", "not a directory".to_string()),
         E::NotAFile => ("not_a_file", "not a file".to_string()),
-        E::Exists => ("exists", "a file or directory with that name already exists".to_string()),
+        E::Exists => (
+            "exists",
+            "a file or directory with that name already exists".to_string(),
+        ),
         E::NotEmpty => ("not_empty", "the directory is not empty".to_string()),
         E::Io(s) => ("io_error", s),
     };
@@ -6978,13 +6935,10 @@ mod tests {
             );
         }
         // A genuine I/O fault and non-I/O errors must still log loudly.
-        assert!(!DaemonError::Io(Error::new(
-            ErrorKind::PermissionDenied,
-            "nope"
-        ))
-        .is_clean_disconnect());
-        assert!(!DaemonError::Protocol("bad handshake".into())
-            .is_clean_disconnect());
+        assert!(
+            !DaemonError::Io(Error::new(ErrorKind::PermissionDenied, "nope")).is_clean_disconnect()
+        );
+        assert!(!DaemonError::Protocol("bad handshake".into()).is_clean_disconnect());
     }
 
     #[test]
@@ -6996,9 +6950,7 @@ mod tests {
     }
 
     fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("aivyx-test-state")
-            .join(name);
+        let dir = std::env::temp_dir().join("aivyx-test-state").join(name);
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -7083,10 +7035,18 @@ mod tests {
         assert_eq!(shared.lock().unwrap().sessions, vec!["ses-1"]);
 
         // Register an in-flight turn.
-        shared.lock().unwrap().in_flight_turns.push("ses-1:turn".into());
+        shared
+            .lock()
+            .unwrap()
+            .in_flight_turns
+            .push("ses-1:turn".into());
 
         // Complete turn.
-        shared.lock().unwrap().in_flight_turns.retain(|t| t != "ses-1:turn");
+        shared
+            .lock()
+            .unwrap()
+            .in_flight_turns
+            .retain(|t| t != "ses-1:turn");
         assert!(shared.lock().unwrap().in_flight_turns.is_empty());
 
         // Deregister session.
@@ -7130,7 +7090,10 @@ mod tests {
         let summary = profile_summary_from_profile(&profile);
         assert_eq!(summary.assistant_name, "Codex");
         assert_eq!(summary.assistant_name_source, "toml");
-        assert_eq!(summary.operator_profile.as_deref(), Some("Senior Rust engineer"));
+        assert_eq!(
+            summary.operator_profile.as_deref(),
+            Some("Senior Rust engineer")
+        );
         assert_eq!(
             summary.communication_style.as_deref(),
             Some("terse, conclusion-first"),
@@ -7196,9 +7159,8 @@ mod tests {
             .await
             .expect("proposal log"),
         );
-        let shared = crate::persona::shared_effective_persona(
-            crate::persona::EffectivePersona::default(),
-        );
+        let shared =
+            crate::persona::shared_effective_persona(crate::persona::EffectivePersona::default());
         (persona_log, proposal_log, shared)
     }
 
@@ -7217,12 +7179,7 @@ mod tests {
     async fn resolve_proposal_approve_appends_to_persona_log_and_records_approved() {
         let (persona_log, proposal_log, shared) = open_phase_70_test_logs("approve").await;
         proposal_log
-            .append_pending(
-                "pp-1".into(),
-                1_000,
-                "ses-1".into(),
-                pending_op_fixture(),
-            )
+            .append_pending("pp-1".into(), 1_000, "ses-1".into(), pending_op_fixture())
             .await
             .unwrap();
         let success = resolve_persona_proposal(
@@ -7247,9 +7204,10 @@ mod tests {
         ));
         // Shared persona state reflects the approved op.
         let snap = shared.read().unwrap();
-        assert!(snap
-            .behavioral_preferences
-            .contains(&"prefer terse".to_string()));
+        assert!(
+            snap.behavioral_preferences
+                .contains(&"prefer terse".to_string())
+        );
     }
 
     // ---- Chapter Accord prevent-at-write — approve coherence gate ----------
@@ -7262,9 +7220,7 @@ mod tests {
         ) -> Result<Option<aivyx_llm::LlmStreamEvent>, aivyx_llm::LlmError> {
             Ok(None)
         }
-        async fn finish(
-            self: Box<Self>,
-        ) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError> {
+        async fn finish(self: Box<Self>) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError> {
             Ok(aivyx_llm::LlmStepEnd::FinalMessage {
                 text: self.0.unwrap_or_default(),
                 usage: aivyx_llm::LlmUsage::default(),
@@ -7285,15 +7241,12 @@ mod tests {
 
     #[tokio::test]
     async fn approve_gate_blocks_contradiction_then_dismiss_overrides() {
-        let (_persona_log, proposal_log, _shared) =
-            open_phase_70_test_logs("accord-gate").await;
+        let (_persona_log, proposal_log, _shared) = open_phase_70_test_logs("accord-gate").await;
         // Existing Soul facet: "communicate concisely".
-        let shared = crate::persona::shared_effective_persona(
-            crate::persona::EffectivePersona {
-                character_traits: vec!["communicate concisely".into()],
-                ..Default::default()
-            },
-        );
+        let shared = crate::persona::shared_effective_persona(crate::persona::EffectivePersona {
+            character_traits: vec!["communicate concisely".into()],
+            ..Default::default()
+        });
         // Pending proposal: append a contradicting facet.
         let candidate = "always give long, elaborate explanations";
         proposal_log
@@ -7344,14 +7297,15 @@ mod tests {
         .await;
         let msg = block.expect("contradiction must block approval");
         assert!(msg.contains("coherence"), "{msg}");
-        assert!(msg.contains("communicate concisely"), "names the existing facet: {msg}");
+        assert!(
+            msg.contains("communicate concisely"),
+            "names the existing facet: {msg}"
+        );
 
         // 2) Dismiss that pair → the gate now ALLOWS (override via keep-both).
         let snap_for_id = { shared.read().unwrap().clone() };
         let conflict = crate::soul_contradiction::SoulContradictionDetector::new(
-            Arc::new(AccordFakeProvider(
-                "[{\"a\":0,\"b\":1,\"reason\":\"x\"}]",
-            )),
+            Arc::new(AccordFakeProvider("[{\"a\":0,\"b\":1,\"reason\":\"x\"}]")),
             "test",
         )
         .detect_for_candidate(
@@ -7371,20 +7325,19 @@ mod tests {
             &crate::daemon_ipc::PersonaProposalResolution::Approve,
         )
         .await;
-        assert!(after.is_none(), "a dismissed pair must not block re-approval");
+        assert!(
+            after.is_none(),
+            "a dismissed pair must not block re-approval"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn resolve_proposal_approve_with_edit_records_edited_op() {
-        let (persona_log, proposal_log, shared) = open_phase_70_test_logs("approve-with-edit").await;
+        let (persona_log, proposal_log, shared) =
+            open_phase_70_test_logs("approve-with-edit").await;
         proposal_log
-            .append_pending(
-                "pp-1".into(),
-                1_000,
-                "ses-1".into(),
-                pending_op_fixture(),
-            )
+            .append_pending("pp-1".into(), 1_000, "ses-1".into(), pending_op_fixture())
             .await
             .unwrap();
         let edited = crate::persona::ProposedPersonaDelta {
@@ -7409,24 +7362,22 @@ mod tests {
         .expect("approve-with-edit ok");
         // Shared persona reflects the EDITED op, not the original.
         let snap = shared.read().unwrap();
-        assert!(snap
-            .behavioral_preferences
-            .contains(&"operator-edited preference".to_string()));
-        assert!(!snap
-            .behavioral_preferences
-            .contains(&"prefer terse".to_string()));
+        assert!(
+            snap.behavioral_preferences
+                .contains(&"operator-edited preference".to_string())
+        );
+        assert!(
+            !snap
+                .behavioral_preferences
+                .contains(&"prefer terse".to_string())
+        );
     }
 
     #[tokio::test]
     async fn resolve_proposal_reject_records_rejected_no_persona_append() {
         let (persona_log, proposal_log, shared) = open_phase_70_test_logs("reject").await;
         proposal_log
-            .append_pending(
-                "pp-1".into(),
-                1_000,
-                "ses-1".into(),
-                pending_op_fixture(),
-            )
+            .append_pending("pp-1".into(), 1_000, "ses-1".into(), pending_op_fixture())
             .await
             .unwrap();
         let success = resolve_persona_proposal(
@@ -7504,21 +7455,19 @@ mod tests {
 
     #[test]
     fn history_renderer_delivered_has_empty_detail() {
-        let (kind, detail) = render_notify_outcome_for_history(
-            &aivyx_audit::AutoNotifyOutcomeSummary::Delivered,
-        );
+        let (kind, detail) =
+            render_notify_outcome_for_history(&aivyx_audit::AutoNotifyOutcomeSummary::Delivered);
         assert_eq!(kind, "delivered");
         assert!(detail.is_empty());
     }
 
     #[test]
     fn history_renderer_failed_carries_error_kind_and_message() {
-        let (kind, detail) = render_notify_outcome_for_history(
-            &aivyx_audit::AutoNotifyOutcomeSummary::Failed {
+        let (kind, detail) =
+            render_notify_outcome_for_history(&aivyx_audit::AutoNotifyOutcomeSummary::Failed {
                 error_kind: "transport".into(),
                 error_message: "dns lookup failed".into(),
-            },
-        );
+            });
         assert_eq!(kind, "failed");
         assert!(detail.contains("transport"), "{detail}");
         assert!(detail.contains("dns lookup failed"), "{detail}");
@@ -7673,8 +7622,13 @@ mod tests {
     #[test]
     fn fold_called_but_unregistered_base_gets_an_unregistered_row() {
         let now = std::time::SystemTime::now();
-        let entries =
-            vec![tc_entry(0, "shell.exec:cwd:/x/**", completed_outcome(), 9, now)];
+        let entries = vec![tc_entry(
+            0,
+            "shell.exec:cwd:/x/**",
+            completed_outcome(),
+            9,
+            now,
+        )];
         // No descriptor for shell.exec — only fs.read is registered.
         let descs = vec![desc("fs.read", "fs.read")];
         let rows = fold_tool_stats(&entries, None, &descs);
@@ -7743,7 +7697,10 @@ mod tests {
         assert_eq!(snap.asr_engine.as_deref(), Some("whisper-rs"));
         assert_eq!(snap.asr_beam_size, Some(5));
         assert_eq!(snap.asr_model_status, "present", "model file exists");
-        assert_eq!(snap.tts_model_status, "present", "kokoro .onnx present in dir");
+        assert_eq!(
+            snap.tts_model_status, "present",
+            "kokoro .onnx present in dir"
+        );
         assert_eq!(snap.tts_voices_status, "missing", "no voices-*.bin in dir");
     }
 
@@ -7784,7 +7741,10 @@ mod tests {
         assert!(s.contains("asr_model_path = cleared"), "{s}");
         assert!(s.contains("asr_beam_size = set"), "{s}");
         assert!(s.contains("tts_model_dir = cleared"), "{s}");
-        assert!(!s.contains("whisper-rs"), "summary must not carry values: {s}");
+        assert!(
+            !s.contains("whisper-rs"),
+            "summary must not carry values: {s}"
+        );
     }
 
     #[test]
@@ -7797,9 +7757,7 @@ mod tests {
                 "root_required",
             ),
             (
-                aivyx_config::ConfigWriteError::InvalidBudget {
-                    reason: "x".into(),
-                },
+                aivyx_config::ConfigWriteError::InvalidBudget { reason: "x".into() },
                 "invalid_budget",
             ),
             (
@@ -7822,7 +7780,10 @@ mod tests {
         assert_eq!(provider_label(ProviderKind::Ollama), "ollama");
         assert_eq!(provider_label(ProviderKind::MistralRs), "mistralrs");
         assert_eq!(budget_action_label(aivyx_cost::BudgetAction::Deny), "deny");
-        assert_eq!(budget_action_label(aivyx_cost::BudgetAction::Alert), "alert");
+        assert_eq!(
+            budget_action_label(aivyx_cost::BudgetAction::Alert),
+            "alert"
+        );
     }
 
     #[test]
@@ -7861,8 +7822,14 @@ mod tests {
              behavioral_preferences = 0, behavioral_constraints = cleared"
         );
         // The declared value must never leak into the audit summary.
-        assert!(!s.contains("Aria"), "summary must not carry profile prose: {s}");
-        assert!(!s.contains("coding"), "summary must not carry list values: {s}");
+        assert!(
+            !s.contains("Aria"),
+            "summary must not carry profile prose: {s}"
+        );
+        assert!(
+            !s.contains("coding"),
+            "summary must not carry list values: {s}"
+        );
     }
 
     #[test]
@@ -7905,19 +7872,20 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        let store: Arc<dyn Storage> =
-            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([9u8; 32]))
-                .await
-                .expect("storage");
+        let store: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([9u8; 32]),
+        )
+        .await
+        .expect("storage");
         let log = crate::persona::PersistentPersonaLog::open(
             store.domain(KeyDomain::Persona),
             b"persona-key".to_vec(),
         )
         .await
         .expect("persona log");
-        let shared = crate::persona::shared_effective_persona(
-            crate::persona::EffectivePersona::default(),
-        );
+        let shared =
+            crate::persona::shared_effective_persona(crate::persona::EffectivePersona::default());
 
         let wire = aivyx_ipc::protocol::PersonaSeedWire {
             character_traits: vec!["pragmatic".into(), "precise".into()],
@@ -7939,7 +7907,13 @@ mod tests {
             .await
             .expect("seed ok");
         assert_eq!(n, 2);
-        assert!(shared.read().unwrap().character_traits.contains(&"precise".to_string()));
+        assert!(
+            shared
+                .read()
+                .unwrap()
+                .character_traits
+                .contains(&"precise".to_string())
+        );
 
         // Second seed on the now-non-empty chain → refused.
         let again = seed_persona_live(Some(&log), &shared, None, wire).await;
@@ -7977,16 +7951,22 @@ mod tests {
             .await
             .expect("persona log"),
         );
-        let shared = crate::persona::shared_effective_persona(
-            crate::persona::EffectivePersona::default(),
-        );
+        let shared =
+            crate::persona::shared_effective_persona(crate::persona::EffectivePersona::default());
 
         // No persona log → clear error.
-        assert!(author_skill_live(
-            None, &shared, SkillAuthorOp::Teach, "x", Some("t"), Some("p")
-        )
-        .await
-        .is_err());
+        assert!(
+            author_skill_live(
+                None,
+                &shared,
+                SkillAuthorOp::Teach,
+                "x",
+                Some("t"),
+                Some("p")
+            )
+            .await
+            .is_err()
+        );
 
         // Teach a new skill → appended + adopted live.
         author_skill_live(
@@ -8003,24 +7983,41 @@ mod tests {
         assert!(skills.iter().any(|s| s.name == "summarize-doc"));
 
         // Duplicate teach → rejected (use update).
-        assert!(author_skill_live(
-            Some(&log), &shared, SkillAuthorOp::Teach, "summarize-doc",
-            Some("t"), Some("p")
-        )
-        .await
-        .is_err());
+        assert!(
+            author_skill_live(
+                Some(&log),
+                &shared,
+                SkillAuthorOp::Teach,
+                "summarize-doc",
+                Some("t"),
+                Some("p")
+            )
+            .await
+            .is_err()
+        );
 
         // Teach with missing trigger/procedure → rejected.
-        assert!(author_skill_live(
-            Some(&log), &shared, SkillAuthorOp::Teach, "incomplete", None, None
-        )
-        .await
-        .is_err());
+        assert!(
+            author_skill_live(
+                Some(&log),
+                &shared,
+                SkillAuthorOp::Teach,
+                "incomplete",
+                None,
+                None
+            )
+            .await
+            .is_err()
+        );
 
         // Update existing: changes trigger, preserves the omitted procedure.
         author_skill_live(
-            Some(&log), &shared, SkillAuthorOp::Update, "summarize-doc",
-            Some("new trigger"), None,
+            Some(&log),
+            &shared,
+            SkillAuthorOp::Update,
+            "summarize-doc",
+            Some("new trigger"),
+            None,
         )
         .await
         .expect("update ok");
@@ -8033,20 +8030,39 @@ mod tests {
         );
 
         // Update unknown / forget unknown → errors.
-        assert!(author_skill_live(
-            Some(&log), &shared, SkillAuthorOp::Update, "nope", Some("t"), None
-        )
-        .await
-        .is_err());
-        assert!(author_skill_live(
-            Some(&log), &shared, SkillAuthorOp::Forget, "nope", None, None
-        )
-        .await
-        .is_err());
+        assert!(
+            author_skill_live(
+                Some(&log),
+                &shared,
+                SkillAuthorOp::Update,
+                "nope",
+                Some("t"),
+                None
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            author_skill_live(
+                Some(&log),
+                &shared,
+                SkillAuthorOp::Forget,
+                "nope",
+                None,
+                None
+            )
+            .await
+            .is_err()
+        );
 
         // Forget existing → removed + adopted.
         author_skill_live(
-            Some(&log), &shared, SkillAuthorOp::Forget, "summarize-doc", None, None,
+            Some(&log),
+            &shared,
+            SkillAuthorOp::Forget,
+            "summarize-doc",
+            None,
+            None,
         )
         .await
         .expect("forget ok");
@@ -8059,9 +8075,8 @@ mod tests {
 
     #[tokio::test]
     async fn seed_persona_live_without_log_errors() {
-        let shared = crate::persona::shared_effective_persona(
-            crate::persona::EffectivePersona::default(),
-        );
+        let shared =
+            crate::persona::shared_effective_persona(crate::persona::EffectivePersona::default());
         let r = seed_persona_live(
             None,
             &shared,
@@ -8081,7 +8096,10 @@ mod tests {
             fs_root: Some(PathBuf::from("/srv/work")),
             workspace_root: None,
         };
-        assert_eq!(resolve_document_root(&roots, "fs").unwrap(), Path::new("/srv/work"));
+        assert_eq!(
+            resolve_document_root(&roots, "fs").unwrap(),
+            Path::new("/srv/work")
+        );
         // workspace unavailable → typed no_workspace.
         match resolve_document_root(&roots, "workspace") {
             Err(QueryResponsePayload::QueryError { code, .. }) => assert_eq!(code, "no_workspace"),

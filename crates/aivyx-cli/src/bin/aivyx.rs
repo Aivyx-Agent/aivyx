@@ -7165,6 +7165,23 @@ async fn run_async(
         }
     }
 
+    // Studio Gallery — a `comfyui`-named `[[mcp_server]]` carries its
+    // backing ComfyUI instance's URL in its own `COMFYUI_URL` env entry
+    // (read by the bridge itself; see docs/comfyui-mcp-integration notes).
+    // Reuse that single source of truth rather than adding a new config
+    // key: `None` when no such server is configured (the Gallery screen
+    // and `/studio-asset` route both no-op), else the env value or the
+    // bridge's own `localhost:8188` default.
+    let comfyui_base_url: Option<String> = mcp_servers.iter().find(|c| c.name == "comfyui").map(
+        |c| {
+            c.env
+                .iter()
+                .find(|(k, _)| k == "COMFYUI_URL")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "http://localhost:8188".to_string())
+        },
+    );
+
     // ---- Phase 49: tool processes (PRODUCT.md P12) ----------------------
     // Same shape as the MCP block above. One ToolProcessBridge per
     // `[[tool_process]]` entry. Each tool the process registers
@@ -8935,6 +8952,7 @@ async fn run_async(
             web_ui_host: config_web_ui_host,
             web_ui_allowed_origins: config_web_ui_allowed_origins,
             web_ui_auth_token: config_web_ui_auth_token,
+            comfyui_base_url: comfyui_base_url.clone(),
             memory: Some(Arc::clone(&memory)),
             memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
             audit_log: Some(Arc::clone(&persistent_audit_for_query)),

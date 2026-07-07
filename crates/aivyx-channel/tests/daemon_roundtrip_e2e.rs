@@ -19,19 +19,21 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use aivyx_capability::CapabilitySet;
-use aivyx_channel::daemon_client::{daemon_is_running, run_poc_client, DaemonSession};
-use aivyx_channel::{run_daemon_session, run_daemon_session_connected, DaemonSessionConfig};
-use aivyx_channel::daemon_ipc::{
-    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, MissionDetail,
-    QueryPayload, QueryResponsePayload, StreamEventPayload,
-};
+use aivyx_channel::daemon_client::{DaemonSession, daemon_is_running, run_poc_client};
 use aivyx_channel::daemon_ipc::FrontendType;
-use aivyx_channel::daemon_server::{run_daemon, run_daemon_compat, run_poc_daemon, ChannelFactory, DaemonConfig};
+use aivyx_channel::daemon_ipc::{
+    DaemonEnvelope, FrameError, FrontendMessage, MissionDetail, QueryPayload, QueryResponsePayload,
+    StreamEventPayload, decode_frame, encode_frame,
+};
+use aivyx_channel::daemon_server::{
+    ChannelFactory, DaemonConfig, run_daemon, run_daemon_compat, run_poc_daemon,
+};
+use aivyx_channel::{DaemonSessionConfig, run_daemon_session, run_daemon_session_connected};
 // Phase 58 — `DaemonConfig.profile` field for Profile inspection
 // query support. Tests construct daemons with the synthesized
 // default Profile, except the dedicated Phase 58 Profile-query test.
-use aivyx_config::Profile;
 use aivyx_channel::LocalChannel;
+use aivyx_config::Profile;
 use aivyx_core::{
     Agent, AgentId, CancellationToken, ChannelContext, Message, StreamEvent, TurnOutcome,
 };
@@ -55,14 +57,12 @@ impl Agent for FakeStreamingAgent {
         &self.caps
     }
 
-    async fn turn(
-        &self,
-        _message: Message,
-        channel: &dyn ChannelContext,
-    ) -> TurnOutcome {
+    async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
         // Stream two text chunks so the test can verify ordering.
         let _ = channel.stream_event(StreamEvent::Text("Hello ")).await;
-        let _ = channel.stream_event(StreamEvent::Text("from daemon!")).await;
+        let _ = channel
+            .stream_event(StreamEvent::Text("from daemon!"))
+            .await;
 
         TurnOutcome::Completed {
             final_message: "Hello from daemon!".into(),
@@ -85,10 +85,7 @@ impl ScratchDir {
         let tmp = std::env::var("TMPDIR")
             .or_else(|_| std::env::var("TEMP"))
             .unwrap_or_else(|_| "/tmp".to_string());
-        let path = PathBuf::from(tmp).join(format!(
-            "aivyx-daemon-e2e-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let path = PathBuf::from(tmp).join(format!("aivyx-daemon-e2e-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("scratch dir must be creatable");
         ScratchDir { path }
     }
@@ -208,9 +205,14 @@ async fn multi_turn_session_streams_both_turns() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -224,13 +226,16 @@ async fn multi_turn_session_streams_both_turns() {
 
     // Read DaemonReady.
     read_more(&mut reader, &mut buf).await;
-    let (envelope, consumed): (DaemonEnvelope, _) =
-        decode_frame(&buf).expect("decode DaemonReady");
+    let (envelope, consumed): (DaemonEnvelope, _) = decode_frame(&buf).expect("decode DaemonReady");
     buf.drain(..consumed);
     assert!(matches!(envelope, DaemonEnvelope::DaemonReady { .. }));
 
     // StartSession.
-    let frame = encode_frame(&FrontendMessage::StartSession { role: None, frontend_type: None }).unwrap();
+    let frame = encode_frame(&FrontendMessage::StartSession {
+        role: None,
+        frontend_type: None,
+    })
+    .unwrap();
     writer.write_all(&frame).await.unwrap();
 
     let sid: String = loop {
@@ -313,9 +318,14 @@ async fn graceful_shutdown_sends_shutting_down() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -394,9 +404,14 @@ async fn frontend_disconnect_stops_daemon_cleanly() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -443,9 +458,14 @@ async fn daemon_session_multi_turn_via_client_library() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -518,9 +538,14 @@ async fn run_daemon_session_renders_two_turns() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -594,9 +619,14 @@ async fn run_daemon_session_with_no_input_prints_banner_only() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -656,9 +686,14 @@ async fn run_daemon_session_connected_with_cancel_handle() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -706,8 +741,8 @@ async fn run_daemon_session_connected_with_cancel_handle() {
 
 #[tokio::test]
 async fn cancel_flag_resets_between_turns() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let scratch = ScratchDir::new();
     let socket_path = scratch.socket_path();
@@ -725,9 +760,14 @@ async fn cancel_flag_resets_between_turns() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -773,7 +813,7 @@ async fn cancel_flag_resets_between_turns() {
 
 #[tokio::test]
 async fn two_concurrent_connections() {
-    use aivyx_channel::daemon_server::{run_daemon, ChannelFactory};
+    use aivyx_channel::daemon_server::{ChannelFactory, run_daemon};
 
     let scratch = ScratchDir::new();
     let socket_path = scratch.socket_path();
@@ -795,28 +835,31 @@ async fn two_concurrent_connections() {
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
         run_daemon(DaemonConfig {
-                socket_path: daemon_socket,
-                agent: daemon_agent,
-                channel_factory: daemon_factory,
-                shutdown: daemon_shutdown,
-                mission_store: None,
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: daemon_factory,
+            shutdown: daemon_shutdown,
+            mission_store: None,
             notify_dispatcher: None,
             default_notify_target: None,
             notify_targets: Vec::new(),
-                schedule_store: None,
-                webhook_store: None,
-                file_watch_store: None,
-                webhook_port: None,
-                web_ui_port: None,
-                web_ui_host: None,
-                web_ui_allowed_origins: Vec::new(),
-                web_ui_auth_token: None,
-                memory: None,
-                memory_ttl_secs: None,
-                audit_log: None,
-                profile: Arc::new(Profile::default()),
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+            web_ui_host: None,
+            web_ui_allowed_origins: Vec::new(),
+            web_ui_auth_token: None,
+            comfyui_base_url: None,
+            memory: None,
+            memory_ttl_secs: None,
+            audit_log: None,
+            profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -869,13 +912,13 @@ async fn two_concurrent_connections() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
-            })
-            .await
-            .expect("daemon must complete successfully");
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
+        })
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -938,9 +981,14 @@ async fn connection_after_disconnect() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1037,11 +1085,7 @@ impl Agent for PlatformEchoAgent {
         &self.caps
     }
 
-    async fn turn(
-        &self,
-        _message: Message,
-        channel: &dyn ChannelContext,
-    ) -> TurnOutcome {
+    async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
         let platform = format!("{:?}", channel.platform());
         let tier = format!("{:?}", channel.trust_tier());
         let text = format!("platform={platform} tier={tier}");
@@ -1091,17 +1135,11 @@ impl ChannelContext for TestTelegramChannel {
         self.session
     }
 
-    async fn stream_event(
-        &self,
-        _event: StreamEvent<'_>,
-    ) -> Result<(), aivyx_core::ChannelError> {
+    async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), aivyx_core::ChannelError> {
         Ok(())
     }
 
-    async fn finalize(
-        &self,
-        _outcome: &TurnOutcome,
-    ) -> Result<(), aivyx_core::ChannelError> {
+    async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), aivyx_core::ChannelError> {
         Ok(())
     }
 
@@ -1126,10 +1164,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
 
     let factory: ChannelFactory = Arc::new(|ft| match ft {
         FrontendType::Telegram => Arc::new(TestTelegramChannel::new()),
-        FrontendType::Local
-        | FrontendType::Web
-        | FrontendType::Discord
-        | FrontendType::Slack => {
+        FrontendType::Local | FrontendType::Web | FrontendType::Discord | FrontendType::Slack => {
             Arc::new(LocalChannel::new("test-local", Vec::<u8>::new()))
         }
     });
@@ -1140,28 +1175,31 @@ async fn telegram_frontend_type_gets_telegram_channel() {
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
         run_daemon(DaemonConfig {
-                socket_path: daemon_socket,
-                agent: daemon_agent,
-                channel_factory: factory,
-                shutdown: daemon_shutdown,
-                mission_store: None,
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: factory,
+            shutdown: daemon_shutdown,
+            mission_store: None,
             notify_dispatcher: None,
             default_notify_target: None,
             notify_targets: Vec::new(),
-                schedule_store: None,
-                webhook_store: None,
-                file_watch_store: None,
-                webhook_port: None,
-                web_ui_port: None,
-                web_ui_host: None,
-                web_ui_allowed_origins: Vec::new(),
-                web_ui_auth_token: None,
-                memory: None,
-                memory_ttl_secs: None,
-                audit_log: None,
-                profile: Arc::new(Profile::default()),
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+            web_ui_host: None,
+            web_ui_allowed_origins: Vec::new(),
+            web_ui_auth_token: None,
+            comfyui_base_url: None,
+            memory: None,
+            memory_ttl_secs: None,
+            audit_log: None,
+            profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -1214,24 +1252,20 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
-            })
-            .await
-            .expect("daemon must complete successfully");
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
+        })
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let mut session = DaemonSession::connect(
-        &socket_path,
-        None,
-        Some(FrontendType::Telegram),
-    )
-    .await
-    .expect("connect must succeed");
+    let mut session = DaemonSession::connect(&socket_path, None, Some(FrontendType::Telegram))
+        .await
+        .expect("connect must succeed");
 
     let (events, outcome) = session
         .submit_input("hello".to_string())
@@ -1246,10 +1280,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
         outcome.contains("SemiTrusted"),
         "outcome must report SemiTrusted tier: {outcome}"
     );
-    assert!(
-        !events.is_empty(),
-        "must receive at least one stream event"
-    );
+    assert!(!events.is_empty(), "must receive at least one stream event");
 
     let _ = session.disconnect().await;
 
@@ -1269,10 +1300,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
 
     let factory: ChannelFactory = Arc::new(|ft| match ft {
         FrontendType::Telegram => Arc::new(TestTelegramChannel::new()),
-        FrontendType::Local
-        | FrontendType::Web
-        | FrontendType::Discord
-        | FrontendType::Slack => {
+        FrontendType::Local | FrontendType::Web | FrontendType::Discord | FrontendType::Slack => {
             Arc::new(LocalChannel::new("test-local", Vec::<u8>::new()))
         }
     });
@@ -1283,28 +1311,31 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
         run_daemon(DaemonConfig {
-                socket_path: daemon_socket,
-                agent: daemon_agent,
-                channel_factory: factory,
-                shutdown: daemon_shutdown,
-                mission_store: None,
+            socket_path: daemon_socket,
+            agent: daemon_agent,
+            channel_factory: factory,
+            shutdown: daemon_shutdown,
+            mission_store: None,
             notify_dispatcher: None,
             default_notify_target: None,
             notify_targets: Vec::new(),
-                schedule_store: None,
-                webhook_store: None,
-                file_watch_store: None,
-                webhook_port: None,
-                web_ui_port: None,
-                web_ui_host: None,
-                web_ui_allowed_origins: Vec::new(),
-                web_ui_auth_token: None,
-                memory: None,
-                memory_ttl_secs: None,
-                audit_log: None,
-                profile: Arc::new(Profile::default()),
+            schedule_store: None,
+            webhook_store: None,
+            file_watch_store: None,
+            webhook_port: None,
+            web_ui_port: None,
+            web_ui_host: None,
+            web_ui_allowed_origins: Vec::new(),
+            web_ui_auth_token: None,
+            comfyui_base_url: None,
+            memory: None,
+            memory_ttl_secs: None,
+            audit_log: None,
+            profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -1357,34 +1388,26 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
-            })
-            .await
-            .expect("daemon must complete successfully");
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
+        })
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Connect a Local frontend.
-    let mut local_session = DaemonSession::connect(
-        &socket_path,
-        None,
-        Some(FrontendType::Local),
-    )
-    .await
-    .expect("local connect must succeed");
+    let mut local_session = DaemonSession::connect(&socket_path, None, Some(FrontendType::Local))
+        .await
+        .expect("local connect must succeed");
 
     // Connect a Telegram frontend.
-    let mut tg_session = DaemonSession::connect(
-        &socket_path,
-        None,
-        Some(FrontendType::Telegram),
-    )
-    .await
-    .expect("telegram connect must succeed");
+    let mut tg_session = DaemonSession::connect(&socket_path, None, Some(FrontendType::Telegram))
+        .await
+        .expect("telegram connect must succeed");
 
     // Submit turns on both.
     let (_local_events, local_outcome) = local_session
@@ -1452,9 +1475,14 @@ async fn daemon_stop_triggers_graceful_shutdown() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1495,9 +1523,14 @@ async fn daemon_status_reports_running_daemon() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1521,7 +1554,10 @@ async fn daemon_status_reports_not_running_for_absent_socket() {
 
     let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
     assert!(!info.running, "daemon must report as not running");
-    assert!(info.version.is_none(), "version must be None when not running");
+    assert!(
+        info.version.is_none(),
+        "version must be None when not running"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1552,17 +1588,23 @@ async fn pid_file_appears_on_daemon_start_and_disappears_on_stop() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     assert!(pid_path.exists(), "PID file must exist while daemon runs");
-    let pid_content = std::fs::read_to_string(&pid_path)
-        .expect("PID file must be readable");
-    let pid: u32 = pid_content.trim().parse()
+    let pid_content = std::fs::read_to_string(&pid_path).expect("PID file must be readable");
+    let pid: u32 = pid_content
+        .trim()
+        .parse()
         .expect("PID file must contain a valid u32");
     assert!(pid > 0, "PID must be positive");
 
@@ -1596,9 +1638,14 @@ async fn daemon_status_includes_pid_from_pid_file() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1614,9 +1661,9 @@ async fn daemon_status_includes_pid_from_pid_file() {
 
 #[test]
 fn read_pid_file_returns_none_for_missing_file() {
-    let result = aivyx_channel::daemon_client::read_pid_file(
-        std::path::Path::new("/nonexistent/daemon.pid")
-    );
+    let result = aivyx_channel::daemon_client::read_pid_file(std::path::Path::new(
+        "/nonexistent/daemon.pid",
+    ));
     assert!(result.is_none());
 }
 
@@ -1628,8 +1675,7 @@ fn read_pid_file_returns_none_for_non_numeric_content() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .subsec_nanos();
-    let path = std::path::PathBuf::from(dir)
-        .join(format!("aivyx-pid-test-{pid}-{nanos}.pid"));
+    let path = std::path::PathBuf::from(dir).join(format!("aivyx-pid-test-{pid}-{nanos}.pid"));
     std::fs::write(&path, "not-a-number").expect("write test PID file");
     let result = aivyx_channel::daemon_client::read_pid_file(&path);
     let _ = std::fs::remove_file(&path);
@@ -1658,14 +1704,14 @@ impl Agent for FakeEscalatingAgent {
         &self.caps
     }
 
-    async fn turn(
-        &self,
-        _message: Message,
-        channel: &dyn ChannelContext,
-    ) -> TurnOutcome {
-        let n = self.turn_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+        let n = self
+            .turn_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if n == 0 {
-            let _ = channel.stream_event(StreamEvent::Text("escalating...")).await;
+            let _ = channel
+                .stream_event(StreamEvent::Text("escalating..."))
+                .await;
             TurnOutcome::Escalated {
                 reason: "requires approval".into(),
                 pending_tool: aivyx_core::ToolId::new(),
@@ -1673,7 +1719,9 @@ impl Agent for FakeEscalatingAgent {
                 tool_calls_made: 1,
             }
         } else {
-            let _ = channel.stream_event(StreamEvent::Text("resumed after approval")).await;
+            let _ = channel
+                .stream_event(StreamEvent::Text("resumed after approval"))
+                .await;
             TurnOutcome::Completed {
                 final_message: "mission continued".into(),
                 tool_calls_made: 0,
@@ -1711,11 +1759,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
     let mission_handle = storage.domain(KeyDomain::Missions);
 
     let mission_id = format!("m-{}", uuid::Uuid::new_v4());
-    let record = MissionRecord::new(
-        mission_id.clone(),
-        "default".into(),
-        "test mission".into(),
-    );
+    let record = MissionRecord::new(mission_id.clone(), "default".into(), "test mission".into());
     mission::create_mission(&mission_handle, &record)
         .await
         .expect("create mission must succeed");
@@ -1764,12 +1808,15 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             web_ui_host: None,
             web_ui_allowed_origins: Vec::new(),
             web_ui_auth_token: None,
+            comfyui_base_url: None,
             memory: None,
             memory_ttl_secs: None,
             audit_log: None,
             profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -1822,10 +1869,10 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -1923,8 +1970,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
     }
 
     assert!(saw_escalated_outcome, "must see escalated TurnComplete");
-    let (gate_mid, gate_gid) =
-        gate_event.expect("must receive ApprovalGate stream event");
+    let (gate_mid, gate_gid) = gate_event.expect("must receive ApprovalGate stream event");
     assert_eq!(gate_mid, mission_id, "gate mission_id must match");
 
     // Verify mission is now GatePending in storage.
@@ -2029,11 +2075,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
     let mission_handle = storage.domain(KeyDomain::Missions);
 
     let mission_id = format!("m-{}", uuid::Uuid::new_v4());
-    let record = MissionRecord::new(
-        mission_id.clone(),
-        "default".into(),
-        "test mission".into(),
-    );
+    let record = MissionRecord::new(mission_id.clone(), "default".into(), "test mission".into());
     mission::create_mission(&mission_handle, &record)
         .await
         .expect("create mission");
@@ -2082,12 +2124,15 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             web_ui_host: None,
             web_ui_allowed_origins: Vec::new(),
             web_ui_auth_token: None,
+            comfyui_base_url: None,
             memory: None,
             memory_ttl_secs: None,
             audit_log: None,
             profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -2140,10 +2185,10 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete");
@@ -2151,9 +2196,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let stream = UnixStream::connect(&socket_path)
-        .await
-        .expect("connect");
+    let stream = UnixStream::connect(&socket_path).await.expect("connect");
     let (mut reader, mut writer) = stream.into_split();
     let mut buf = Vec::new();
 
@@ -2168,7 +2211,10 @@ async fn escalation_gate_wiring_reject_fails_mission() {
         role: None,
         frontend_type: Some(FrontendType::Local),
     };
-    writer.write_all(&encode_frame(&start).unwrap()).await.unwrap();
+    writer
+        .write_all(&encode_frame(&start).unwrap())
+        .await
+        .unwrap();
     loop {
         read_more(&mut reader, &mut buf).await;
         match decode_frame::<DaemonEnvelope>(&buf) {
@@ -2189,7 +2235,10 @@ async fn escalation_gate_wiring_reject_fails_mission() {
         attachments: vec![],
         headless: false,
     };
-    writer.write_all(&encode_frame(&submit).unwrap()).await.unwrap();
+    writer
+        .write_all(&encode_frame(&submit).unwrap())
+        .await
+        .unwrap();
 
     let mut gate_gid = String::new();
     loop {
@@ -2220,7 +2269,10 @@ async fn escalation_gate_wiring_reject_fails_mission() {
         gate_id: gate_gid,
         approved: false,
     };
-    writer.write_all(&encode_frame(&resolve).unwrap()).await.unwrap();
+    writer
+        .write_all(&encode_frame(&resolve).unwrap())
+        .await
+        .unwrap();
 
     loop {
         match decode_frame::<DaemonEnvelope>(&buf) {
@@ -2277,9 +2329,14 @@ async fn protocol_negotiation_accepted() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2292,8 +2349,7 @@ async fn protocol_negotiation_accepted() {
 
     // Read DaemonReady.
     read_more(&mut reader, &mut buf).await;
-    let (envelope, consumed): (DaemonEnvelope, _) =
-        decode_frame(&buf).expect("decode DaemonReady");
+    let (envelope, consumed): (DaemonEnvelope, _) = decode_frame(&buf).expect("decode DaemonReady");
     buf.drain(..consumed);
     assert!(matches!(envelope, DaemonEnvelope::DaemonReady { .. }));
 
@@ -2318,8 +2374,11 @@ async fn protocol_negotiation_accepted() {
     }
 
     // After negotiation, normal session flow works.
-    let frame =
-        encode_frame(&FrontendMessage::StartSession { role: None, frontend_type: None }).unwrap();
+    let frame = encode_frame(&FrontendMessage::StartSession {
+        role: None,
+        frontend_type: None,
+    })
+    .unwrap();
     writer.write_all(&frame).await.unwrap();
 
     loop {
@@ -2360,9 +2419,14 @@ async fn list_sessions_query_round_trips_over_ipc() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2386,8 +2450,11 @@ async fn list_sessions_query_round_trips_over_ipc() {
     }
 
     // Start a session so DaemonState.sessions has one entry.
-    let frame =
-        encode_frame(&FrontendMessage::StartSession { role: None, frontend_type: None }).unwrap();
+    let frame = encode_frame(&FrontendMessage::StartSession {
+        role: None,
+        frontend_type: None,
+    })
+    .unwrap();
     writer.write_all(&frame).await.unwrap();
     let started_session_id = loop {
         match decode_frame::<DaemonEnvelope>(&buf) {
@@ -2452,7 +2519,7 @@ async fn list_sessions_query_round_trips_over_ipc() {
 
 #[tokio::test]
 async fn mission_queries_round_trip_over_ipc() {
-    use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig};
+    use aivyx_channel::daemon_server::{ChannelFactory, DaemonConfig, run_daemon};
     use aivyx_channel::mission::{self, MissionRecord};
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
@@ -2463,10 +2530,12 @@ async fn mission_queries_round_trip_over_ipc() {
 
     // Seed a mission in a real RedbStorage.
     let store_path = scratch.path.join("missions.redb");
-    let storage: Arc<dyn Storage> =
-        RedbStorage::open(StorageConfig::new(store_path), MasterKey::from_raw([9u8; 32]))
-            .await
-            .expect("storage must open");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path),
+        MasterKey::from_raw([9u8; 32]),
+    )
+    .await
+    .expect("storage must open");
     let mission_handle = storage.domain(KeyDomain::Missions);
 
     let mission_id = format!("m-{}", uuid::Uuid::new_v4());
@@ -2512,12 +2581,15 @@ async fn mission_queries_round_trip_over_ipc() {
             web_ui_host: None,
             web_ui_allowed_origins: Vec::new(),
             web_ui_auth_token: None,
+            comfyui_base_url: None,
             memory: None,
             memory_ttl_secs: None,
             audit_log: None,
             profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -2570,10 +2642,10 @@ async fn mission_queries_round_trip_over_ipc() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -2713,9 +2785,14 @@ async fn mission_queries_without_store_return_query_error() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2783,9 +2860,14 @@ async fn team_queries_without_service_return_query_error() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2810,11 +2892,16 @@ async fn team_queries_without_service_return_query_error() {
         ("tm-list", QueryPayload::TeamMissionList),
         (
             "tm-goal",
-            QueryPayload::TeamRunGoal { goal: "close the kitchen".into(), config: None },
+            QueryPayload::TeamRunGoal {
+                goal: "close the kitchen".into(),
+                config: None,
+            },
         ),
         (
             "tm-status",
-            QueryPayload::TeamMissionStatus { mission_id: "x".into() },
+            QueryPayload::TeamMissionStatus {
+                mission_id: "x".into(),
+            },
         ),
         (
             "tm-resolve",
@@ -2825,7 +2912,10 @@ async fn team_queries_without_service_return_query_error() {
             },
         ),
     ] {
-        let q = FrontendMessage::Query { id: id.into(), payload };
+        let q = FrontendMessage::Query {
+            id: id.into(),
+            payload,
+        };
         writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
 
         let code = loop {
@@ -2859,7 +2949,7 @@ async fn team_queries_without_service_return_query_error() {
 async fn audit_queries_round_trip_over_ipc() {
     use aivyx_audit::{AuditEvent, AuditWriter, PersistentAuditLog, TrustTierSummary};
     use aivyx_capability::TrustTier;
-    use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig};
+    use aivyx_channel::daemon_server::{ChannelFactory, DaemonConfig, run_daemon};
     use aivyx_core::{ChannelPlatform, SessionId, TurnId};
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{RedbStorage, Storage, StorageConfig};
@@ -2870,10 +2960,12 @@ async fn audit_queries_round_trip_over_ipc() {
 
     // Open storage + persistent audit log; seed two events.
     let store_path = scratch.path.join("audit.redb");
-    let storage: Arc<dyn Storage> =
-        RedbStorage::open(StorageConfig::new(store_path), MasterKey::from_raw([5u8; 32]))
-            .await
-            .expect("storage open");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path),
+        MasterKey::from_raw([5u8; 32]),
+    )
+    .await
+    .expect("storage open");
     let audit_key: [u8; 32] = [42u8; 32];
     let audit_log = PersistentAuditLog::open(Arc::clone(&storage), audit_key)
         .await
@@ -2933,12 +3025,15 @@ async fn audit_queries_round_trip_over_ipc() {
             web_ui_host: None,
             web_ui_allowed_origins: Vec::new(),
             web_ui_auth_token: None,
+            comfyui_base_url: None,
             memory: None,
             memory_ttl_secs: None,
             audit_log: Some(daemon_audit),
             profile: Arc::new(Profile::default()),
             persona_log: None,
-            shared_persona: aivyx_channel::persona::shared_effective_persona(aivyx_channel::persona::EffectivePersona::default()),
+            shared_persona: aivyx_channel::persona::shared_effective_persona(
+                aivyx_channel::persona::EffectivePersona::default(),
+            ),
             web_ui_broadcaster: None,
             persona_proposal_log: None,
             reflection_schedules: Vec::new(),
@@ -2991,10 +3086,10 @@ async fn audit_queries_round_trip_over_ipc() {
             skill_auto_proposer: None,
             tool_relevance_ledger: None,
             skill_effectiveness_ledger: None,
-        skill_refinement_config: None,
-        skill_refinement_drafter: None,
-        skill_authoring_config: None,
-        skill_authoring_drafter: None,
+            skill_refinement_config: None,
+            skill_refinement_drafter: None,
+            skill_authoring_config: None,
+            skill_authoring_drafter: None,
         })
         .await
         .expect("daemon must complete successfully");
@@ -3021,7 +3116,10 @@ async fn audit_queries_round_trip_over_ipc() {
     // --- ListAuditEntries (from_seq=0, limit=100) ---
     let q = FrontendMessage::Query {
         id: "audit-list".into(),
-        payload: QueryPayload::ListAuditEntries { from_seq: 0, limit: 100 },
+        payload: QueryPayload::ListAuditEntries {
+            from_seq: 0,
+            limit: 100,
+        },
     };
     writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
 
@@ -3055,7 +3153,10 @@ async fn audit_queries_round_trip_over_ipc() {
     // --- ListAuditEntries (from_seq=1, limit=10) — short read ---
     let q = FrontendMessage::Query {
         id: "audit-page2".into(),
-        payload: QueryPayload::ListAuditEntries { from_seq: 1, limit: 10 },
+        payload: QueryPayload::ListAuditEntries {
+            from_seq: 1,
+            limit: 10,
+        },
     };
     writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
 
@@ -3087,7 +3188,11 @@ async fn audit_queries_round_trip_over_ipc() {
             Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
                 buf.drain(..consumed);
                 match payload {
-                    QueryResponsePayload::VerifyAuditChain { ok, entries_verified, error } => {
+                    QueryResponsePayload::VerifyAuditChain {
+                        ok,
+                        entries_verified,
+                        error,
+                    } => {
                         break (ok, entries_verified, error);
                     }
                     other => panic!("expected VerifyAuditChain, got {other:?}"),
@@ -3125,9 +3230,14 @@ async fn audit_queries_without_log_return_query_error() {
     let daemon_channel = Arc::clone(&channel);
     let daemon_shutdown = shutdown.clone();
     let daemon_handle = tokio::spawn(async move {
-        run_daemon_compat(&daemon_socket, daemon_agent, daemon_channel, daemon_shutdown)
-            .await
-            .expect("daemon must complete successfully");
+        run_daemon_compat(
+            &daemon_socket,
+            daemon_agent,
+            daemon_channel,
+            daemon_shutdown,
+        )
+        .await
+        .expect("daemon must complete successfully");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -3149,7 +3259,10 @@ async fn audit_queries_without_log_return_query_error() {
 
     let q = FrontendMessage::Query {
         id: "no-audit".into(),
-        payload: QueryPayload::ListAuditEntries { from_seq: 0, limit: 50 },
+        payload: QueryPayload::ListAuditEntries {
+            from_seq: 0,
+            limit: 50,
+        },
     };
     writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
 

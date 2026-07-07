@@ -18,6 +18,7 @@ page in this guide; this is the map.
 | **Teams** | View and edit your team of specialists (see [Teams](07-teams.md)). |
 | **Documents** | A file browser over the folders your assistant can access. |
 | **MCP** | The status of any external tool servers you've connected. |
+| **Gallery** | Browse images your assistant has generated through a connected ComfyUI server. |
 | **Voice** | Set up talking to your assistant out loud. |
 
 ## Command Center
@@ -48,3 +49,26 @@ things like a GitHub connector, a database, or a web-search service. You add
 servers in your config file; the **MCP** screen shows each one's status: whether
 it connected, how many tools it offers, and any errors. This is how you extend
 your assistant with capabilities beyond what ships in the box.
+
+## Gallery
+
+If you run [ComfyUI](https://github.com/comfyanonymous/ComfyUI) locally, your
+assistant can generate images when you ask it to, and this is where you see the
+results. Each image shows the prompt that produced it and when it was made,
+newest first; click one to view it full-size.
+
+To connect one, add an MCP bridge server (for example
+[`comfyui-mcp-server`](https://github.com/joenorton/comfyui-mcp-server)) as an
+`[[mcp_server]]` entry named `comfyui` in your config file:
+
+```toml
+[[mcp_server]]
+name = "comfyui"
+command = "/path/to/comfyui-mcp-server/venv/bin/python"
+args = ["/path/to/comfyui-mcp-server/server.py", "--stdio"]
+env = { COMFYUI_URL = "http://localhost:8188" }
+```
+
+Restart the daemon and the Gallery screen picks it up automatically. If no
+`comfyui` server is configured, the screen just explains how to add one —
+there's nothing else to set up here.

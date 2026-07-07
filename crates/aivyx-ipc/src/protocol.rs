@@ -580,6 +580,11 @@ pub enum QueryPayload {
     SetTeamRoster {
         roster: aivyx_team_types::TeamConfig,
     },
+    /// Studio Gallery — recent images generated via the configured
+    /// `comfyui` `[[mcp_server]]`, read directly from ComfyUI's own
+    /// `/history` HTTP API (not the MCP tool surface). Read-only.
+    /// Responds with [`QueryResponsePayload::Gallery`].
+    GetGallery,
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1200,6 +1205,29 @@ pub enum QueryResponsePayload {
         roster: aivyx_team_types::TeamConfig,
         restart_required: bool,
     },
+    /// Response to [`QueryPayload::GetGallery`]. `available = false` when no
+    /// `comfyui`-named `[[mcp_server]]` is configured (no network call is
+    /// made in that case) — the Studio Gallery screen renders an empty
+    /// state rather than an error.
+    Gallery {
+        available: bool,
+        images: Vec<GalleryImage>,
+    },
+}
+
+/// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean
+/// (the Studio renders it directly); `caption` and `created_unix` are
+/// best-effort (`None` when the node graph/status shape doesn't match what
+/// we know how to parse).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GalleryImage {
+    pub prompt_id: String,
+    pub filename: String,
+    pub subfolder: String,
+    /// ComfyUI's own `type` field for `/view` — `output`/`input`/`temp`.
+    pub folder_type: String,
+    pub created_unix: Option<u64>,
+    pub caption: Option<String>,
 }
 
 /// Chapter Voice — the daemon's `[voice]` config + readiness snapshot for the

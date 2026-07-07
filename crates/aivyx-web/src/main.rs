@@ -18,7 +18,7 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
-    McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, NotificationHistoryEntry,
+    GalleryImage, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, NotificationHistoryEntry,
     NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
@@ -80,6 +80,7 @@ const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
 const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
 const ICON_TOOLS: Asset = asset!("/assets/icons/tools.svg");
+const ICON_GALLERY: Asset = asset!("/assets/icons/gallery.svg");
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -125,11 +126,14 @@ enum View {
     /// Chapter Genesis — the guided agent-creation flow (Profile → Persona seed
     /// → access). First-run lands here when the Profile isn't yet declared.
     Onboarding,
+    /// Studio Gallery — recent images generated via the configured
+    /// `comfyui` `[[mcp_server]]`, read from ComfyUI's own `/history` API.
+    Gallery,
 }
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 18] = [
+    const ALL: [View; 19] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -143,6 +147,7 @@ impl View {
         View::Skills,
         View::Teams,
         View::Documents,
+        View::Gallery,
         View::Mcp,
         View::Tools,
         View::Voice,
@@ -166,6 +171,7 @@ impl View {
             View::Agents => "agents",
             View::Teams => "teams",
             View::Documents => "documents",
+            View::Gallery => "gallery",
             View::Mcp => "mcp",
             View::Tools => "tools",
             View::Voice => "voice",
@@ -195,6 +201,7 @@ impl View {
             View::Agents => "Agents",
             View::Teams => "Teams",
             View::Documents => "Documents",
+            View::Gallery => "Gallery",
             View::Mcp => "MCP",
             View::Tools => "Tools",
             View::Voice => "Voice",
@@ -267,6 +274,18 @@ struct McpState {
 #[derive(Clone, Default, PartialEq)]
 struct ToolsState {
     tools: Vec<ToolCatalogEntry>,
+    loaded: bool,
+}
+
+/// Studio Gallery state — recent images generated via the `comfyui`
+/// `[[mcp_server]]`, read from ComfyUI's own `/history` API (not the MCP
+/// tool surface). Read-only snapshot fanned in by `ws_task`. `available`
+/// is `false` when no `comfyui` server is configured at all (distinct from
+/// "configured but zero generations yet").
+#[derive(Clone, Default, PartialEq)]
+struct GalleryState {
+    available: bool,
+    images: Vec<GalleryImage>,
     loaded: bool,
 }
 
@@ -582,6 +601,7 @@ fn App() -> Element {
     let skills = use_signal(SkillsState::default);
     let mcp = use_signal(McpState::default);
     let tools = use_signal(ToolsState::default);
+    let gallery = use_signal(GalleryState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
@@ -593,8 +613,8 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, dashboard, memory, wiki, lattice, settings, agents, teams, documents,
-            voice, skills, mcp, tools, schedules_ui, notifications, connected, session, transcript,
-            streaming, gate,
+            voice, skills, mcp, tools, gallery, schedules_ui, notifications, connected, session,
+            transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -612,6 +632,7 @@ fn App() -> Element {
     use_context_provider(|| skills);
     use_context_provider(|| mcp);
     use_context_provider(|| tools);
+    use_context_provider(|| gallery);
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
     // Chapter Chime — the Schedules screen reads the routine list from
@@ -729,6 +750,7 @@ fn App() -> Element {
         View::Agents => "Agents",
         View::Teams => "Teams",
         View::Documents => "Documents",
+        View::Gallery => "Gallery",
         View::Mcp => "MCP Servers",
         View::Tools => "Tools",
         View::Voice => "Voice",
@@ -773,6 +795,7 @@ fn App() -> Element {
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
                         View::Documents => rsx! { DocumentsPanel {} },
+                        View::Gallery => rsx! { GalleryPanel {} },
                         View::Mcp => rsx! { McpPanel {} },
                         View::Tools => rsx! { ToolsPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
@@ -922,6 +945,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             "System",
             vec![
                 (ICON_DOCUMENTS, "Documents", View::Documents),
+                (ICON_GALLERY, "Gallery", View::Gallery),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_TOOLS, "Tools", View::Tools),
@@ -2683,6 +2707,123 @@ fn McpServerCard(view: McpServerStatusView) -> Element {
                             for line in view.stderr_tail.iter() {
                                 "{line}\n"
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Studio Gallery — recent images generated via the `comfyui` `[[mcp_server]]`.
+// The daemon reads ComfyUI's own `/history` API directly (not the MCP tool
+// surface — see memory `comfyui-mcp-integration`) and this screen renders
+// each result's bytes through the authenticated `/studio-asset` proxy route,
+// never reaching ComfyUI's own (loopback-only) port from the browser.
+// ---------------------------------------------------------------------------
+
+fn gallery_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-gallery".to_string(),
+        payload: QueryPayload::GetGallery,
+    }
+}
+
+/// `/studio-asset` URL for one gallery image — the same query params
+/// `serve_comfy_asset` expects on the daemon side.
+fn gallery_asset_url(img: &GalleryImage) -> String {
+    format!(
+        "/studio-asset?filename={}&subfolder={}&type={}",
+        js_encode_uri(&img.filename),
+        js_encode_uri(&img.subfolder),
+        js_encode_uri(&img.folder_type),
+    )
+}
+
+/// Percent-encode a query value client-side. Mirrors the daemon's own
+/// encoder (`percent_encode` in `web_ui.rs`) closely enough that filenames
+/// with the odd space/unicode character still round-trip.
+fn js_encode_uri(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[component]
+fn GalleryPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let gallery = use_context::<Signal<GalleryState>>();
+    // Which image (by index) is open in the lightbox, if any.
+    let mut open_index = use_signal(|| None::<usize>);
+
+    // Same "load on open + manual refresh" cadence as the MCP screen — a
+    // ComfyUI generation only happens on an explicit tool call, so there's
+    // nothing to poll for between opens.
+    use_future(move || async move {
+        ws.send(gallery_query());
+    });
+
+    let g = gallery();
+    rsx! {
+        div { class: "gallery",
+            div { class: "panel-head",
+                h3 { "Gallery" }
+                if g.loaded && g.available && !g.images.is_empty() {
+                    span { class: "label-tech", "{g.images.len()} image(s)" }
+                }
+                button { class: "btn-ghost", onclick: move |_| ws.send(gallery_query()), "Refresh" }
+            }
+            if !g.loaded {
+                SkeletonCards { cards: 6 }
+            } else if !g.available {
+                div { class: "glass-card empty",
+                    p { class: "label-tech",
+                        "No `comfyui` MCP server is configured. Add a `[[mcp_server]]` block named \"comfyui\" in aivyx.toml pointing at a running ComfyUI instance, then restart the daemon."
+                    }
+                }
+            } else if g.images.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech", "No images generated yet." }
+                }
+            } else {
+                div { class: "gallery-grid",
+                    for (i , img) in g.images.iter().enumerate() {
+                        div {
+                            key: "{img.prompt_id}",
+                            class: "glass-card gallery-card",
+                            onclick: move |_| open_index.set(Some(i)),
+                            img { class: "gallery-thumb", src: gallery_asset_url(img), loading: "lazy" }
+                            if let Some(caption) = img.caption.as_ref() {
+                                p { class: "gallery-caption", "{caption}" }
+                            }
+                            if let Some(ts) = img.created_unix {
+                                span { class: "label-tech", "{rel_time_secs(ts)}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(i) = open_index() {
+            if let Some(img) = g.images.get(i) {
+                div { class: "modal-scrim", onclick: move |_| open_index.set(None),
+                    div {
+                        class: "glass-card modal gallery-lightbox",
+                        onclick: move |e| e.stop_propagation(),
+                        img { class: "gallery-full", src: gallery_asset_url(img) }
+                        if let Some(caption) = img.caption.as_ref() {
+                            p { "{caption}" }
+                        }
+                        div { class: "actions",
+                            button { class: "btn btn-glass", onclick: move |_| open_index.set(None), "Close" }
                         }
                     }
                 }
@@ -5720,6 +5861,7 @@ async fn ws_task(
     skills: Signal<SkillsState>,
     mcp: Signal<McpState>,
     tools: Signal<ToolsState>,
+    gallery: Signal<GalleryState>,
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
     mut connected: Signal<bool>,
@@ -5759,8 +5901,8 @@ async fn ws_task(
 
         spawn(read_task(
             read, missions, dashboard, memory, wiki, lattice, settings, agents, teams,
-            documents, voice, skills, mcp, tools, schedules_ui, notifications, connected, session,
-            transcript, streaming, gate,
+            documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications, connected,
+            session, transcript, streaming, gate,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -5851,6 +5993,7 @@ async fn read_task(
     mut skills: Signal<SkillsState>,
     mut mcp: Signal<McpState>,
     mut tools: Signal<ToolsState>,
+    mut gallery: Signal<GalleryState>,
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
     mut connected: Signal<bool>,
@@ -6035,6 +6178,16 @@ async fn read_task(
                     m.servers = servers;
                     m.captured_unix = captured_unix;
                     m.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::Gallery { available, images },
+                    ..
+                } => {
+                    // Studio Gallery — recent ComfyUI generations.
+                    let mut g = gallery.write();
+                    g.available = available;
+                    g.images = images;
+                    g.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetToolCatalog { tools: entries },

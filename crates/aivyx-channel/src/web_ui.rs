@@ -26,10 +26,10 @@ use aivyx_core::{
     TurnOutcome,
 };
 
-use crate::daemon_server::DaemonError;
 use crate::daemon_ipc::{
-    decode_frame, encode_frame, DaemonEnvelope, FrameError, FrontendMessage, FrontendType,
+    DaemonEnvelope, FrameError, FrontendMessage, FrontendType, decode_frame, encode_frame,
 };
+use crate::daemon_server::DaemonError;
 use crate::notify_webui::{DesktopNotificationFrame, WebUiBroadcaster};
 
 /// Default web UI port. Adjacent to webhook (7842).
@@ -156,20 +156,22 @@ impl ChannelContext for WebDaemonChannel {
 ///
 /// This future never returns normally — it runs until `shutdown` is
 /// cancelled.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_web_ui_server(
     socket_path: PathBuf,
     host: Option<std::net::IpAddr>,
     port: u16,
     allowed_origins: Vec<String>,
     auth_token: Option<String>,
+    comfyui_base_url: Option<String>,
     shutdown: CancellationToken,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
-    let host = host
-        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let host = host.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let addr = std::net::SocketAddr::new(host, port);
     let allowed_origins = Arc::new(allowed_origins);
     let auth_token = Arc::new(auth_token);
+    let comfyui_base_url = Arc::new(comfyui_base_url);
 
     // Chapter Harbor F-4 — binding beyond loopback is a deliberate network
     // exposure. Warn once at startup so an operator who flips web_ui_host can't
@@ -224,6 +226,7 @@ pub async fn run_web_ui_server(
         let conn_broadcaster = web_ui_broadcaster.clone();
         let conn_allowed_origins = Arc::clone(&allowed_origins);
         let conn_auth_token = Arc::clone(&auth_token);
+        let conn_comfyui_base_url = Arc::clone(&comfyui_base_url);
 
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
@@ -232,6 +235,7 @@ pub async fn run_web_ui_server(
                 port,
                 &conn_allowed_origins,
                 conn_auth_token.as_deref(),
+                conn_comfyui_base_url.as_deref(),
                 conn_broadcaster,
             )
             .await
@@ -267,9 +271,8 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 /// First value of a header (case-insensitive name) from a peeked request head.
 fn header_value<'a>(request_head: &'a str, name: &str) -> Option<&'a str> {
     request_head.split("\r\n").find_map(|line| {
-        line.split_once(':').and_then(|(n, v)| {
-            n.trim().eq_ignore_ascii_case(name).then(|| v.trim())
-        })
+        line.split_once(':')
+            .and_then(|(n, v)| n.trim().eq_ignore_ascii_case(name).then(|| v.trim()))
     })
 }
 
@@ -327,15 +330,14 @@ async fn handle_connection(
     port: u16,
     allowed_origins: &[String],
     auth_token: Option<&str>,
+    comfyui_base_url: Option<&str>,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     // Peek at the request head to determine the path *and* read the
     // `Origin` header for the WebSocket origin check. 4 KiB comfortably
     // covers a standard handshake's request line + headers.
     let mut peek_buf = [0u8; 4096];
-    let n = stream
-        .peek(&mut peek_buf)
-        .await?;
+    let n = stream.peek(&mut peek_buf).await?;
     let request_head = String::from_utf8_lossy(&peek_buf[..n]);
 
     if request_head.starts_with("GET /ws") {
@@ -402,9 +404,164 @@ async fn handle_connection(
                 "Set-Cookie: {AUTH_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/\r\n"
             ));
         }
+        // Studio Gallery — proxy ComfyUI's `/view` so the browser never needs
+        // to reach ComfyUI directly (it's bound to the daemon's own
+        // loopback, unreachable from another LAN device). Gated by the same
+        // token check above, like every other non-`/ws` route.
+        if request_path(&request_head) == "/studio-asset" {
+            return serve_comfy_asset(stream, &request_head, comfyui_base_url).await;
+        }
         // Static HTTP: serve the embedded Dioxus bundle, falling back to the
         // legacy page at `/` while the bundle is unbuilt.
         serve_static(stream, request_path(&request_head), set_cookie.as_deref()).await
+    }
+}
+
+/// The raw query string (no leading `?`) from an HTTP request line, e.g.
+/// `GET /studio-asset?filename=a.png HTTP/1.1` → `filename=a.png`. Empty
+/// when there's no `?`.
+fn request_query(request_head: &str) -> &str {
+    request_head
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("")
+        .split_once('?')
+        .map(|(_, q)| q)
+        .unwrap_or("")
+}
+
+/// Minimal query param lookup with `%XX` percent-decoding. No new
+/// dependency: both ends of this URL (browser `<img src>` and the
+/// `serve_comfy_asset` → ComfyUI request below) are ours, so a small
+/// self-contained codec is simpler than promoting `url`/`urlencoding` to a
+/// direct dependency for two call sites.
+fn query_param(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then(|| percent_decode(v))
+    })
+}
+
+/// Reverses [`percent_encode`]: `%XX` → the decoded byte, everything else
+/// passed through as-is. Invalid UTF-8 after decoding falls back to the
+/// original (still-encoded) string rather than failing.
+fn percent_decode(s: &str) -> String {
+    // Byte-indexed throughout (never sub-slices the `&str`) so adversarial
+    // input can't panic on a non-UTF-8 char boundary.
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+/// Percent-encodes anything outside `A-Za-z0-9-_.~` — enough for a query
+/// value we're building ourselves (filenames/subfolders/type).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Studio Gallery — proxy `GET {COMFYUI_URL}/view?filename=&subfolder=&type=`
+/// to the browser. Rejects a `filename`/`subfolder` containing `/` or `..`
+/// before building the upstream request (defense in depth — ComfyUI's own
+/// `/view` already validates its side, but a proxy shouldn't forward
+/// anything odd upstream either).
+async fn serve_comfy_asset(
+    stream: tokio::net::TcpStream,
+    request_head: &str,
+    comfyui_base_url: Option<&str>,
+) -> Result<(), DaemonError> {
+    let Some(base_url) = comfyui_base_url else {
+        return serve_bytes(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"no comfyui server configured",
+        )
+        .await;
+    };
+    let query = request_query(request_head);
+    let Some(filename) = query_param(query, "filename") else {
+        return serve_bytes(
+            stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            b"missing filename",
+        )
+        .await;
+    };
+    let subfolder = query_param(query, "subfolder").unwrap_or_default();
+    let folder_type = query_param(query, "type").unwrap_or_else(|| "output".to_string());
+    if [&filename, &subfolder]
+        .iter()
+        .any(|s| s.contains('/') || s.contains(".."))
+    {
+        return serve_bytes(
+            stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            b"invalid path segment",
+        )
+        .await;
+    }
+
+    let url = format!(
+        "{}/view?filename={}&subfolder={}&type={}",
+        base_url.trim_end_matches('/'),
+        percent_encode(&filename),
+        percent_encode(&subfolder),
+        percent_encode(&folder_type),
+    );
+
+    let resp = match reqwest::get(&url).await {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            return serve_bytes(
+                stream,
+                "502 Bad Gateway",
+                "text/plain; charset=utf-8",
+                b"comfyui did not return the asset",
+            )
+            .await;
+        }
+    };
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    match resp.bytes().await {
+        Ok(body) => serve_bytes(stream, "200 OK", &content_type, &body).await,
+        Err(_) => {
+            serve_bytes(
+                stream,
+                "502 Bad Gateway",
+                "text/plain; charset=utf-8",
+                b"failed reading comfyui response",
+            )
+            .await
+        }
     }
 }
 
@@ -413,7 +570,9 @@ async fn handle_connection(
 fn parse_origin(request_head: &str) -> Option<&str> {
     request_head.split("\r\n").find_map(|line| {
         line.split_once(':').and_then(|(name, value)| {
-            name.trim().eq_ignore_ascii_case("origin").then(|| value.trim())
+            name.trim()
+                .eq_ignore_ascii_case("origin")
+                .then(|| value.trim())
         })
     })
 }
@@ -477,13 +636,29 @@ async fn serve_static(
     // Dioxus app hasn't ported yet (Chapter M ships Missions + Chat). The new
     // app links to it so building the bundle never loses a pane.
     if path == "/classic" {
-        return serve_bytes_ext(stream, "200 OK", "text/html; charset=utf-8", extra, HTML.as_bytes()).await;
+        return serve_bytes_ext(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            extra,
+            HTML.as_bytes(),
+        )
+        .await;
     }
     if path == "/" || path == "/index.html" {
         return match bundle_index() {
             Some((bytes, mime)) => serve_bytes_ext(stream, "200 OK", mime, extra, bytes).await,
             // No bundle built → the legacy page is the whole UI.
-            None => serve_bytes_ext(stream, "200 OK", "text/html; charset=utf-8", extra, HTML.as_bytes()).await,
+            None => {
+                serve_bytes_ext(
+                    stream,
+                    "200 OK",
+                    "text/html; charset=utf-8",
+                    extra,
+                    HTML.as_bytes(),
+                )
+                .await
+            }
         };
     }
     match web_asset(&path) {
@@ -681,9 +856,7 @@ async fn handle_websocket(
                             };
                             let mut sink = ws_sink.lock().await;
                             if sink
-                                .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    json.into(),
-                                ))
+                                .send(tokio_tungstenite::tungstenite::Message::Text(json.into()))
                                 .await
                                 .is_err()
                             {
@@ -782,9 +955,7 @@ async fn handle_websocket(
                         };
                         let mut sink = ws_sink.lock().await;
                         if sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                json.into(),
-                            ))
+                            .send(tokio_tungstenite::tungstenite::Message::Text(json.into()))
                             .await
                             .is_err()
                         {
@@ -875,11 +1046,9 @@ mod tests {
     #[test]
     fn request_carries_token_via_cookie() {
         // The /ws upgrade path: a browser can't set headers, but sends cookies.
-        let head =
-            "GET /ws HTTP/1.1\r\nCookie: other=1; aivyx_web_token=tok-123; x=y\r\n\r\n";
+        let head = "GET /ws HTTP/1.1\r\nCookie: other=1; aivyx_web_token=tok-123; x=y\r\n\r\n";
         assert!(request_carries_token(head, "tok-123"));
-        let head_wrong =
-            "GET /ws HTTP/1.1\r\nCookie: aivyx_web_token=stale\r\n\r\n";
+        let head_wrong = "GET /ws HTTP/1.1\r\nCookie: aivyx_web_token=stale\r\n\r\n";
         assert!(!request_carries_token(head_wrong, "tok-123"));
     }
 
@@ -909,7 +1078,8 @@ mod tests {
 
     #[test]
     fn parse_origin_is_case_insensitive_and_optional() {
-        let head = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:7843\r\nOrigin: http://127.0.0.1:7843\r\n\r\n";
+        let head =
+            "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:7843\r\nOrigin: http://127.0.0.1:7843\r\n\r\n";
         assert_eq!(parse_origin(head), Some("http://127.0.0.1:7843"));
         // header-name case must not matter
         let lower = "GET /ws HTTP/1.1\r\norigin:   http://localhost:7843  \r\n\r\n";
@@ -925,18 +1095,42 @@ mod tests {
         let none: &[String] = &[];
         let head = |o: &str| format!("GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: {o}\r\n\r\n");
         // our own loopback origins on the bound port — allowed
-        assert!(ws_origin_allowed(&head("http://127.0.0.1:7843"), port, none));
-        assert!(ws_origin_allowed(&head("http://localhost:7843"), port, none));
+        assert!(ws_origin_allowed(
+            &head("http://127.0.0.1:7843"),
+            port,
+            none
+        ));
+        assert!(ws_origin_allowed(
+            &head("http://localhost:7843"),
+            port,
+            none
+        ));
         assert!(ws_origin_allowed(&head("http://[::1]:7843"), port, none));
-        assert!(ws_origin_allowed(&head("HTTP://LOCALHOST:7843"), port, none)); // case-insensitive
+        assert!(ws_origin_allowed(
+            &head("HTTP://LOCALHOST:7843"),
+            port,
+            none
+        )); // case-insensitive
         // non-browser client (no Origin) — allowed (inside the trust boundary)
-        assert!(ws_origin_allowed("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n", port, none));
+        assert!(ws_origin_allowed(
+            "GET /ws HTTP/1.1\r\nHost: x\r\n\r\n",
+            port,
+            none
+        ));
         // CSWSH: a malicious page's real origin — rejected
         assert!(!ws_origin_allowed(&head("http://evil.example"), port, none));
         // DNS rebinding: attacker hostname resolving to 127.0.0.1 — rejected
-        assert!(!ws_origin_allowed(&head("http://attacker.test:7843"), port, none));
+        assert!(!ws_origin_allowed(
+            &head("http://attacker.test:7843"),
+            port,
+            none
+        ));
         // wrong port (another local app) — rejected
-        assert!(!ws_origin_allowed(&head("http://127.0.0.1:9999"), port, none));
+        assert!(!ws_origin_allowed(
+            &head("http://127.0.0.1:9999"),
+            port,
+            none
+        ));
         // sandboxed/file origin — rejected
         assert!(!ws_origin_allowed(&head("null"), port, none));
     }
@@ -950,15 +1144,39 @@ mod tests {
         let head = |o: &str| format!("GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: {o}\r\n\r\n");
         let allow = vec!["https://studio.mybox.lan".to_string()];
         // configured origin — allowed (trailing-slash + case insensitive)
-        assert!(ws_origin_allowed(&head("https://studio.mybox.lan"), port, &allow));
-        assert!(ws_origin_allowed(&head("https://studio.mybox.lan/"), port, &allow));
-        assert!(ws_origin_allowed(&head("HTTPS://Studio.MyBox.LAN"), port, &allow));
+        assert!(ws_origin_allowed(
+            &head("https://studio.mybox.lan"),
+            port,
+            &allow
+        ));
+        assert!(ws_origin_allowed(
+            &head("https://studio.mybox.lan/"),
+            port,
+            &allow
+        ));
+        assert!(ws_origin_allowed(
+            &head("HTTPS://Studio.MyBox.LAN"),
+            port,
+            &allow
+        ));
         // loopback still allowed alongside the configured one
-        assert!(ws_origin_allowed(&head("http://localhost:7843"), port, &allow));
+        assert!(ws_origin_allowed(
+            &head("http://localhost:7843"),
+            port,
+            &allow
+        ));
         // a different host is still rejected
-        assert!(!ws_origin_allowed(&head("https://evil.example"), port, &allow));
+        assert!(!ws_origin_allowed(
+            &head("https://evil.example"),
+            port,
+            &allow
+        ));
         // and an http:// variant of the https allowlisted host is NOT a match
-        assert!(!ws_origin_allowed(&head("http://studio.mybox.lan"), port, &allow));
+        assert!(!ws_origin_allowed(
+            &head("http://studio.mybox.lan"),
+            port,
+            &allow
+        ));
     }
 
     #[test]
@@ -998,7 +1216,10 @@ mod tests {
     #[test]
     fn html_is_non_empty() {
         assert!(!HTML.is_empty(), "embedded HTML must not be empty");
-        assert!(HTML.contains("<html"), "embedded HTML must contain <html tag");
+        assert!(
+            HTML.contains("<html"),
+            "embedded HTML must contain <html tag"
+        );
     }
 
     /// Phase 47 — the embedded HTML must wire the four inspection panes
@@ -1127,9 +1348,7 @@ mod tests {
             "must read the accumulated_helpfulness field"
         );
         assert!(
-            HTML.contains(
-                "Accumulated helpfulness (all-time, decayed)"
-            ),
+            HTML.contains("Accumulated helpfulness (all-time, decayed)"),
             "must render the accumulated-helpfulness card"
         );
         // Phase 83 — the Learning pane must surface the durable
@@ -1139,9 +1358,7 @@ mod tests {
             "must read the cooccurrence field"
         );
         assert!(
-            HTML.contains(
-                "Topics that consistently help together"
-            ),
+            HTML.contains("Topics that consistently help together"),
             "must render the co-occurrence card"
         );
         // Phase 84 — the Learning pane must surface the
@@ -1184,10 +1401,7 @@ mod tests {
             "notif-outcome.skipped_by_condition",
             "notif-outcome.skipped_by_rate_limit",
         ] {
-            assert!(
-                HTML.contains(badge),
-                "must style the {badge} outcome badge"
-            );
+            assert!(HTML.contains(badge), "must style the {badge} outcome badge");
         }
     }
 
@@ -1295,11 +1509,8 @@ mod tests {
         s.write_all(request.as_bytes()).await.unwrap();
         s.flush().await.unwrap();
         let mut buf = Vec::new();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            s.read_to_end(&mut buf),
-        )
-        .await;
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(3), s.read_to_end(&mut buf)).await;
         String::from_utf8_lossy(&buf).into_owned()
     }
 
@@ -1317,6 +1528,7 @@ mod tests {
                 port,
                 Vec::new(),
                 Some("tok-abc123".to_string()),
+                None,
                 server_shutdown,
                 None,
             )
@@ -1327,8 +1539,14 @@ mod tests {
 
         // (1) Static request with NO credentials → 401 + Basic challenge.
         let resp = http_roundtrip(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
-        assert!(resp.starts_with("HTTP/1.1 401"), "no-auth static: {resp:.60}");
-        assert!(resp.contains("WWW-Authenticate: Basic"), "must challenge: {resp:.120}");
+        assert!(
+            resp.starts_with("HTTP/1.1 401"),
+            "no-auth static: {resp:.60}"
+        );
+        assert!(
+            resp.contains("WWW-Authenticate: Basic"),
+            "must challenge: {resp:.120}"
+        );
 
         // (2) Static request WITH the Basic password → 200 + Set-Cookie.
         use base64::Engine;
@@ -1350,7 +1568,10 @@ mod tests {
             "GET /ws HTTP/1.1\r\nHost: x\r\nOrigin: http://127.0.0.1\r\nUpgrade: websocket\r\n\r\n",
         )
         .await;
-        assert!(ws.starts_with("HTTP/1.1 401"), "unauth /ws must be 401: {ws:.60}");
+        assert!(
+            ws.starts_with("HTTP/1.1 401"),
+            "unauth /ws must be 401: {ws:.60}"
+        );
 
         shutdown.cancel();
         let _ = handle.await;
