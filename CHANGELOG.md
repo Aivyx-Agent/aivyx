@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-07-08
+
+### Fixed
+
+- **Studio footer showed the wrong version number.** The WASM bundle
+  released in 0.8.2 was built before that version bump, so
+  `env!("CARGO_PKG_VERSION")` baked "v0.8.1" into the Studio's status bar
+  even though the daemon binary itself correctly reported 0.8.2. No
+  functional change — the bundle is rebuilt from the same 0.8.2 source,
+  now after the version bump.
+
 ## [0.8.2] — 2026-07-07
 
 ### Added
