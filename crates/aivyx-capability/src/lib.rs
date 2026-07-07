@@ -1171,6 +1171,16 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "team.delegate",
         // Team dialogue (the message bus) — held by every member. Trusted.
         "team.message",
+        // Chapter L (L.7) — `team.run` (starts a whole durable team
+        // mission). The KNOWN_BASES doc comment has said "Channel-tier,
+        // Trusted (like the loop tools)" since the base was added
+        // (51a711d), but this ceiling entry was never actually added
+        // alongside it — found 2026-07-07 via Chapter Almanac's Studio
+        // Tools screen showing it as Kernel-only in the live catalog.
+        // Until this fix, no Trusted-tier chat turn or autonomous-loop
+        // iteration could ever actually invoke it (silently denied at
+        // the capability gate before reaching the tool).
+        "team.run",
     ])
 });
 
@@ -1955,6 +1965,27 @@ mod tests {
         // Kernel holds every KNOWN_BASES entry including this
         // one — the `ceiling_kernel_grants_everything` invariant.
         assert!(TrustTier::Kernel.default_ceiling().grants(&s("role.switch")));
+    }
+
+    #[test]
+    fn team_run_is_in_trusted_ceiling_only() {
+        // Regression for a real bug (found 2026-07-07 via Chapter
+        // Almanac's Studio Tools screen): `team.run`'s KNOWN_BASES doc
+        // comment always said "Channel-tier, Trusted (like the loop
+        // tools)" (since 51a711d), but the base was never actually
+        // added to CEILING_TRUSTED — so it silently resolved to
+        // Kernel-only, and no Trusted-tier chat turn or autonomous-loop
+        // iteration could ever invoke the tool it gates.
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s("team.run")));
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("team.run")));
+        assert!(!TrustTier::Untrusted.default_ceiling().grants(&s("team.run")));
+        assert!(TrustTier::Kernel.default_ceiling().grants(&s("team.run")));
+        assert_eq!(
+            TrustTier::min_for_scope(&s("team.run")),
+            TrustTier::Trusted
+        );
     }
 
     // ---- Phase 62 Task 2: `notify.send` scope base ----
