@@ -45,16 +45,19 @@ computes the capability the call needs, which the daemon enforces **before**
 | `fs.metadata` | `fs.metadata` | SemiTrusted | stat a path (size/kind/mtime) |
 | `workspace.read` / `.write` / `.list` / `.delete` / `.note` | `workspace` | Trusted | the agent's own private notebook dir (Chapter O), independent of `fs_root` |
 
-## Structured-data readers (infrastructure — Chapter Sheaf)
+## Structured-data readers + writers (infrastructure — Chapter Sheaf)
 
-Reuse the `fs.read` capability + sandbox (no new base, no new I/O reach): they
-only parse bytes the agent could already `fs.read`. Registered beside `fs.read`.
+Reuse the `fs.read` / `fs.write` capabilities + sandbox (no new base, no new I/O
+reach): they only parse/produce bytes the agent could already `fs.read` /
+`fs.write`. Registered beside `fs.read`/`fs.write`.
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
 | `data.csv` | `fs.read` | Trusted | read a CSV/TSV file into `{headers, rows, …}` (SH.1) |
 | `data.xlsx` | `fs.read` | Trusted | read an .xlsx sheet into `{sheet, sheet_names, headers, rows, …}` (SH.2, `calamine`) |
 | `data.pdf` | `fs.read` | Trusted | extract a PDF's text layer into `{text, pages, …}` (SH.3, `pdf-extract`; no OCR) |
+| `data.xlsx.write` | `fs.write` | Trusted | write `rows` (+ optional `headers`) into a new .xlsx spreadsheet (SH.6, `rust_xlsxwriter`) |
+| `data.pdf.write` | `fs.write` | Trusted | lay `text` out into a new PDF, single font, auto-wrap + pagination (SH.6, `lopdf`; no rich formatting) |
 
 ## Network & web (substrate)
 

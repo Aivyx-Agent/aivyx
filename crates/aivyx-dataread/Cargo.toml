@@ -23,6 +23,7 @@ aivyx-capability = { path = "../aivyx-capability" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 
 # CSV parsing (Chapter Sheaf SH.1). Already in the workspace dep tree;
 # MIT/Unlicense — permissive, clears deny.toml.
@@ -34,18 +35,22 @@ csv = "1"
 calamine = "0.26"
 
 # PDF text extraction (Chapter Sheaf SH.3). MIT; brings `lopdf` (also
-# used directly for the page count). Text layer only — no OCR.
+# used directly for the page count, and now for `data.pdf.write`'s
+# low-level content-stream construction — SH.6). Text EXTRACTION is
+# layer-only, no OCR; `data.pdf.write` is plain single-font text flow,
+# no rich formatting.
 # lopdf >= 0.42 fixes RUSTSEC-2026-0187 (unbounded-recursion stack-overflow
 # DoS on a crafted PDF); pdf-extract 0.9+ tracks the same lopdf line.
 pdf-extract = "0.12"
 lopdf = "0.42"
 
-[dev-dependencies]
-# SH.5 live-verify only: writes a real .xlsx fixture so the reader is
-# exercised against genuine bytes. Dev-only (MIT). The PDF fixture is
-# generated with the already-present `lopdf` (a writer too), so no PDF
-# writer dep is needed.
+# XLSX spreadsheet WRITING (Chapter Sheaf SH.6 — `data.xlsx.write`,
+# symmetric with SH.2's reader). MIT — permissive, clears deny.toml.
+# Was a dev-only test-fixture dependency (SH.5); promoted to a real
+# dependency now that the crate ships a writer, not just readers.
 rust_xlsxwriter = "0.79"
+
+[dev-dependencies]
 # Drives the in-process readers' async `execute()` in the live-verify.
 tokio = { workspace = true, features = ["rt", "macros"] }
 

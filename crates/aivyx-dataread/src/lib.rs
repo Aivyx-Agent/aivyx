@@ -8,6 +8,13 @@
 //! - [`DataXlsxTool`] (`data.xlsx`, SH.2) — spreadsheet → a sheet's rows.
 //! - [`DataPdfTool`] (`data.pdf`, SH.3) — PDF → extracted text.
 //!
+//! Plus two SH.6 writers, symmetric with the readers above — structured
+//! content the agent already has, turned into a real file:
+//!
+//! - [`DataXlsxWriteTool`] (`data.xlsx.write`) — rows → a new spreadsheet.
+//! - [`DataPdfWriteTool`] (`data.pdf.write`) — text → a new PDF (plain
+//!   single-font text flow with pagination; no rich formatting).
+//!
 //! ## Governance (see `docs/SHEAF.md`)
 //!
 //! Each reader **reuses the existing `fs.read` capability and the
@@ -22,10 +29,14 @@
 
 pub mod csv_reader;
 pub mod pdf_reader;
+pub mod pdf_writer;
 pub mod sandbox;
 pub mod xlsx_reader;
+pub mod xlsx_writer;
 
 pub use csv_reader::DataCsvTool;
 pub use pdf_reader::DataPdfTool;
+pub use pdf_writer::DataPdfWriteTool;
 pub use sandbox::ReaderSandbox;
 pub use xlsx_reader::DataXlsxTool;
+pub use xlsx_writer::DataXlsxWriteTool;

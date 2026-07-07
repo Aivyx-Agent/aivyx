@@ -118,6 +118,137 @@ impl ReaderSandbox {
         }
     }
 
+    /// Derive the `fs.write:<resolved>` scope for a writer call (Chapter
+    /// Sheaf SH.6 — `data.xlsx.write` / `data.pdf.write`). Same shape as
+    /// [`Self::scope_for`], gating a writer on the *existing* `fs.write`
+    /// capability rather than a new base — a writer can only ever write
+    /// where the agent could already `fs.write`.
+    pub fn scope_for_write(&self, input: &Value) -> Scope {
+        let Some(path_str) = input.get("path").and_then(|v| v.as_str()) else {
+            return deny_write_scope();
+        };
+        match lexical_resolve(&self.root, Path::new(path_str)) {
+            Some(abs) => Scope::parse(&format!("fs.write:{}", abs.display()))
+                .unwrap_or_else(deny_write_scope),
+            None => deny_write_scope(),
+        }
+    }
+
+    /// Resolve + fence a write target: lexical resolve, auto-create the
+    /// parent directory (mirroring `FsWriteTool`'s precedent), then a
+    /// canonical re-check that the parent still lives under the sandbox
+    /// root (the TOCTOU-resistant fence, matching the read side).
+    /// Refuses to clobber an existing file unless `input.overwrite ==
+    /// true` — simpler than `FsWriteTool`'s `confirm_destructive` gate
+    /// (this crate has no operator-facing confirm-first toggle), but the
+    /// same no-silent-overwrite property.
+    ///
+    /// Returns `(tmp_path, final_path)`: the caller writes its content to
+    /// `tmp_path` (guaranteed to sit in the same directory as
+    /// `final_path`, so [`Self::commit_write`]'s rename is atomic), then
+    /// calls `commit_write` to install it.
+    pub fn resolve_write_target(
+        &self,
+        input: &Value,
+        tool: ToolId,
+    ) -> Result<(PathBuf, PathBuf), ToolOutcome> {
+        let path_str = match input.get("path").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => return Err(fail(tool, "input must have a string `path` field".to_string())),
+        };
+        let overwrite = input.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+
+        let lexical = match lexical_resolve(&self.root, Path::new(path_str)) {
+            Some(p) => p,
+            None => {
+                return Err(fail(tool, format!("path {path_str:?} escapes the sandbox root")))
+            }
+        };
+
+        if lexical.exists() && !overwrite {
+            return Err(fail(
+                tool,
+                format!(
+                    "{path_str:?} already exists — pass `overwrite: true` to replace it"
+                ),
+            ));
+        }
+
+        let parent = match lexical.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => {
+                return Err(fail(
+                    tool,
+                    format!("path {lexical:?} has no parent directory"),
+                ))
+            }
+        };
+        let file_name = match lexical.file_name() {
+            Some(n) => n.to_owned(),
+            None => {
+                return Err(fail(
+                    tool,
+                    format!("path {lexical:?} has no final component (trailing slash?)"),
+                ))
+            }
+        };
+
+        if let Err(e) = std::fs::create_dir_all(&parent) {
+            return Err(fail(tool, format!("cannot create parent {parent:?}: {e}")));
+        }
+        let canonical_parent = match std::fs::canonicalize(&parent) {
+            Ok(p) => p,
+            Err(e) => return Err(fail(tool, format!("cannot canonicalize parent {parent:?}: {e}"))),
+        };
+        if !canonical_parent.starts_with(&*self.root) {
+            return Err(fail(
+                tool,
+                format!(
+                    "parent {canonical_parent:?} escapes sandbox root {:?} after \
+                     symlink resolution",
+                    self.root
+                ),
+            ));
+        }
+
+        let canonical_target = canonical_parent.join(&file_name);
+
+        // Chapter Portcullis — refuse a sensitive write location even
+        // inside the sandbox, matching fs.write's guard.
+        if let Some(reason) = self.sensitive.classify_write(&canonical_target) {
+            return Err(fail(
+                tool,
+                format!(
+                    "refusing to write {} — {reason}. Add it to `[access] \
+                     allow_sensitive_paths` if you intend the agent to write it.",
+                    canonical_target.display()
+                ),
+            ));
+        }
+
+        let tmp_name = format!(".aivyx-dataread-write-{}.tmp", uuid::Uuid::new_v4().simple());
+        let tmp_path = canonical_parent.join(tmp_name);
+        Ok((tmp_path, canonical_target))
+    }
+
+    /// Atomically install `tmp_path` at `final_path` (same-directory
+    /// rename — atomic on a single filesystem, matching `FsWriteTool`).
+    /// Best-effort cleanup of the temp file on failure.
+    pub fn commit_write(
+        tmp_path: &Path,
+        final_path: &Path,
+        tool: ToolId,
+    ) -> Result<(), ToolOutcome> {
+        if let Err(e) = std::fs::rename(tmp_path, final_path) {
+            let _ = std::fs::remove_file(tmp_path);
+            return Err(fail(
+                tool,
+                format!("cannot install {final_path:?}: {e}"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Run both fences and read the file (capped). On any failure
     /// returns a `Failed` [`ToolOutcome`] ready to hand back from
     /// `execute`.
@@ -198,6 +329,10 @@ fn read_capped(path: &Path) -> std::io::Result<(Vec<u8>, bool)> {
 /// construction (the loop's scope gate refuses it before `execute`).
 fn deny_read_scope() -> Scope {
     Scope::parse("fs.read:/aivyx/__deny__/invalid-input").expect("deny scope must parse")
+}
+
+fn deny_write_scope() -> Scope {
+    Scope::parse("fs.write:/aivyx/__deny__/invalid-input").expect("deny scope must parse")
 }
 
 fn fail(tool: ToolId, detail: String) -> ToolOutcome {

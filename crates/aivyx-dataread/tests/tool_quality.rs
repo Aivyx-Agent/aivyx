@@ -1,19 +1,21 @@
-//! Chapter Sheaf (SH.4) — metadata quality sweep over the
-//! structured-data readers.
+//! Chapter Sheaf (SH.4, extended SH.6) — metadata quality sweep over
+//! the structured-data readers AND writers.
 //!
 //! Atlas (AT.3) shipped `check_tool_quality` and recommended every
 //! crate run it over the tools it owns. This is `aivyx-dataread`'s
-//! sweep: each reader's name / description / schema — the metadata the
+//! sweep: each tool's name / description / schema — the metadata the
 //! LLM relies on to call it — must meet the correctness floor, so a
 //! thin description or malformed schema fails CI rather than shipping.
-//! The readers are cheap to construct (a `ReaderSandbox` over a temp
+//! The tools are cheap to construct (a `ReaderSandbox` over a temp
 //! dir); the metadata methods never touch the filesystem.
 
 use std::sync::Arc;
 
 use aivyx_core::tools::check_tool_quality;
 use aivyx_core::Tool;
-use aivyx_dataread::{DataCsvTool, DataPdfTool, DataXlsxTool, ReaderSandbox};
+use aivyx_dataread::{
+    DataCsvTool, DataPdfTool, DataPdfWriteTool, DataXlsxTool, DataXlsxWriteTool, ReaderSandbox,
+};
 
 #[test]
 fn dataread_tools_meet_quality_floor() {
@@ -22,7 +24,9 @@ fn dataread_tools_meet_quality_floor() {
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(DataCsvTool::new(sandbox.clone())),
         Arc::new(DataXlsxTool::new(sandbox.clone())),
-        Arc::new(DataPdfTool::new(sandbox)),
+        Arc::new(DataPdfTool::new(sandbox.clone())),
+        Arc::new(DataXlsxWriteTool::new(sandbox.clone())),
+        Arc::new(DataPdfWriteTool::new(sandbox)),
     ];
 
     let issues: Vec<String> = tools

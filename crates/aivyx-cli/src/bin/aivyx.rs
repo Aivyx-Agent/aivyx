@@ -180,7 +180,9 @@ use aivyx_channel::{
 };
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
 use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
-use aivyx_dataread::{DataCsvTool, DataPdfTool, DataXlsxTool, ReaderSandbox};
+use aivyx_dataread::{
+    DataCsvTool, DataPdfTool, DataPdfWriteTool, DataXlsxTool, DataXlsxWriteTool, ReaderSandbox,
+};
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsDeleteToolConfig,
     FsMetadataToolConfig, FsReadToolConfig, FsWriteToolConfig, LlmPlanner, LlmPlannerConfig,
@@ -6577,7 +6579,13 @@ async fn run_async(
         .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy));
     let data_csv = DataCsvTool::new(reader_sandbox.clone());
     let data_xlsx = DataXlsxTool::new(reader_sandbox.clone());
-    let data_pdf = DataPdfTool::new(reader_sandbox);
+    let data_pdf = DataPdfTool::new(reader_sandbox.clone());
+    // Chapter Sheaf SH.6 — the write-side symmetric to the readers
+    // above, reusing the existing `fs.write` capability + the same
+    // sandbox (Ward-guarded identically): a writer can only ever
+    // write where the agent could already `fs.write`.
+    let data_xlsx_write = DataXlsxWriteTool::new(reader_sandbox.clone());
+    let data_pdf_write = DataPdfWriteTool::new(reader_sandbox);
 
     let mut tool_list: Vec<Arc<dyn Tool>> = vec![
         Arc::new(fs_read) as Arc<dyn Tool>,
@@ -6586,6 +6594,8 @@ async fn run_async(
         Arc::new(data_csv) as Arc<dyn Tool>,
         Arc::new(data_xlsx) as Arc<dyn Tool>,
         Arc::new(data_pdf) as Arc<dyn Tool>,
+        Arc::new(data_xlsx_write) as Arc<dyn Tool>,
+        Arc::new(data_pdf_write) as Arc<dyn Tool>,
         Arc::new(memory_read) as Arc<dyn Tool>,
         Arc::new(memory_write) as Arc<dyn Tool>,
         Arc::new(memory_forget) as Arc<dyn Tool>,
