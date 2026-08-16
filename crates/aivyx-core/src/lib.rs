@@ -75,6 +75,10 @@ use aivyx_capability::{CapabilitySet, Scope};
 // pick up `tokio-util` just to reference the type in function signatures.
 pub use tokio_util::sync::CancellationToken;
 
+// Re-export the shared Landlock+seccomp process confiner so aivyx-cli
+// never needs its own direct dependency on aivyx-confine.
+pub use aivyx_confine::{ExecutionConfiner, LandlockConfiner, NoopConfiner, default_confiner};
+
 // ---------------------------------------------------------------------------
 // ID newtypes
 // ---------------------------------------------------------------------------

@@ -55,5 +55,9 @@ libc = { workspace = true }
 jsonschema = { workspace = true }
 dom_smoothie = "0.18.0"
 
+# Shared Landlock+seccomp process confinement for shell.exec/git.rs,
+# re-exported so aivyx-cli never needs its own direct dependency on it.
+aivyx-confine = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
