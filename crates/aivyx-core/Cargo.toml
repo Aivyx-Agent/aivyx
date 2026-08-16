@@ -61,3 +61,8 @@ aivyx-confine = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
+# Confinement test fixture (Task 3 — shell.exec confinement): needs a
+# directory outside cwd_root's default write scope. Pinned to match
+# aivyx-confine's own dev-dependency version so Cargo.lock gains no
+# second resolution.
+tempfile = "3.27.0"

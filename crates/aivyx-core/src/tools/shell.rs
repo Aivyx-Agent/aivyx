@@ -96,7 +96,10 @@ use tokio::process::Command;
 
 use aivyx_capability::Scope;
 
-use crate::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
+use crate::{
+    AivyxError, ExecutionConfiner, Tool, ToolContext, ToolId, ToolOutcome, Verification,
+    default_confiner,
+};
 
 /// Default wall-clock timeout for a single `shell.exec` invocation.
 /// 30 seconds is generous enough for most `cargo check`-style
@@ -143,6 +146,7 @@ impl ShellExecToolConfig {
                 "shell.exec cwd_root {canonical:?} is not a directory"
             )));
         }
+        let confiner = default_confiner(&canonical, &[], &[], true);
         Ok(ShellExecTool {
             id: ToolId::new(),
             cwd_root: Arc::from(canonical),
@@ -150,6 +154,7 @@ impl ShellExecToolConfig {
             // Default disabled ⇒ byte-identical to pre-guard behavior until the
             // binary installs a real policy (mirrors `fs.read`/`fs.write`).
             sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
+            confiner,
         })
     }
 }
@@ -157,7 +162,6 @@ impl ShellExecToolConfig {
 /// Reference shell-execution tool. Agents holding
 /// `shell.exec:cwd:<cwd_root>/**` can run any command from any
 /// directory under `cwd_root` with a ≤10-minute timeout.
-#[derive(Debug)]
 pub struct ShellExecTool {
     id: ToolId,
     /// Pre-canonicalized absolute path. `Arc<Path>` for the same
@@ -170,6 +174,29 @@ pub struct ShellExecTool {
     /// their own path; a shell command bypasses them entirely, so this
     /// scans the command string for references to protected locations.
     sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
+    /// OS-level process confinement (Landlock + seccomp-bpf, via
+    /// `aivyx-confine`) — the kernel-level counterpart to `sensitive`'s
+    /// string-level guard above. Built as a real, on-by-default confiner
+    /// at `build()` time so every caller gets it even if they never call
+    /// `with_confiner` explicitly (mirrors `sensitive`'s own "default
+    /// disabled ⇒ safe" shape, but inverted: this one defaults ON).
+    confiner: Arc<dyn ExecutionConfiner>,
+}
+
+// Hand-rolled (not `#[derive(Debug)]`): `dyn ExecutionConfiner` has no
+// `Debug` impl (it's a plain confine-a-Command trait, not a data type
+// worth formatting), so the field is named as a placeholder instead of
+// derived away entirely.
+impl std::fmt::Debug for ShellExecTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellExecTool")
+            .field("id", &self.id)
+            .field("cwd_root", &self.cwd_root)
+            .field("schema", &self.schema)
+            .field("sensitive", &self.sensitive)
+            .field("confiner", &"<dyn ExecutionConfiner>")
+            .finish()
+    }
 }
 
 impl ShellExecTool {
@@ -192,6 +219,15 @@ impl ShellExecTool {
         policy: Arc<crate::sensitive_paths::SensitivePolicy>,
     ) -> Self {
         self.sensitive = policy;
+        self
+    }
+
+    /// Override the confiner `build()` set by default. The real binary
+    /// call site uses this to pass the operator's configured
+    /// `require_enforcement` value instead of the hardcoded `true`
+    /// `build()` itself uses.
+    pub fn with_confiner(mut self, confiner: Arc<dyn ExecutionConfiner>) -> Self {
+        self.confiner = confiner;
         self
     }
 }
@@ -544,6 +580,8 @@ impl Tool for ShellExecTool {
         // this only kills the direct child; the timeout path below
         // handles the full group via killpg().
         command.kill_on_drop(true);
+
+        let mut command = self.confiner.confine(command);
 
         let child = match command.spawn() {
             Ok(c) => c,
@@ -1269,6 +1307,38 @@ mod tests {
             matches!(out, ToolOutcome::Completed { .. }),
             "disabled policy must not block; got {out:?}"
         );
+    }
+
+    // ---- OS-level confinement (aivyx-confine) -----------------------
+
+    #[tokio::test]
+    async fn execute_denies_a_write_outside_cwd_root_under_the_default_confiner() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ShellExecToolConfig::new(dir.path().to_path_buf())
+            .build()
+            .expect("shell tool should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        // Outside the sandbox root entirely — /var/tmp, not another
+        // tempfile::tempdir() (which would also resolve under /tmp,
+        // itself write-granted by aivyx-confine's default write scope).
+        let outside = tempfile::Builder::new().tempdir_in("/var/tmp").unwrap();
+        let target = outside.path().join("should-not-exist.txt");
+
+        let input = serde_json::json!({
+            "cmd": format!("echo hi > {}", target.display()),
+        });
+
+        let outcome = tool.execute(input, &ctx).await;
+
+        assert!(!target.exists(), "write outside cwd_root must be denied by Landlock");
+        // The shell command itself still "completes" (sh runs, the redirect
+        // just fails inside it) -- assert on the filesystem effect, not the
+        // ToolOutcome variant, since `sh -c` swallows the redirect failure
+        // into its own non-zero exit rather than a spawn-level Failed.
+        let _ = outcome;
     }
 
     #[tokio::test]
