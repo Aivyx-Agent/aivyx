@@ -828,6 +828,11 @@ pub struct AivyxConfig {
     /// gate for an operator confirmation (N.5). Defaults on for any level
     /// other than `sandbox`; `[access] confirm_destructive` overrides.
     pub confirm_destructive: Sourced<bool>,
+    /// `[confine] require_enforcement` — whether OS-level process
+    /// confinement (Landlock + seccomp-bpf) must succeed for
+    /// `shell.exec`/`git.rs` to run a command at all. `true` (fail-closed)
+    /// by default, matching `aivyx-coder`'s own `aivyx-confine` usage.
+    pub require_enforcement: Sourced<bool>,
     /// Chapter Ward — whether the sensitive-path read guard is active. Default
     /// `true` (privacy-by-default): even at broad reach, `fs.read` refuses
     /// known secret locations (SSH/cloud creds, `.env`, private keys, Aivyx's
@@ -3695,6 +3700,8 @@ struct RawToml {
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
+    #[serde(default)]
+    confine: RawConfine,
     /// `[team]` section. Chapter Roster — the operator's team-config file.
     #[serde(default)]
     team: RawTeam,
@@ -4559,6 +4566,15 @@ struct RawSlack {
 struct RawGit {
     #[serde(default)]
     repos: Vec<String>,
+}
+
+/// `[confine]` section deserialize target — whether OS-level process
+/// confinement (Landlock + seccomp-bpf, via the `aivyx-confine` crate)
+/// must succeed for `shell.exec`/`git.rs` to run a command at all.
+#[derive(Debug, Default, Deserialize)]
+struct RawConfine {
+    #[serde(default)]
+    require_enforcement: Option<bool>,
 }
 
 /// Phase 68 — `[email]` section deserialize target.
@@ -5600,6 +5616,17 @@ impl AivyxConfig {
         let confirm_destructive = match toml.access.confirm_destructive {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(access_level.value.is_expanded(), FieldSource::Default),
+        };
+
+        // --- confine.require_enforcement -----------------------------
+        // Fail-closed by default: if Landlock can't be established at
+        // runtime, refuse to run the command rather than running
+        // unconfined. An explicit `[confine] require_enforcement = false`
+        // opts into the opposite (log + run unconfined) for operators on
+        // kernels/platforms where Landlock genuinely isn't available.
+        let require_enforcement = match toml.confine.require_enforcement {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(true, FieldSource::Default),
         };
 
         // --- sensitive-path read guard (Chapter Ward) ---------------
@@ -7289,6 +7316,7 @@ impl AivyxConfig {
             fs_root,
             access_level,
             confirm_destructive,
+            require_enforcement,
             guard_sensitive_paths,
             allow_sensitive_paths,
             allow_private_egress,

@@ -10917,6 +10917,35 @@ fn access_confirm_destructive_explicit_override() {
     drop(env);
 }
 
+// ------------------------------------------------------------------
+// `[confine]` section — OS-level process confinement enforcement
+// ------------------------------------------------------------------
+
+/// No `[confine]` section ⇒ `require_enforcement` defaults to `true`
+/// (fail-closed).
+#[test]
+fn confine_require_enforcement_defaults_to_true_when_absent() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n", "confine-absent");
+    assert!(cfg.require_enforcement.value);
+    assert_eq!(cfg.require_enforcement.source, FieldSource::Default);
+    drop(env);
+}
+
+/// An explicit `[confine] require_enforcement = false` overrides the
+/// fail-closed default.
+#[test]
+fn confine_require_enforcement_reads_an_explicit_false() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[confine]\nrequire_enforcement = false\n",
+        "confine-explicit-false",
+    );
+    assert!(!cfg.require_enforcement.value);
+    assert_eq!(cfg.require_enforcement.source, FieldSource::Toml);
+    drop(env);
+}
+
 // --- Chapter Reins (RN.2) — the `[autonomy]` section -----------------
 
 /// No `[autonomy]` section ⇒ `assisted` ⇒ today's behavior: the effective
