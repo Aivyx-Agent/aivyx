@@ -1760,6 +1760,24 @@ parent_role = "researcher"
 # ]
 
 # ----------------------------------------------------------------
+# OS-level process confinement — [confine]
+# ----------------------------------------------------------------
+#
+# `shell.exec` and `git.rs`'s three tools (`git.status`/`git.diff`/
+# `git.commit`) confine every spawned command with Landlock +
+# seccomp-bpf (`aivyx-confine`), unconditionally and on by default —
+# there is no config key that turns confinement itself off. The only
+# knob is what happens if Landlock fails to establish a ruleset on a
+# given machine (old kernel, Landlock disabled at the kernel-config
+# level): `true` (default) fails the spawn closed; `false` lets it run
+# unconfined instead. Confinement itself is unaffected either way when
+# Landlock is working normally, and this section has no effect on
+# non-Linux builds (no confinement backend there at all).
+#
+# [confine]
+# require_enforcement = true   # default; false = fail-open on setup failure
+
+# ----------------------------------------------------------------
 # Team — Chapter Roster (the Nonagon the daemon runs)
 # ----------------------------------------------------------------
 #

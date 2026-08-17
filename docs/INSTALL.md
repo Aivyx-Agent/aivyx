@@ -510,6 +510,34 @@ uses the existing `net.dns` scope base from Phase 0). Takes a
 plain hostname (no scheme, no port, no slash) and returns the
 resolved IP addresses.
 
+**OS-level process confinement (`[confine]`).** `shell.exec` and
+`git.rs`'s three tools confine every spawned command with Landlock +
+seccomp-bpf (`aivyx-confine`), on by default and unconditionally —
+there is no config key that disables confinement itself. The only
+knob is what happens if Landlock fails to establish a ruleset on a
+given machine (e.g. an old kernel, or Landlock disabled at the
+kernel-config level):
+
+```toml
+[confine]
+require_enforcement = true   # default
+```
+
+- `true` (default): fail-closed. If Landlock can't be set up, the
+  spawn itself fails rather than running the command unconfined.
+- `false`: fail-open. If Landlock can't be set up, the command runs
+  unconfined (logged) rather than being refused — for operators on a
+  kernel without Landlock support who still want `shell.exec`/`git.*`
+  usable.
+
+When Landlock *is* available (the common case on a modern Linux
+kernel), confinement always applies regardless of this setting —
+`require_enforcement` only governs the failure path. Non-Linux
+builds have no confinement backend at all (the tools still run,
+just without the OS-level boundary — same as before this feature
+existed). See `docs/THREAT_MODEL.md` §5.6 / property 7 in §6 for the
+full mechanism and its current scope.
+
 6. **`aivyx mcp recipes`** (Phase 106) lists Aivyx's curated
    catalog of MCP servers worth enabling — `filesystem`,
    `github`, `gitlab`, `sqlite`, `postgres`, `time`, `fetch`,

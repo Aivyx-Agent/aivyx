@@ -5,6 +5,32 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **`shell.exec` and the `git.rs` tools (`git.status`/`git.diff`/
+  `git.commit`) now confine every spawned command with Landlock +
+  seccomp-bpf, on by default.** Previously, at `[access] level =
+  "sandbox"`, `shell.exec` could read and execute anywhere on disk the
+  operator's OS permissions allowed, subject only to the string-level
+  `[access] guard_sensitive_paths` check — a command that got past that
+  guard had the full authority of the daemon's own OS user. Every
+  spawned child now additionally runs under kernel-level confinement
+  (`aivyx-confine`): filesystem writes are scoped to the tool's own
+  working-directory root (`shell.exec`'s `cwd_root` / the git repo being
+  operated on) plus a fixed system/toolchain read list, and a
+  seccomp-bpf denylist blocks a set of syscalls with no legitimate use
+  in a coding agent's spawned commands (`ptrace`, `mount`, `bpf`,
+  `perf_event_open`, and others). New `[confine] require_enforcement`
+  config key (default `true`) controls what happens if Landlock itself
+  fails to establish a ruleset on a given machine: fail-closed (refuse
+  to run the command, the default) or fail-open (run unconfined, for
+  operators on a kernel without Landlock support who still want
+  `shell.exec` usable). It does not provide a way to turn confinement
+  off when Landlock is working normally. Linux only — non-Linux builds
+  are unaffected (no confinement, same as before). See
+  `docs/THREAT_MODEL.md` §5.6/§6 and `docs/INSTALL.md`'s `[confine]`
+  section.
+
 ## [0.8.3] — 2026-07-08
 
 ### Fixed

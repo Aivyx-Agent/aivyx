@@ -123,7 +123,15 @@ upstream MCP-server tool description steers the LLM into emitting
    provider tokens from the child's environment so an LLM-generated
    command cannot exfiltrate them via `echo $ANTHROPIC_API_KEY`
    (Phase 42).
-5. **Audit trail.** The denied call (or, if it ran, the call +
+5. **OS-level process confinement.** Even a call that clears every
+   gate above still runs the spawned `sh` under Landlock + seccomp-bpf
+   confinement (`aivyx-confine`, on by default). `shell.exec`'s write
+   grant is scoped to `cwd_root` plus a fixed system/toolchain list —
+   `rm -rf $HOME` targets almost entirely outside that grant, so the
+   kernel denies the deletions regardless of what the capability/
+   allowlist layers above did or didn't catch. See §5.6 / property 7
+   in §6 for the mechanism and its current scope.
+6. **Audit trail.** The denied call (or, if it ran, the call +
    output hash) lands in the HMAC-chained audit log
    synchronously. There is no path that runs a tool without
    appending an audit row first.
@@ -442,9 +450,23 @@ gap has narrowed substantially.
   principle. The defense-in-depth picture is:
   - `#![forbid(unsafe_code)]` on `aivyx-crypto`, `aivyx-storage`,
     and `aivyx-telegram`.
-  - The only production `unsafe` is in `aivyx-core::tools::shell`
-    — `libc::killpg` for process-group teardown when a shell
-    invocation times out (Phase 42, narrowly scoped).
+  - Within this workspace's own crates, the only production
+    `unsafe` is in `aivyx-core::tools::shell` — `libc::killpg` for
+    process-group teardown when a shell invocation times out
+    (Phase 42, narrowly scoped).
+  - `aivyx-confine` (an external dependency, Linux builds only —
+    see `aivyx-core`'s Cargo.toml target-gating) adds its own
+    narrowly-scoped `unsafe`, compiled into the same production
+    binary: a read-only raw `landlock_create_ruleset` probe syscall
+    for kernel-support detection, and the `pre_exec` hook that
+    applies the Landlock ruleset + seccomp-bpf filter in the forked
+    child before `exec` — written allocation-free per
+    async-signal-safety constraints (see that crate's own
+    `confiner.rs` doc comments for the invariants each block
+    upholds). This runs for every `shell.exec`/`git.rs` spawn, not
+    just on timeout, so it is broader in frequency than the
+    `killpg` call above, though still a fixed, audited surface
+    rather than free-form `unsafe`.
   - Test-only `unsafe` blocks for `std::env::set_var` /
     `remove_var` exist in `aivyx-channel::passphrase` and
     `aivyx-config::tests`. Rust 2024 marks env-var mutation
@@ -515,8 +537,11 @@ running Aivyx daemon":
 7. **Container-level sandboxing of tools:** **Partial.** `shell.exec`
    and `git.rs`'s three tools (`git.status`/`git.diff`/`git.commit`)
    confine every spawned child process with Landlock + seccomp-bpf
-   (`aivyx-confine`, on by default, `[confine] require_enforcement`
-   configurable) — see §5.6. `[[tool_process]]`/MCP external tool
+   (`aivyx-confine`, on by default — there is no config option to turn
+   confinement itself off; `[confine] require_enforcement`, default
+   `true`, only governs whether a *failure* to establish the Landlock
+   ruleset fails the spawn closed or lets it run unconfined) — see
+   §5.6. `[[tool_process]]`/MCP external tool
    processes remain on the separate, pre-existing operator-configured
    `bwrap`/`firejail`/`docker` wrapper mechanism (`aivyx-tool/src/
    sandbox.rs`, Phase 52/55/180); that mechanism is opt-in/preset-based,
