@@ -541,7 +541,12 @@ running Aivyx daemon":
    confinement itself off; `[confine] require_enforcement`, default
    `true`, only governs whether a *failure* to establish the Landlock
    ruleset fails the spawn closed or lets it run unconfined) — see
-   §5.6. `[[tool_process]]`/MCP external tool
+   §5.6. One real, code-level exception: a `[git] repos` entry that is
+   a linked git worktree or submodule (its `.git` is a file pointing
+   elsewhere, not a directory) runs fully unconfined instead — Landlock
+   can't reach the real gitdir from the worktree root alone, so `git.rs`
+   falls back to no confinement for that specific repo rather than
+   breaking it outright. `[[tool_process]]`/MCP external tool
    processes remain on the separate, pre-existing operator-configured
    `bwrap`/`firejail`/`docker` wrapper mechanism (`aivyx-tool/src/
    sandbox.rs`, Phase 52/55/180); that mechanism is opt-in/preset-based,

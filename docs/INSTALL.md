@@ -526,9 +526,15 @@ require_enforcement = true   # default
 - `true` (default): fail-closed. If Landlock can't be set up, the
   spawn itself fails rather than running the command unconfined.
 - `false`: fail-open. If Landlock can't be set up, the command runs
-  unconfined (logged) rather than being refused — for operators on a
-  kernel without Landlock support who still want `shell.exec`/`git.*`
-  usable.
+  unconfined rather than being refused — for operators on a kernel
+  without Landlock support who still want `shell.exec`/`git.*` usable.
+  (`aivyx-confine` emits a `tracing::warn!` when this happens, but this
+  workspace installs no tracing subscriber today, so nothing is
+  currently surfaced to the operator — don't rely on seeing a log line.)
+
+One other exception worth knowing: a `[git] repos` entry that's a
+linked git worktree or submodule runs fully unconfined regardless of
+this setting — see `docs/THREAT_MODEL.md` §6 property 7.
 
 When Landlock *is* available (the common case on a modern Linux
 kernel), confinement always applies regardless of this setting —
