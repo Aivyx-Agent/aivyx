@@ -282,6 +282,7 @@ fn build_shell_exec_for_channel(
     channel_kind: ChannelKind,
     fs_root: &std::path::Path,
     sensitive: std::sync::Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
+    require_enforcement: bool,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice runs in-process on the
@@ -295,7 +296,17 @@ fn build_shell_exec_for_channel(
                 // Chapters Ward/Portcullis on shell.exec — refuse commands
                 // that reference protected locations, closing the residual
                 // where a shell routes around the fs-tool guards.
-                .with_sensitive_policy(sensitive);
+                .with_sensitive_policy(sensitive)
+                // aivyx-confine — Landlock + seccomp-bpf process
+                // confinement for every spawned command, on by default.
+                // `require_enforcement` is the operator's `[confine]`
+                // posture (fail-closed unless explicitly relaxed).
+                .with_confiner(aivyx_core::default_confiner(
+                    fs_root,
+                    &[],
+                    &[],
+                    require_enforcement,
+                ));
             let canonical_cwd_root = shell.cwd_root().to_path_buf();
             let scope = Scope::parse(&format!(
                 "shell.exec:cwd:{}",
@@ -5132,6 +5143,10 @@ async fn run_async(
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
         confirm_destructive,
+        // aivyx-confine — `[confine] require_enforcement` posture,
+        // threaded into `shell.exec`'s persistent confiner and
+        // `git.rs`'s per-call confiners below.
+        require_enforcement,
         // Chapter Ward — the sensitive-path read guard, applied to fs.read +
         // the data readers below.
         guard_sensitive_paths,
@@ -5907,6 +5922,10 @@ async fn run_async(
     );
     // Chapter N — confirm-first posture (overwrites need `confirmed: true`).
     let confirm_destructive = confirm_destructive.value;
+    // aivyx-confine — the operator's `[confine] require_enforcement`
+    // posture, unwrapped once here for the shell.exec + git.rs
+    // confiner-construction sites below.
+    let require_enforcement = require_enforcement.value;
     let fs_write = FsWriteToolConfig::new(fs_root.clone())
         .with_confirm_destructive(confirm_destructive)
         // Chapter Portcullis — same guard as fs.read, on the write path:
@@ -6615,6 +6634,7 @@ async fn run_async(
             channel_kind,
             &fs_root,
             std::sync::Arc::clone(&sensitive_policy),
+            require_enforcement,
         )? {
             Some((shell, scope)) => {
                 tool_list.push(shell);
@@ -6795,9 +6815,12 @@ async fn run_async(
         let repos: Vec<std::path::PathBuf> =
             gc.repos.into_iter().map(|s| s.value).collect();
         let (git_status, git_diff) =
-            aivyx_core::GitReadToolConfig::new(repos.clone()).build().map_err(|e| {
-                format!("failed to build git.read tool pair: {e}")
-            })?;
+            aivyx_core::GitReadToolConfig::new(repos.clone())
+                .with_require_enforcement(require_enforcement)
+                .build()
+                .map_err(|e| {
+                    format!("failed to build git.read tool pair: {e}")
+                })?;
         // The canonical allow-set is the same for both tools;
         // construct one scope per canonical path so the
         // operator-held capability set includes them all.
@@ -6816,6 +6839,7 @@ async fn run_async(
         // `git.write:<repo>` in the role's `capability_scopes`.
         let git_commit = aivyx_core::GitWriteToolConfig::new(repos)
             .with_confirm_destructive(confirm_destructive)
+            .with_require_enforcement(require_enforcement)
             .build()
             .map_err(|e| format!("failed to build git.commit tool: {e}"))?;
         tool_list.push(Arc::new(git_commit) as Arc<dyn Tool>);
@@ -9943,6 +9967,10 @@ mod tests {
             ChannelKind::Local,
             &scratch.dir,
             std::sync::Arc::new(aivyx_core::sensitive_paths::SensitivePolicy::disabled()),
+            // This test pins the registration-time gate, not
+            // confinement behavior — `true` matches production's
+            // default posture.
+            true,
         )
         .expect("local branch must build shell.exec cleanly");
         let (tool, scope) = result.expect("local must receive shell.exec");
@@ -10083,6 +10111,11 @@ mod tests {
             ChannelKind::Telegram,
             &scratch.dir,
             std::sync::Arc::new(aivyx_core::sensitive_paths::SensitivePolicy::disabled()),
+            // Telegram never reaches the confiner-construction branch
+            // (it returns `None` before that code runs) — the value is
+            // irrelevant to what this test proves; `true` matches
+            // production's default posture.
+            true,
         )
         .expect("telegram branch must not error — it's a no-op");
         assert!(

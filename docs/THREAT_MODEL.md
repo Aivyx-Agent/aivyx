@@ -512,8 +512,15 @@ running Aivyx daemon":
 6. **No hosted control plane:** Yes. The operator's API key talks
    directly to the model provider; storage stays on the operator's
    hardware (`PRODUCT.md` G6, N5).
-7. **Container-level sandboxing of tools:** **No.** Out-of-process
-   tool isolation (P12) is forward work.
+7. **Container-level sandboxing of tools:** **Partial.** `shell.exec`
+   and `git.rs`'s three tools (`git.status`/`git.diff`/`git.commit`)
+   confine every spawned child process with Landlock + seccomp-bpf
+   (`aivyx-confine`, on by default, `[confine] require_enforcement`
+   configurable) — see §5.6. `[[tool_process]]`/MCP external tool
+   processes remain on the separate, pre-existing operator-configured
+   `bwrap`/`firejail`/`docker` wrapper mechanism (`aivyx-tool/src/
+   sandbox.rs`, Phase 52/55/180); that mechanism is opt-in/preset-based,
+   not the `aivyx-confine` boundary described here.
 8. **Prompt-injection content scanning:** **No.** Operators are
    responsible for what they grant a role authority to do.
 9. **Defense against a compromised OS user:** **No.** Outside scope.
