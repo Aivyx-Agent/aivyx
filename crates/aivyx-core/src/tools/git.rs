@@ -55,7 +55,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::{
-    AivyxError, CapabilitySet, Tool, ToolContext, ToolId, ToolOutcome, Verification,
+    AivyxError, CapabilitySet, ExecutionConfiner, LandlockConfiner, Tool, ToolContext, ToolId,
+    ToolOutcome, Verification,
 };
 use aivyx_capability::Scope;
 
@@ -69,6 +70,7 @@ use aivyx_capability::Scope;
 /// both.
 pub struct GitReadToolConfig {
     repos: Vec<PathBuf>,
+    require_enforcement: bool,
 }
 
 impl GitReadToolConfig {
@@ -79,7 +81,15 @@ impl GitReadToolConfig {
     pub fn new(repos: impl IntoIterator<Item = PathBuf>) -> Self {
         GitReadToolConfig {
             repos: repos.into_iter().collect(),
+            require_enforcement: true,
         }
+    }
+
+    /// See `GitWriteToolConfig::with_require_enforcement` — same flag,
+    /// same default, same reasoning.
+    pub fn with_require_enforcement(mut self, require_enforcement: bool) -> Self {
+        self.require_enforcement = require_enforcement;
+        self
     }
 
     /// Canonicalize the allow-set and return a ready-to-register
@@ -94,11 +104,13 @@ impl GitReadToolConfig {
                 id: ToolId::new(),
                 repos: Arc::clone(&allow_set),
                 schema: status_input_schema(),
+                require_enforcement: self.require_enforcement,
             },
             GitDiffTool {
                 id: ToolId::new(),
                 repos: allow_set,
                 schema: diff_input_schema(),
+                require_enforcement: self.require_enforcement,
             },
         ))
     }
@@ -111,6 +123,7 @@ impl GitReadToolConfig {
 pub struct GitWriteToolConfig {
     repos: Vec<PathBuf>,
     confirm_destructive: bool,
+    require_enforcement: bool,
 }
 
 impl GitWriteToolConfig {
@@ -120,6 +133,7 @@ impl GitWriteToolConfig {
         GitWriteToolConfig {
             repos: repos.into_iter().collect(),
             confirm_destructive: false,
+            require_enforcement: true,
         }
     }
 
@@ -129,6 +143,13 @@ impl GitWriteToolConfig {
     /// (Chapter N). Wired from `[access] confirm_destructive`.
     pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
         self.confirm_destructive = confirm;
+        self
+    }
+
+    /// Whether Landlock confinement (via `aivyx-confine`) must succeed
+    /// for `git.commit` to run at all. `true` (fail-closed) by default.
+    pub fn with_require_enforcement(mut self, require_enforcement: bool) -> Self {
+        self.require_enforcement = require_enforcement;
         self
     }
 
@@ -143,6 +164,7 @@ impl GitWriteToolConfig {
             repos: allow_set,
             confirm_destructive: self.confirm_destructive,
             schema: commit_input_schema(),
+            require_enforcement: self.require_enforcement,
         })
     }
 }
@@ -159,6 +181,7 @@ pub struct GitStatusTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     schema: Value,
+    require_enforcement: bool,
 }
 
 impl GitStatusTool {
@@ -211,15 +234,16 @@ impl Tool for GitStatusTool {
             }
         };
 
-        let output = match tokio::process::Command::new("git")
+        let mut command = tokio::process::Command::new("git");
+        command
             .arg("-C")
             .arg(&repo)
             .arg("status")
             .arg("--porcelain")
-            .arg("--untracked-files=all")
-            .output()
-            .await
-        {
+            .arg("--untracked-files=all");
+        let confiner = LandlockConfiner::new(&repo, &[], &[], self.require_enforcement);
+        let mut command = confiner.confine(command);
+        let output = match command.output().await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -263,6 +287,7 @@ pub struct GitDiffTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     schema: Value,
+    require_enforcement: bool,
 }
 
 impl GitDiffTool {
@@ -343,6 +368,8 @@ impl Tool for GitDiffTool {
             cmd.arg("--").arg(p);
         }
 
+        let confiner = LandlockConfiner::new(&repo, &[], &[], self.require_enforcement);
+        let mut cmd = confiner.confine(cmd);
         let output = match cmd.output().await {
             Ok(o) => o,
             Err(e) => {
@@ -395,6 +422,7 @@ pub struct GitCommitTool {
     repos: Arc<[PathBuf]>,
     confirm_destructive: bool,
     schema: Value,
+    require_enforcement: bool,
 }
 
 impl GitCommitTool {
@@ -450,6 +478,8 @@ impl Tool for GitCommitTool {
                 });
             }
         };
+
+        let confiner = LandlockConfiner::new(&repo, &[], &[], self.require_enforcement);
 
         let message = match input.get("message").and_then(|v| v.as_str()) {
             Some(m) if !m.trim().is_empty() => m,
@@ -524,6 +554,7 @@ impl Tool for GitCommitTool {
         for p in &paths {
             add_cmd.arg(p);
         }
+        let mut add_cmd = confiner.confine(add_cmd);
         match add_cmd.output().await {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
@@ -548,15 +579,10 @@ impl Tool for GitCommitTool {
         // Commit: `git -C <repo> commit -m <message>`. Author identity
         // comes from the repo's own git config (operator-owned), same
         // as a manual commit.
-        let commit_out = match tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .arg("commit")
-            .arg("-m")
-            .arg(message)
-            .output()
-            .await
-        {
+        let mut commit_cmd = tokio::process::Command::new("git");
+        commit_cmd.arg("-C").arg(&repo).arg("commit").arg("-m").arg(message);
+        let mut commit_cmd = confiner.confine(commit_cmd);
+        let commit_out = match commit_cmd.output().await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -582,14 +608,10 @@ impl Tool for GitCommitTool {
         }
 
         // Resolve the new HEAD so the caller gets the commit hash.
-        let commit_hash = match tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .arg("rev-parse")
-            .arg("HEAD")
-            .output()
-            .await
-        {
+        let mut rev_parse_cmd = tokio::process::Command::new("git");
+        rev_parse_cmd.arg("-C").arg(&repo).arg("rev-parse").arg("HEAD");
+        let mut rev_parse_cmd = confiner.confine(rev_parse_cmd);
+        let commit_hash = match rev_parse_cmd.output().await {
             Ok(o) if o.status.success() => {
                 String::from_utf8_lossy(&o.stdout).trim().to_string()
             }
@@ -1137,6 +1159,62 @@ mod git_tests {
             )
             .await;
         assert!(matches!(ok, ToolOutcome::Completed { .. }), "expected Completed, got {ok:?}");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[tokio::test]
+    async fn git_commit_denies_a_read_outside_the_repo_via_a_malicious_hook() {
+        let Some(repo) = init_temp_repo() else { return };
+
+        let outside = tempfile::Builder::new().tempdir_in("/var/tmp").unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "top secret").unwrap();
+
+        // Note: a plain `cat secret > repo/leaked.txt` is not a valid
+        // proof of denial here — the shell creates/truncates the
+        // redirect target *before* running `cat`, so `leaked.txt` would
+        // exist (empty) even when the read is denied. Capture into a
+        // shell variable first so the assignment's exit status carries
+        // `cat`'s failure, and only write `leaked.txt` when that
+        // succeeded — this way its existence is a genuine signal that
+        // the hook's read of the outside file succeeded.
+        let hook_path = repo.join(".git/hooks/post-commit");
+        std::fs::write(
+            &hook_path,
+            format!(
+                "#!/bin/sh\ncontent=$(cat {} 2>/dev/null) && printf '%s' \"$content\" > {}/leaked.txt\n",
+                secret.display(),
+                repo.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+
+        let input = serde_json::json!({
+            "repo": repo.display().to_string(),
+            "message": "test commit",
+            "paths": ["a.txt"],
+        });
+
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let _ = tool.execute(input, &ctx).await;
+
+        assert!(
+            !repo.join("leaked.txt").exists(),
+            "the post-commit hook must not be able to read a file outside the repo root"
+        );
         std::fs::remove_dir_all(&repo).ok();
     }
 
