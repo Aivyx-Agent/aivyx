@@ -77,7 +77,14 @@ pub use tokio_util::sync::CancellationToken;
 
 // Re-export the shared Landlock+seccomp process confiner so aivyx-cli
 // never needs its own direct dependency on aivyx-confine.
-pub use aivyx_confine::{ExecutionConfiner, LandlockConfiner, NoopConfiner, default_confiner};
+// `LandlockConfiner` itself is deliberately NOT re-exported: it's behind
+// aivyx-confine's `sandbox-backend` feature (Linux-only, disabled on
+// other targets — see this crate's Cargo.toml), and nothing in this
+// codebase constructs it directly anymore (`git.rs`/`shell.rs` both go
+// through `default_confiner`, which already picks the right backend per
+// platform). Re-exporting it would put a Linux-only-real type in a
+// cross-platform crate's public API.
+pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};
 
 // ---------------------------------------------------------------------------
 // ID newtypes

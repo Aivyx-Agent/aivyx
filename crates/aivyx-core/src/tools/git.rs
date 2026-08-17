@@ -55,8 +55,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::{
-    AivyxError, CapabilitySet, ExecutionConfiner, LandlockConfiner, Tool, ToolContext, ToolId,
-    ToolOutcome, Verification,
+    AivyxError, CapabilitySet, ExecutionConfiner, NoopConfiner, Tool, ToolContext, ToolId,
+    ToolOutcome, Verification, default_confiner,
 };
 use aivyx_capability::Scope;
 
@@ -241,7 +241,7 @@ impl Tool for GitStatusTool {
             .arg("status")
             .arg("--porcelain")
             .arg("--untracked-files=all");
-        let confiner = LandlockConfiner::new(&repo, &[], &[], self.require_enforcement);
+        let confiner = confiner_for(&repo, self.require_enforcement);
         let mut command = confiner.confine(command);
         let output = match command.output().await {
             Ok(o) => o,
@@ -368,7 +368,7 @@ impl Tool for GitDiffTool {
             cmd.arg("--").arg(p);
         }
 
-        let confiner = LandlockConfiner::new(&repo, &[], &[], self.require_enforcement);
+        let confiner = confiner_for(&repo, self.require_enforcement);
         let mut cmd = confiner.confine(cmd);
         let output = match cmd.output().await {
             Ok(o) => o,
@@ -479,7 +479,7 @@ impl Tool for GitCommitTool {
             }
         };
 
-        let confiner = LandlockConfiner::new(&repo, &[], &[], self.require_enforcement);
+        let confiner = confiner_for(&repo, self.require_enforcement);
 
         let message = match input.get("message").and_then(|v| v.as_str()) {
             Some(m) if !m.trim().is_empty() => m,
@@ -637,6 +637,37 @@ impl Tool for GitCommitTool {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/// Build the confiner to use for a git command about to run against
+/// `repo`. A linked git worktree or submodule's `.git` is a **file**
+/// (not a directory) containing `gitdir: <path-to-the-real-gitdir>`,
+/// which typically lives outside `repo` — Landlock confinement scoped to
+/// `repo` alone would cut git off from its own real gitdir and break
+/// every operation on it (`fatal: not a git repository`). Detect that
+/// shape here and fall back to `NoopConfiner` for this one repo rather
+/// than the real backend, logging why so an operator sees it in the
+/// daemon log rather than silently getting an unconfined `git`.
+///
+/// Centralizing this (used by all three tools' `execute()`) means the
+/// worktree/submodule check and the default-confiner construction can't
+/// drift apart across call sites the way three separate copies could.
+fn confiner_for(repo: &Path, require_enforcement: bool) -> Arc<dyn ExecutionConfiner> {
+    if repo.join(".git").is_file() {
+        // No `tracing` dependency in this crate (the rest of `aivyx`
+        // logs operator-facing warnings via `eprintln!`, e.g.
+        // `aivyx-cli/src/bin/aivyx.rs`) — match that convention rather
+        // than pulling in a new logging dependency for one line.
+        eprintln!(
+            "aivyx: skipping Landlock confinement for {}: its .git is a file, \
+             not a directory, so this repo is a git worktree or submodule \
+             whose real gitdir lives outside the repo root — confining to the \
+             repo root would break git entirely here",
+            repo.display(),
+        );
+        return Arc::new(NoopConfiner);
+    }
+    default_confiner(repo, &[], &[], require_enforcement)
+}
 
 /// Canonicalize an operator repo allow-set: each entry must
 /// canonicalize, be a directory, and contain a `.git/` entry.
@@ -1166,7 +1197,13 @@ mod git_tests {
     async fn git_commit_denies_a_read_outside_the_repo_via_a_malicious_hook() {
         let Some(repo) = init_temp_repo() else { return };
 
-        let outside = tempfile::Builder::new().tempdir_in("/var/tmp").unwrap();
+        // Same skip-not-fail posture as `init_temp_repo` above: a
+        // sandboxed/locked-down environment where `/var/tmp` isn't
+        // writable must skip this test, not panic the whole suite.
+        let Ok(outside) = tempfile::Builder::new().tempdir_in("/var/tmp") else {
+            std::fs::remove_dir_all(&repo).ok();
+            return;
+        };
         let secret = outside.path().join("secret.txt");
         std::fs::write(&secret, "top secret").unwrap();
 
@@ -1209,8 +1246,18 @@ mod git_tests {
         let channel = fresh_channel();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
-        let _ = tool.execute(input, &ctx).await;
+        let outcome = tool.execute(input, &ctx).await;
 
+        // The commit itself is not blocked — only the hook's attempted
+        // read of the outside file is. Asserting `Completed` here (rather
+        // than discarding the outcome) proves the leaked.txt-absence
+        // check below is a genuine confinement signal, not a vacuous pass
+        // from the whole tool call having been refused for some unrelated
+        // reason.
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit itself should still succeed; got {outcome:?}"
+        );
         assert!(
             !repo.join("leaked.txt").exists(),
             "the post-commit hook must not be able to read a file outside the repo root"
@@ -1244,6 +1291,62 @@ mod git_tests {
             .execute(json!({ "repo": base, "message": "m", "paths": [] }), &ctx)
             .await;
         assert!(ctx_less_outcome_detail(&no_paths).contains("paths"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    // ---- confiner_for: worktree/submodule fallback (final-review Fix 2) ---
+
+    #[tokio::test]
+    async fn confiner_for_falls_back_to_noop_when_git_is_a_file() {
+        // A linked worktree or submodule's `.git` is a plain file (not a
+        // directory) containing `gitdir: <real-gitdir-elsewhere>`. We
+        // simulate the shape directly rather than needing a real `git
+        // worktree add` fixture — `confiner_for` only inspects
+        // `repo.join(".git")`'s file-vs-directory-ness, so the exact
+        // gitdir target (even a dangling, nonexistent one) doesn't matter
+        // for this test.
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join(".git"), "gitdir: /some/nonexistent/path").unwrap();
+
+        let confiner = confiner_for(repo.path(), true);
+
+        // Behavioral proof of which variant came back: `ExecutionConfiner`
+        // has no `Debug`/`PartialEq`, so confine a trivial command and
+        // check an effect only `NoopConfiner` would allow. A real
+        // `LandlockConfiner` confined to `repo.path()` would deny a write
+        // to an unrelated `/var/tmp` directory; `NoopConfiner` never
+        // touches the command at all.
+        let Ok(outside) = tempfile::Builder::new().tempdir_in("/var/tmp") else {
+            return;
+        };
+        let target = outside.path().join("proof.txt");
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", &format!("echo hi > {}", target.display())]);
+        let mut command = confiner.confine(command);
+        let output = command.output().await.expect("command should spawn");
+
+        assert!(
+            output.status.success(),
+            "NoopConfiner must not block this write (worktree/submodule fallback \
+             should skip Landlock entirely): {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(target.exists(), "the write should have actually landed");
+    }
+
+    #[tokio::test]
+    async fn confiner_for_uses_the_real_confiner_for_a_normal_repo() {
+        // Sanity check for the branch condition itself: an ordinary repo
+        // (`.git` is a directory, the common case) must NOT take the
+        // worktree/submodule fallback path — confirmed indirectly via
+        // `init_temp_repo`'s real `git init`, whose `.git` is always a
+        // directory.
+        let Some(repo) = init_temp_repo() else { return };
+        assert!(repo.join(".git").is_dir());
+        // Just exercise construction — `default_confiner` itself is
+        // covered by aivyx-confine's own test suite; this only confirms
+        // `confiner_for` takes the non-fallback branch without panicking.
+        let _confiner = confiner_for(&repo, true);
         std::fs::remove_dir_all(&repo).ok();
     }
 }

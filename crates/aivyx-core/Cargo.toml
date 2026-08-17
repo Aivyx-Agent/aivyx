@@ -57,6 +57,21 @@ dom_smoothie = "0.18.0"
 
 # Shared Landlock+seccomp process confinement for shell.exec/git.rs,
 # re-exported so aivyx-cli never needs its own direct dependency on it.
+# Target-gated: `aivyx-confine`'s `sandbox-backend` feature (its
+# `default`, disabled at the workspace-dependency level — see root
+# Cargo.toml's comment for why) pulls in `landlock`/`seccompiler`, which
+# call Linux-only libc syscalls (`SYS_landlock_create_ruleset` etc.) — a
+# plain unconditional dependency on it here would break the macOS release
+# build (`aivyx-core` is a dependency of every shipped binary, including
+# the two macOS targets in `dist-workspace.toml`). Only the Linux table
+# opts `sandbox-backend` back on; everywhere else `aivyx-confine` builds
+# with just `NoopConfiner`/`ExecutionConfiner`/`default_confiner` —
+# `default_confiner` already picks the right backend per-platform, so no
+# calling code needs to know which build this is.
+[target.'cfg(target_os = "linux")'.dependencies]
+aivyx-confine = { workspace = true, features = ["sandbox-backend"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 aivyx-confine = { workspace = true }
 
 [dev-dependencies]
