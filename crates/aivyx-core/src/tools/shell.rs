@@ -1324,7 +1324,12 @@ mod tests {
         // Outside the sandbox root entirely — /var/tmp, not another
         // tempfile::tempdir() (which would also resolve under /tmp,
         // itself write-granted by aivyx-confine's default write scope).
-        let outside = tempfile::Builder::new().tempdir_in("/var/tmp").unwrap();
+        // Skip (not panic) on a machine where /var/tmp isn't writable,
+        // matching `tools::git`'s `init_temp_repo` skip-not-fail posture
+        // for environment-dependent fixtures.
+        let Ok(outside) = tempfile::Builder::new().tempdir_in("/var/tmp") else {
+            return;
+        };
         let target = outside.path().join("should-not-exist.txt");
 
         let input = serde_json::json!({
@@ -1335,10 +1340,24 @@ mod tests {
 
         assert!(!target.exists(), "write outside cwd_root must be denied by Landlock");
         // The shell command itself still "completes" (sh runs, the redirect
-        // just fails inside it) -- assert on the filesystem effect, not the
-        // ToolOutcome variant, since `sh -c` swallows the redirect failure
-        // into its own non-zero exit rather than a spawn-level Failed.
-        let _ = outcome;
+        // just fails inside it) -- the ToolOutcome variant is still worth
+        // pinning so this test doesn't pass vacuously if the whole call
+        // were refused for an unrelated reason (e.g. a spawn-level
+        // failure): it must be Completed with a nonzero exit code, not
+        // Failed, since `sh -c` swallows the redirect failure into its
+        // own exit status rather than a spawn-level error.
+        match &outcome {
+            ToolOutcome::Completed { output, .. } => {
+                assert_ne!(
+                    output["exit_code"], 0,
+                    "the denied redirect should have made `sh -c` exit nonzero"
+                );
+            }
+            other => panic!(
+                "expected Completed (the shell command itself still runs; only the \
+                 redirect fails inside it), got {other:?}"
+            ),
+        }
     }
 
     #[tokio::test]
