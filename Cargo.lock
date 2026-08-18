@@ -197,6 +197,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-checkpoint"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=1292d6cbda34aa514856b81e11635f7385a4d168#1292d6cbda34aa514856b81e11635f7385a4d168"
+dependencies = [
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "aivyx-cli"
 version = "0.8.3"
 dependencies = [
@@ -291,6 +301,7 @@ name = "aivyx-core"
 version = "0.8.3"
 dependencies = [
  "aivyx-capability",
+ "aivyx-checkpoint",
  "aivyx-confine",
  "aivyx-crypto",
  "aivyx-llm",

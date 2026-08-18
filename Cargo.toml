@@ -243,6 +243,14 @@ crossterm = "0.29"
 # — see that crate's Cargo.toml for why (macOS release build).
 aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "03de88616789f9a52adf41afe71fd14d538f3144", default-features = false }
 
+# Shared git-ref checkpoint/rollback for fs_root's mutating tools
+# (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder
+# repo (via aivyx-checkpoint) rather than reimplemented here. Not on
+# crates.io — pinned by commit SHA. No platform-specific backend (pure
+# git plumbing, unlike aivyx-confine) so no default-features/target-gating
+# split is needed.
+aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "1292d6cbda34aa514856b81e11635f7385a4d168" }
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

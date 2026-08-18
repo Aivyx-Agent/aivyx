@@ -85,6 +85,7 @@ pub use tokio_util::sync::CancellationToken;
 // platform). Re-exporting it would put a Linux-only-real type in a
 // cross-platform crate's public API.
 pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};
+pub use aivyx_checkpoint::GitCheckpointer;
 
 // ---------------------------------------------------------------------------
 // ID newtypes

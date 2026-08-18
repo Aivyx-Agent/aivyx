@@ -211,6 +211,11 @@ pub struct ConcreteAgent {
     /// `MAX_STEPS_PER_TURN` + the wall-clock deadline bound a turn. See
     /// [`CycleConfig`] and [`ConcreteAgent::with_cycle_detection`].
     cycle_config: Option<CycleConfig>,
+    /// `aivyx-checkpoint` — snapshots `fs_root`'s worktree to a shadow
+    /// git ref before any tool call for which `Tool::mutates_fs_root()`
+    /// is `true`. `None` (the default) preserves pre-checkpoint behavior
+    /// byte-for-byte — the same shape as `budget_gate`/`rate_gate`.
+    checkpointer: Option<Arc<aivyx_checkpoint::GitCheckpointer>>,
 }
 
 impl ConcreteAgent {
@@ -234,6 +239,7 @@ impl ConcreteAgent {
             repeat_call_limit: DEFAULT_REPEAT_CALL_LIMIT,
             turn_timeout: TURN_TIMEOUT,
             cycle_config: None,
+            checkpointer: None,
         }
     }
 
@@ -305,6 +311,18 @@ impl ConcreteAgent {
     /// `[rate_limit]` config at agent-stack construction time.
     pub fn with_rate_gate(mut self, gate: Option<Arc<dyn RateGate>>) -> Self {
         self.rate_gate = gate;
+        self
+    }
+
+    /// Attach an `aivyx-checkpoint` `GitCheckpointer` for `fs_root`. See
+    /// the [`Self::checkpointer`] field doc for semantics. `None` means
+    /// "no checkpointer" (either checkpointing is disabled, or `fs_root`
+    /// isn't a git repository), preserving pre-checkpoint behavior.
+    pub fn with_checkpointer(
+        mut self,
+        checkpointer: Option<Arc<aivyx_checkpoint::GitCheckpointer>>,
+    ) -> Self {
+        self.checkpointer = checkpointer;
         self
     }
 }
@@ -1259,6 +1277,17 @@ impl ConcreteAgent {
                 input: &input,
             })
             .await;
+
+        // aivyx-checkpoint — snapshot fs_root before anything that can
+        // mutate it, so a bad fs.write/fs.delete/shell.exec is always
+        // recoverable via GitCheckpointer::restore_to. Best-effort: a
+        // failed checkpoint logs and the call proceeds (see
+        // GitCheckpointer::checkpoint's own contract).
+        if tool.mutates_fs_root()
+            && let Some(checkpointer) = &self.checkpointer
+        {
+            checkpointer.checkpoint(tool.name(), cancellation).await;
+        }
 
         let step_start = Instant::now();
         let mut outcome = tool.execute(input, &ctx).await;
@@ -3472,6 +3501,177 @@ mod tests {
             "throttling is distinct from ScopeDenied"
         );
         assert_eq!(begins.load(Ordering::SeqCst), 1, "begin_turn fired once");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_fires_only_for_mutates_fs_root_tools() {
+        // A real git-backed fs_root, a real FsWriteTool (mutates_fs_root
+        // == true) and a FakeTool standing in for an unrelated mutating
+        // tool (mutates_fs_root == false, the default — e.g. what
+        // aivyx-gmail's SendTool would inherit). Dispatch both through a
+        // real turn; assert the checkpoint ref count only grows for the
+        // fs.write call.
+        let dir = tempfile::tempdir().unwrap();
+        aivyx_checkpoint::test_support::init_repo(dir.path()).await;
+        let fs_root = dir.path().to_path_buf();
+
+        let write_tool: Arc<dyn Tool> = Arc::new(
+            crate::tools::fs::FsWriteToolConfig::new(fs_root.clone())
+                .build()
+                .expect("fs_root must be canonicalizable"),
+        );
+        // Tool *name* "gmail.send" (aivyx-gmail's SendTool), but its
+        // capability *base* is "email.send" per aivyx-capability's
+        // KNOWN_BASES — "gmail.send" itself is not a registered base and
+        // would fail Scope::parse. (Fixed from the brief's literal
+        // `"gmail.send"` scope string, which does not parse; see the
+        // task report for details.)
+        let unrelated_tool: Arc<dyn Tool> =
+            Arc::new(FakeTool::new_bare("gmail.send", "email.send"));
+        let write_id = write_tool.id();
+        let unrelated_id = unrelated_tool.id();
+
+        let checkpointer = Arc::new(
+            aivyx_checkpoint::GitCheckpointer::detect(&fs_root, vec![])
+                .await
+                .expect("fs_root is a real git repo"),
+        );
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse(&format!("fs.write:{}/**", fs_root.display())).unwrap(),
+            Scope::parse("email.send").unwrap(),
+        ]);
+        let registry = Arc::new(ToolRegistry::new(vec![write_tool, unrelated_tool]));
+        let audit = RecordingAudit::new();
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: write_id,
+                input: json!({ "path": "new.txt", "content": "hello" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::ToolCall {
+                tool_id: unrelated_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_checkpointer(Some(checkpointer))
+        .with_repeat_call_limit(0);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "write then send");
+        let _ = agent.turn(message, &channel).await;
+
+        let refs = aivyx_checkpoint::test_support::git(
+            dir.path(),
+            &["for-each-ref", "refs/aivyx/checkpoints/"],
+        )
+        .await;
+        let ref_count = refs.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(
+            ref_count, 1,
+            "exactly one checkpoint (before fs.write), none for the unrelated tool: {refs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_to_reverts_a_checkpoint_taken_by_the_dispatch_hook() {
+        // Full round-trip: the checkpoint the hook takes before a real
+        // fs.write is a real, restorable snapshot via the same
+        // GitCheckpointer instance the agent used.
+        let dir = tempfile::tempdir().unwrap();
+        aivyx_checkpoint::test_support::init_repo(dir.path()).await;
+        let fs_root = dir.path().to_path_buf();
+        std::fs::write(fs_root.join("tracked.txt"), "v1\n").unwrap();
+        aivyx_checkpoint::test_support::git(dir.path(), &["add", "-A"]).await;
+        // `--allow-empty`: init_repo already commits tracked.txt = "v1\n"
+        // (the brief's literal `git commit -q -m v1` without this flag
+        // fails here with "nothing to commit, working tree clean" since
+        // the content is identical). `--allow-empty` establishes the
+        // "v1" commit boundary this test names regardless. (Fixed from
+        // the brief's literal invocation; see the task report for
+        // details.)
+        aivyx_checkpoint::test_support::git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "v1"],
+        )
+        .await;
+
+        let write_tool: Arc<dyn Tool> = Arc::new(
+            crate::tools::fs::FsWriteToolConfig::new(fs_root.clone())
+                .build()
+                .expect("fs_root must be canonicalizable"),
+        );
+        let write_id = write_tool.id();
+
+        let checkpointer = Arc::new(
+            aivyx_checkpoint::GitCheckpointer::detect(&fs_root, vec![])
+                .await
+                .expect("fs_root is a real git repo"),
+        );
+        let checkpointer_for_restore = Arc::clone(&checkpointer);
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse(&format!("fs.write:{}/**", fs_root.display())).unwrap(),
+        ]);
+        let registry = Arc::new(ToolRegistry::new(vec![write_tool]));
+        let audit = RecordingAudit::new();
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: write_id,
+                input: json!({ "path": "tracked.txt", "content": "v2 (bad edit)" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_checkpointer(Some(checkpointer));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "overwrite tracked.txt");
+        let _ = agent.turn(message, &channel).await;
+
+        assert_eq!(
+            std::fs::read_to_string(fs_root.join("tracked.txt")).unwrap(),
+            "v2 (bad edit)"
+        );
+
+        let checkpoint_ref = checkpointer_for_restore
+            .latest_ref(&CancellationToken::new())
+            .await
+            .expect("the dispatch hook must have taken a checkpoint");
+        checkpointer_for_restore
+            .restore_to(&checkpoint_ref, &CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(fs_root.join("tracked.txt")).unwrap(),
+            "v1\n",
+            "restore_to must revert to the pre-write checkpoint"
+        );
     }
 
     #[tokio::test]
