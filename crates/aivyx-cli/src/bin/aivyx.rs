@@ -5145,6 +5145,42 @@ fn collect_sensitive_paths_under(
     hits
 }
 
+/// Mirrors `GitCheckpointer::detect`'s own repo-detection behavior
+/// (`git rev-parse --absolute-git-dir`, which walks *up* parent
+/// directories to find an ancestor `.git`) closely enough to gate
+/// `collect_sensitive_paths_under`'s walk correctly — unlike a naive
+/// `root.join(".git").exists()` check, which only sees a `.git` directly
+/// under `root` and false-negatives whenever `root` is a subdirectory
+/// nested inside a larger working tree (a realistic `[access] root`
+/// pointed at one service folder of a monorepo). A false negative here
+/// is worse than the wasted walk it's meant to avoid: it would leave
+/// `checkpoint_deny_paths` empty while `detect()` still finds the
+/// ancestor `.git` and activates checkpointing anyway, silently
+/// defeating the sensitive-path exclusion.
+///
+/// `git rev-parse --is-inside-work-tree` prints `"true"`/`"false"` and
+/// exits non-zero outside any git repository at all — any error or a
+/// `"false"` result is treated as "not a repo", matching what
+/// `detect()` itself would conclude (it returns `None` and disables
+/// checkpointing, making the walk's cost genuinely unnecessary).
+async fn fs_root_is_inside_git_work_tree(root: &std::path::Path) -> bool {
+    let mut command = tokio::process::Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    match command.output().await {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim() == "true"
+        }
+        _ => false,
+    }
+}
+
 // `run_async` sits right at the binary's composition root: it takes
 // the validated `AivyxConfig`, the open storage handle, the audit
 // chain key, and the CLI-derived `ChannelKind`, and threads
@@ -6015,8 +6051,13 @@ async fn run_async(
     // Skip the walk entirely when fs_root isn't a git repo — `detect()`
     // below will return None either way, so paying for a full recursive
     // scan of fs_root (potentially "/" under `[access] level = "full"`)
-    // just to throw the result away is pure waste.
-    let checkpoint_deny_paths = if canonical_root.join(".git").exists() {
+    // just to throw the result away is pure waste. This has to match
+    // `detect()`'s own notion of "is a git repo" (which walks up parent
+    // directories, via `git rev-parse --absolute-git-dir`) rather than a
+    // naive `.git` existence check directly under `canonical_root` — see
+    // `fs_root_is_inside_git_work_tree`'s doc comment for why a naive
+    // check false-negatives on a `fs_root` nested inside a larger repo.
+    let checkpoint_deny_paths = if fs_root_is_inside_git_work_tree(&canonical_root).await {
         collect_sensitive_paths_under(&canonical_root, &sensitive_policy)
     } else {
         Vec::new()
@@ -10075,6 +10116,52 @@ mod tests {
         assert!(
             !hits.contains(&id_rsa_canonical),
             "children of an already-matched directory should not be separately listed: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn collect_sensitive_paths_under_does_not_follow_symlinked_directories() {
+        // Deterministic regression test for the `path.is_dir()` bug (the
+        // timing-based cycle test above passes identically whether the
+        // fix is present or reverted — a one-hop, no-fan-out cycle is
+        // bounded by the OS's own ELOOP protection either way, so it
+        // proves termination but not the recursion-check property
+        // itself). This test proves the property directly: a symlinked
+        // directory's contents must never be walked a second time
+        // through the symlink.
+        //
+        // Structure:
+        //   real/.env         — a real sensitive file under a real dir
+        //   link_to_real -> real/   — a symlink to that same directory
+        //
+        // `canonicalize()` resolves symlinks, so `real/.env`'s canonical
+        // path and `link_to_real/.env`'s canonical path are byte-
+        // identical. If the recursion decision ever followed
+        // `link_to_real` (the pre-fix `path.is_dir()` bug), the walk
+        // would descend into it, rediscover `.env` via the symlinked
+        // route, and push the same canonical path onto `hits` a second
+        // time. The fixed code's `entry.file_type()` check never treats
+        // a symlink as a directory to descend into, so `link_to_real` is
+        // never pushed onto the stack and the file is found exactly once
+        // (via `real/` directly).
+        use std::os::unix::fs::symlink;
+
+        let scratch = Scratch::new();
+        let real_dir = scratch.dir.join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        std::fs::write(real_dir.join(".env"), b"API_KEY=secret\n").unwrap();
+        symlink(&real_dir, scratch.dir.join("link_to_real"))
+            .expect("create symlink to real dir");
+
+        let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        let hits = collect_sensitive_paths_under(&scratch.dir, &policy);
+
+        let env_canonical = std::fs::canonicalize(real_dir.join(".env")).unwrap();
+        let occurrences = hits.iter().filter(|p| **p == env_canonical).count();
+        assert_eq!(
+            occurrences, 1,
+            "real/.env's canonical path must be discovered exactly once, \
+             not once per route (direct + symlinked): {hits:?}"
         );
     }
 
