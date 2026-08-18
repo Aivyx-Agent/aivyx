@@ -221,7 +221,7 @@ relative to `fs_root`), built **once**:
 // workspace (standalone Discord/Slack/Telegram bot mode, aivyx-team) is
 // out of scope for this pass — see the design doc's Finding 3.
 let checkpoint_deny_paths = collect_sensitive_paths_under(&canonical_root, &sensitive_policy);
-let checkpointer = aivyx_checkpoint::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
+let checkpointer = aivyx_core::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
     .await
     .map(std::sync::Arc::new);
 ```
@@ -259,6 +259,15 @@ Unlike `aivyx-confine`, `aivyx-checkpoint` has no platform-specific
 backend (no Landlock/seccomp, pure git plumbing) — no
 `[target.'cfg(...)'.dependencies]` split is needed; it's a plain
 workspace dependency, buildable on every platform `aivyx` ships for.
+
+`aivyx-core/src/lib.rs` re-exports `pub use aivyx_checkpoint::GitCheckpointer;`,
+mirroring the exact existing precedent for `aivyx-confine`
+(`pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};`,
+`aivyx-core/src/lib.rs:87`) — so `aivyx-cli` calls
+`aivyx_core::GitCheckpointer::detect(...)` and needs no direct dependency
+of its own on `aivyx-checkpoint` at all, confirmed by `aivyx-cli` today
+having zero direct `aivyx-confine` dependency despite calling
+`aivyx_core::default_confiner(...)` throughout `aivyx.rs`.
 
 ## Explicitly out of scope
 
