@@ -9452,7 +9452,7 @@ async fn run_async(
 
             let stdin = io::stdin();
             let reader = stdin.lock();
-            run_session(provider, audit, session_config, channel, reader)
+            run_session(provider, audit, checkpointer.clone(), session_config, channel, reader)
                 .await
                 .map(|_report| ())
         }
@@ -9914,6 +9914,7 @@ async fn run_async(
                         turn_timeout_secs,
                         cycle_detection,
                     ),
+                    checkpointer: checkpointer.clone(),
                 };
                 let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),

@@ -262,7 +262,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
     };
 
     // -- Drive the session.
-    let report = run_session(provider, audit_hook, config, channel, reader)
+    let report = run_session(provider, audit_hook, None, config, channel, reader)
         .await
         .expect("run_session must complete cleanly on scripted EOF");
 

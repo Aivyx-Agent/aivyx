@@ -359,6 +359,7 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
         session_a_report = run_session(
             Arc::clone(&provider) as Arc<dyn LlmProvider>,
             audit_hook,
+            None,
             config,
             channel,
             reader,
@@ -594,6 +595,7 @@ async fn memory_survives_a_clean_close_and_second_session_recalls_it() {
         session_b_report = run_session(
             Arc::clone(&provider) as Arc<dyn LlmProvider>,
             audit_hook,
+            None,
             config,
             channel,
             reader,
@@ -784,6 +786,7 @@ async fn memory_forget_persists_across_reopen() {
         let report = run_session(
             Arc::clone(&provider) as Arc<dyn LlmProvider>,
             audit_hook,
+            None,
             config,
             channel,
             reader,

@@ -346,6 +346,7 @@ async fn scripted_fs_read_tool_call_round_trips_through_full_stack() {
     let report = run_session(
         Arc::clone(&provider) as Arc<dyn LlmProvider>,
         audit_hook,
+        None,
         config,
         channel,
         reader,
@@ -557,6 +558,7 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
     let report = run_session(
         Arc::clone(&provider) as Arc<dyn LlmProvider>,
         audit_hook,
+        None,
         config,
         channel,
         reader,
