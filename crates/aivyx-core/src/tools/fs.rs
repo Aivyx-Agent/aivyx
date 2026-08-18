@@ -642,6 +642,11 @@ impl Tool for FsWriteTool {
         "fs.write"
     }
 
+    /// Writes land on disk under fs_root — checkpoint before every call.
+    fn mutates_fs_root(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Write a UTF-8 file under the agent's sandbox root, atomically. \
          Input is a JSON object with `path` (where to write) and `content` \
@@ -1100,6 +1105,11 @@ impl Tool for FsDeleteTool {
 
     fn name(&self) -> &str {
         "fs.delete"
+    }
+
+    /// Deletes remove content from fs_root — checkpoint before every call.
+    fn mutates_fs_root(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -1978,6 +1988,26 @@ mod tests {
         // A file's contents are fenced as untrusted (prompt-injection defense).
         let sandbox = SandboxDir::new();
         assert!(build_tool(&sandbox).output_is_untrusted());
+    }
+
+    #[test]
+    fn fs_write_mutates_fs_root() {
+        let sandbox = SandboxDir::new();
+        assert!(build_write_tool(&sandbox).mutates_fs_root());
+    }
+
+    #[test]
+    fn fs_delete_mutates_fs_root() {
+        let sandbox = SandboxDir::new();
+        assert!(build_delete_tool(&sandbox).mutates_fs_root());
+    }
+
+    #[test]
+    fn fs_read_does_not_mutate_fs_root() {
+        // The default (false) — fs.read is unmodified by this plan, proving
+        // the trait's default polarity without touching FsReadTool's impl.
+        let sandbox = SandboxDir::new();
+        assert!(!build_tool(&sandbox).mutates_fs_root());
     }
 
     #[test]

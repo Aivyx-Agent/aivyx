@@ -426,6 +426,12 @@ impl Tool for ShellExecTool {
         "shell.exec"
     }
 
+    /// An arbitrary shell command can mutate anything under fs_root —
+    /// checkpoint before every call, same as fs.write/fs.delete.
+    fn mutates_fs_root(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Run a shell command inside the agent's shell.exec sandbox \
          root and return its stdout, stderr, and exit code. The \
@@ -787,6 +793,12 @@ mod tests {
     }
 
     // ---- Scope derivation ------------------------------------------
+
+    #[test]
+    fn shell_exec_mutates_fs_root() {
+        let scratch = Scratch::new();
+        assert!(build_tool(&scratch.dir).mutates_fs_root());
+    }
 
     #[test]
     fn required_scope_uses_canonical_cwd_root_for_missing_cwd() {
