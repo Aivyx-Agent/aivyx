@@ -5104,6 +5104,14 @@ async fn run_audit_export(
 /// Once a directory itself matches, its children are not separately
 /// descended into: `exclude_pathspecs`' git pathspec semantics exclude a
 /// matched directory's whole subtree from one entry.
+///
+/// The recursion decision is made from `DirEntry::file_type()`, which does
+/// NOT follow symlinks — a symlinked directory (e.g. `/proc/self/root`
+/// under `[access] level = "full"`, which points back at `/`) is therefore
+/// never pushed onto the walk stack, so a symlink cycle cannot loop the
+/// walk forever. Only the recursion check changed; the `canonical` path
+/// computed for an actual sensitive-path hit still resolves symlinks, same
+/// as before.
 fn collect_sensitive_paths_under(
     root: &std::path::Path,
     policy: &aivyx_core::sensitive_paths::SensitivePolicy,
@@ -5123,7 +5131,13 @@ fn collect_sensitive_paths_under(
                 hits.push(canonical);
                 continue;
             }
-            if path.is_dir() {
+            // `entry.file_type()` reads the dirent's own type and does NOT
+            // follow symlinks (unlike `Path::is_dir()`, which stats through
+            // the link). On `[access] level = "full"` (`fs_root = "/"`),
+            // `/proc/self/root` symlinks back to `/` — treating that as a
+            // directory to descend into loops the walk forever. A symlink
+            // is therefore never pushed onto the stack, cycle or not.
+            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                 stack.push(path);
             }
         }
@@ -5998,7 +6012,15 @@ async fn run_async(
     // being a git repository (None, one log line) — checkpointer then
     // stays None for this session, same graceful-degradation contract as
     // every other optional agent knob (budget_gate, rate_gate, ...).
-    let checkpoint_deny_paths = collect_sensitive_paths_under(&canonical_root, &sensitive_policy);
+    // Skip the walk entirely when fs_root isn't a git repo — `detect()`
+    // below will return None either way, so paying for a full recursive
+    // scan of fs_root (potentially "/" under `[access] level = "full"`)
+    // just to throw the result away is pure waste.
+    let checkpoint_deny_paths = if canonical_root.join(".git").exists() {
+        collect_sensitive_paths_under(&canonical_root, &sensitive_policy)
+    } else {
+        Vec::new()
+    };
     let checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>> =
         aivyx_core::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
             .await
@@ -10054,6 +10076,35 @@ mod tests {
             !hits.contains(&id_rsa_canonical),
             "children of an already-matched directory should not be separately listed: {hits:?}"
         );
+    }
+
+    #[test]
+    fn collect_sensitive_paths_under_symlink_cycle_does_not_hang() {
+        // Regression test for the infinite-loop bug: `path.is_dir()`
+        // follows symlinks, so a symlink that resolves back to a
+        // directory already on the walk stack (or to itself) made the
+        // walk recurse forever. A real one-hop cycle: `sub/loop` is a
+        // symlink pointing at `sub` itself.
+        use std::os::unix::fs::symlink;
+
+        let scratch = Scratch::new();
+        let sub = scratch.dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        symlink(&sub, sub.join("loop")).expect("create one-hop symlink cycle");
+
+        let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        let root = scratch.dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let hits = collect_sensitive_paths_under(&root, &policy);
+            let _ = tx.send(hits);
+        });
+
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect(
+                "collect_sensitive_paths_under must return promptly instead of \
+                 looping forever on a symlink cycle",
+            );
     }
 
     #[test]

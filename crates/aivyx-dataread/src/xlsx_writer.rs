@@ -61,6 +61,11 @@ impl Tool for DataXlsxWriteTool {
     fn name(&self) -> &str {
         "data.xlsx.write"
     }
+    /// Writes a real .xlsx file under fs_root via `fs.write` — checkpoint
+    /// before every call, same as FsWriteTool/FsDeleteTool/ShellExecTool.
+    fn mutates_fs_root(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Write structured rows into a new .xlsx spreadsheet under the \
          agent's sandbox root. Input: `{path: string (required), \
@@ -357,5 +362,13 @@ mod tests {
             tool.required_scope(&json!({"path": "x.xlsx"})).base(),
             "fs.write"
         );
+    }
+
+    #[test]
+    fn data_xlsx_write_mutates_fs_root() {
+        let dir = std::env::temp_dir();
+        let sb = ReaderSandbox::new(&dir).unwrap();
+        let tool = DataXlsxWriteTool::new(sb);
+        assert!(tool.mutates_fs_root());
     }
 }

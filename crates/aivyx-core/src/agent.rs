@@ -3675,6 +3675,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checkpoint_deny_paths_excludes_a_sensitive_file_from_the_snapshot() {
+        // End-to-end proof of the classifier -> deny_paths -> exclusion
+        // chain: a real git-backed fs_root, a real `.env` file classified
+        // sensitive by `SensitivePolicy::classify` (the same classifier
+        // `collect_sensitive_paths_under` in the aivyx-cli binary walks
+        // with, but that binary-only helper isn't reachable from here —
+        // this test builds the equivalent single-file deny_paths list
+        // directly), fed into a real `GitCheckpointer::detect`, then a
+        // real fs.write dispatched through `ConcreteAgent::turn`. The
+        // resulting checkpoint tree must not contain the `.env` file,
+        // while an ordinary tracked file is captured as normal.
+        let dir = tempfile::tempdir().unwrap();
+        // init_repo already writes + commits "tracked.txt" = "v1\n" — that
+        // becomes the "ordinary file" this test proves is still captured.
+        aivyx_checkpoint::test_support::init_repo(dir.path()).await;
+        let fs_root = dir.path().to_path_buf();
+
+        std::fs::write(fs_root.join(".env"), "API_KEY=secret\n").unwrap();
+        let env_canonical = std::fs::canonicalize(fs_root.join(".env")).unwrap();
+
+        let policy = crate::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        assert!(
+            policy.classify(&env_canonical).is_some(),
+            "SensitivePolicy must flag .env as sensitive for this test to prove anything"
+        );
+        let deny_paths = vec![env_canonical];
+
+        let write_tool: Arc<dyn Tool> = Arc::new(
+            crate::tools::fs::FsWriteToolConfig::new(fs_root.clone())
+                .build()
+                .expect("fs_root must be canonicalizable"),
+        );
+        let write_id = write_tool.id();
+
+        let checkpointer = Arc::new(
+            aivyx_checkpoint::GitCheckpointer::detect(&fs_root, deny_paths)
+                .await
+                .expect("fs_root is a real git repo"),
+        );
+        let checkpointer_for_inspect = Arc::clone(&checkpointer);
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse(&format!("fs.write:{}/**", fs_root.display())).unwrap(),
+        ]);
+        let registry = Arc::new(ToolRegistry::new(vec![write_tool]));
+        let audit = RecordingAudit::new();
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: write_id,
+                // The mutating call itself targets an unrelated new file —
+                // the checkpoint is taken *before* this call runs, so what
+                // it captures is the pre-existing fs_root state
+                // (tracked.txt + .env), which is exactly what this test
+                // needs to inspect.
+                input: json!({ "path": "new.txt", "content": "hello" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_checkpointer(Some(checkpointer));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "write new.txt");
+        let _ = agent.turn(message, &channel).await;
+
+        let checkpoint_ref = checkpointer_for_inspect
+            .latest_ref(&CancellationToken::new())
+            .await
+            .expect("the dispatch hook must have taken a checkpoint");
+
+        let tree = aivyx_checkpoint::test_support::git(
+            dir.path(),
+            &["ls-tree", "-r", "--name-only", &checkpoint_ref],
+        )
+        .await;
+        assert!(
+            !tree.lines().any(|l| l == ".env"),
+            "deny_paths must exclude .env from the checkpoint tree: {tree}"
+        );
+        assert!(
+            tree.lines().any(|l| l == "tracked.txt"),
+            "an ordinary tracked file must still be captured: {tree}"
+        );
+    }
+
+    #[tokio::test]
     async fn no_rate_gate_preserves_ungated_behavior() {
         // Backwards-compat: an agent built without a rate gate dispatches every
         // call unthrottled (the pre-Throttle path).
