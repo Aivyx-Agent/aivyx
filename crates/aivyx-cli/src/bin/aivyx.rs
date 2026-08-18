@@ -5090,6 +5090,47 @@ async fn run_audit_export(
     Ok(())
 }
 
+/// Walks `root` recursively and returns the canonical path of every entry
+/// `policy.classify(...)` flags as sensitive. Closes the gap
+/// `SensitivePolicy`'s `extra_deny` leaves open for `aivyx-checkpoint`'s
+/// `deny_paths` — `extra_deny` is never populated from real operator
+/// config at this binary's own construction site (see the aivyx-checkpoint
+/// adoption design's Finding 2), so the real protection has to come from
+/// walking the same pattern-based classifier that already guards
+/// fs.read/fs.write. Called once at startup: a secret file created under
+/// `fs_root` after this walk isn't covered until the process restarts —
+/// the same "fixed at construction, not re-derived per checkpoint"
+/// limitation `GitCheckpointer`'s own `deny_paths` API already has.
+/// Once a directory itself matches, its children are not separately
+/// descended into: `exclude_pathspecs`' git pathspec semantics exclude a
+/// matched directory's whole subtree from one entry.
+fn collect_sensitive_paths_under(
+    root: &std::path::Path,
+    policy: &aivyx_core::sensitive_paths::SensitivePolicy,
+) -> Vec<std::path::PathBuf> {
+    let mut hits = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(canonical) = path.canonicalize() else {
+                continue;
+            };
+            if policy.classify(&canonical).is_some() {
+                hits.push(canonical);
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    hits
+}
+
 // `run_async` sits right at the binary's composition root: it takes
 // the validated `AivyxConfig`, the open storage handle, the audit
 // chain key, and the CLI-derived `ChannelKind`, and threads
@@ -5949,6 +5990,19 @@ async fn run_async(
     // at execute time. Using the un-canonicalized `fs_root` here would
     // let a symlink in the user's `$HOME` silently widen the scope.
     let canonical_root = fs_read.sandbox_root().to_path_buf();
+
+    // aivyx-checkpoint — git-ref checkpoint/rollback for fs_root's
+    // mutating tools (fs.write, fs.delete, shell.exec). Built once, shared
+    // by daemon_agent and child_agent below (both run in this process
+    // against this same fs_root). detect() already tolerates fs_root not
+    // being a git repository (None, one log line) — checkpointer then
+    // stays None for this session, same graceful-degradation contract as
+    // every other optional agent knob (budget_gate, rate_gate, ...).
+    let checkpoint_deny_paths = collect_sensitive_paths_under(&canonical_root, &sensitive_policy);
+    let checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>> =
+        aivyx_core::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
+            .await
+            .map(std::sync::Arc::new);
     // Chapter N — the enforced fs root, shared into every prompt-assembly
     // closure so the system prompt can name the actual sandbox boundary
     // (the model must know its real root to neither over-refuse a granted
@@ -7962,6 +8016,10 @@ async fn run_async(
     let provider_for_factory = Arc::clone(&provider);
     let audit_for_factory = Arc::clone(&audit);
     let tools_for_factory = Arc::clone(&tools);
+    // aivyx-checkpoint — the closure below is `move`, so it needs its
+    // own clone of `checkpointer`; the outer binding is still needed
+    // afterward for `daemon_agent`'s own `.with_checkpointer(...)`.
+    let checkpointer_for_factory = checkpointer.clone();
     let roles_for_factory = roles.clone();
     let backcompat_floor_for_factory = backcompat_floor.clone();
     let model_for_factory = model.clone();
@@ -8168,7 +8226,8 @@ async fn run_async(
             child_planner_factory,
         )
         .with_tool_allowlist(child_tool_allowlist)
-        .with_memory_topic_prefix(child_memory_topic_prefix);
+        .with_memory_topic_prefix(child_memory_topic_prefix)
+        .with_checkpointer(checkpointer_for_factory.clone());
         let child_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
             .apply(child_agent);
 
@@ -8631,7 +8690,8 @@ async fn run_async(
         .with_tool_allowlist(daemon_tool_allowlist)
         .with_memory_topic_prefix(memory_topic_prefix)
         .with_budget_gate(daemon_budget_gate)
-        .with_rate_gate(daemon_rate_gate);
+        .with_rate_gate(daemon_rate_gate)
+        .with_checkpointer(checkpointer.clone());
         let daemon_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
             .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
@@ -9958,6 +10018,42 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[test]
+    fn collect_sensitive_paths_under_finds_curated_matches_only() {
+        let scratch = Scratch::new();
+        std::fs::write(scratch.dir.join(".env"), b"API_KEY=secret\n").unwrap();
+        std::fs::write(scratch.dir.join("notes.md"), b"hello\n").unwrap();
+        let ssh_dir = scratch.dir.join(".ssh");
+        std::fs::create_dir(&ssh_dir).unwrap();
+        std::fs::write(ssh_dir.join("id_rsa"), b"not a real key\n").unwrap();
+
+        let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        let hits = collect_sensitive_paths_under(&scratch.dir, &policy);
+
+        let env_canonical = std::fs::canonicalize(scratch.dir.join(".env")).unwrap();
+        let ssh_canonical = std::fs::canonicalize(&ssh_dir).unwrap();
+        let notes_canonical = std::fs::canonicalize(scratch.dir.join("notes.md")).unwrap();
+
+        assert!(hits.contains(&env_canonical), "must flag .env: {hits:?}");
+        assert!(
+            hits.contains(&ssh_canonical),
+            "must flag the .ssh directory itself: {hits:?}"
+        );
+        assert!(
+            !hits.contains(&notes_canonical),
+            "must not flag an ordinary file: {hits:?}"
+        );
+        // id_rsa under .ssh is not separately enumerated — the .ssh
+        // directory's own entry is enough for GitCheckpointer's
+        // exclude_pathspecs (a directory pathspec excludes its whole
+        // subtree), and re-descending would be wasted work.
+        let id_rsa_canonical = std::fs::canonicalize(ssh_dir.join("id_rsa")).unwrap();
+        assert!(
+            !hits.contains(&id_rsa_canonical),
+            "children of an already-matched directory should not be separately listed: {hits:?}"
+        );
     }
 
     #[test]
