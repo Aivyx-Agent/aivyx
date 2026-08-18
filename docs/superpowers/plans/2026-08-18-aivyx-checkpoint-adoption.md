@@ -746,3 +746,116 @@ pre-existing closure) that this plan can't fully verify without running
 the actual build — the step gives the implementer a concrete, scoped fix
 (mirror the existing `_for_factory` clone pattern) rather than leaving it
 as an unexplained "add appropriate handling."
+
+---
+
+## Post-final-review additions
+
+The final whole-branch review (opus, after Tasks 1-3 were each independently
+approved) found: one Critical startup-hang bug, two Important correctness
+gaps, and — per explicit user decision after the review's findings were
+presented — a fourth, genuinely new scope addition (wiring the two
+same-process paths the original design's Finding 3 mischaracterized as
+"third-party callers"). All four are captured here as two units of work.
+
+### Fix wave: Critical + Important findings 2 and 4
+
+**Files:**
+- Modify: `crates/aivyx-cli/src/bin/aivyx.rs` (`collect_sensitive_paths_under`, plus its test)
+- Modify: `crates/aivyx-dataread/src/xlsx_writer.rs`, `crates/aivyx-dataread/src/pdf_writer.rs`
+- Modify: `crates/aivyx-core/src/agent.rs` (new end-to-end exclusion test)
+
+1. **Critical — unbounded/symlink-following walk.** `collect_sensitive_paths_under`'s `path.is_dir()` check follows symlinks; on `[access] level = "full"` (`fs_root = "/"`), `/proc/self/root` symlinks back to `/`, looping forever. Fix: use `entry.file_type()` (does not follow symlinks) instead of `path.is_dir()` for the recursion decision — canonicalization for the *hit* path itself (used when a match is found) is unaffected, only the "should I push this onto the stack to keep walking" check changes. Also gate the whole walk on `fs_root` actually being a git repo first (cheap `fs_root.join(".git").exists()` check, or simply moving the walk to run only when `GitCheckpointer::detect` will be attempted) so the cost isn't paid when checkpointing would end up disabled anyway.
+2. **Important — `data.xlsx.write`/`data.pdf.write` don't override `mutates_fs_root()`.** Both write real files under `fs_root` via the same `fs.write` capability (`aivyx-dataread/src/sandbox.rs`'s gate) but were missed by Task 1 (the design's Finding 1 only enumerated `FsWriteTool`/`FsDeleteTool`/`ShellExecTool`). Add the identical `fn mutates_fs_root(&self) -> bool { true }` override (with a one-line doc comment matching Task 1's style) to both `XlsxWriteTool`'s and `PdfWriteTool's `impl Tool for ...` blocks in `crates/aivyx-dataread/src/xlsx_writer.rs` and `crates/aivyx-dataread/src/pdf_writer.rs` (exact type names: read the files first — the final review cited `xlsx_writer.rs:57` and `pdf_writer.rs:63` as the `impl Tool for` lines).
+3. **Important — no end-to-end test of the classifier→`deny_paths`→exclusion chain.** Add one test in `crates/aivyx-core/src/agent.rs`'s test module: build a real git-backed `fs_root` (via `aivyx_checkpoint::test_support::init_repo`, matching the existing checkpoint tests' style), write a `.env` file under it, construct `GitCheckpointer::detect(&fs_root, collect-equivalent-deny-paths)` — since `collect_sensitive_paths_under` itself lives in the `aivyx-cli` binary and isn't reachable from `aivyx-core`'s own tests, build the equivalent `deny_paths` inline using `aivyx_core::sensitive_paths::SensitivePolicy::classify` directly on the `.env` file's canonical path (mirroring what the binary helper does) — dispatch a real `fs.write` through `ConcreteAgent::turn`, then assert via `aivyx_checkpoint::test_support::git(dir.path(), &["ls-tree", "-r", "--name-only", <ref>])` that the resulting tree does NOT contain `.env`. This closes the one load-bearing security claim (Finding 2) that no test in the branch currently exercises.
+
+Each fix must re-run its own covering tests: fix 1 — `collect_sensitive_paths_under_finds_curated_matches_only` (`aivyx-cli`) plus a new regression test proving a symlink cycle doesn't hang (bounded by e.g. a `std::time::Instant` timeout assertion, or by constructing a real one-hop cycle and asserting the walk still returns); fix 2 — `cargo test -p aivyx-dataread`; fix 3 — the new test itself plus the full `aivyx-core` suite.
+
+### Task 4: wire the checkpointer into `build_agent_stack` (REPL + voice)
+
+**Files:**
+- Modify: `crates/aivyx-channel/src/session.rs` (`AgentStackSpec`, `from_session_config`, `build_agent_stack`, `run_session`)
+- Modify: `crates/aivyx-cli/src/bin/aivyx.rs` (the `ChannelKind::Local` arm's `run_session(...)` call, and the voice arm's `agent_spec` literal)
+
+**Interfaces:**
+- Consumes: `aivyx_core::GitCheckpointer` (already re-exported; `aivyx-channel` already depends on `aivyx-core` directly — confirmed no new Cargo.toml change needed), the `checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>` binding already built in `aivyx.rs` near `canonical_root` (Task 3) — confirmed still in lexical scope at both the `ChannelKind::Local` match arm and the voice arm (both are nested inside the same top-level `fn run()`, at a shallower scope than `checkpointer`'s own declaration).
+- Produces: `AgentStackSpec.checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>`; `run_session`'s new `checkpointer` parameter.
+
+`aivyx-channel::session::build_agent_stack` is a *shared* helper — this task changes its signature and `AgentStackSpec`'s shape, both public API of `aivyx-channel`. `run_session` has exactly one real caller (`aivyx.rs:9392` — confirmed via a workspace-wide grep, no test callers found).
+
+- [ ] **Step 1: Add the field to `AgentStackSpec` and default it in `from_session_config`**
+
+In `crates/aivyx-channel/src/session.rs`, add to `AgentStackSpec`'s field list (after `turn_safety`):
+
+```rust
+    /// `aivyx-checkpoint` — attached to the built agent so fs_root-mutating
+    /// tool calls get a git-ref snapshot before they run. `None` (the
+    /// default from `from_session_config`) leaves the loop byte-identical;
+    /// non-REPL channels (voice) that want checkpointing set this directly
+    /// on the spec, same pattern as `budget_gate`/`rate_gate`.
+    pub checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
+```
+
+In `AgentStackSpec::from_session_config`, add `checkpointer: None,` alongside the existing `budget_gate: None, rate_gate: None,` lines (same "REPL is ungated for now" comment block applies).
+
+- [ ] **Step 2: Destructure and wire it in `build_agent_stack`**
+
+In `build_agent_stack`'s `let AgentStackSpec { ... } = spec;` destructure, add `checkpointer,` to the field list. In the builder chain (currently ending `.with_budget_gate(budget_gate).with_rate_gate(rate_gate);`), add `.with_checkpointer(checkpointer)`.
+
+- [ ] **Step 3: Thread it through `run_session`**
+
+Add a new parameter to `run_session`'s signature, immediately after `audit: Arc<dyn AuditHook>,`:
+
+```rust
+    checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
+```
+
+Immediately after `let agent_spec = AgentStackSpec::from_session_config(&config);`, add:
+
+```rust
+    let agent_spec = AgentStackSpec { checkpointer, ..agent_spec };
+```
+
+- [ ] **Step 4: Update the one real call site**
+
+In `crates/aivyx-cli/src/bin/aivyx.rs`, find the `ChannelKind::Local` arm's call (currently `run_session(provider, audit, session_config, channel, reader)`, around line 9392). Add the new argument in the matching position (right after `audit`):
+
+```rust
+            run_session(provider, audit, session_config, checkpointer.clone(), channel, reader)
+```
+
+- [ ] **Step 5: Update the voice arm**
+
+Find the voice arm's `agent_spec` struct literal (the one containing `budget_gate:`/`rate_gate:`/`turn_safety:`, around line 9830-9853). Add, alongside those fields:
+
+```rust
+                    checkpointer: checkpointer.clone(),
+```
+
+- [ ] **Step 6: Verify it builds**
+
+Run: `cargo build -p aivyx-channel -p aivyx-cli`
+Expected: clean success. If `checkpointer` is reported out of scope at either call site, that's a real signal the lexical-scope assumption above was wrong — locate where `checkpointer` actually goes out of scope (likely an intervening early `return` inside a conditional block) and report back rather than guessing a workaround.
+
+- [ ] **Step 7: Run the full workspace test suite and clippy**
+
+Run: `cargo test --workspace --exclude aivyx-desktop 2>&1 | grep "test result"` and `cargo clippy --workspace --exclude aivyx-desktop --all-targets`
+Expected: every count matches the pre-Task-4 baseline (no test should be affected by this signature change, since `run_session`'s only test-relevant callers, if any, would need the new argument too — verify none exist via `grep -rn "run_session(" crates/aivyx-channel/src`), clean clippy.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add crates/aivyx-channel/src/session.rs crates/aivyx-cli/src/bin/aivyx.rs
+git commit -m "Wire GitCheckpointer into build_agent_stack (REPL + voice)
+
+The final whole-branch review found the design's Finding 3 mischaracterized
+aivyx.rs's own default no-daemon REPL and voice paths as equivalent to the
+genuinely-external standalone Discord/Slack/Telegram bot crates — both
+actually run in-process through the same shared build_agent_stack helper
+this branch left unwired. Threads the same checkpointer instance built
+near canonical_root through AgentStackSpec/run_session, so the default
+'run aivyx with no daemon' experience gets the same protection as the
+daemon path. The 3 standalone bot-mode crates remain genuinely deferred.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+```
