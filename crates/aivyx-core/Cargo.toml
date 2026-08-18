@@ -74,6 +74,23 @@ aivyx-confine = { workspace = true, features = ["sandbox-backend"] }
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 aivyx-confine = { workspace = true }
 
+# Shared git-ref checkpoint/rollback for fs_root's mutating tools, gating
+# ConcreteAgent's dispatch hook on Tool::mutates_fs_root(). Re-exported
+# below so aivyx-cli never needs its own direct dependency on it — same
+# pattern as the aivyx-confine re-export just above.
+#
+# Declared via the `[dependencies.name]` sub-table form rather than the
+# inline `aivyx-checkpoint = { workspace = true }` form: a plain
+# unheadered entry placed here (after the two `[target.'cfg(...)']`
+# tables above) would be parsed by TOML as belonging to the most
+# recently opened table — the non-Linux target table — not the
+# top-level [dependencies] table, and would silently vanish from the
+# Linux build. Confirmed empirically (`cargo metadata` on a
+# minimal repro) before choosing this form. `aivyx-checkpoint` has no
+# platform split, unlike aivyx-confine, so it belongs here untargeted.
+[dependencies.aivyx-checkpoint]
+workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
 # Confinement test fixture (Task 3 — shell.exec confinement): needs a

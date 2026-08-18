@@ -224,6 +224,12 @@ pub struct AgentStackSpec {
     /// built agent via `TurnSafety::apply`. `TurnSafety::default()` leaves the
     /// loop byte-identical.
     pub turn_safety: aivyx_core::TurnSafety,
+    /// `aivyx-checkpoint` — attached to the built agent so fs_root-mutating
+    /// tool calls get a git-ref snapshot before they run. `None` (the
+    /// default from `from_session_config`) leaves the loop byte-identical;
+    /// non-REPL channels (voice) that want checkpointing set this directly
+    /// on the spec, same pattern as `budget_gate`/`rate_gate`.
+    pub checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
 }
 
 impl AgentStackSpec {
@@ -251,6 +257,7 @@ impl AgentStackSpec {
             budget_gate: None,
             rate_gate: None,
             turn_safety: c.turn_safety.clone(),
+            checkpointer: None,
         }
     }
 }
@@ -295,6 +302,7 @@ pub fn build_agent_stack(
         budget_gate,
         rate_gate,
         turn_safety,
+        checkpointer,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -344,7 +352,8 @@ pub fn build_agent_stack(
     .with_tool_allowlist(tool_allowlist)
     .with_memory_topic_prefix(memory_topic_prefix)
     .with_budget_gate(budget_gate)
-    .with_rate_gate(rate_gate);
+    .with_rate_gate(rate_gate)
+    .with_checkpointer(checkpointer);
 
     // Apply the per-turn safety knobs (deadline + small-cycle breaker) through
     // the one shared choke point, so this path can't drift from the others.
@@ -385,6 +394,7 @@ pub struct SessionReport {
 pub async fn run_session<R, W>(
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
     config: SessionConfig,
     channel: LocalChannel<W>,
     mut reader: R,
@@ -407,6 +417,7 @@ where
     // string) stay below.
     let storage = Arc::clone(&config.storage);
     let agent_spec = AgentStackSpec::from_session_config(&config);
+    let agent_spec = AgentStackSpec { checkpointer, ..agent_spec };
     let agent = build_agent_stack(provider, Arc::clone(&audit), agent_spec);
 
     // ---- Session marker (Phase 5 task 4) -----------------------------

@@ -85,6 +85,7 @@ pub use tokio_util::sync::CancellationToken;
 // platform). Re-exporting it would put a Linux-only-real type in a
 // cross-platform crate's public API.
 pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};
+pub use aivyx_checkpoint::GitCheckpointer;
 
 // ---------------------------------------------------------------------------
 // ID newtypes
@@ -929,6 +930,21 @@ pub trait Tool: Send + Sync {
     /// operator-trusted tools like `loop.next`, `memory.*`, the compute
     /// utilities); the network + file-content readers override it to `true`.
     fn output_is_untrusted(&self) -> bool {
+        false
+    }
+
+    /// Whether this tool can mutate the `fs_root` sandbox directly on
+    /// disk. Gates `aivyx-checkpoint`'s git-ref snapshot: the turn loop
+    /// checkpoints `fs_root`'s worktree immediately before executing any
+    /// tool for which this returns `true`. Default `false` — the vast
+    /// majority of tools (Gmail, Notion, Drive, Calendar, …) mutate
+    /// something, but nothing under `fs_root`, so checkpointing them
+    /// would be pure overhead for zero protective benefit. Only
+    /// `fs.write`, `fs.delete`, and `shell.exec` override this to
+    /// `true` — see `aivyx-checkpoint` adoption design's Finding 1 for
+    /// why this is opt-in (not opt-out, unlike `aivyx-coder`'s own
+    /// analogous trait method) in this codebase specifically.
+    fn mutates_fs_root(&self) -> bool {
         false
     }
 }

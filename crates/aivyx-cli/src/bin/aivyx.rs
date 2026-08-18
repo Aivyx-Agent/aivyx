@@ -5090,6 +5090,97 @@ async fn run_audit_export(
     Ok(())
 }
 
+/// Walks `root` recursively and returns the canonical path of every entry
+/// `policy.classify(...)` flags as sensitive. Closes the gap
+/// `SensitivePolicy`'s `extra_deny` leaves open for `aivyx-checkpoint`'s
+/// `deny_paths` — `extra_deny` is never populated from real operator
+/// config at this binary's own construction site (see the aivyx-checkpoint
+/// adoption design's Finding 2), so the real protection has to come from
+/// walking the same pattern-based classifier that already guards
+/// fs.read/fs.write. Called once at startup: a secret file created under
+/// `fs_root` after this walk isn't covered until the process restarts —
+/// the same "fixed at construction, not re-derived per checkpoint"
+/// limitation `GitCheckpointer`'s own `deny_paths` API already has.
+/// Once a directory itself matches, its children are not separately
+/// descended into: `exclude_pathspecs`' git pathspec semantics exclude a
+/// matched directory's whole subtree from one entry.
+///
+/// The recursion decision is made from `DirEntry::file_type()`, which does
+/// NOT follow symlinks — a symlinked directory (e.g. `/proc/self/root`
+/// under `[access] level = "full"`, which points back at `/`) is therefore
+/// never pushed onto the walk stack, so a symlink cycle cannot loop the
+/// walk forever. Only the recursion check changed; the `canonical` path
+/// computed for an actual sensitive-path hit still resolves symlinks, same
+/// as before.
+fn collect_sensitive_paths_under(
+    root: &std::path::Path,
+    policy: &aivyx_core::sensitive_paths::SensitivePolicy,
+) -> Vec<std::path::PathBuf> {
+    let mut hits = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(canonical) = path.canonicalize() else {
+                continue;
+            };
+            if policy.classify(&canonical).is_some() {
+                hits.push(canonical);
+                continue;
+            }
+            // `entry.file_type()` reads the dirent's own type and does NOT
+            // follow symlinks (unlike `Path::is_dir()`, which stats through
+            // the link). On `[access] level = "full"` (`fs_root = "/"`),
+            // `/proc/self/root` symlinks back to `/` — treating that as a
+            // directory to descend into loops the walk forever. A symlink
+            // is therefore never pushed onto the stack, cycle or not.
+            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                stack.push(path);
+            }
+        }
+    }
+    hits
+}
+
+/// Mirrors `GitCheckpointer::detect`'s own repo-detection behavior
+/// (`git rev-parse --absolute-git-dir`, which walks *up* parent
+/// directories to find an ancestor `.git`) closely enough to gate
+/// `collect_sensitive_paths_under`'s walk correctly — unlike a naive
+/// `root.join(".git").exists()` check, which only sees a `.git` directly
+/// under `root` and false-negatives whenever `root` is a subdirectory
+/// nested inside a larger working tree (a realistic `[access] root`
+/// pointed at one service folder of a monorepo). A false negative here
+/// is worse than the wasted walk it's meant to avoid: it would leave
+/// `checkpoint_deny_paths` empty while `detect()` still finds the
+/// ancestor `.git` and activates checkpointing anyway, silently
+/// defeating the sensitive-path exclusion.
+///
+/// `git rev-parse --is-inside-work-tree` prints `"true"`/`"false"` and
+/// exits non-zero outside any git repository at all — any error or a
+/// `"false"` result is treated as "not a repo", matching what
+/// `detect()` itself would conclude (it returns `None` and disables
+/// checkpointing, making the walk's cost genuinely unnecessary).
+async fn fs_root_is_inside_git_work_tree(root: &std::path::Path) -> bool {
+    let mut command = tokio::process::Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    match command.output().await {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim() == "true"
+        }
+        _ => false,
+    }
+}
+
 // `run_async` sits right at the binary's composition root: it takes
 // the validated `AivyxConfig`, the open storage handle, the audit
 // chain key, and the CLI-derived `ChannelKind`, and threads
@@ -5949,6 +6040,32 @@ async fn run_async(
     // at execute time. Using the un-canonicalized `fs_root` here would
     // let a symlink in the user's `$HOME` silently widen the scope.
     let canonical_root = fs_read.sandbox_root().to_path_buf();
+
+    // aivyx-checkpoint — git-ref checkpoint/rollback for fs_root's
+    // mutating tools (fs.write, fs.delete, shell.exec). Built once, shared
+    // by daemon_agent and child_agent below (both run in this process
+    // against this same fs_root). detect() already tolerates fs_root not
+    // being a git repository (None, one log line) — checkpointer then
+    // stays None for this session, same graceful-degradation contract as
+    // every other optional agent knob (budget_gate, rate_gate, ...).
+    // Skip the walk entirely when fs_root isn't a git repo — `detect()`
+    // below will return None either way, so paying for a full recursive
+    // scan of fs_root (potentially "/" under `[access] level = "full"`)
+    // just to throw the result away is pure waste. This has to match
+    // `detect()`'s own notion of "is a git repo" (which walks up parent
+    // directories, via `git rev-parse --absolute-git-dir`) rather than a
+    // naive `.git` existence check directly under `canonical_root` — see
+    // `fs_root_is_inside_git_work_tree`'s doc comment for why a naive
+    // check false-negatives on a `fs_root` nested inside a larger repo.
+    let checkpoint_deny_paths = if fs_root_is_inside_git_work_tree(&canonical_root).await {
+        collect_sensitive_paths_under(&canonical_root, &sensitive_policy)
+    } else {
+        Vec::new()
+    };
+    let checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>> =
+        aivyx_core::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
+            .await
+            .map(std::sync::Arc::new);
     // Chapter N — the enforced fs root, shared into every prompt-assembly
     // closure so the system prompt can name the actual sandbox boundary
     // (the model must know its real root to neither over-refuse a granted
@@ -7962,6 +8079,10 @@ async fn run_async(
     let provider_for_factory = Arc::clone(&provider);
     let audit_for_factory = Arc::clone(&audit);
     let tools_for_factory = Arc::clone(&tools);
+    // aivyx-checkpoint — the closure below is `move`, so it needs its
+    // own clone of `checkpointer`; the outer binding is still needed
+    // afterward for `daemon_agent`'s own `.with_checkpointer(...)`.
+    let checkpointer_for_factory = checkpointer.clone();
     let roles_for_factory = roles.clone();
     let backcompat_floor_for_factory = backcompat_floor.clone();
     let model_for_factory = model.clone();
@@ -8168,7 +8289,8 @@ async fn run_async(
             child_planner_factory,
         )
         .with_tool_allowlist(child_tool_allowlist)
-        .with_memory_topic_prefix(child_memory_topic_prefix);
+        .with_memory_topic_prefix(child_memory_topic_prefix)
+        .with_checkpointer(checkpointer_for_factory.clone());
         let child_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
             .apply(child_agent);
 
@@ -8631,7 +8753,8 @@ async fn run_async(
         .with_tool_allowlist(daemon_tool_allowlist)
         .with_memory_topic_prefix(memory_topic_prefix)
         .with_budget_gate(daemon_budget_gate)
-        .with_rate_gate(daemon_rate_gate);
+        .with_rate_gate(daemon_rate_gate)
+        .with_checkpointer(checkpointer.clone());
         let daemon_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
             .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
@@ -9329,7 +9452,7 @@ async fn run_async(
 
             let stdin = io::stdin();
             let reader = stdin.lock();
-            run_session(provider, audit, session_config, channel, reader)
+            run_session(provider, audit, checkpointer.clone(), session_config, channel, reader)
                 .await
                 .map(|_report| ())
         }
@@ -9791,6 +9914,7 @@ async fn run_async(
                         turn_timeout_secs,
                         cycle_detection,
                     ),
+                    checkpointer: checkpointer.clone(),
                 };
                 let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),
@@ -9958,6 +10082,117 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[test]
+    fn collect_sensitive_paths_under_finds_curated_matches_only() {
+        let scratch = Scratch::new();
+        std::fs::write(scratch.dir.join(".env"), b"API_KEY=secret\n").unwrap();
+        std::fs::write(scratch.dir.join("notes.md"), b"hello\n").unwrap();
+        let ssh_dir = scratch.dir.join(".ssh");
+        std::fs::create_dir(&ssh_dir).unwrap();
+        std::fs::write(ssh_dir.join("id_rsa"), b"not a real key\n").unwrap();
+
+        let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        let hits = collect_sensitive_paths_under(&scratch.dir, &policy);
+
+        let env_canonical = std::fs::canonicalize(scratch.dir.join(".env")).unwrap();
+        let ssh_canonical = std::fs::canonicalize(&ssh_dir).unwrap();
+        let notes_canonical = std::fs::canonicalize(scratch.dir.join("notes.md")).unwrap();
+
+        assert!(hits.contains(&env_canonical), "must flag .env: {hits:?}");
+        assert!(
+            hits.contains(&ssh_canonical),
+            "must flag the .ssh directory itself: {hits:?}"
+        );
+        assert!(
+            !hits.contains(&notes_canonical),
+            "must not flag an ordinary file: {hits:?}"
+        );
+        // id_rsa under .ssh is not separately enumerated — the .ssh
+        // directory's own entry is enough for GitCheckpointer's
+        // exclude_pathspecs (a directory pathspec excludes its whole
+        // subtree), and re-descending would be wasted work.
+        let id_rsa_canonical = std::fs::canonicalize(ssh_dir.join("id_rsa")).unwrap();
+        assert!(
+            !hits.contains(&id_rsa_canonical),
+            "children of an already-matched directory should not be separately listed: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn collect_sensitive_paths_under_does_not_follow_symlinked_directories() {
+        // Deterministic regression test for the `path.is_dir()` bug (the
+        // timing-based cycle test above passes identically whether the
+        // fix is present or reverted — a one-hop, no-fan-out cycle is
+        // bounded by the OS's own ELOOP protection either way, so it
+        // proves termination but not the recursion-check property
+        // itself). This test proves the property directly: a symlinked
+        // directory's contents must never be walked a second time
+        // through the symlink.
+        //
+        // Structure:
+        //   real/.env         — a real sensitive file under a real dir
+        //   link_to_real -> real/   — a symlink to that same directory
+        //
+        // `canonicalize()` resolves symlinks, so `real/.env`'s canonical
+        // path and `link_to_real/.env`'s canonical path are byte-
+        // identical. If the recursion decision ever followed
+        // `link_to_real` (the pre-fix `path.is_dir()` bug), the walk
+        // would descend into it, rediscover `.env` via the symlinked
+        // route, and push the same canonical path onto `hits` a second
+        // time. The fixed code's `entry.file_type()` check never treats
+        // a symlink as a directory to descend into, so `link_to_real` is
+        // never pushed onto the stack and the file is found exactly once
+        // (via `real/` directly).
+        use std::os::unix::fs::symlink;
+
+        let scratch = Scratch::new();
+        let real_dir = scratch.dir.join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        std::fs::write(real_dir.join(".env"), b"API_KEY=secret\n").unwrap();
+        symlink(&real_dir, scratch.dir.join("link_to_real"))
+            .expect("create symlink to real dir");
+
+        let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        let hits = collect_sensitive_paths_under(&scratch.dir, &policy);
+
+        let env_canonical = std::fs::canonicalize(real_dir.join(".env")).unwrap();
+        let occurrences = hits.iter().filter(|p| **p == env_canonical).count();
+        assert_eq!(
+            occurrences, 1,
+            "real/.env's canonical path must be discovered exactly once, \
+             not once per route (direct + symlinked): {hits:?}"
+        );
+    }
+
+    #[test]
+    fn collect_sensitive_paths_under_symlink_cycle_does_not_hang() {
+        // Regression test for the infinite-loop bug: `path.is_dir()`
+        // follows symlinks, so a symlink that resolves back to a
+        // directory already on the walk stack (or to itself) made the
+        // walk recurse forever. A real one-hop cycle: `sub/loop` is a
+        // symlink pointing at `sub` itself.
+        use std::os::unix::fs::symlink;
+
+        let scratch = Scratch::new();
+        let sub = scratch.dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        symlink(&sub, sub.join("loop")).expect("create one-hop symlink cycle");
+
+        let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
+        let root = scratch.dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let hits = collect_sensitive_paths_under(&root, &policy);
+            let _ = tx.send(hits);
+        });
+
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect(
+                "collect_sensitive_paths_under must return promptly instead of \
+                 looping forever on a symlink cycle",
+            );
     }
 
     #[test]

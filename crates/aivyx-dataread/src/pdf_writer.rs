@@ -67,6 +67,11 @@ impl Tool for DataPdfWriteTool {
     fn name(&self) -> &str {
         "data.pdf.write"
     }
+    /// Writes a real PDF file under fs_root via `fs.write` — checkpoint
+    /// before every call, same as FsWriteTool/FsDeleteTool/ShellExecTool.
+    fn mutates_fs_root(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Lay plain text out into a new PDF under the agent's sandbox \
          root. Input: `{path: string (required), title: string \
@@ -438,5 +443,13 @@ mod tests {
             tool.required_scope(&json!({"path": "x.pdf"})).base(),
             "fs.write"
         );
+    }
+
+    #[test]
+    fn data_pdf_write_mutates_fs_root() {
+        let dir = std::env::temp_dir();
+        let sb = ReaderSandbox::new(&dir).unwrap();
+        let tool = DataPdfWriteTool::new(sb);
+        assert!(tool.mutates_fs_root());
     }
 }
