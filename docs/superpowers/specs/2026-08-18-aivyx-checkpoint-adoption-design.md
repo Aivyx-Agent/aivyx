@@ -16,11 +16,12 @@ a real commit SHA exists to pin against.
 
 The original combined design's "`aivyx` adoption" section was written
 during `aivyx-checkpoint`'s own brainstorming, before this project's
-dedicated read of `aivyx`'s actual current code. Two of its assumptions
+dedicated read of `aivyx`'s actual current code. Three of its assumptions
 turned out to be wrong once checked against the real, much larger
-codebase — both found by direct investigation (grepping every `impl Tool
-for`, reading the real `SensitivePolicy` construction site), not
-inferred from the prior design's summary. Both are corrected here.
+codebase — all found by direct investigation (grepping every `impl Tool
+for`, reading the real `SensitivePolicy` construction site, grepping
+every real `ConcreteAgent::new` call site), not inferred from the prior
+design's summary. All three are corrected here.
 
 ### Finding 1 — the `Tool` trait is not aivyx-coder-shaped
 
@@ -95,6 +96,38 @@ after the walk wouldn't be covered until the process restarts, but that's
 an existing, accepted limitation of the shared crate's API, not a new one
 introduced here.
 
+### Finding 3 — there is no single agent-construction site
+
+The original design's "Construction" section described "the `Agent` (or
+`ConcreteAgent`) builder call site" as if there were one. Grepping every
+real (non-test) `ConcreteAgent::new(...)` call site across the workspace
+finds **9**: two in `crates/aivyx-cli/src/bin/aivyx.rs`
+(`daemon_agent` — the primary Studio/CLI-daemon path — and `child_agent`,
+built for `role.switch` delegation), plus independent ones in
+`aivyx-channel::session::build_agent_stack` (a shared helper, but not
+universally used), `aivyx-discord/src/session.rs`,
+`aivyx-slack/src/session.rs`, `aivyx-telegram/src/session.rs` (×2), and
+`aivyx-team`'s factory/CLI module. Confirmed by direct inspection:
+Discord/Slack/Telegram's standalone-bot-mode session builders each
+independently duplicate `ConcreteAgent::new(...)` rather than calling the
+shared `build_agent_stack` helper, so wiring one site does not cover the
+others.
+
+**Resolution (explicit scope decision):** this pass wires the
+checkpointer into `daemon_agent` and `child_agent` only — both live in
+`aivyx.rs`, both share the same process, the same `tools` registry
+(`Arc::clone`), and therefore the same `fs_root` and the same
+`FsWriteTool`/`FsDeleteTool`/`ShellExecTool` instances. One
+`GitCheckpointer`, built once, is passed to both via
+`.with_checkpointer(...)`. The other 7 construction sites (standalone
+Discord/Slack/Telegram bot mode, `aivyx-channel`'s shared helper when
+used by a caller other than `aivyx.rs`, and `aivyx-team`'s agents) are
+explicitly **not** wired in this pass — see "Explicitly out of scope"
+below. This means `fs.write`/`fs.delete`/`shell.exec` calls made through
+those paths run with no checkpoint protection even though they may hit
+the same physical `fs_root`; that inconsistency is a known, accepted gap
+for this pass, not an oversight, and is logged as follow-on work.
+
 ## Design
 
 ### 1. New trait method
@@ -124,10 +157,22 @@ mirroring the existing `budget_gate`/`rate_gate` pattern exactly —
 checkpointer: Option<Arc<aivyx_checkpoint::GitCheckpointer>>,
 ```
 
-with a builder method, `with_checkpointer(mut self, checkpointer:
-Arc<aivyx_checkpoint::GitCheckpointer>) -> Self`, matching the shape of
-the existing `with_cycle_detection`-style builders on the same struct.
-`ConcreteAgent::new` initializes it to `None`.
+with a builder method matching `with_budget_gate`/`with_rate_gate`'s exact
+signature shape (both take `Option<Arc<dyn T>>`, not a bare `Arc`, so the
+caller passes the field's own optionality straight through without an
+`if let`/`map` at the call site):
+
+```rust
+pub fn with_checkpointer(
+    mut self,
+    checkpointer: Option<Arc<aivyx_checkpoint::GitCheckpointer>>,
+) -> Self {
+    self.checkpointer = checkpointer;
+    self
+}
+```
+
+`ConcreteAgent::new` initializes the field to `None`.
 
 ### 3. The hook
 
@@ -161,7 +206,7 @@ tool call into a failed one.
 In `crates/aivyx-cli/src/bin/aivyx.rs`, near where `canonical_root` is
 resolved (~line 5951, immediately after `fs_read.sandbox_root()` is
 pulled back out — the same point `ShellExecTool`'s confiner is built
-relative to `fs_root`):
+relative to `fs_root`), built **once**:
 
 ```rust
 // aivyx-checkpoint — git-ref checkpoint/rollback for fs_root's mutating
@@ -170,12 +215,25 @@ relative to `fs_root`):
 // walked once here rather than reusing SensitivePolicy's extra_deny
 // directly — extra_deny is never populated from real config (always
 // Vec::new() at this call site), so the real protection has to come
-// from the pattern-based classifier instead.
+// from the pattern-based classifier instead. Shared by daemon_agent and
+// child_agent below — both run in this process against this same
+// fs_root; every other real ConcreteAgent construction site in the
+// workspace (standalone Discord/Slack/Telegram bot mode, aivyx-team) is
+// out of scope for this pass — see the design doc's Finding 3.
 let checkpoint_deny_paths = collect_sensitive_paths_under(&canonical_root, &sensitive_policy);
 let checkpointer = aivyx_checkpoint::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
     .await
     .map(std::sync::Arc::new);
 ```
+
+then threaded into both of `aivyx.rs`'s real `ConcreteAgent` construction
+sites via `.with_checkpointer(checkpointer.clone())` — `daemon_agent`
+(~line 8624, alongside its existing `.with_budget_gate(...)`/
+`.with_rate_gate(...)` chain) and `child_agent` (~line 8163, alongside
+its existing `.with_tool_allowlist(...)`/`.with_memory_topic_prefix(...)`
+chain). `checkpointer` is `Option<Arc<GitCheckpointer>>`, so `.clone()`
+is a cheap `Arc` clone (or a no-op `None.clone()` when `fs_root` isn't a
+git repository) — no double-construction, no second filesystem walk.
 
 `collect_sensitive_paths_under` is a new, small private helper function
 defined directly in `crates/aivyx-cli/src/bin/aivyx.rs` (its only call
@@ -187,11 +245,6 @@ already tolerates `fs_root` not being a git repository (`None`, one log
 line) — `checkpointer` then stays `None` for that session, matching the
 crate's existing graceful-degradation contract; no operator error, no
 new failure mode.
-
-The `Agent` (or `ConcreteAgent`) builder call site gains
-`.with_checkpointer(checkpointer)` when `checkpointer` is `Some`
-(conditionally, since the builder method takes `Arc<GitCheckpointer>`
-directly, not an `Option`).
 
 ### 5. Dependency
 
@@ -209,6 +262,14 @@ workspace dependency, buildable on every platform `aivyx` ships for.
 
 ## Explicitly out of scope
 
+- **The other 7 real `ConcreteAgent::new` construction sites** (Finding
+  3): `aivyx-channel::session::build_agent_stack` when called by anyone
+  other than `aivyx.rs`, `aivyx-discord`/`aivyx-slack`/`aivyx-telegram`'s
+  standalone bot-mode session builders, and `aivyx-team`'s factory/CLI
+  module. `fs.write`/`fs.delete`/`shell.exec` calls made through these
+  paths get no checkpoint protection this pass, even against the same
+  physical `fs_root`. Logged as follow-on work in
+  `aivyx-ecosystem/ROADMAP.md`.
 - **`git.rs`'s three tools** (`GitStatusTool`/`GitDiffTool`/`GitCommitTool`)
   — they operate against a separate, multi-repo allow-set (`[git]
   repos`, a `Vec<PathBuf>`), not `fs_root`. A single `GitCheckpointer`
