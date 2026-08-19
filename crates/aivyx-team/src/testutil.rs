@@ -45,15 +45,15 @@ fn one_shot(text: &str) -> FakeStep {
     }
 }
 
-/// One step that emits a single tool call to `name` with empty input.
-fn tool_step(name: &str, call_id: &str) -> FakeStep {
+/// One step that emits a single tool call to `name` with `input`.
+fn tool_step(name: &str, call_id: &str, input: serde_json::Value) -> FakeStep {
     FakeStep {
         events: vec![],
         terminal: LlmStepEnd::ToolCalls {
             calls: vec![ToolCallEnd {
                 call_id: call_id.to_string(),
                 tool_name: name.to_string(),
-                input: serde_json::json!({}),
+                input,
                 name_resolution: NameResolution::Known,
             }],
             text_so_far: String::new(),
@@ -87,10 +87,23 @@ impl FakeProvider {
         let steps: VecDeque<FakeStep> = names
             .iter()
             .enumerate()
-            .map(|(i, n)| tool_step(n, &format!("c{i}")))
+            .map(|(i, n)| tool_step(n, &format!("c{i}"), serde_json::json!({})))
             .collect();
         Arc::new(FakeProvider {
             script: Mutex::new(steps),
+            repeat: None,
+        })
+    }
+
+    /// One turn: a single tool call to `name` with `input`, then a final
+    /// message closing the turn. For tests that need a real (non-empty)
+    /// tool-call payload — e.g. `fs.write`'s `{"path", "content"}`.
+    pub fn tool_call_then_done(name: &str, input: serde_json::Value) -> Arc<Self> {
+        Arc::new(FakeProvider {
+            script: Mutex::new(VecDeque::from(vec![
+                tool_step(name, "c0", input),
+                one_shot("done"),
+            ])),
             repeat: None,
         })
     }

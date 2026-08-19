@@ -7695,6 +7695,7 @@ async fn run_async(
             &model,
             DEFAULT_MAX_TOKENS,
             Arc::clone(&audit),
+            checkpointer.clone(),
             tool_list,
             mission,
             config.as_deref(),
@@ -8710,6 +8711,7 @@ async fn run_async(
                 notify_dispatcher: Some(Arc::clone(&notify_dispatcher)),
                 default_notify_target: default_notify_target_name.clone(),
                 audit_log: Some(Arc::clone(&persistent_audit_for_query)),
+                checkpointer: checkpointer.clone(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
@@ -9555,6 +9557,7 @@ async fn run_async(
                 telegram_config,
                 provider,
                 audit,
+                checkpointer.clone(),
                 shutdown,
             )
             .await
@@ -9659,6 +9662,7 @@ async fn run_async(
                 discord_config,
                 provider,
                 audit,
+                checkpointer.clone(),
                 shutdown,
             )
             .await
@@ -9790,6 +9794,7 @@ async fn run_async(
                 slack_config,
                 provider,
                 audit,
+                checkpointer.clone(),
                 shutdown,
             )
             .await

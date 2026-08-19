@@ -38,7 +38,7 @@ use async_trait::async_trait;
 
 use aivyx_audit::{AuditBridge, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
-use aivyx_core::{AuditHook, CancellationToken, ToolRegistry};
+use aivyx_core::{AuditHook, CancellationToken, Tool, ToolRegistry};
 use aivyx_crypto::MasterKey;
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent,
@@ -213,6 +213,7 @@ async fn slack_session_smoke_e2e() {
             config,
             provider,
             audit,
+            None,
             shutdown,
         ),
     )
@@ -243,6 +244,175 @@ async fn slack_session_smoke_e2e() {
     assert!(sent[1].text.contains("Bye!"));
 
     let _ = std::fs::remove_dir_all(&parent);
+}
+
+// ---------------------------------------------------------------------------
+// Test — a real dispatched mutates_fs_root tool through the real slack
+// construction chain produces a real, restorable git checkpoint.
+//
+// Same rationale as the aivyx-discord precedent (Task 1 of this plan):
+// `SlackChannel::trust_tier()` is hardcoded to `TrustTier::SemiTrusted`, and
+// `fs.write` is `CEILING_TRUSTED`-only in aivyx-capability's ceiling table,
+// so a literal scripted `fs.write` call can never reach dispatch through a
+// real Slack channel — `ConcreteAgent::turn`'s unconditional
+// `capabilities.intersect(tier.default_ceiling())` strips it before the
+// checkpoint hook (gated only on `Tool::mutates_fs_root()`) ever runs.
+//
+// `CheckpointProbeTool` stands in for `fs.write`: it declares
+// `mutates_fs_root() == true` (the only thing the checkpoint hook actually
+// gates on) but requires the `memory.write` scope, which SemiTrusted's
+// default ceiling does grant — so it proves the same property (the
+// checkpointer threaded through the 3-hop chain reaches `ConcreteAgent` and
+// fires on a real dispatched mutating tool call) via a scope Slack can
+// actually reach.
+// ---------------------------------------------------------------------------
+
+struct CheckpointProbeTool {
+    id: aivyx_core::ToolId,
+    schema: serde_json::Value,
+}
+
+impl CheckpointProbeTool {
+    fn new() -> Self {
+        CheckpointProbeTool {
+            id: aivyx_core::ToolId::new(),
+            schema: serde_json::json!({}),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for CheckpointProbeTool {
+    fn id(&self) -> aivyx_core::ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "checkpoint.probe"
+    }
+    fn description(&self) -> &str {
+        "test-only stand-in for fs.write: mutates_fs_root() == true under a \
+         SemiTrusted-reachable (memory.write) scope"
+    }
+    fn input_schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &serde_json::Value) -> aivyx_capability::Scope {
+        Scope::parse("memory.write").expect("memory.write is a known base")
+    }
+    fn mutates_fs_root(&self) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &aivyx_core::ToolContext<'_>,
+    ) -> aivyx_core::ToolOutcome {
+        aivyx_core::ToolOutcome::Completed {
+            output: serde_json::json!({"ok": true}),
+            verified: aivyx_core::Verification::NotApplicable,
+        }
+    }
+}
+
+#[tokio::test]
+async fn slack_dispatched_mutating_tool_produces_a_checkpoint() {
+    let (storage, parent) = scratch_storage("checkpoint").await;
+
+    // A real git-backed fs_root, separate from the audit/memory scratch dir.
+    let fs_root = std::env::temp_dir().join(format!(
+        "aivyx-slack-checkpoint-fsroot-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&fs_root).unwrap();
+    aivyx_checkpoint::test_support::init_repo(&fs_root).await;
+
+    let probe_tool: Arc<dyn Tool> = Arc::new(CheckpointProbeTool::new());
+
+    // One ToolCalls step (the mutates_fs_root probe) followed by one
+    // FinalMessage step closing the turn — same shape as the discord
+    // precedent's checkpoint test.
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(
+            vec![
+                ScriptedStep {
+                    events: vec![],
+                    terminal: LlmStepEnd::ToolCalls {
+                        calls: vec![aivyx_llm::ToolCallEnd {
+                            call_id: "toolu_1".to_string(),
+                            tool_name: "checkpoint.probe".to_string(),
+                            input: serde_json::json!({}),
+                            name_resolution: aivyx_llm::NameResolution::Known,
+                        }],
+                        text_so_far: String::new(),
+                        usage: LlmUsage::default(),
+                    },
+                },
+                final_step(&["done"], "done"),
+            ]
+            .into(),
+        ),
+    });
+    let audit_bridge = Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let audit: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    let transport = Arc::new(ScriptedTransport::with_queue(vec![sample_inbound(
+        "T01",
+        "C42",
+        "write a file",
+    )]));
+
+    let mut config = slack_session_config(Arc::clone(&storage));
+    config.tools = Arc::new(ToolRegistry::new(vec![probe_tool]));
+    config.capabilities = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+
+    let shutdown = CancellationToken::new();
+    let watcher_shutdown = shutdown.clone();
+    let watcher_transport = Arc::clone(&transport);
+    tokio::spawn(async move {
+        loop {
+            if !watcher_transport.sent().await.is_empty() {
+                watcher_shutdown.cancel();
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let checkpointer = Arc::new(
+        aivyx_checkpoint::GitCheckpointer::detect(&fs_root, vec![])
+            .await
+            .expect("fs_root is a real git repo"),
+    );
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run_slack_session_with_transport(
+            "aivyx-slack-test",
+            Arc::clone(&transport),
+            config,
+            provider,
+            audit,
+            Some(checkpointer),
+            shutdown,
+        ),
+    )
+    .await
+    .expect("run_slack_session_with_transport must exit within the 5s test bound")
+    .expect("run_slack_session_with_transport must return Ok");
+
+    let refs = aivyx_checkpoint::test_support::git(
+        &fs_root,
+        &["for-each-ref", "refs/aivyx/checkpoints/"],
+    )
+    .await;
+    assert_eq!(
+        refs.lines().filter(|l| !l.is_empty()).count(),
+        1,
+        "the dispatched mutating tool call must produce exactly one checkpoint: {refs}"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+    let _ = std::fs::remove_dir_all(&fs_root);
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +475,7 @@ async fn slack_session_two_partitions_persistent_e2e() {
             config,
             provider,
             audit,
+            None,
             shutdown,
         ),
     )
@@ -394,6 +565,7 @@ async fn slack_session_shutdown_drains_inflight_turns() {
             config,
             provider,
             audit,
+            None,
             shutdown,
         ),
     )

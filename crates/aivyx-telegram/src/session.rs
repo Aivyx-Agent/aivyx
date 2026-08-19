@@ -767,6 +767,7 @@ pub(crate) async fn run_telegram_session_with_mailbox<T>(
     config: TelegramSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     mut mailbox: mpsc::Receiver<IncomingMessage>,
     shutdown: CancellationToken,
 ) -> Result<TelegramSessionReport, String>
@@ -797,7 +798,8 @@ where
         },
     )
     .with_tool_allowlist(config.tool_allowlist)
-    .with_memory_topic_prefix(config.memory_topic_prefix);
+    .with_memory_topic_prefix(config.memory_topic_prefix)
+    .with_checkpointer(checkpointer);
     // Route through the shared per-turn-safety choke point. This standalone path
     // carries no `[agent]` config to inherit, so it stays at the built-in
     // defaults (`default()`); a future config thread switches this to
@@ -960,6 +962,7 @@ where
 ///   stops polling and drops all per-chat mpsc senders, which in turn
 ///   cancels each inner task's in-flight turn (via the mailbox-close
 ///   branch above) and lets them drain to completion.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_telegram_multi_session(
     channel_name: impl Into<String> + Clone,
     token: &str,
@@ -967,6 +970,7 @@ pub async fn run_telegram_multi_session(
     config: TelegramSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     shutdown: CancellationToken,
 ) -> Result<TelegramMultiSessionReport, String> {
     let transport = Arc::new(ReqwestTransport::new(token));
@@ -977,6 +981,7 @@ pub async fn run_telegram_multi_session(
         config,
         provider,
         audit,
+        checkpointer,
         LONG_POLL_TIMEOUT_SECS,
         shutdown,
     )
@@ -1010,6 +1015,7 @@ pub(crate) async fn run_telegram_multi_session_with_transport<T>(
     config: TelegramSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     long_poll_timeout_secs: u32,
     shutdown: CancellationToken,
 ) -> Result<TelegramMultiSessionReport, String>
@@ -1081,6 +1087,7 @@ where
                 let config_clone = config.clone();
                 let provider_clone = Arc::clone(&provider);
                 let audit_clone = Arc::clone(&audit);
+                let checkpointer_clone = checkpointer.clone();
                 let shutdown_clone = shutdown.clone();
                 let handle = tokio::spawn(async move {
                     run_telegram_session_with_mailbox(
@@ -1088,6 +1095,7 @@ where
                         config_clone,
                         provider_clone,
                         audit_clone,
+                        checkpointer_clone,
                         rx,
                         shutdown_clone,
                     )

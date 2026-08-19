@@ -54,3 +54,8 @@ http = "1"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-crypto = { path = "../aivyx-crypto" }
+# Task 2 (aivyx-checkpoint remaining-sites plan) — the checkpoint e2e test
+# drives a real GitCheckpointer::detect + test_support git helpers against a
+# real fs_root repo, mirroring aivyx-discord's own Task 1 precedent.
+aivyx-checkpoint = { workspace = true }
+uuid = { workspace = true }

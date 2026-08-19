@@ -176,6 +176,7 @@ pub(crate) async fn run_discord_session_with_mailbox<T>(
     config: DiscordSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     mut mailbox: mpsc::Receiver<IncomingMessage>,
     shutdown: CancellationToken,
 ) -> Result<DiscordSessionReport, String>
@@ -206,7 +207,8 @@ where
         },
     )
     .with_tool_allowlist(config.tool_allowlist)
-    .with_memory_topic_prefix(config.memory_topic_prefix);
+    .with_memory_topic_prefix(config.memory_topic_prefix)
+    .with_checkpointer(checkpointer);
     // Route through the shared per-turn-safety choke point (built-in defaults;
     // no `[agent]` config to inherit on this standalone path).
     let agent = aivyx_core::TurnSafety::default().apply(agent);
@@ -382,6 +384,7 @@ pub async fn run_discord_session(
     config: DiscordSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     shutdown: CancellationToken,
 ) -> Result<DiscordMultiSessionReport, String> {
     let transport = Arc::new(TwilightTransport::new(token));
@@ -391,6 +394,7 @@ pub async fn run_discord_session(
         config,
         provider,
         audit,
+        checkpointer,
         shutdown,
     )
     .await
@@ -410,6 +414,7 @@ pub(crate) async fn run_discord_session_with_transport<T>(
     config: DiscordSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     shutdown: CancellationToken,
 ) -> Result<DiscordMultiSessionReport, String>
 where
@@ -458,6 +463,7 @@ where
             let config_clone = config.clone();
             let provider_clone = Arc::clone(&provider);
             let audit_clone = Arc::clone(&audit);
+            let checkpointer_clone = checkpointer.clone();
             let shutdown_clone = shutdown.clone();
             let handle = tokio::spawn(async move {
                 run_discord_session_with_mailbox(
@@ -465,6 +471,7 @@ where
                     config_clone,
                     provider_clone,
                     audit_clone,
+                    checkpointer_clone,
                     rx,
                     shutdown_clone,
                 )
