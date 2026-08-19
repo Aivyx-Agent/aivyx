@@ -9659,6 +9659,7 @@ async fn run_async(
                 discord_config,
                 provider,
                 audit,
+                checkpointer.clone(),
                 shutdown,
             )
             .await

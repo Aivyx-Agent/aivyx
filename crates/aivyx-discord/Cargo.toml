@@ -57,3 +57,8 @@ twilight-model = "0.16"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 aivyx-audit = { path = "../aivyx-audit" }
 aivyx-crypto = { path = "../aivyx-crypto" }
+# Task 1 (aivyx-checkpoint remaining-sites plan) — the checkpoint e2e test
+# drives a real GitCheckpointer::detect + test_support git helpers against a
+# real fs_root repo, mirroring aivyx-core's own agent.rs checkpoint tests.
+aivyx-checkpoint = { workspace = true }
+uuid = { workspace = true }
