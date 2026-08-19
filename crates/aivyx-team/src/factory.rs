@@ -404,21 +404,77 @@ mod tests {
         assert_eq!(names, ["alpha"], "no bus → tool-only, least privilege");
     }
 
-    #[test]
-    fn build_attaches_the_checkpointer_when_configured() {
-        // The checkpointer is opaque to this test — SpecialistFactory only
-        // needs to plumb whatever Option it's given through to
-        // ConcreteAgent::with_checkpointer, which Task 2 of the
-        // aivyx-checkpoint adoption plan already tested end-to-end against
-        // a real GitCheckpointer. Passing None here and confirming build()
-        // still succeeds is sufficient to prove the new field/builder
-        // don't break construction — the wiring itself is exercised by
-        // this crate's real callers (team_mission_driver.rs / run_mission),
-        // not by fabricating a redundant real-git fixture in this crate.
-        let f = factory(vec![fake("fs.read")]).with_checkpointer(None);
-        let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
-        let result = f.build(&member("spec", &["fs.read"], &[]), &lead);
-        assert!(result.is_ok(), "build must still succeed with no checkpointer configured");
+    /// End-to-end proof that `SpecialistFactory::build` actually wires the
+    /// checkpointer into `ConcreteAgent::new(...).with_checkpointer(...)` —
+    /// not just that `build()` still returns `Ok` with `None` (that would
+    /// pass identically whether the wiring exists or not, since `new`
+    /// already defaults `checkpointer` to `None`).
+    ///
+    /// Unlike the three channel crates (Discord/Slack/Telegram), whose
+    /// channels are hardcoded `TrustTier::SemiTrusted` and so can never
+    /// legitimately hold `fs.write` (`CEILING_TRUSTED`-only), a team
+    /// specialist genuinely can: real mission channels
+    /// (`MissionLeadChannel` / `MissionChannel`) are `TrustTier::Trusted`,
+    /// same as this file's own `member(...)` helper defaults to. So this
+    /// test drives a real `fs.write` call — no `checkpoint.probe`-style
+    /// stand-in needed — through a real `SpecialistFactory::build`-
+    /// constructed `ConcreteAgent`, mirroring aivyx-core's own
+    /// `checkpoint_fires_only_for_mutates_fs_root_tools` precedent
+    /// (agent.rs) one level up the stack.
+    #[tokio::test]
+    async fn build_attaches_the_checkpointer_when_configured() {
+        use crate::testutil::{FakeLeadChannel, FakeProvider};
+        use aivyx_core::{ChannelContext, Message};
+
+        // A real git-backed fs_root the specialist is allowed to write under.
+        let dir = tempfile::tempdir().unwrap();
+        aivyx_checkpoint::test_support::init_repo(dir.path()).await;
+        let fs_root = dir.path().to_path_buf();
+
+        let write_tool: Arc<dyn Tool> = Arc::new(
+            aivyx_core::tools::fs::FsWriteToolConfig::new(fs_root.clone())
+                .build()
+                .expect("fs_root must be canonicalizable"),
+        );
+
+        let checkpointer = Arc::new(
+            aivyx_checkpoint::GitCheckpointer::detect(&fs_root, vec![])
+                .await
+                .expect("fs_root is a real git repo"),
+        );
+
+        // The lead grants fs.write under fs_root; the specialist declares
+        // the same scope (mission channels/specialists are Trusted, unlike
+        // the SemiTrusted-ceilinged channel crates, so this is legitimate).
+        let write_scope = format!("fs.write:{}/**", fs_root.display());
+        let lead = CapabilitySet::from_scopes([Scope::parse(&write_scope).unwrap()]);
+        let m = member("spec", &[write_scope.as_str()], &["fs.write"]);
+
+        let provider = FakeProvider::tool_call_then_done(
+            "fs.write",
+            serde_json::json!({ "path": "new.txt", "content": "hello" }),
+        );
+        let f = SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), vec![write_tool])
+            .with_checkpointer(Some(checkpointer));
+
+        let specialist = f.build(&m, &lead).expect("build");
+
+        let channel = FakeLeadChannel::at(TrustTier::Trusted);
+        let message = Message::text(channel.session_id(), "write a file");
+        let _ = specialist.turn(message, &channel).await;
+
+        let refs = aivyx_checkpoint::test_support::git(
+            dir.path(),
+            &["for-each-ref", "refs/aivyx/checkpoints/"],
+        )
+        .await;
+        let ref_count = refs.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(
+            ref_count, 1,
+            "the specialist's fs.write must produce exactly one checkpoint \
+             — proves SpecialistFactory::build actually wired the \
+             checkpointer through, not just that build() tolerates None: {refs}"
+        );
     }
 
     #[test]

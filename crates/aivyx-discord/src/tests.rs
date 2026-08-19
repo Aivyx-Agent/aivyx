@@ -367,7 +367,7 @@ impl Tool for CheckpointProbeTool {
 }
 
 #[tokio::test]
-async fn discord_dispatched_fs_write_produces_a_checkpoint() {
+async fn discord_dispatched_mutating_tool_produces_a_checkpoint() {
     let (storage, parent) = scratch_storage("checkpoint").await;
 
     // A real git-backed fs_root, separate from the audit/memory scratch dir.
@@ -463,7 +463,7 @@ async fn discord_dispatched_fs_write_produces_a_checkpoint() {
     assert_eq!(
         refs.lines().filter(|l| !l.is_empty()).count(),
         1,
-        "the dispatched fs.write must produce exactly one checkpoint: {refs}"
+        "the dispatched mutating tool call must produce exactly one checkpoint: {refs}"
     );
 
     let _ = std::fs::remove_dir_all(&parent);

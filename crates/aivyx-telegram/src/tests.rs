@@ -3058,7 +3058,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn telegram_dispatched_fs_write_produces_a_checkpoint() {
+async fn telegram_dispatched_mutating_tool_produces_a_checkpoint() {
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::Mutex as StdMutex;
@@ -3307,7 +3307,7 @@ async fn telegram_dispatched_fs_write_produces_a_checkpoint() {
     assert_eq!(
         refs.lines().filter(|l| !l.is_empty()).count(),
         1,
-        "the dispatched fs.write must produce exactly one checkpoint: {refs}"
+        "the dispatched mutating tool call must produce exactly one checkpoint: {refs}"
     );
 
     let _ = std::fs::remove_dir_all(&parent);

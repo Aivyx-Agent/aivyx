@@ -39,3 +39,9 @@ futures-util = { workspace = true }
 # Turn-running tests need a Tokio runtime for the sub-turn; J.4.2's
 # concurrency proof needs a Barrier + a timeout guard (sync + time).
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+# Final-review fix wave (remaining-sites plan) — the checkpoint e2e test in
+# factory.rs drives a real GitCheckpointer::detect + test_support git
+# helpers against a real fs_root repo, mirroring aivyx-core's own agent.rs
+# checkpoint tests and the three channel crates' analogous tests.
+aivyx-checkpoint = { workspace = true }
+tempfile = "3.27.0"
