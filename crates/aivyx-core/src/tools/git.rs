@@ -638,6 +638,24 @@ impl Tool for GitCommitTool {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// Per-repo latch: `true` the first time `repo` is seen (the caller
+/// should log a warning), `false` on every subsequent call for the same
+/// canonicalized repo — keeps routine git activity against a
+/// worktree/submodule repo from flooding the daemon log with the
+/// identical warning on every single tool call. Process-lifetime only
+/// (resets on restart), which is fine: the point is deduplicating noise
+/// within one running session, not persisting the fact across restarts.
+/// Falls back to the raw (non-canonicalized) path on a canonicalization
+/// failure — that just means two paths that *should* dedupe (e.g. a
+/// symlinked alias) won't, not a correctness issue.
+fn should_warn_once(repo: &Path) -> bool {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let set = WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    set.lock().unwrap().insert(canonical)
+}
+
 /// Build the confiner to use for a git command about to run against
 /// `repo`. A linked git worktree or submodule's `.git` is a **file**
 /// (not a directory) containing `gitdir: <path-to-the-real-gitdir>`,
@@ -653,17 +671,19 @@ impl Tool for GitCommitTool {
 /// drift apart across call sites the way three separate copies could.
 fn confiner_for(repo: &Path, require_enforcement: bool) -> Arc<dyn ExecutionConfiner> {
     if repo.join(".git").is_file() {
-        // No `tracing` dependency in this crate (the rest of `aivyx`
-        // logs operator-facing warnings via `eprintln!`, e.g.
-        // `aivyx-cli/src/bin/aivyx.rs`) — match that convention rather
-        // than pulling in a new logging dependency for one line.
-        eprintln!(
-            "aivyx: skipping Landlock confinement for {}: its .git is a file, \
-             not a directory, so this repo is a git worktree or submodule \
-             whose real gitdir lives outside the repo root — confining to the \
-             repo root would break git entirely here",
-            repo.display(),
-        );
+        if should_warn_once(repo) {
+            // No `tracing` dependency in this crate (the rest of `aivyx`
+            // logs operator-facing warnings via `eprintln!`, e.g.
+            // `aivyx-cli/src/bin/aivyx.rs`) — match that convention rather
+            // than pulling in a new logging dependency for one line.
+            eprintln!(
+                "aivyx: skipping Landlock confinement for {}: its .git is a file, \
+                 not a directory, so this repo is a git worktree or submodule \
+                 whose real gitdir lives outside the repo root — confining to the \
+                 repo root would break git entirely here",
+                repo.display(),
+            );
+        }
         return Arc::new(NoopConfiner);
     }
     default_confiner(repo, &[], &[], require_enforcement)
@@ -1348,5 +1368,26 @@ mod git_tests {
         // `confiner_for` takes the non-fallback branch without panicking.
         let _confiner = confiner_for(&repo, true);
         std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn should_warn_once_fires_once_per_repo_then_stays_silent() {
+        let repo = tempfile::tempdir().unwrap();
+        assert!(
+            should_warn_once(repo.path()),
+            "the first call for a repo must report true (caller should warn)"
+        );
+        assert!(
+            !should_warn_once(repo.path()),
+            "a second call for the SAME repo must report false (already warned)"
+        );
+
+        // A different repo warns independently -- the latch is per-repo,
+        // not a single global "only ever warn once" flag.
+        let other_repo = tempfile::tempdir().unwrap();
+        assert!(
+            should_warn_once(other_repo.path()),
+            "a different repo must warn on its own first call"
+        );
     }
 }
