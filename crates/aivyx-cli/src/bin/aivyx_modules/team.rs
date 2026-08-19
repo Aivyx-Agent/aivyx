@@ -185,6 +185,7 @@ pub async fn run_mission(
     model: &str,
     max_tokens: u32,
     audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
     base_tools: Vec<Arc<dyn Tool>>,
     mission: &str,
     config: Option<&str>,
@@ -216,6 +217,7 @@ pub async fn run_mission(
         // Chapter Ensemble — the CLI lead-driven `team run` uses one shared
         // backend for all roles; per-role overrides are a daemon-mission path.
         std::collections::HashMap::new(),
+        checkpointer.clone(),
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 
@@ -239,7 +241,8 @@ pub async fn run_mission(
                 cfg,
             ))
         },
-    );
+    )
+    .with_checkpointer(checkpointer);
     // The lead orchestrates the mission autonomously (delegating to specialists
     // via team.delegate), so it takes the same autonomous safety posture as the
     // specialists (see SpecialistFactory::build): the small-cycle breaker as a

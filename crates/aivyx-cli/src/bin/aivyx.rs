@@ -7695,6 +7695,7 @@ async fn run_async(
             &model,
             DEFAULT_MAX_TOKENS,
             Arc::clone(&audit),
+            checkpointer.clone(),
             tool_list,
             mission,
             config.as_deref(),
