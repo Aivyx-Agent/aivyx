@@ -2871,6 +2871,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
                 config,
                 Arc::clone(&provider),
                 Arc::clone(&audit_hook),
+                None, // checkpointer — not exercised by this test
                 1, // long_poll_timeout_secs
                 shutdown.clone(),
             ),
@@ -3023,6 +3024,294 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
     drop(memory_post);
     drop(storage);
     let _ = std::fs::remove_dir_all(&parent);
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 (aivyx-checkpoint remaining-sites plan) — a real dispatched
+// mutates_fs_root tool through the real telegram *multi-session*
+// construction chain produces a real, restorable git checkpoint.
+//
+// Same rationale as the aivyx-discord/aivyx-slack precedents (Tasks 1-2 of
+// this plan): `TelegramChannel::trust_tier()` is hardcoded to
+// `TrustTier::SemiTrusted`, and `fs.write` is `CEILING_TRUSTED`-only in
+// aivyx-capability's ceiling table, so a literal scripted `fs.write` call
+// can never reach dispatch through a real Telegram channel —
+// `ConcreteAgent::turn`'s unconditional
+// `capabilities.intersect(tier.default_ceiling())` strips it before the
+// checkpoint hook (gated only on `Tool::mutates_fs_root()`) ever runs.
+//
+// `CheckpointProbeTool` stands in for `fs.write`: it declares
+// `mutates_fs_root() == true` (the only thing the checkpoint hook actually
+// gates on) but requires the `memory.write` scope, which SemiTrusted's
+// default ceiling does grant — so it proves the same property (the
+// checkpointer threaded through the 3-hop chain —
+// `run_telegram_multi_session` -> `run_telegram_multi_session_with_transport`
+// -> `run_telegram_session_with_mailbox` — reaches `ConcreteAgent` and fires
+// on a real dispatched mutating tool call) via a scope Telegram can actually
+// reach.
+//
+// This test targets the *multi*-session chain specifically (not
+// `run_telegram_session_with_transport`, which is the single-chat chain
+// reachable only through the unused `run_telegram_session`) because that's
+// where `run_telegram_session_with_mailbox` — the real innermost
+// construction site for the multi-chat path — lives.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn telegram_dispatched_fs_write_produces_a_checkpoint() {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aivyx_audit::{AuditBridge, HmacChainLog};
+    use aivyx_capability::{CapabilitySet, Scope};
+    use aivyx_core::{AuditHook, CancellationToken, Tool, ToolRegistry};
+    use crate::TelegramSessionConfig;
+    use aivyx_crypto::MasterKey;
+    use aivyx_llm::{
+        LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    };
+    use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+
+    use crate::session::run_telegram_multi_session_with_transport;
+
+    // ---- Scripted provider — same shape as this file's own
+    // `run_telegram_session_two_chats_persistent_e2e` memory.write script,
+    // the closest prior art for a `ToolCalls` step in this file.
+    struct ScriptedStep {
+        events: Vec<LlmStreamEvent>,
+        terminal: LlmStepEnd,
+    }
+
+    struct ScriptedProvider {
+        queue: StdMutex<VecDeque<ScriptedStep>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            let step = self
+                .queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".into()))?;
+            Ok(Box::new(ScriptedStream {
+                events: step.events.into_iter(),
+                terminal: Some(step.terminal),
+            }))
+        }
+    }
+
+    struct ScriptedStream {
+        events: std::vec::IntoIter<LlmStreamEvent>,
+        terminal: Option<LlmStepEnd>,
+    }
+    #[async_trait]
+    impl LlmStream for ScriptedStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(self.events.next())
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            self.terminal
+                .ok_or_else(|| LlmError::StreamEnded("ScriptedStream::finish double-called".into()))
+        }
+    }
+
+    fn final_step(chunks: &[&str], text: &str) -> ScriptedStep {
+        ScriptedStep {
+            events: chunks
+                .iter()
+                .map(|c| LlmStreamEvent::TextChunk((*c).to_string()))
+                .collect(),
+            terminal: LlmStepEnd::FinalMessage {
+                text: text.to_string(),
+                usage: LlmUsage::default(),
+            },
+        }
+    }
+
+    // ---- CheckpointProbeTool — copied verbatim from aivyx-slack's Task 2
+    // fixture (crates/aivyx-slack/src/tests.rs), import paths adapted to
+    // this file's own `use` block. See the module doc comment above for
+    // why a literal `fs.write` call can't be used here.
+    struct CheckpointProbeTool {
+        id: aivyx_core::ToolId,
+        schema: serde_json::Value,
+    }
+
+    impl CheckpointProbeTool {
+        fn new() -> Self {
+            CheckpointProbeTool {
+                id: aivyx_core::ToolId::new(),
+                schema: serde_json::json!({}),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for CheckpointProbeTool {
+        fn id(&self) -> aivyx_core::ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "checkpoint.probe"
+        }
+        fn description(&self) -> &str {
+            "test-only stand-in for fs.write: mutates_fs_root() == true under a \
+             SemiTrusted-reachable (memory.write) scope"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &serde_json::Value) -> aivyx_capability::Scope {
+            Scope::parse("memory.write").expect("memory.write is a known base")
+        }
+        fn mutates_fs_root(&self) -> bool {
+            true
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &aivyx_core::ToolContext<'_>,
+        ) -> aivyx_core::ToolOutcome {
+            aivyx_core::ToolOutcome::Completed {
+                output: serde_json::json!({"ok": true}),
+                verified: aivyx_core::Verification::NotApplicable,
+            }
+        }
+    }
+
+    // ---- Scratch storage --------------------------------------------
+    let tmp = std::env::var("TMPDIR")
+        .or_else(|_| std::env::var("TEMP"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let parent = PathBuf::from(tmp).join(format!("aivyx-tg-checkpoint-{pid}-{nanos}"));
+    std::fs::create_dir_all(&parent).expect("scratch store parent must be creatable");
+    let store_path = parent.join("store.redb");
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(store_path),
+        MasterKey::from_raw([13u8; 32]),
+    )
+    .await
+    .expect("scratch storage must open");
+
+    // A real git-backed fs_root, separate from the audit/memory scratch dir.
+    let fs_root = std::env::temp_dir().join(format!(
+        "aivyx-telegram-checkpoint-fsroot-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&fs_root).unwrap();
+    aivyx_checkpoint::test_support::init_repo(&fs_root).await;
+
+    let probe_tool: Arc<dyn Tool> = Arc::new(CheckpointProbeTool::new());
+
+    // One ToolCalls step (the mutates_fs_root probe) followed by one
+    // FinalMessage step closing the turn.
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(
+            vec![
+                ScriptedStep {
+                    events: vec![],
+                    terminal: LlmStepEnd::ToolCalls {
+                        calls: vec![aivyx_llm::ToolCallEnd {
+                            call_id: "toolu_1".to_string(),
+                            tool_name: "checkpoint.probe".to_string(),
+                            input: serde_json::json!({}),
+                            name_resolution: aivyx_llm::NameResolution::Known,
+                        }],
+                        text_so_far: String::new(),
+                        usage: LlmUsage::default(),
+                    },
+                },
+                final_step(&["done"], "done"),
+            ]
+            .into(),
+        ),
+    });
+    let audit_bridge = Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let audit: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    let transport = Arc::new(ScriptedTransport::new());
+    transport.push_update(IncomingMessage {
+        update_id: 900,
+        chat_id: 8001,
+        user_id: 1,
+        text: "write a file".to_string(),
+        image: None,
+    });
+
+    let config = TelegramSessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "telegram checkpoint test".to_string(),
+        max_tokens: 128,
+        capabilities: CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]),
+        tools: Arc::new(ToolRegistry::new(vec![probe_tool])),
+        storage: Arc::clone(&storage),
+        tool_allowlist: None,
+        memory_topic_prefix: None,
+    };
+
+    let shutdown = CancellationToken::new();
+    let watcher_shutdown = shutdown.clone();
+    let watcher_transport = Arc::clone(&transport);
+    tokio::spawn(async move {
+        loop {
+            if !watcher_transport.sent_snapshot().is_empty() {
+                watcher_shutdown.cancel();
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let checkpointer = Arc::new(
+        aivyx_checkpoint::GitCheckpointer::detect(&fs_root, vec![])
+            .await
+            .expect("fs_root is a real git repo"),
+    );
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run_telegram_multi_session_with_transport(
+            "aivyx-telegram-test",
+            Arc::clone(&transport),
+            None, // chat_filter: accept every chat
+            config,
+            provider,
+            audit,
+            Some(checkpointer),
+            1, // long_poll_timeout_secs
+            shutdown,
+        ),
+    )
+    .await
+    .expect("run_telegram_multi_session_with_transport must exit within the 5s test bound")
+    .expect("run_telegram_multi_session_with_transport must return Ok");
+
+    let refs = aivyx_checkpoint::test_support::git(
+        &fs_root,
+        &["for-each-ref", "refs/aivyx/checkpoints/"],
+    )
+    .await;
+    assert_eq!(
+        refs.lines().filter(|l| !l.is_empty()).count(),
+        1,
+        "the dispatched fs.write must produce exactly one checkpoint: {refs}"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+    let _ = std::fs::remove_dir_all(&fs_root);
 }
 
 // ---- Supporting types for the multi-chat test -----------------------

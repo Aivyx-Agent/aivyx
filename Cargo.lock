@@ -680,6 +680,7 @@ version = "0.8.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
+ "aivyx-checkpoint",
  "aivyx-core",
  "aivyx-crypto",
  "aivyx-llm",
@@ -691,6 +692,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "uuid 1.23.0",
 ]
 
 [[package]]

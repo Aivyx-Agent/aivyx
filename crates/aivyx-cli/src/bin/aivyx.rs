@@ -9555,6 +9555,7 @@ async fn run_async(
                 telegram_config,
                 provider,
                 audit,
+                checkpointer.clone(),
                 shutdown,
             )
             .await
