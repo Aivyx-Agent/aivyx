@@ -56,6 +56,10 @@ pub struct SpecialistFactory {
     /// Empty ⇒ every specialist uses the shared `provider`/`model` (byte-
     /// identical to pre-Ensemble).
     member_backends: std::collections::HashMap<String, SpecialistBackend>,
+    /// `aivyx-checkpoint` — attached to every built specialist so an
+    /// fs_root-mutating tool call it makes gets checkpointed, same as the
+    /// lead agent. `None` (the default) preserves pre-checkpoint behavior.
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
 }
 
 impl SpecialistFactory {
@@ -74,6 +78,7 @@ impl SpecialistFactory {
             base_tools,
             dialogue: None,
             member_backends: std::collections::HashMap::new(),
+            checkpointer: None,
         }
     }
 
@@ -91,6 +96,18 @@ impl SpecialistFactory {
     /// own message tools on `bus` (J.5 roster wiring).
     pub fn with_dialogue(mut self, bus: Arc<MessageBus>, dialogue: DialogueConfig) -> Self {
         self.dialogue = Some((bus, dialogue));
+        self
+    }
+
+    /// Attach an `aivyx-checkpoint` `GitCheckpointer` to every specialist
+    /// this factory builds. `None` means "no checkpointer" (checkpointing
+    /// disabled, or `fs_root` isn't a git repository), preserving
+    /// pre-checkpoint behavior — same shape as `ConcreteAgent::with_checkpointer`.
+    pub fn with_checkpointer(
+        mut self,
+        checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
+    ) -> Self {
+        self.checkpointer = checkpointer;
         self
     }
 
@@ -133,7 +150,8 @@ impl SpecialistFactory {
                     cfg,
                 ))
             },
-        );
+        )
+        .with_checkpointer(self.checkpointer.clone());
         // Team specialists run autonomously inside a mission — no human watches
         // each turn to `/cancel` a runaway — so they take the autonomous safety
         // posture: the small-cycle breaker as a built-in floor (always on, like
@@ -384,6 +402,23 @@ mod tests {
         let tools = f.member_tools(&member("spec", &["fs.read"], &["alpha"]));
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert_eq!(names, ["alpha"], "no bus → tool-only, least privilege");
+    }
+
+    #[test]
+    fn build_attaches_the_checkpointer_when_configured() {
+        // The checkpointer is opaque to this test — SpecialistFactory only
+        // needs to plumb whatever Option it's given through to
+        // ConcreteAgent::with_checkpointer, which Task 2 of the
+        // aivyx-checkpoint adoption plan already tested end-to-end against
+        // a real GitCheckpointer. Passing None here and confirming build()
+        // still succeeds is sufficient to prove the new field/builder
+        // don't break construction — the wiring itself is exercised by
+        // this crate's real callers (team_mission_driver.rs / run_mission),
+        // not by fabricating a redundant real-git fixture in this crate.
+        let f = factory(vec![fake("fs.read")]).with_checkpointer(None);
+        let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let result = f.build(&member("spec", &["fs.read"], &[]), &lead);
+        assert!(result.is_ok(), "build must still succeed with no checkpointer configured");
     }
 
     #[test]

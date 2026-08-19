@@ -136,6 +136,10 @@ pub struct TeamRunDeps {
     /// notify dispatch lands an `AutoNotifyDispatched` entry, same
     /// as the schedule/webhook/file-watch notify path.
     pub audit_log: Option<Arc<PersistentAuditLog>>,
+    /// `aivyx-checkpoint` — passed through to every specialist's
+    /// `SpecialistFactory` so fs_root-mutating tool calls made during a team
+    /// mission are checkpointed, same as every other agent construction path.
+    pub checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -989,6 +993,7 @@ fn assemble_runtime(
         deps.base_tools.clone(),
         lead_caps,
         member_backends,
+        deps.checkpointer.clone(),
     )?;
     Ok((assembly.runtime(), meter))
 }
@@ -1461,6 +1466,7 @@ mod tests {
             notify_dispatcher: None,
             default_notify_target: None,
             audit_log: None,
+            checkpointer: None,
         }
     }
 
@@ -1495,6 +1501,7 @@ mod tests {
             notify_dispatcher: None,
             default_notify_target: None,
             audit_log: None,
+            checkpointer: None,
         }
     }
 
