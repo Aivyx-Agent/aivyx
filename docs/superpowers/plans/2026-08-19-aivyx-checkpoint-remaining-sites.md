@@ -368,7 +368,60 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-In `crates/aivyx-slack/src/tests.rs`, add a test with the same structure as Task 1 Step 1's `discord_dispatched_fs_write_produces_a_checkpoint`, adapted to Slack's own existing test helpers and types (read `crates/aivyx-slack/src/tests.rs` first to find its own `scratch_storage`-equivalent, `slack_session_config`-equivalent, and `ScriptedTransport`/`ScriptedStep`/`ScriptedProvider` definitions — they mirror Discord's by design, per the crate's own doc comments, but confirm the exact local names before writing the test, since a mismatched helper name won't compile). Name it `slack_dispatched_fs_write_produces_a_checkpoint`. Use `IncomingMessage`'s Slack-specific fields (`team_id`/`channel_id` rather than Discord's bare `channel_id`) and pass `Some(checkpointer)` as the new argument to `run_slack_session_with_transport(...)`, in the same position Task 1 used (immediately after `audit`).
+**Correction from Task 1's real result, applied here up front:** `aivyx-slack::SlackChannel::trust_tier()` is hardcoded `TrustTier::SemiTrusted` (confirmed during Task 1). `fs.write` is `CEILING_TRUSTED`-only in `aivyx-capability` and absent from `CEILING_SEMITRUSTED`, so `ConcreteAgent::turn`'s unconditional `capabilities.intersect(tier.default_ceiling())` strips any `fs.write:*` scope before the tool call ever reaches the capability gate — the checkpoint hook (gated on `tool.mutates_fs_root()`, which runs *after* that gate) never fires, and a literal scripted `fs.write` call cannot pass this test regardless of how it's wired. Task 1 discovered this the hard way (by running the naive version first and debugging the zero-checkpoint failure); this task starts directly from its fix instead: a small test-only tool that declares `mutates_fs_root() == true` (the only thing the checkpoint hook actually gates on) under a scope Slack's `SemiTrusted` ceiling *does* grant (`memory.write`), so the test proves the real property (the checkpointer instance reaches `ConcreteAgent` through the full 3-hop chain and fires on a real dispatched mutating call) via a reachable path.
+
+In `crates/aivyx-slack/src/tests.rs`, add (adapt `Tool`/`ToolId`/`ToolContext`/`ToolOutcome`/`Verification`/`Scope` import paths to whatever this file's own existing `use` block already provides — check first):
+
+```rust
+struct CheckpointProbeTool {
+    id: aivyx_core::ToolId,
+    schema: serde_json::Value,
+}
+
+impl CheckpointProbeTool {
+    fn new() -> Self {
+        CheckpointProbeTool {
+            id: aivyx_core::ToolId::new(),
+            schema: serde_json::json!({}),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for CheckpointProbeTool {
+    fn id(&self) -> aivyx_core::ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "checkpoint.probe"
+    }
+    fn description(&self) -> &str {
+        "test-only stand-in for fs.write: mutates_fs_root() == true under a \
+         SemiTrusted-reachable (memory.write) scope"
+    }
+    fn input_schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &serde_json::Value) -> aivyx_capability::Scope {
+        Scope::parse("memory.write").expect("memory.write is a known base")
+    }
+    fn mutates_fs_root(&self) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &aivyx_core::ToolContext<'_>,
+    ) -> aivyx_core::ToolOutcome {
+        aivyx_core::ToolOutcome::Completed {
+            output: serde_json::json!({"ok": true}),
+            verified: aivyx_core::Verification::NotApplicable,
+        }
+    }
+}
+```
+
+Then add a test with the same overall structure as Task 1's `discord_dispatched_fs_write_produces_a_checkpoint` (read that test's final, committed form in `crates/aivyx-discord/src/tests.rs` on this same branch — Task 1 is already merged into this worktree's history by the time this task runs — as the exact structural template, not the version shown in this plan's own Task 1 Step 1, which describes the pre-fix approach), adapted to Slack's own existing test helpers and types (read `crates/aivyx-slack/src/tests.rs` first to find its own `scratch_storage`-equivalent, `slack_session_config`-equivalent, and `ScriptedTransport`/`ScriptedStep`/`ScriptedProvider` definitions — they mirror Discord's by design, per the crate's own doc comments, but confirm the exact local names before writing the test, since a mismatched helper name won't compile). Name it `slack_dispatched_fs_write_produces_a_checkpoint` (keeping the name for continuity with the plan's own task list, even though the tool it dispatches is `checkpoint.probe`, not literally `fs.write`). Use `IncomingMessage`'s Slack-specific fields (`team_id`/`channel_id` rather than Discord's bare `channel_id`), grant `CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()])` instead of an `fs.write:...` scope, script a `ToolCallEnd` targeting `"checkpoint.probe"` instead of `"fs.write"`, and pass `Some(checkpointer)` as the new argument to `run_slack_session_with_transport(...)`, in the same position Task 1 used (immediately after `audit`).
 
 - [ ] **Step 2: Run the test to verify it fails to compile**
 
@@ -464,7 +517,9 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-In `crates/aivyx-telegram/src/tests.rs`, add a test with the same structure as Task 1's, adapted to Telegram's own existing test helpers (read the file first — it already has a `ScriptedProvider`/`ScriptedStep` pair per the `run_telegram_session_two_chats_persistent_e2e` test read during design, which is the closest prior art for the `LlmStepEnd::ToolCalls { calls: vec![aivyx_llm::ToolCallEnd { ... }], ... }` shape this new test also needs). Name it `telegram_dispatched_fs_write_produces_a_checkpoint`. `run_telegram_multi_session_with_transport`'s real signature (found during design) is:
+**Same correction as Task 2** (from Task 1's real result): `aivyx-telegram::TelegramChannel::trust_tier()` is also hardcoded `TrustTier::SemiTrusted`, and `fs.write` is `CEILING_TRUSTED`-only — a literal scripted `fs.write` call gets stripped by `ConcreteAgent::turn`'s capability-ceiling intersection before the checkpoint hook can ever fire, the same dead end Task 1 hit and fixed. Use the identical `CheckpointProbeTool` fixture Task 2 added (`mutates_fs_root() == true`, `required_scope()` → `memory.write`, tool name `"checkpoint.probe"` — copy its exact definition from `crates/aivyx-slack/src/tests.rs` on this same branch, Task 2 is already merged into this worktree's history by the time this task runs, adapting only the import paths to whatever this file's own `use` block provides) rather than a literal `fs.write` script.
+
+In `crates/aivyx-telegram/src/tests.rs`, add a test with the same structure as Task 1's real, committed test (read `crates/aivyx-discord/src/tests.rs`'s final form on this branch as the structural template — not the pre-fix version described in this plan's own Task 1 Step 1), adapted to Telegram's own existing test helpers (read the file first — it already has a `ScriptedProvider`/`ScriptedStep` pair per the `run_telegram_session_two_chats_persistent_e2e` test read during design, which is the closest prior art for the `LlmStepEnd::ToolCalls { calls: vec![aivyx_llm::ToolCallEnd { ... }], ... }` shape this new test also needs — its own existing memory.write-scripting example is directly reusable here, just retarget the `tool_name` to `"checkpoint.probe"` and use the `CheckpointProbeTool` fixture instead of a real `MemoryWriteTool`). Name it `telegram_dispatched_fs_write_produces_a_checkpoint` (keeping the name for continuity with the plan's own task list, even though the tool it dispatches is `checkpoint.probe`, not literally `fs.write`). `run_telegram_multi_session_with_transport`'s real signature (found during design) is:
 
 ```rust
 pub(crate) async fn run_telegram_multi_session_with_transport<T>(
@@ -479,7 +534,7 @@ pub(crate) async fn run_telegram_multi_session_with_transport<T>(
 ) -> Result<TelegramMultiSessionReport, String>
 ```
 
-The new test's call to it must supply `chat_filter: None` (accept every chat, matching the existing `discord_session_smoke_e2e`-style tests' permissiveness) and pass `Some(checkpointer)` as the new argument, positioned immediately after `audit` (matching Tasks 1-2's convention) and before `long_poll_timeout_secs`.
+The new test's call to it must supply `chat_filter: None` (accept every chat, matching the existing `discord_session_smoke_e2e`-style tests' permissiveness), grant `CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()])` instead of an `fs.write:...` scope, script the `ToolCallEnd` against `"checkpoint.probe"` instead of `"fs.write"`, and pass `Some(checkpointer)` as the new argument, positioned immediately after `audit` (matching Tasks 1-2's convention) and before `long_poll_timeout_secs`.
 
 - [ ] **Step 2: Run the test to verify it fails to compile**
 
