@@ -9791,6 +9791,7 @@ async fn run_async(
                 slack_config,
                 provider,
                 audit,
+                checkpointer.clone(),
                 shutdown,
             )
             .await
