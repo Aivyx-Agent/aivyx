@@ -217,6 +217,27 @@ actually gets. No `default_nonagon` change: this member is
 opt-in, added to a custom `TeamConfig` the same way the kitchen BOH
 roster is — never part of the free-core default roster.
 
+**The team's lead must hold a matching `mcp.call` scope too** — this
+is not optional, and omitting it fails silently rather than with an
+error. NT-02 attenuation (`crates/aivyx-team/src/attenuation.rs`'s
+`attenuate_for_member`) floors every specialist's grant to a subset
+of what the *lead itself* declares (`aivyx team run`'s own
+`lead_caps = lead.declared_capabilities()`,
+`crates/aivyx-cli/src/bin/aivyx_modules/team.rs`) — a lead can't
+delegate authority it doesn't hold. Confirmed live: with the lead's
+`capability_scopes` missing an `mcp.call` entry, `remote-coder`'s
+tools still *appear* in its registry (`tool_allowlist`'s `"mcp.call"`
+marker doesn't consult the lead), but every call to `code`/
+`code_reply` is capability-denied — the specialist's own model sees
+no error, just tools it can't successfully invoke, and falls back to
+describing a shell command instead. Add `mcp.call:aivyx-coder:*` (or
+the broader bare `mcp.call`, to admit every configured MCP server) to
+the **lead's** `capability_scopes` as well — see
+`crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`'s Aria for
+the same pattern already in production: the lead's scopes are a
+superset of everything it delegates, not just `team.delegate`/
+`team.message`.
+
 ## 10. What's reused vs. new
 
 **Reused unchanged:** `ConcreteAgent` + the turn loop, `ToolRegistry`,

@@ -303,7 +303,7 @@ name = "lead"
 role = "Coordinator"
 soul = "You decompose the goal into one targeted subtask and delegate it to remote-coder, then verify the result and report what actually happened."
 tool_allowlist = ["decompose_task", "delegate_task", "query_agent", "verify_output", "synthesize_results"]
-capability_scopes = ["team.delegate", "team.message"]
+capability_scopes = ["team.delegate", "team.message", "mcp.call:aivyx-coder:*"]
 trust_ceiling = "Trusted"
 
 [[team.member]]
@@ -311,9 +311,22 @@ name = "remote-coder"
 role = "Engineering specialist (out-of-process)"
 soul = "You delegate coding tasks to a separate aivyx-coder process over MCP rather than touching files yourself. Use access_level \"edit\" for this task."
 tool_allowlist = ["mcp.call"]
-capability_scopes = ["mcp.call:aivyx-coder:*"]
+capability_scopes = ["mcp.call:aivyx-coder:*", "team.message"]
 trust_ceiling = "Trusted"
 ```
+
+**Live-verification finding (not knowable before running this task):**
+the lead's `capability_scopes` MUST also carry a matching `mcp.call`
+entry, or NT-02 attenuation (`crates/aivyx-team/src/attenuation.rs`'s
+`attenuate_for_member`, floored against `lead.declared_capabilities()`
+in `crates/aivyx-cli/src/bin/aivyx_modules/team.rs`) silently strips
+`remote-coder`'s grant to nothing — the tools still appear in its
+registry, every call to them is capability-denied, and the specialist
+falls back to describing a shell command instead of running it. This
+is why the lead's `capability_scopes` above includes
+`mcp.call:aivyx-coder:*`, not just `team.delegate`/`team.message`.
+`docs/NONAGON.md` §9's worked example carries the same fix and
+explains it in full.
 
 - [ ] **Step 4: Run the mission**
 
