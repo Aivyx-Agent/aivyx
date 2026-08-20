@@ -132,8 +132,8 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 | [`slack`](#slack) | Medium | Channel read + post |
 | [`memory`](#memory) | Low | Knowledge-graph (distinct from Aivyx's own memory) |
 | [`puppeteer`](#puppeteer) | Low | Headless browser; higher blast radius |
-| [`aivyx-coder`](#aivyx-coder) | Low | Delegate coding tasks to a local aivyx-coder process |
 | [`everything`](#everything) | First-run | Reference / smoke-test server |
+| [`aivyx-coder`](#aivyx-coder) | Low | Delegate coding tasks to a local aivyx-coder process |
 
 ---
 
