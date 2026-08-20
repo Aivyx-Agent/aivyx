@@ -419,6 +419,47 @@ args = [
 ]
 "#,
     },
+    Recipe {
+        name: "aivyx-coder",
+        description:
+            "Delegate bounded coding tasks to a local aivyx-coder process over MCP.",
+        toml_snippet: r#"# aivyx-coder MCP server -- delegates bounded coding tasks to a
+# local `aivyx-coder --mcp-server` process. Unlike every other
+# recipe in this catalog, aivyx-coder is not third-party code: it
+# ships its own Landlock+seccomp confinement and its own tiered
+# access ceiling, so the sandbox block below is optional
+# defense-in-depth here, not the thing actually keeping the
+# operator safe -- that's the prerequisite below.
+#
+# Prerequisite: aivyx-coder's own config.toml must set
+# `[mcp_server].max_access_level` ("plan" | "edit" | "execute")
+# before this server can start -- there is no default, and it
+# refuses to start unconfigured. This ceiling caps every session's
+# access regardless of what a specialist's model requests; set it
+# no higher than the specialists calling it actually need.
+#
+# Required env: none.
+# Capability scopes the agent gets: mcp.call:aivyx-coder:*
+
+[[mcp_server]]
+name = "aivyx-coder"
+command = "aivyx-coder"
+args = ["--mcp-server"]
+
+[mcp_server.sandbox]
+# Optional defense-in-depth (see note above) -- bind only what
+# aivyx-coder itself needs to start. Omit this block entirely if
+# you'd rather rely solely on aivyx-coder's own confinement.
+wrapper = "bwrap"
+args = [
+    "--ro-bind", "/usr", "/usr",
+    "--ro-bind", "/etc", "/etc",
+    "--ro-bind", "/home/me/.config/aivyx-coder", "/home/me/.config/aivyx-coder",
+    "--dev", "/dev", "--proc", "/proc",
+    "--",
+]
+"#,
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -573,6 +614,16 @@ mod tests {
         let out = render_recipe("filesystem").expect("filesystem recipe must exist");
         assert!(out.contains("[[mcp_server]]"));
         assert!(out.contains("server-filesystem"));
+        assert!(out.ends_with('\n'), "snippet must end with newline");
+    }
+
+    #[test]
+    fn render_recipe_aivyx_coder_returns_snippet() {
+        let out = render_recipe("aivyx-coder").expect("aivyx-coder recipe must exist");
+        assert!(out.contains("[[mcp_server]]"));
+        assert!(out.contains("aivyx-coder"));
+        assert!(out.contains("--mcp-server"));
+        assert!(out.contains("mcp.call:aivyx-coder:*"));
         assert!(out.ends_with('\n'), "snippet must end with newline");
     }
 

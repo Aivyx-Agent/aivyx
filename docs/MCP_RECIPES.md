@@ -132,6 +132,7 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 | [`slack`](#slack) | Medium | Channel read + post |
 | [`memory`](#memory) | Low | Knowledge-graph (distinct from Aivyx's own memory) |
 | [`puppeteer`](#puppeteer) | Low | Headless browser; higher blast radius |
+| [`aivyx-coder`](#aivyx-coder) | Low | Delegate coding tasks to a local aivyx-coder process |
 | [`everything`](#everything) | First-run | Reference / smoke-test server |
 
 ---
@@ -513,6 +514,55 @@ args = [
     "--",
 ]
 ```
+
+---
+
+## aivyx-coder
+
+Delegate bounded coding tasks to a local `aivyx-coder` process (a
+separate, sibling Aivyx product — a terminal coding agent for local
+LLMs) running as `aivyx-coder --mcp-server`. Unlike every other
+recipe in this catalog, this is not third-party code: `aivyx-coder`
+ships its own Landlock+seccomp confinement and its own tiered
+access ceiling, so the sandbox block below is optional
+defense-in-depth, not the thing actually keeping the operator safe.
+
+**Prerequisite:** `aivyx-coder`'s own `config.toml` must set
+`[mcp_server].max_access_level` (`"plan"` | `"edit"` | `"execute"`)
+before this server can start — there is no default, and it refuses
+to start unconfigured. This ceiling caps every session's access
+regardless of what a specialist's model requests; set it no higher
+than the specialists calling it actually need.
+
+**Required env:** none.
+**Capability scopes the agent gets:** `mcp.call:aivyx-coder:*`.
+
+```toml
+[[mcp_server]]
+name = "aivyx-coder"
+command = "aivyx-coder"
+args = ["--mcp-server"]
+
+[mcp_server.sandbox]
+# Optional defense-in-depth (see prerequisite above) -- bind only
+# what aivyx-coder itself needs to start. Omit this block entirely
+# if you'd rather rely solely on aivyx-coder's own confinement.
+wrapper = "bwrap"
+args = [
+    "--ro-bind", "/usr", "/usr",
+    "--ro-bind", "/etc", "/etc",
+    "--ro-bind", "/home/me/.config/aivyx-coder", "/home/me/.config/aivyx-coder",
+    "--dev", "/dev", "--proc", "/proc",
+    "--",
+]
+```
+
+Verify it works: after configuring `aivyx-coder`'s
+`max_access_level` and restarting the daemon (`aivyx daemon stop &&
+aivyx`), run `aivyx mcp status` — `aivyx-coder` should show
+connected with 2 tools (`code`, `code_reply`). See
+`docs/NONAGON.md` §9 for a worked example wiring this into a
+Nonagon specialist.
 
 ---
 
