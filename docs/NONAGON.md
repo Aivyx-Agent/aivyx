@@ -188,6 +188,35 @@ parallel-ready — adding wide parallelism is a *flip*, not a redesign.
 > One engine, a catering-shaped team; every specialist least-privileged;
 > the whole run on the audit chain.
 
+A second example: delegating a bounded coding task to `aivyx-coder`
+running out-of-process, bridged in as an MCP server (see
+`docs/MCP_RECIPES.md`'s `aivyx-coder` recipe). The specialist below
+is named `remote-coder` — deliberately distinct from the default
+roster's own in-process `coder` role (`crates/aivyx-team/src/roster.rs`,
+which touches `fs.*`/`shell.exec` directly) — to keep "runs in this
+process" and "delegates to a separate aivyx-coder binary" visually
+unambiguous in any team config that uses both:
+
+```toml
+[[team.member]]
+name = "remote-coder"
+role = "Engineering specialist (out-of-process)"
+soul = "You delegate coding tasks to a separate aivyx-coder process over MCP rather than touching files yourself. Every call needs an access_level: \"plan\" for read-only investigation, \"edit\" when the task needs a file changed but no commands or git actions, \"execute\" when it needs to run tests, commands, or commit. Pick the lowest tier that gets the task done -- the ceiling aivyx-coder's own operator configured wins regardless of what you request, so asking for more than you need only risks an unnecessary rejection, never gets you more than what's configured."
+tool_allowlist = ["mcp.call"]
+capability_scopes = ["mcp.call:aivyx-coder:*"]
+trust_ceiling = "Trusted"
+```
+
+`tool_allowlist` carries the literal marker `"mcp.call"` — not a
+tool name, not a scope — which `filter_tools`
+(`crates/aivyx-team/src/factory.rs`) expands to every bridged tool
+whose required scope base is `mcp.call` (here: `code` and
+`code_reply`, `aivyx-coder`'s only two). `capability_scopes` is the
+separate list carrying the real, attenuated grant the specialist
+actually gets. No `default_nonagon` change: this member is
+opt-in, added to a custom `TeamConfig` the same way the kitchen BOH
+roster is — never part of the free-core default roster.
+
 ## 10. What's reused vs. new
 
 **Reused unchanged:** `ConcreteAgent` + the turn loop, `ToolRegistry`,
