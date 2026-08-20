@@ -130,7 +130,7 @@ mod quality_tests {
             Arc::new(FsDeleteToolConfig::new(dir.clone()).build().expect("fs.delete")),
             Arc::new(RoleSwitchTool::default()),
         ];
-        if let Ok((ws_tools, _)) = workspace::build_workspace_tools(&dir) {
+        if let Ok((ws_tools, _)) = workspace::build_workspace_tools(&dir, None) {
             tools.extend(ws_tools);
         }
 

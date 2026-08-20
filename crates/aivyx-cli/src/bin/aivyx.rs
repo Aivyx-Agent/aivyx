@@ -6782,8 +6782,38 @@ async fn run_async(
     // delete/note), rooted at `workspace_root` and always-on (independent of
     // fs_root / the access level). The held `workspace:<root>/**` + bare-root
     // grant goes into the backcompat floor below.
+    //
+    // aivyx-checkpoint — one GitCheckpointer for workspace_root, same shape
+    // as fs_root's own checkpointer above: opt-in only (no auto `git init`
+    // here), so this stays `None` unless the operator (or the agent itself)
+    // has already made `workspace_root` a git repo.
+    let workspace_checkpointer: Option<Arc<aivyx_core::GitCheckpointer>> =
+        if let Some(root) = &workspace_root {
+            match std::fs::canonicalize(root) {
+                Ok(canonical) => {
+                    let deny_paths = if is_inside_git_work_tree(&canonical).await {
+                        collect_sensitive_paths_under(&canonical, &sensitive_policy)
+                    } else {
+                        Vec::new()
+                    };
+                    aivyx_core::GitCheckpointer::detect(&canonical, deny_paths)
+                        .await
+                        .map(Arc::new)
+                }
+                // build_workspace_tools below performs the same
+                // canonicalize call and will surface this as a real
+                // "failed to build tools" error there; no checkpointer
+                // for an unresolvable root either way.
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
     let workspace_scopes: Vec<Scope> = match &workspace_root {
-        Some(root) => match aivyx_core::tools::workspace::build_workspace_tools(root) {
+        Some(root) => match aivyx_core::tools::workspace::build_workspace_tools(
+            root,
+            workspace_checkpointer.clone(),
+        ) {
             Ok((tools, canonical)) => {
                 for t in tools {
                     tool_list.push(t);
