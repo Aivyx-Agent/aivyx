@@ -48,6 +48,7 @@
 //! can swap in `git2` behind the same tool surface without
 //! changing the `Tool` impl.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -55,8 +56,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::{
-    AivyxError, CapabilitySet, ExecutionConfiner, NoopConfiner, Tool, ToolContext, ToolId,
-    ToolOutcome, Verification, default_confiner,
+    AivyxError, CapabilitySet, ExecutionConfiner, GitCheckpointer, NoopConfiner, Tool,
+    ToolContext, ToolId, ToolOutcome, Verification, default_confiner,
 };
 use aivyx_capability::Scope;
 
@@ -124,6 +125,7 @@ pub struct GitWriteToolConfig {
     repos: Vec<PathBuf>,
     confirm_destructive: bool,
     require_enforcement: bool,
+    checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
 }
 
 impl GitWriteToolConfig {
@@ -134,6 +136,7 @@ impl GitWriteToolConfig {
             repos: repos.into_iter().collect(),
             confirm_destructive: false,
             require_enforcement: true,
+            checkpointers: HashMap::new(),
         }
     }
 
@@ -153,6 +156,26 @@ impl GitWriteToolConfig {
         self
     }
 
+    /// Attach a pre-built per-repo checkpoint map: one `GitCheckpointer`
+    /// per entry in the `[git] repos` allow-set that both is a real git
+    /// work tree and had `GitCheckpointer::detect` succeed for it, keyed
+    /// by that repo's own canonical path. Building these requires an
+    /// async `detect()` call per repo plus operator sensitive-path config
+    /// this crate has no visibility into, so the caller (the binary)
+    /// builds the map once at startup and hands it in fully-formed —
+    /// `build()` below stays synchronous. Defaults to an empty map (no
+    /// checkpointing for any repo) when this method is never called. A
+    /// repo missing from the map simply gets no checkpoint before its
+    /// commits — the same graceful-degradation contract `fs_root`'s own
+    /// checkpointer already has when `fs_root` isn't a git repo.
+    pub fn with_checkpointers(
+        mut self,
+        checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
+    ) -> Self {
+        self.checkpointers = checkpointers;
+        self
+    }
+
     /// Canonicalize the allow-set (same validation as the read pair —
     /// each entry must be a directory containing a `.git/`) and return
     /// a ready-to-register [`GitCommitTool`].
@@ -165,6 +188,7 @@ impl GitWriteToolConfig {
             confirm_destructive: self.confirm_destructive,
             schema: commit_input_schema(),
             require_enforcement: self.require_enforcement,
+            checkpointers: self.checkpointers,
         })
     }
 }
@@ -416,13 +440,26 @@ impl Tool for GitDiffTool {
 /// `git.write` scope (Trusted-tier only) and confirm-first when the
 /// operator enables `[access] confirm_destructive`. Shells out to the
 /// system `git` (same as the read tools — no `git2` dep).
-#[derive(Debug)]
 pub struct GitCommitTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     confirm_destructive: bool,
     schema: Value,
     require_enforcement: bool,
+    checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
+}
+
+impl std::fmt::Debug for GitCommitTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitCommitTool")
+            .field("id", &self.id)
+            .field("repos", &self.repos)
+            .field("confirm_destructive", &self.confirm_destructive)
+            .field("schema", &self.schema)
+            .field("require_enforcement", &self.require_enforcement)
+            .field("checkpointed_repos", &self.checkpointers.len())
+            .finish()
+    }
 }
 
 impl GitCommitTool {
@@ -467,7 +504,7 @@ impl Tool for GitCommitTool {
         }
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let repo = match resolve_repo(&input, &self.repos) {
             Some(p) => p,
             None => {
@@ -478,6 +515,10 @@ impl Tool for GitCommitTool {
                 });
             }
         };
+
+        if let Some(checkpointer) = self.checkpointers.get(&repo) {
+            checkpointer.checkpoint("git.commit", ctx.cancellation).await;
+        }
 
         let confiner = confiner_for(&repo, self.require_enforcement);
 
@@ -1389,5 +1430,108 @@ mod git_tests {
             should_warn_once(other_repo.path()),
             "a different repo must warn on its own first call"
         );
+    }
+
+    // ---- git.commit checkpointing (aivyx-checkpoint git.rs/workspace.rs adoption) ----
+
+    #[tokio::test]
+    async fn commit_checkpoints_the_correct_repo_when_multiple_are_configured() {
+        let Some(repo_a) = init_temp_repo() else { return };
+        let Some(repo_b) = init_temp_repo() else {
+            std::fs::remove_dir_all(&repo_a).ok();
+            return;
+        };
+        std::fs::write(repo_a.join("a.txt"), b"a\n").unwrap();
+
+        let checkpointer_a = crate::GitCheckpointer::detect(&repo_a, Vec::new())
+            .await
+            .expect("repo_a is a real git repo");
+        let checkpointer_b = crate::GitCheckpointer::detect(&repo_b, Vec::new())
+            .await
+            .expect("repo_b is a real git repo");
+        let mut checkpointers = HashMap::new();
+        checkpointers.insert(repo_a.clone(), Arc::new(checkpointer_a));
+        checkpointers.insert(repo_b.clone(), Arc::new(checkpointer_b));
+
+        let tool = GitWriteToolConfig::new(vec![repo_a.clone(), repo_b.clone()])
+            .with_checkpointers(checkpointers)
+            .build()
+            .expect("build");
+
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({
+                    "repo": repo_a.display().to_string(),
+                    "message": "add a",
+                    "paths": ["a.txt"],
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+
+        let refs_a = aivyx_checkpoint::test_support::git(
+            &repo_a,
+            &["for-each-ref", "refs/aivyx/checkpoints/"],
+        )
+        .await;
+        assert!(!refs_a.trim().is_empty(), "repo A must have a checkpoint ref");
+
+        let refs_b = aivyx_checkpoint::test_support::git(
+            &repo_b,
+            &["for-each-ref", "refs/aivyx/checkpoints/"],
+        )
+        .await;
+        assert!(refs_b.trim().is_empty(), "repo B must NOT have any checkpoint ref");
+
+        std::fs::remove_dir_all(&repo_a).ok();
+        std::fs::remove_dir_all(&repo_b).ok();
+    }
+
+    #[tokio::test]
+    async fn commit_skips_checkpoint_for_a_repo_with_no_entry_in_the_map() {
+        let Some(repo) = init_temp_repo() else { return };
+        std::fs::write(repo.join("b.txt"), b"b\n").unwrap();
+
+        // Default GitWriteToolConfig (no `.with_checkpointers` call) --
+        // the map defaults empty, so this repo has no checkpointer even
+        // though it's a real git repo.
+        let tool = GitWriteToolConfig::new(vec![repo.clone()]).build().expect("build");
+
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({
+                    "repo": repo.display().to_string(),
+                    "message": "add b",
+                    "paths": ["b.txt"],
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "commit must still succeed: {outcome:?}"
+        );
+
+        let refs = aivyx_checkpoint::test_support::git(
+            &repo,
+            &["for-each-ref", "refs/aivyx/checkpoints/"],
+        )
+        .await;
+        assert!(
+            refs.trim().is_empty(),
+            "no checkpointer configured -- no checkpoint ref should exist"
+        );
+
+        std::fs::remove_dir_all(&repo).ok();
     }
 }

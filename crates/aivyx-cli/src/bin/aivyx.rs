@@ -6948,6 +6948,27 @@ async fn run_async(
         tool_list.push(Arc::new(git_status) as Arc<dyn Tool>);
         tool_list.push(Arc::new(git_diff) as Arc<dyn Tool>);
 
+        // aivyx-checkpoint — one GitCheckpointer per configured repo,
+        // built once here (not per git.commit call: detect() spawns a
+        // `git` subprocess, and `[git] repos` is a small, fixed,
+        // operator-curated list, so paying that cost once at startup
+        // mirrors exactly how fs_root's own checkpointer is built once
+        // above). A repo missing from this map (detect() returned None,
+        // e.g. a corrupted .git) simply gets no checkpoint before its
+        // commits.
+        let mut git_checkpointers: std::collections::HashMap<
+            std::path::PathBuf,
+            Arc<aivyx_core::GitCheckpointer>,
+        > = std::collections::HashMap::new();
+        for repo in &canonical_repos {
+            if is_inside_git_work_tree(repo).await {
+                let deny_paths = collect_sensitive_paths_under(repo, &sensitive_policy);
+                if let Some(cp) = aivyx_core::GitCheckpointer::detect(repo, deny_paths).await {
+                    git_checkpointers.insert(repo.clone(), Arc::new(cp));
+                }
+            }
+        }
+
         // Chapter Forge (FG.4) — `git.commit` registers from the
         // SAME `[git] repos` allow-set, gated by the `git.write`
         // scope (Trusted-tier only). Confirm-first wires from
@@ -6959,6 +6980,7 @@ async fn run_async(
         let git_commit = aivyx_core::GitWriteToolConfig::new(repos)
             .with_confirm_destructive(confirm_destructive)
             .with_require_enforcement(require_enforcement)
+            .with_checkpointers(git_checkpointers)
             .build()
             .map_err(|e| format!("failed to build git.commit tool: {e}"))?;
         tool_list.push(Arc::new(git_commit) as Arc<dyn Tool>);
