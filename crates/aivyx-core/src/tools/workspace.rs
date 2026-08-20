@@ -159,6 +159,11 @@ fn str_field(input: &Value, key: &str) -> Result<String, String> {
 /// Build all workspace tools rooted at `root` (canonicalized). Returns the
 /// tools plus the canonical root so the binary can mint the operator-held
 /// `workspace:<root>/**` + bare-root grant. Fails if the root isn't a dir.
+///
+/// `checkpointer` is `None` when `root` isn't (yet) a git repo -- opt-in
+/// only, there is no auto `git init` here. Only the three mutating tools
+/// (`WorkspaceWriteTool`/`WorkspaceDeleteTool`/`WorkspaceNoteTool`) receive
+/// it; `WorkspaceReadTool`/`WorkspaceListTool` are read-only and don't need it.
 pub fn build_workspace_tools(
     root: &Path,
     checkpointer: Option<Arc<GitCheckpointer>>,
@@ -707,6 +712,20 @@ mod tests {
         tools.iter().find(|t| t.name() == name).expect("tool present").as_ref()
     }
 
+    /// Extract the ref name (third whitespace-separated field) from the
+    /// first line of `git for-each-ref` output (`<sha> <type> <refname>`
+    /// per line).
+    fn first_ref_name(for_each_ref_output: &str) -> String {
+        for_each_ref_output
+            .lines()
+            .next()
+            .expect("at least one checkpoint ref")
+            .split_whitespace()
+            .nth(2)
+            .expect("for-each-ref line has a ref name field")
+            .to_string()
+    }
+
     #[test]
     fn write_then_read_roundtrips() {
         let (root, tools) = tools_at("rw");
@@ -933,6 +952,21 @@ mod tests {
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
         assert!(!refs.trim().is_empty(), "a checkpoint ref must exist before the write");
+
+        // Prove the checkpoint captured PRE-mutation state: the write
+        // target didn't exist on disk until `workspace.write`'s own
+        // `std::fs::write` ran, which happens strictly *after* the
+        // checkpoint call inside `execute()` -- so the checkpoint's tree
+        // must not contain it.
+        let ref_name = first_ref_name(&refs);
+        let tree_check = rt.block_on(aivyx_checkpoint::test_support::git(
+            &root,
+            &["ls-tree", "-r", "--name-only", &ref_name],
+        ));
+        assert!(
+            !tree_check.contains("ideas/spark.md"),
+            "checkpoint tree must predate the new file, got: {tree_check}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -960,6 +994,21 @@ mod tests {
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
         assert!(!refs.trim().is_empty(), "a checkpoint ref must exist before the delete");
+
+        // Prove the checkpoint captured PRE-mutation state: the deleted
+        // file was written to disk before the tool call and the
+        // checkpoint runs before `workspace.delete`'s own removal, so the
+        // checkpoint's tree must still contain it.
+        let ref_name = first_ref_name(&refs);
+        let tree_check = rt.block_on(aivyx_checkpoint::test_support::git(
+            &root,
+            &["ls-tree", "-r", "--name-only", &ref_name],
+        ));
+        assert!(
+            tree_check.contains("ideas/tmp.md"),
+            "checkpoint tree must still contain the file that's about to be \
+             deleted, got: {tree_check}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -979,13 +1028,33 @@ mod tests {
             named(&tools, "workspace.note"),
             json!({"content":"today I learned X"}),
         );
-        assert!(matches!(n, ToolOutcome::Completed { .. }));
+        let appended_to = match &n {
+            ToolOutcome::Completed { output, .. } => {
+                output["appended_to"].as_str().unwrap().to_string()
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        };
 
         let refs = rt.block_on(aivyx_checkpoint::test_support::git(
             &root,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
         assert!(!refs.trim().is_empty(), "a checkpoint ref must exist before the note append");
+
+        // Prove the checkpoint captured PRE-mutation state: the dated
+        // journal file didn't exist on disk until `workspace.note`'s own
+        // append-open ran, which happens strictly *after* the checkpoint
+        // call inside `execute()` -- so the checkpoint's tree must not
+        // contain it.
+        let ref_name = first_ref_name(&refs);
+        let tree_check = rt.block_on(aivyx_checkpoint::test_support::git(
+            &root,
+            &["ls-tree", "-r", "--name-only", &ref_name],
+        ));
+        assert!(
+            !tree_check.contains(&appended_to),
+            "checkpoint tree must predate the new journal file, got: {tree_check}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -1012,6 +1081,35 @@ mod tests {
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
         assert!(refs.trim().is_empty(), "no checkpointer configured -- no ref should exist");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ---- mutates_fs_root regression (final-review Fix 3) ----
+    //
+    // Each mutating workspace.* tool checkpoints itself, scoped to
+    // workspace_root -- it must never be wired into ConcreteAgent's
+    // fs_root-scoped checkpointer hook (agent.rs's dispatch loop fires that
+    // hook for any tool where this returns true), since workspace_root is
+    // not fs_root.
+
+    #[test]
+    fn workspace_write_does_not_mutate_fs_root() {
+        let (root, tools) = tools_at("write-mutates-fs-root");
+        assert!(!named(&tools, "workspace.write").mutates_fs_root());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn workspace_delete_does_not_mutate_fs_root() {
+        let (root, tools) = tools_at("delete-mutates-fs-root");
+        assert!(!named(&tools, "workspace.delete").mutates_fs_root());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn workspace_note_does_not_mutate_fs_root() {
+        let (root, tools) = tools_at("note-mutates-fs-root");
+        assert!(!named(&tools, "workspace.note").mutates_fs_root());
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -516,10 +516,6 @@ impl Tool for GitCommitTool {
             }
         };
 
-        if let Some(checkpointer) = self.checkpointers.get(&repo) {
-            checkpointer.checkpoint("git.commit", ctx.cancellation).await;
-        }
-
         let confiner = confiner_for(&repo, self.require_enforcement);
 
         let message = match input.get("message").and_then(|v| v.as_str()) {
@@ -587,6 +583,10 @@ impl Tool for GitCommitTool {
                     repo.display(),
                 ),
             });
+        }
+
+        if let Some(checkpointer) = self.checkpointers.get(&repo) {
+            checkpointer.checkpoint("git.commit", ctx.cancellation).await;
         }
 
         // Stage: `git -C <repo> add -- <paths...>`.
@@ -1112,6 +1112,16 @@ mod git_tests {
         }
     }
 
+    #[test]
+    fn git_commit_does_not_mutate_fs_root() {
+        // git.commit checkpoints itself, per-repo, inside execute() -- it must
+        // never be wired into ConcreteAgent's fs_root-scoped checkpointer hook
+        // (agent.rs's dispatch loop fires that hook for any tool where this
+        // returns true), since git.commit's target repo is not fs_root.
+        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new()).build().expect("build");
+        assert!(!tool.mutates_fs_root());
+    }
+
     // ---- Integration: a real tmpdir git repo ----
 
     /// `git init` a fresh repo under a unique tmp dir with a committable
@@ -1161,6 +1171,20 @@ mod git_tests {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => detail.clone(),
             other => panic!("expected Failed(Tool), got {other:?}"),
         }
+    }
+
+    /// Extract the ref name (third whitespace-separated field) from the
+    /// first line of `git for-each-ref` output (`<sha> <type> <refname>`
+    /// per line).
+    fn first_ref_name(for_each_ref_output: &str) -> String {
+        for_each_ref_output
+            .lines()
+            .next()
+            .expect("at least one checkpoint ref")
+            .split_whitespace()
+            .nth(2)
+            .expect("for-each-ref line has a ref name field")
+            .to_string()
     }
 
     #[tokio::test]
@@ -1482,6 +1506,30 @@ mod git_tests {
         )
         .await;
         assert!(!refs_a.trim().is_empty(), "repo A must have a checkpoint ref");
+
+        // Prove the checkpoint captured PRE-mutation state, not just that a
+        // ref exists. `init_temp_repo` never commits anything, so repo_a's
+        // HEAD is still unborn at checkpoint time -- and `a.txt` (written to
+        // disk by this test, above, before `execute` was even called) is
+        // already present in the working tree either way, so a naive
+        // "checkpoint tree doesn't contain a.txt" assertion can't
+        // distinguish correct ordering from the bug (`checkpoint()`'s own
+        // `git add -A` restages whatever is on disk regardless of when
+        // within `execute()` it runs). What DOES distinguish them is
+        // whether HEAD existed yet: `checkpoint_inner` only adds `-p HEAD`
+        // when `git rev-parse --verify HEAD` succeeds, so a checkpoint
+        // taken before git.commit's own `git commit` (this test, per Fix 1)
+        // must be parentless; one taken after would carry the just-created
+        // commit as its parent.
+        let ref_name_a = first_ref_name(&refs_a);
+        let checkpoint_commit_a =
+            aivyx_checkpoint::test_support::git(&repo_a, &["cat-file", "-p", &ref_name_a]).await;
+        assert!(
+            !checkpoint_commit_a.lines().any(|l| l.starts_with("parent ")),
+            "checkpoint must be parentless -- it should have run while repo_a's \
+             HEAD was still unborn (before git.commit's own `git commit` created \
+             the first commit), got: {checkpoint_commit_a}"
+        );
 
         let refs_b = aivyx_checkpoint::test_support::git(
             &repo_b,

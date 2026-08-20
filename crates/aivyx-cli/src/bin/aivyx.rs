@@ -5183,6 +5183,43 @@ async fn is_inside_git_work_tree(root: &std::path::Path) -> bool {
     }
 }
 
+/// Builds a `GitCheckpointer` for `root`, reusing a prior sensitive-path
+/// walk if `root` (post-canonicalization) was already walked for a
+/// different checkpointed root in this same startup sequence (fs_root, a
+/// `[git] repos` entry, and workspace_root can legitimately coincide).
+/// `walk_cache` is owned by the caller and threaded through every call
+/// site in this function so the cache is shared across all of them.
+///
+/// Final-review Fix 4: three near-duplicate blocks (fs_root, the `[git]
+/// repos` loop, workspace_root) each used to do their own
+/// `is_inside_git_work_tree` + `collect_sensitive_paths_under` + `detect()`
+/// sequence. When two of those roots turn out to be the same real
+/// directory, `collect_sensitive_paths_under` -- a full recursive
+/// directory walk -- used to run redundantly for the same tree; this
+/// helper also incidentally makes all three call sites consistent about
+/// using `is_inside_git_work_tree` only to gate the walk, not as a
+/// redundant guard around `detect()` itself (the `[git] repos` loop used
+/// to do the latter, which was always true there since
+/// `canonicalize_repo_allow_set` already guarantees every repo has a
+/// `.git` entry).
+async fn checkpointer_for(
+    root: &std::path::Path,
+    policy: &aivyx_core::sensitive_paths::SensitivePolicy,
+    walk_cache: &mut std::collections::HashMap<std::path::PathBuf, Vec<std::path::PathBuf>>,
+) -> Option<std::sync::Arc<aivyx_core::GitCheckpointer>> {
+    if !is_inside_git_work_tree(root).await {
+        return None;
+    }
+    let deny_paths = if let Some(cached) = walk_cache.get(root) {
+        cached.clone()
+    } else {
+        let walked = collect_sensitive_paths_under(root, policy);
+        walk_cache.insert(root.to_path_buf(), walked.clone());
+        walked
+    };
+    aivyx_core::GitCheckpointer::detect(root, deny_paths).await.map(std::sync::Arc::new)
+}
+
 // `run_async` sits right at the binary's composition root: it takes
 // the validated `AivyxConfig`, the open storage handle, the audit
 // chain key, and the CLI-derived `ChannelKind`, and threads
@@ -6059,15 +6096,24 @@ async fn run_async(
     // naive `.git` existence check directly under `canonical_root` — see
     // `is_inside_git_work_tree`'s doc comment for why a naive
     // check false-negatives on a `fs_root` nested inside a larger repo.
-    let checkpoint_deny_paths = if is_inside_git_work_tree(&canonical_root).await {
-        collect_sensitive_paths_under(&canonical_root, &sensitive_policy)
-    } else {
-        Vec::new()
-    };
+    //
+    // `checkpoint_walk_cache` is declared here (the earliest of the three
+    // checkpointer-construction sites in this function — fs_root, the
+    // `[git] repos` loop, and workspace_root all follow) and threaded
+    // through every `checkpointer_for` call below so a sensitive-path walk
+    // is never repeated for the same real directory (final-review Fix 4).
+    // `workspace_root`, `fs_root`, and a `[git] repos` entry can
+    // legitimately be the same real directory, in which case more than one
+    // `GitCheckpointer` instance ends up checkpointing that repo
+    // independently (deduplicating checkpointer *instances* is out of
+    // scope — see the `[git] repos` loop's own comment below for why that's
+    // wasteful but not unsafe).
+    let mut checkpoint_walk_cache: std::collections::HashMap<
+        std::path::PathBuf,
+        Vec<std::path::PathBuf>,
+    > = std::collections::HashMap::new();
     let checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>> =
-        aivyx_core::GitCheckpointer::detect(&canonical_root, checkpoint_deny_paths)
-            .await
-            .map(std::sync::Arc::new);
+        checkpointer_for(&canonical_root, &sensitive_policy, &mut checkpoint_walk_cache).await;
     // Chapter N — the enforced fs root, shared into every prompt-assembly
     // closure so the system prompt can name the actual sandbox boundary
     // (the model must know its real root to neither over-refuse a granted
@@ -6786,19 +6832,23 @@ async fn run_async(
     // aivyx-checkpoint — one GitCheckpointer for workspace_root, same shape
     // as fs_root's own checkpointer above: opt-in only (no auto `git init`
     // here), so this stays `None` unless the operator (or the agent itself)
-    // has already made `workspace_root` a git repo.
+    // has already made `workspace_root` a git repo. Note: `workspace_root`
+    // can legitimately be the same real directory as `fs_root` or a `[git]
+    // repos` entry, in which case that repo ends up checkpointed by more
+    // than one independent `GitCheckpointer` instance — wasteful (redundant
+    // refs, faster churn through the retention window) but not unsafe:
+    // `GitCheckpointer` never touches the user's real HEAD/index, and a
+    // failed/contended checkpoint only logs a warning and never blocks the
+    // tool call. `checkpointer_for`'s `walk_cache` parameter (Fix 4)
+    // dedupes the sensitive-path walk when that coincidence happens; it
+    // deliberately does not try to dedupe the checkpointer instances
+    // themselves.
     let workspace_checkpointer: Option<Arc<aivyx_core::GitCheckpointer>> =
         if let Some(root) = &workspace_root {
             match std::fs::canonicalize(root) {
                 Ok(canonical) => {
-                    let deny_paths = if is_inside_git_work_tree(&canonical).await {
-                        collect_sensitive_paths_under(&canonical, &sensitive_policy)
-                    } else {
-                        Vec::new()
-                    };
-                    aivyx_core::GitCheckpointer::detect(&canonical, deny_paths)
+                    checkpointer_for(&canonical, &sensitive_policy, &mut checkpoint_walk_cache)
                         .await
-                        .map(Arc::new)
                 }
                 // build_workspace_tools below performs the same
                 // canonicalize call and will surface this as a real
@@ -6812,7 +6862,7 @@ async fn run_async(
     let workspace_scopes: Vec<Scope> = match &workspace_root {
         Some(root) => match aivyx_core::tools::workspace::build_workspace_tools(
             root,
-            workspace_checkpointer.clone(),
+            workspace_checkpointer,
         ) {
             Ok((tools, canonical)) => {
                 for t in tools {
@@ -6985,17 +7035,23 @@ async fn run_async(
         // mirrors exactly how fs_root's own checkpointer is built once
         // above). A repo missing from this map (detect() returned None,
         // e.g. a corrupted .git) simply gets no checkpoint before its
-        // commits.
+        // commits. Note: a `[git] repos` entry can legitimately be the
+        // same real directory as `fs_root` or `workspace_root`, in which
+        // case that repo ends up checkpointed by more than one independent
+        // `GitCheckpointer` instance — see `workspace_checkpointer`'s
+        // comment above for why that's wasteful but not unsafe, and why
+        // only the sensitive-path walk (via `checkpointer_for`'s
+        // `walk_cache`, Fix 4) is deduplicated, not the instances
+        // themselves.
         let mut git_checkpointers: std::collections::HashMap<
             std::path::PathBuf,
             Arc<aivyx_core::GitCheckpointer>,
         > = std::collections::HashMap::new();
         for repo in &canonical_repos {
-            if is_inside_git_work_tree(repo).await {
-                let deny_paths = collect_sensitive_paths_under(repo, &sensitive_policy);
-                if let Some(cp) = aivyx_core::GitCheckpointer::detect(repo, deny_paths).await {
-                    git_checkpointers.insert(repo.clone(), Arc::new(cp));
-                }
+            if let Some(cp) =
+                checkpointer_for(repo, &sensitive_policy, &mut checkpoint_walk_cache).await
+            {
+                git_checkpointers.insert(repo.clone(), cp);
             }
         }
 
