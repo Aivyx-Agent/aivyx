@@ -438,6 +438,13 @@ args = [
 # access regardless of what a specialist's model requests; set it
 # no higher than the specialists calling it actually need.
 #
+# Security note: an MCP-server session has no human to show a
+# permission prompt to -- every tool call within its granted tier
+# auto-resolves. "execute" means run_shell is auto-approved with no
+# human in the loop; set max_access_level no higher than this team
+# actually needs (see aivyx-coder's own README "MCP server
+# integration" section for the full caveat).
+#
 # Required env: none.
 # Capability scopes the agent gets: mcp.call:aivyx-coder:*
 
@@ -447,14 +454,20 @@ command = "aivyx-coder"
 args = ["--mcp-server"]
 
 [mcp_server.sandbox]
-# Optional defense-in-depth (see note above) -- bind only what
-# aivyx-coder itself needs to start. Omit this block entirely if
-# you'd rather rely solely on aivyx-coder's own confinement.
+# aivyx-coder inherits the daemon's own working directory when
+# spawned over stdio (there's no separate `cwd` field to point it
+# elsewhere) -- bind that same directory, read-write, so its
+# fs/shell tools can actually reach your project; substitute the
+# real path, matching wherever your aivyx daemon runs. No
+# --unshare-net here (unlike filesystem/time/everything above):
+# aivyx-coder needs network to reach its own configured local LLM
+# backend (Ollama/vLLM/llama-server).
 wrapper = "bwrap"
 args = [
     "--ro-bind", "/usr", "/usr",
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/home/me/.config/aivyx-coder", "/home/me/.config/aivyx-coder",
+    "--bind", "/home/me/projects", "/home/me/projects",
     "--dev", "/dev", "--proc", "/proc",
     "--",
 ]

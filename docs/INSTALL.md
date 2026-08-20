@@ -548,7 +548,7 @@ full mechanism and its current scope.
    catalog of MCP servers worth enabling — `filesystem`,
    `github`, `gitlab`, `sqlite`, `postgres`, `time`, `fetch`,
    `brave-search`, `slack`, `memory`, `puppeteer`,
-   `everything`. Bare form prints the list; `aivyx mcp
+   `everything`, `aivyx-coder`. Bare form prints the list; `aivyx mcp
    recipes <name>` prints a paste-able `[[mcp_server]]` block
    plus an inline `[mcp_server.sandbox]` block so a
    copy-paste produces a sandboxed config (Phase 55 substrate

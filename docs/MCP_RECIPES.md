@@ -24,12 +24,12 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 > loaded, the daemon registers each of its tools under
 > `mcp.call:<server-name>:<tool-name>`. Roles that need to invoke
 > the server must declare a matching scope — either `mcp.call`
-> (broad: any MCP tool), `mcp.call:<server-name>` (mid: any tool on
-> one named server), or `mcp.call:<server-name>:<tool-name>`
-> (narrow: one specific tool). The recipes below use the
-> middle granularity as the default since "if this server is
-> enabled, the agent can use any of its tools" is the most common
-> operator intent.
+> (broad: any MCP tool), `mcp.call:<server-name>:*` (mid: any tool
+> on one named server, via glob dispatch), or
+> `mcp.call:<server-name>:<tool-name>` (narrow: one specific tool).
+> The recipes below use the middle granularity as the default since
+> "if this server is enabled, the agent can use any of its tools"
+> is the most common operator intent.
 
 > **Resources.** Discovery is **capability-gated** on the server's
 > `initialize` response. A server that declares the `tools` capability
@@ -534,6 +534,17 @@ to start unconfigured. This ceiling caps every session's access
 regardless of what a specialist's model requests; set it no higher
 than the specialists calling it actually need.
 
+**Security note:** unlike a human using aivyx-coder's own TUI or
+editor integration, an MCP-server session has no human to show a
+permission prompt to — every tool call within the session's granted
+tier auto-resolves. In particular, `max_access_level = "execute"`
+means any process able to reach this server gets `run_shell`
+auto-approved with no human in the loop. Landlock/seccomp still
+confine what runs, but the interactive permission gate aivyx-coder
+otherwise relies on does not apply to MCP-server sessions — set
+`max_access_level` no higher than the specialists calling it
+actually need.
+
 **Required env:** none.
 **Capability scopes the agent gets:** `mcp.call:aivyx-coder:*`.
 
@@ -544,14 +555,20 @@ command = "aivyx-coder"
 args = ["--mcp-server"]
 
 [mcp_server.sandbox]
-# Optional defense-in-depth (see prerequisite above) -- bind only
-# what aivyx-coder itself needs to start. Omit this block entirely
-# if you'd rather rely solely on aivyx-coder's own confinement.
+# aivyx-coder inherits the daemon's own working directory when
+# spawned over stdio (there's no separate `cwd` field to point it
+# elsewhere) -- bind that same directory, read-write, so its
+# fs/shell tools can actually reach your project; substitute the
+# real path, matching wherever your aivyx daemon runs. No
+# --unshare-net here (unlike filesystem/time/everything above):
+# aivyx-coder needs network to reach its own configured local LLM
+# backend (Ollama/vLLM/llama-server).
 wrapper = "bwrap"
 args = [
     "--ro-bind", "/usr", "/usr",
     "--ro-bind", "/etc", "/etc",
     "--ro-bind", "/home/me/.config/aivyx-coder", "/home/me/.config/aivyx-coder",
+    "--bind", "/home/me/projects", "/home/me/projects",
     "--dev", "/dev", "--proc", "/proc",
     "--",
 ]
@@ -569,7 +586,7 @@ Nonagon specialist.
 ## Adding a recipe to this catalog
 
 Recipes are static data in two places — `docs/MCP_RECIPES.md`
-(this file) and `crates/aivyx-channel/src/bin/aivyx_modules/mcp_recipes.rs`'s
+(this file) and `crates/aivyx-cli/src/bin/aivyx_modules/mcp_recipes.rs`'s
 `RECIPES` slice. The `aivyx mcp recipes` CLI surface reads from
 the slice; the doc is the operator-facing reference. Both must be
 kept in sync — if you add a recipe to one, add the matching half
