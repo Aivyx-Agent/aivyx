@@ -1173,20 +1173,6 @@ mod git_tests {
         }
     }
 
-    /// Extract the ref name (third whitespace-separated field) from the
-    /// first line of `git for-each-ref` output (`<sha> <type> <refname>`
-    /// per line).
-    fn first_ref_name(for_each_ref_output: &str) -> String {
-        for_each_ref_output
-            .lines()
-            .next()
-            .expect("at least one checkpoint ref")
-            .split_whitespace()
-            .nth(2)
-            .expect("for-each-ref line has a ref name field")
-            .to_string()
-    }
-
     #[tokio::test]
     async fn commit_happy_path_stages_and_commits() {
         let Some(repo) = init_temp_repo() else { return };
@@ -1507,30 +1493,6 @@ mod git_tests {
         .await;
         assert!(!refs_a.trim().is_empty(), "repo A must have a checkpoint ref");
 
-        // Prove the checkpoint captured PRE-mutation state, not just that a
-        // ref exists. `init_temp_repo` never commits anything, so repo_a's
-        // HEAD is still unborn at checkpoint time -- and `a.txt` (written to
-        // disk by this test, above, before `execute` was even called) is
-        // already present in the working tree either way, so a naive
-        // "checkpoint tree doesn't contain a.txt" assertion can't
-        // distinguish correct ordering from the bug (`checkpoint()`'s own
-        // `git add -A` restages whatever is on disk regardless of when
-        // within `execute()` it runs). What DOES distinguish them is
-        // whether HEAD existed yet: `checkpoint_inner` only adds `-p HEAD`
-        // when `git rev-parse --verify HEAD` succeeds, so a checkpoint
-        // taken before git.commit's own `git commit` (this test, per Fix 1)
-        // must be parentless; one taken after would carry the just-created
-        // commit as its parent.
-        let ref_name_a = first_ref_name(&refs_a);
-        let checkpoint_commit_a =
-            aivyx_checkpoint::test_support::git(&repo_a, &["cat-file", "-p", &ref_name_a]).await;
-        assert!(
-            !checkpoint_commit_a.lines().any(|l| l.starts_with("parent ")),
-            "checkpoint must be parentless -- it should have run while repo_a's \
-             HEAD was still unborn (before git.commit's own `git commit` created \
-             the first commit), got: {checkpoint_commit_a}"
-        );
-
         let refs_b = aivyx_checkpoint::test_support::git(
             &repo_b,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
@@ -1540,6 +1502,63 @@ mod git_tests {
 
         std::fs::remove_dir_all(&repo_a).ok();
         std::fs::remove_dir_all(&repo_b).ok();
+    }
+
+    /// Genuinely discriminates the checkpoint-ordering fix: a confirm-first
+    /// refusal must short-circuit *before* the checkpoint call is ever
+    /// reached. Under the bug (checkpoint placed right after
+    /// `resolve_repo`, before the confirm-first check), this refused,
+    /// unconfirmed call would still leave a checkpoint ref behind; under the
+    /// fix (checkpoint placed after the confirm-first check, immediately
+    /// before `git add`), the early return means the checkpointer is never
+    /// invoked at all.
+    #[tokio::test]
+    async fn commit_does_not_checkpoint_a_confirm_first_refused_call() {
+        let Some(repo) = init_temp_repo() else { return };
+        std::fs::write(repo.join("f.txt"), b"x\n").unwrap();
+
+        let checkpointer = crate::GitCheckpointer::detect(&repo, Vec::new())
+            .await
+            .expect("repo is a real git repo");
+        let mut checkpointers = HashMap::new();
+        checkpointers.insert(repo.clone(), Arc::new(checkpointer));
+
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .with_confirm_destructive(true)
+            .with_checkpointers(checkpointers)
+            .build()
+            .expect("build");
+
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        // No `confirmed: true` -- must be refused before ever reaching the
+        // checkpoint call, which now sits after this exact refusal check.
+        let outcome = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["f.txt"] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            ctx_less_outcome_detail(&outcome).contains("without confirmation"),
+            "expected the confirm-first refusal, got {outcome:?}"
+        );
+
+        let refs = aivyx_checkpoint::test_support::git(
+            &repo,
+            &["for-each-ref", "refs/aivyx/checkpoints/"],
+        )
+        .await;
+        assert!(
+            refs.trim().is_empty(),
+            "a refused, unconfirmed commit must NOT have been checkpointed -- \
+             this is the regression this test guards: the checkpoint call must \
+             sit after the confirm-first check, not before it"
+        );
+
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[tokio::test]
