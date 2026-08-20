@@ -5148,22 +5148,24 @@ fn collect_sensitive_paths_under(
 /// Mirrors `GitCheckpointer::detect`'s own repo-detection behavior
 /// (`git rev-parse --absolute-git-dir`, which walks *up* parent
 /// directories to find an ancestor `.git`) closely enough to gate
-/// `collect_sensitive_paths_under`'s walk correctly — unlike a naive
-/// `root.join(".git").exists()` check, which only sees a `.git` directly
-/// under `root` and false-negatives whenever `root` is a subdirectory
-/// nested inside a larger working tree (a realistic `[access] root`
-/// pointed at one service folder of a monorepo). A false negative here
-/// is worse than the wasted walk it's meant to avoid: it would leave
-/// `checkpoint_deny_paths` empty while `detect()` still finds the
-/// ancestor `.git` and activates checkpointing anyway, silently
-/// defeating the sensitive-path exclusion.
+/// `collect_sensitive_paths_under`'s walk correctly for any of this
+/// binary's checkpointed roots (`fs_root`, a `[git] repos` entry, or
+/// `workspace_root`) — unlike a naive `root.join(".git").exists()`
+/// check, which only sees a `.git` directly under `root` and
+/// false-negatives whenever `root` is a subdirectory nested inside a
+/// larger working tree (a realistic `[access] root` pointed at one
+/// service folder of a monorepo). A false negative here is worse than
+/// the wasted walk it's meant to avoid: it would leave that root's
+/// deny_paths empty while `detect()` still finds the ancestor `.git`
+/// and activates checkpointing anyway, silently defeating the
+/// sensitive-path exclusion.
 ///
 /// `git rev-parse --is-inside-work-tree` prints `"true"`/`"false"` and
 /// exits non-zero outside any git repository at all — any error or a
 /// `"false"` result is treated as "not a repo", matching what
 /// `detect()` itself would conclude (it returns `None` and disables
 /// checkpointing, making the walk's cost genuinely unnecessary).
-async fn fs_root_is_inside_git_work_tree(root: &std::path::Path) -> bool {
+async fn is_inside_git_work_tree(root: &std::path::Path) -> bool {
     let mut command = tokio::process::Command::new("git");
     command
         .arg("-C")
@@ -6055,9 +6057,9 @@ async fn run_async(
     // `detect()`'s own notion of "is a git repo" (which walks up parent
     // directories, via `git rev-parse --absolute-git-dir`) rather than a
     // naive `.git` existence check directly under `canonical_root` — see
-    // `fs_root_is_inside_git_work_tree`'s doc comment for why a naive
+    // `is_inside_git_work_tree`'s doc comment for why a naive
     // check false-negatives on a `fs_root` nested inside a larger repo.
-    let checkpoint_deny_paths = if fs_root_is_inside_git_work_tree(&canonical_root).await {
+    let checkpoint_deny_paths = if is_inside_git_work_tree(&canonical_root).await {
         collect_sensitive_paths_under(&canonical_root, &sensitive_policy)
     } else {
         Vec::new()
