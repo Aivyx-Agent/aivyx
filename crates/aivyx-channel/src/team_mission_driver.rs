@@ -140,6 +140,17 @@ pub struct TeamRunDeps {
     /// `SpecialistFactory` so fs_root-mutating tool calls made during a team
     /// mission are checkpointed, same as every other agent construction path.
     pub checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
+    /// The daemon's own shared kvcache pool/store + served build hash (Task
+    /// 5's binding, reused — not re-probed). Passed through to every
+    /// specialist's `SpecialistFactory` so a team mission's specialist turns
+    /// share the exact same `KvSlotPool` the daemon's main agent uses.
+    /// `None` disables kvcache for the whole mission (not llama-server, or
+    /// the `/props` probe failed at daemon startup).
+    pub kv_cache_handles: Option<(
+        std::sync::Arc<aivyx_llm::KvSlotPool>,
+        std::sync::Arc<aivyx_kvcache::LlamaServerSlotStore>,
+        String,
+    )>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -994,6 +1005,7 @@ fn assemble_runtime(
         lead_caps,
         member_backends,
         deps.checkpointer.clone(),
+        deps.kv_cache_handles.clone(),
     )?;
     Ok((assembly.runtime(), meter))
 }
@@ -1467,6 +1479,7 @@ mod tests {
             default_notify_target: None,
             audit_log: None,
             checkpointer: None,
+            kv_cache_handles: None,
         }
     }
 
@@ -1502,6 +1515,7 @@ mod tests {
             default_notify_target: None,
             audit_log: None,
             checkpointer: None,
+            kv_cache_handles: None,
         }
     }
 

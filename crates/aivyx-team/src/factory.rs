@@ -60,6 +60,16 @@ pub struct SpecialistFactory {
     /// fs_root-mutating tool call it makes gets checkpointed, same as the
     /// lead agent. `None` (the default) preserves pre-checkpoint behavior.
     checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
+    /// The shared kvcache pool/store + served build hash, when `[agent]
+    /// provider = "llama_cpp"` -- attached to every built specialist so
+    /// its own per-turn `LlmPlanner` shares the exact same `KvSlotPool`
+    /// the daemon's main agent uses, not one each. `None` (the default)
+    /// disables kvcache for every specialist this factory builds.
+    kv_cache_handles: Option<(
+        Arc<aivyx_llm::KvSlotPool>,
+        Arc<aivyx_kvcache::LlamaServerSlotStore>,
+        String,
+    )>,
 }
 
 impl SpecialistFactory {
@@ -79,6 +89,7 @@ impl SpecialistFactory {
             dialogue: None,
             member_backends: std::collections::HashMap::new(),
             checkpointer: None,
+            kv_cache_handles: None,
         }
     }
 
@@ -111,6 +122,22 @@ impl SpecialistFactory {
         self
     }
 
+    /// Attach the shared kvcache pool/store to every specialist this
+    /// factory builds. `None` means "no kvcache" (provider isn't
+    /// llama-server, or the `/props` probe failed), preserving
+    /// pre-kvcache behavior -- same shape as `with_checkpointer`.
+    pub fn with_kv_cache(
+        mut self,
+        kv_cache_handles: Option<(
+            Arc<aivyx_llm::KvSlotPool>,
+            Arc<aivyx_kvcache::LlamaServerSlotStore>,
+            String,
+        )>,
+    ) -> Self {
+        self.kv_cache_handles = kv_cache_handles;
+        self
+    }
+
     /// Build an attenuated specialist agent from `member`, with its
     /// capabilities capped at `lead_caps` (NT-02). Sync — no turn runs.
     pub fn build(
@@ -134,6 +161,7 @@ impl SpecialistFactory {
         let registry_for_planner = Arc::clone(&registry);
         let max_tokens = self.max_tokens;
         let soul = member.soul.clone();
+        let kv_cache_handles = self.kv_cache_handles.clone();
 
         let agent = ConcreteAgent::new(
             AgentId::new(),
@@ -144,11 +172,22 @@ impl SpecialistFactory {
                 let cfg = LlmPlannerConfig::new(&model)
                     .with_system_prompt(&soul)
                     .with_max_tokens(max_tokens);
-                Box::new(LlmPlanner::new(
+                let planner = LlmPlanner::new(
                     Arc::clone(&provider),
                     Arc::clone(&registry_for_planner),
                     cfg,
-                ))
+                );
+                let planner = match &kv_cache_handles {
+                    Some((pool, store, build_hash)) => planner.with_kv_cache(
+                        Arc::clone(pool),
+                        Arc::clone(store),
+                        "llama-server".to_string(),
+                        model.clone(),
+                        build_hash.clone(),
+                    ),
+                    None => planner,
+                };
+                Box::new(planner)
             },
         )
         .with_checkpointer(self.checkpointer.clone());

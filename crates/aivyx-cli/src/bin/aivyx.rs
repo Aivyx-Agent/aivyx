@@ -7849,6 +7849,11 @@ async fn run_async(
             DEFAULT_MAX_TOKENS,
             Arc::clone(&audit),
             checkpointer.clone(),
+            // Task 6 — `aivyx team run` runs inside this SAME `run_async`
+            // invocation, after the provider-selection block above already
+            // built `kv_cache_handles` (the same one the daemon path below
+            // reuses) — no second `/props` probe needed here.
+            kv_cache_handles.clone(),
             tool_list,
             mission,
             config.as_deref(),
@@ -8877,6 +8882,11 @@ async fn run_async(
                 default_notify_target: default_notify_target_name.clone(),
                 audit_log: Some(Arc::clone(&persistent_audit_for_query)),
                 checkpointer: checkpointer.clone(),
+                // Task 6 — reuse the daemon's own shared kvcache pool/store
+                // (Task 5), not a second probe: every specialist sub-turn a
+                // team mission runs shares the exact same `KvSlotPool` the
+                // daemon's main agent uses.
+                kv_cache_handles: kv_cache_handles.clone(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`

@@ -62,6 +62,11 @@ impl TeamAssembly {
             crate::factory::SpecialistBackend,
         >,
         checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
+        kv_cache_handles: Option<(
+            Arc<aivyx_llm::KvSlotPool>,
+            Arc<aivyx_kvcache::LlamaServerSlotStore>,
+            String,
+        )>,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
@@ -70,7 +75,8 @@ impl TeamAssembly {
         let factory = SpecialistFactory::new(provider, model, max_tokens, audit, base_tools)
             .with_dialogue(Arc::clone(&bus), dialogue.clone())
             .with_member_backends(member_backends)
-            .with_checkpointer(checkpointer);
+            .with_checkpointer(checkpointer)
+            .with_kv_cache(kv_cache_handles);
         let pool = Arc::new(SpecialistPool::new(factory, config.clone(), lead_caps.clone()));
         let runtime = Arc::new(TeamRuntime::new(Arc::clone(&pool)));
 
@@ -187,6 +193,7 @@ mod tests {
             lead_caps(),
             std::collections::HashMap::new(),
             None,
+            None,
         )
         .expect("valid team")
     }
@@ -204,6 +211,7 @@ mod tests {
             vec![],
             lead_caps(),
             std::collections::HashMap::new(),
+            None,
             None,
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
@@ -268,6 +276,7 @@ mod tests {
             vec![],
             lead_caps(),
             std::collections::HashMap::new(),
+            None,
             None,
         )
         .unwrap();

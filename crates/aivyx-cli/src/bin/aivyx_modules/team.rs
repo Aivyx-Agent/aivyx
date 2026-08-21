@@ -186,6 +186,11 @@ pub async fn run_mission(
     max_tokens: u32,
     audit: Arc<dyn AuditHook>,
     checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
+    kv_cache_handles: Option<(
+        Arc<aivyx_llm::KvSlotPool>,
+        Arc<aivyx_kvcache::LlamaServerSlotStore>,
+        String,
+    )>,
     base_tools: Vec<Arc<dyn Tool>>,
     mission: &str,
     config: Option<&str>,
@@ -218,6 +223,7 @@ pub async fn run_mission(
         // backend for all roles; per-role overrides are a daemon-mission path.
         std::collections::HashMap::new(),
         checkpointer.clone(),
+        kv_cache_handles.clone(),
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 
@@ -226,6 +232,7 @@ pub async fn run_mission(
     let planner_registry = Arc::clone(&registry);
     let model_owned = model.to_string();
     let soul = lead.soul.clone();
+    let planner_kv_cache_handles = kv_cache_handles.clone();
     let agent = ConcreteAgent::new(
         AgentId::new(),
         lead_caps,
@@ -235,11 +242,22 @@ pub async fn run_mission(
             let cfg = LlmPlannerConfig::new(&model_owned)
                 .with_system_prompt(&soul)
                 .with_max_tokens(max_tokens);
-            Box::new(LlmPlanner::new(
+            let planner = LlmPlanner::new(
                 Arc::clone(&planner_provider),
                 Arc::clone(&planner_registry),
                 cfg,
-            ))
+            );
+            let planner = match &planner_kv_cache_handles {
+                Some((pool, store, build_hash)) => planner.with_kv_cache(
+                    Arc::clone(pool),
+                    Arc::clone(store),
+                    "llama-server".to_string(),
+                    model_owned.clone(),
+                    build_hash.clone(),
+                ),
+                None => planner,
+            };
+            Box::new(planner)
         },
     )
     .with_checkpointer(checkpointer);
