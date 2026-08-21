@@ -306,6 +306,7 @@ impl TopicPhraser for LlmTopicPhraser {
             tools: &[],
             max_tokens: PHRASE_MAX_TOKENS,
             temperature: Some(0.3),
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream =

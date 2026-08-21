@@ -953,6 +953,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let messages = body["messages"].as_array().unwrap();
@@ -1054,6 +1055,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let err =
             build_request_body(&req, &OllamaOptions::default(), false, None).unwrap_err();
@@ -1209,6 +1211,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1285,6 +1288,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         // Would be Err without the retry; the second attempt succeeds.
@@ -1387,6 +1391,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1427,6 +1432,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1454,6 +1460,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1483,6 +1490,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1527,6 +1535,7 @@ mod tests {
             tools: &tools,
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1573,6 +1582,7 @@ mod tests {
             tools: &tools,
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1690,6 +1700,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: None,
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();

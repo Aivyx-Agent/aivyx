@@ -354,6 +354,16 @@ pub struct LlmRequest<'a> {
 
     /// Optional sampling temperature. `None` means "provider default."
     pub temperature: Option<f32>,
+
+    /// llama-server-only: pins this request to a specific `/slots` id (an
+    /// extension beyond the OpenAI spec, but honored by llama-server on
+    /// `/v1/chat/completions` -- verified empirically against a real
+    /// server during `aivyx-coder`'s own kvcache adoption, not documented
+    /// in llama-server's own API reference). Only ever set when
+    /// `[agent] provider = "llama_cpp"` and a slot has been checked out
+    /// (see `LlmPlanner`'s kvcache fields); `None` for every other
+    /// provider and every llama-server request before checkout.
+    pub id_slot: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -707,6 +717,7 @@ mod tests {
             tools,
             max_tokens: 256,
             temperature: Some(0.2),
+            id_slot: None,
         }
     }
 

@@ -606,6 +606,7 @@ impl GraphExtractor {
             tools: &[],
             max_tokens: self.config.max_tokens,
             temperature: Some(0.1),
+        id_slot: None,
         };
         let token = CancellationToken::new();
         let Ok(mut stream) = self.provider.chat_stream(request, &token).await else {

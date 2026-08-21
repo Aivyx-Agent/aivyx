@@ -587,6 +587,7 @@ impl LlmPlanner {
             tools: &self.tools,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
+            id_slot: None,
         };
 
         let cancellation = channel.cancellation_token();

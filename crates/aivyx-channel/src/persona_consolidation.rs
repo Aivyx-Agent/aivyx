@@ -593,6 +593,7 @@ impl PairPhraser for LlmPairPhraser {
             tools: &[],
             max_tokens: PHRASE_MAX_TOKENS,
             temperature: Some(0.3),
+        id_slot: None,
         };
         // A short, non-cancellable token: the consolidation
         // pass is on a reflection cron, not an interactive

@@ -297,6 +297,10 @@ fn build_request_body(
         body["temperature"] = json!(temp);
     }
 
+    if let Some(slot_id) = request.id_slot {
+        body["id_slot"] = json!(slot_id);
+    }
+
     Ok(body)
 }
 
@@ -751,6 +755,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 1000,
             temperature: None,
+            id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -792,6 +797,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 1000,
             temperature: None,
+            id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -843,6 +849,7 @@ data: [DONE]\n\n";
             tools,
             max_tokens: 1000,
             temperature: None,
+            id_slot: None,
         }
     }
 
@@ -971,6 +978,7 @@ data: [DONE]\n\n";
             tools: &[],
             max_tokens: 100,
             temperature: None,
+            id_slot: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         let messages = body["messages"].as_array().unwrap();
@@ -994,6 +1002,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 100,
             temperature: None,
+            id_slot: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
@@ -1026,6 +1035,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 100,
             temperature: None,
+            id_slot: None,
         };
         let body = build_request_body(&req, false, true).unwrap();
 
@@ -1080,6 +1090,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 1000,
             temperature: None,
+            id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1124,6 +1135,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 1000,
             temperature: None,
+            id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1205,6 +1217,7 @@ data: [DONE]\n\n";
             tools: &[],
             max_tokens: 2048,
             temperature: None,
+            id_slot: None,
         };
         let body = build_request_body(&req, false, false).unwrap();
         assert!(
@@ -1223,6 +1236,7 @@ data: [DONE]\n\n";
             tools: &[],
             max_tokens: 1000,
             temperature: None,
+            id_slot: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         assert!(
@@ -1347,6 +1361,7 @@ data: [DONE]\n\n";
             tools: &tools,
             max_tokens: 2048,
             temperature: None,
+            id_slot: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1365,5 +1380,39 @@ data: [DONE]\n\n";
             }
             _ => panic!("expected FinalMessage"),
         }
+    }
+
+    #[test]
+    fn build_request_body_omits_id_slot_when_none() {
+        let messages: Vec<LlmMessage> = vec![];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let request = LlmRequest {
+            model: "test-model",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 100,
+            temperature: None,
+            id_slot: None,
+        };
+        let body = build_request_body(&request, true, false).unwrap();
+        assert!(body.get("id_slot").is_none(), "id_slot must be omitted entirely when None");
+    }
+
+    #[test]
+    fn build_request_body_includes_id_slot_when_set() {
+        let messages: Vec<LlmMessage> = vec![];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let request = LlmRequest {
+            model: "test-model",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 100,
+            temperature: None,
+            id_slot: Some(2),
+        };
+        let body = build_request_body(&request, true, false).unwrap();
+        assert_eq!(body["id_slot"], serde_json::json!(2));
     }
 }

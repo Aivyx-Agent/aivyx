@@ -115,6 +115,7 @@ pub async fn draft_persona_seed(
         tools: &[],
         max_tokens: DRAFT_MAX_TOKENS,
         temperature: Some(0.5),
+    id_slot: None,
     };
     let cancel = CancellationToken::new();
     let mut stream = provider.chat_stream(request, &cancel).await.ok()?;

@@ -284,6 +284,7 @@ impl SoulContradictionDetector {
             model: &self.model,
             max_tokens: self.config.max_tokens,
             temperature: Some(0.0),
+        id_slot: None,
         };
         let cancel = CancellationToken::new();
         let Ok(mut stream) = self.provider.chat_stream(request, &cancel).await else {
