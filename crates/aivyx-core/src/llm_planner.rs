@@ -1541,6 +1541,33 @@ fn truncate(s: &str, max: usize) -> &str {
     }
 }
 
+/// A stable-within-one-process-run hash of the stable prefix (system
+/// prompt + tool definitions) -- used as `CacheKey.prefix_hash`.
+/// Deliberately NOT guaranteed stable across Rust versions/compilations:
+/// a rebuild changing the hash algorithm just means old kvcache entries
+/// silently miss instead of hit (fail-open, matching every other
+/// kvcache operation), never a correctness problem. `None` and `Some("")`
+/// hash differently (a leading discriminant byte precedes the content)
+/// so a planner with no system prompt at all never collides with one
+/// whose prompt happens to be the empty string.
+fn compute_prefix_hash(system_prompt: Option<&str>, tools: &[LlmToolDescriptor]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match system_prompt {
+        Some(s) => {
+            true.hash(&mut hasher);
+            s.hash(&mut hasher);
+        }
+        None => false.hash(&mut hasher),
+    }
+    for tool in tools {
+        tool.name.hash(&mut hasher);
+        tool.description.hash(&mut hasher);
+        tool.input_schema.to_string().hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -4379,5 +4406,47 @@ mod tests {
             }
             other => panic!("expected ToolCall; got {other:?}"),
         }
+    }
+
+    #[test]
+    fn compute_prefix_hash_is_stable_for_identical_inputs() {
+        let tools = vec![LlmToolDescriptor {
+            name: "read_file".to_string(),
+            description: "reads a file".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+        let h1 = compute_prefix_hash(Some("system prompt text"), &tools);
+        let h2 = compute_prefix_hash(Some("system prompt text"), &tools);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn compute_prefix_hash_differs_when_system_text_differs() {
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let h1 = compute_prefix_hash(Some("prompt A"), &tools);
+        let h2 = compute_prefix_hash(Some("prompt B"), &tools);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn compute_prefix_hash_differs_when_tools_differ() {
+        let system = Some("same system text");
+        let tools_a = vec![LlmToolDescriptor {
+            name: "read_file".to_string(),
+            description: "reads".to_string(),
+            input_schema: serde_json::json!({}),
+        }];
+        let tools_b = vec![LlmToolDescriptor {
+            name: "write_file".to_string(),
+            description: "writes".to_string(),
+            input_schema: serde_json::json!({}),
+        }];
+        assert_ne!(compute_prefix_hash(system, &tools_a), compute_prefix_hash(system, &tools_b));
+    }
+
+    #[test]
+    fn compute_prefix_hash_treats_none_system_distinctly_from_empty_string() {
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        assert_ne!(compute_prefix_hash(None, &tools), compute_prefix_hash(Some(""), &tools));
     }
 }
