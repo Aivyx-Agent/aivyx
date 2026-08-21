@@ -5768,6 +5768,7 @@ async fn run_async(
     };
     // Track the Ollama base URL for tool registration (Phase 36).
     let mut ollama_base_url_for_tools: Option<String> = None;
+    let mut llamacpp_base_url_for_kvcache: Option<String> = None;
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::Anthropic => {
             let api_key = anthropic_api_key
@@ -5852,6 +5853,7 @@ async fn run_async(
             let base_url = openai_base_url
                 .map(|s| s.value)
                 .unwrap_or_else(|| DEFAULT_LLAMACPP_BASE_URL.to_string());
+            llamacpp_base_url_for_kvcache = Some(base_url.clone());
             let cfg = match openai_api_key {
                 Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
                 None => OpenAiConfig::without_api_key().with_base_url(base_url),
@@ -5935,6 +5937,47 @@ async fn run_async(
                 );
             }
         }
+    };
+
+    // ---- kvcache (Task 5) — build the shared slot pool + slot store, ----
+    // only when this run actually selected the LlamaCpp provider. The
+    // /props probe is best-effort: any failure (unreachable server,
+    // non-llama-server response) disables kvcache for this run rather
+    // than aborting startup.
+    let kv_cache_handles = match llamacpp_base_url_for_kvcache {
+        Some(base_url) => match aivyx_llm::fetch_llama_slots_info(&base_url).await {
+            Some(info) => {
+                let store_path = directories::ProjectDirs::from("", "", "aivyx")
+                    .map(|dirs| dirs.data_local_dir().join("kvcache"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("aivyx").join("kvcache"));
+                match aivyx_kvcache::LlamaServerSlotStore::open(
+                    &store_path,
+                    &base_url,
+                    10 * 1024 * 1024 * 1024, // 10 GiB default budget
+                ) {
+                    Ok(store) => Some((
+                        Arc::new(aivyx_llm::KvSlotPool::new(info.total_slots)),
+                        Arc::new(store),
+                        info.build_info,
+                    )),
+                    Err(err) => {
+                        eprintln!(
+                            "aivyx daemon: kvcache: failed to open store ({err}); disabled for this run"
+                        );
+                        None
+                    }
+                }
+            }
+            None => {
+                eprintln!(
+                    "aivyx daemon: kvcache: [agent] provider = \"llama_cpp\" but /props probe \
+                     failed or didn't look like a real llama-server response; disabled for \
+                     this run"
+                );
+                None
+            }
+        },
+        None => None, // not the LlamaCpp arm this run
     };
 
     // ---- Phase 122 Task 4/5 — per-family prompt strategy -------------
@@ -8681,6 +8724,7 @@ async fn run_async(
         }
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
+        let planner_kv_cache_handles = kv_cache_handles.clone();
         let daemon_overrides = shared_role_overrides.clone();
         // Phase 60 Task 3 — per-turn Persona refresh, same shape
         // as the local-CLI session config above.
@@ -8723,11 +8767,22 @@ async fn run_async(
                     );
                 }
             }
-            Box::new(LlmPlanner::new(
+            let planner = LlmPlanner::new(
                 Arc::clone(&planner_provider),
                 Arc::clone(&planner_tools),
-                cfg,
-            )) as Box<dyn aivyx_core::TurnPlanner>
+                cfg.clone(),
+            );
+            let planner = match &planner_kv_cache_handles {
+                Some((pool, store, build_hash)) => planner.with_kv_cache(
+                    Arc::clone(pool),
+                    Arc::clone(store),
+                    "llama-server".to_string(),
+                    cfg.model.clone(),
+                    build_hash.clone(),
+                ),
+                None => planner,
+            };
+            Box::new(planner) as Box<dyn aivyx_core::TurnPlanner>
         };
         // Chapter K (K.4.2) — the shared pre-call dollar gate. Built once and
         // attached to the daemon's agent so every interactive / team turn is

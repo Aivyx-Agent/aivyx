@@ -90,6 +90,10 @@ aivyx-llm = { path = "../aivyx-llm", features = [
     "provider-openai",
     "provider-ollama",
 ] }
+# Phase kvcache Task 5 — the shared llama-server slot pool + persisted
+# slot store, wired into the daemon's main-agent planner factory below.
+# Same pinned rev aivyx-core (Task 4) already depends on.
+aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
 aivyx-telegram = { path = "../aivyx-telegram" }
 aivyx-discord = { path = "../aivyx-discord" }
 aivyx-slack = { path = "../aivyx-slack" }
@@ -119,6 +123,7 @@ futures-util = { workspace = true }
 thiserror = { workspace = true }
 rpassword = "7"
 toml_edit = "0.22"
+directories = "6.0.0"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
