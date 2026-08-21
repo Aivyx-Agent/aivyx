@@ -49,11 +49,20 @@ consistent with the ecosystem's own existing sequencing.
 - `aivyx-web`'s `TeamsPanel` component (`crates/aivyx-web/src/main.rs`) is
   roster config: edit the team, capability scopes, Nonagon Templates
   draft-from-role. It reads `TeamsState`, not live mission execution.
-- Mission data reaches the frontend as `TeamMissionView`
-  (`crates/aivyx-ipc/src/team_mission.rs`) — a pure, stateless projection of
-  a `TeamMissionRecord`'s checkpoint: `TeamStepState` is one of `Pending |
-  Done | Awaiting | Rejected`. There is **no "running right now" state** —
-  a step in flight looks identical to one that hasn't started.
+- The poll response (`QueryResponsePayload::TeamMissionList`) actually
+  sends raw `Vec<TeamMissionRecord>` over the wire — the frontend calls
+  `.to_view()` **client-side**, in wasm, on each record it receives
+  (`crates/aivyx-web/src/main.rs`'s WebSocket read loop). `TeamMissionView`
+  (`crates/aivyx-ipc/src/team_mission.rs`) is a pure, stateless projection
+  of a record's checkpoint: `TeamStepState` is one of `Pending | Done |
+  Awaiting | Rejected`. There is **no "running right now" state** — a step
+  in flight looks identical to one that hasn't started. This matters for
+  Piece 1's design below: the running-step signal lives only in the
+  driver's in-memory state, never in the persisted `TeamMissionRecord`, so
+  a client computing `.to_view()` locally from a record it already has can
+  never learn it — the broadcast **must** carry an already-projected
+  `TeamMissionView` (built daemon-side, where the live signal is in scope),
+  not a bare record for the client to project itself.
 - The frontend refreshes missions by **polling** (a source comment reads:
   "Routines panel polls with the missions + audit feed") — there is no
   live push for mission state today.
