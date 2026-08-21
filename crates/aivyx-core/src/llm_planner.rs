@@ -825,6 +825,22 @@ impl LlmPlanner {
 
             match warm_up_ok {
                 Ok(true) => {
+                    // Record as soon as the warm-up itself succeeds, not
+                    // conditioned on the save below: the warm-up is what
+                    // actually loaded this prefix into the slot's live
+                    // GPU state on llama-server, so a later checkout of
+                    // this same slot for this same prefix can skip a
+                    // redundant restore/warm-up regardless of whether
+                    // the on-disk save (purely for persistence across
+                    // process restarts) succeeds. Recording this only
+                    // inside the save's success arm would mean a failed
+                    // or timed-out save leaves nothing recorded, so the
+                    // very next checkout re-runs the warm-up -- sending
+                    // a system-only prompt that TRUNCATES the slot's KV
+                    // back to just the prefix and destroying whatever
+                    // the intervening turns had built up.
+                    kv.pool.record_loaded_prefix(slot_id, key.prefix_hash.clone());
+
                     let meta = CacheMeta { size_bytes: 1, token_count: 1 };
                     // Bounded like restore_into_slot above and the
                     // chat_stream+drain round trip: this POSTs to
@@ -838,12 +854,7 @@ impl LlmPlanner {
                     )
                     .await
                     {
-                        Ok(Ok(())) => {
-                            // Record so a later checkout of this same
-                            // slot for this same prefix (still live from
-                            // this warm-up) can skip a redundant restore.
-                            kv.pool.record_loaded_prefix(slot_id, key.prefix_hash.clone());
-                        }
+                        Ok(Ok(())) => {}
                         Ok(Err(err)) => {
                             warn_save_failed(&err);
                         }
@@ -4924,6 +4935,57 @@ mod tests {
              must never be invoked when the pool already holds this exact prefix for this \
              slot -- a consumed script would mean restore_into_slot was redundantly \
              (and destructively) attempted"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_kv_slot_checked_out_does_not_skip_when_the_pool_has_a_different_prefix() {
+        // Mirror of the test above, inverted: proves the skip check is
+        // genuinely conditioned on the prefix comparison
+        // (`last_loaded_prefix(slot_id) == Some(key.prefix_hash)`), not
+        // just "always skip once anything is recorded for this slot" --
+        // a real coverage gap, since nothing else in the suite would
+        // fail if that comparison were made unconditional and the whole
+        // restore/warm-up feature silently disabled. Seed the pool with
+        // a prefix hash that is NOT what this planner's real `CacheKey`
+        // computes, then assert the restore-or-warm-up path DOES run:
+        // the scripted `chat_stream` step (the warm-up call) is consumed
+        // (script length ends at 0), same discriminator as above but
+        // inverted.
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let mut planner = LlmPlanner::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+        let (kv, _dir) = kv_cache_config_for_test();
+        let pool = kv.pool.clone();
+        // Deliberately NOT the prefix hash this planner's config will
+        // compute (no system prompt, no tools) -- a different, wrong
+        // prefix recorded for this same slot.
+        pool.record_loaded_prefix(0, "some-other-prefix-entirely".to_string());
+        planner.kv_cache = Some(kv);
+
+        planner.ensure_kv_slot_checked_out().await;
+
+        assert_eq!(
+            planner.kv_slot_id,
+            Some(0),
+            "the slot must still be checked out and pinned for the real turn"
+        );
+        assert_eq!(
+            provider.script.lock().unwrap().len(),
+            0,
+            "chat_stream (the warm-up call) must be invoked when the pool's recorded prefix \
+             for this slot does not match this planner's own prefix -- if this stayed at 1, \
+             the skip check would be firing unconditionally instead of comparing prefixes"
         );
     }
 }

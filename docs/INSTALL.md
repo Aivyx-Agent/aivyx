@@ -1518,13 +1518,12 @@ has seen before can skip re-prefilling that stable prefix instead of
 paying for it again from a cold slot.
 
 **Hard prerequisite:** start `llama-server` with `--slot-save-path`
-pointed at exactly `<data_local_dir>/aivyx/kvcache/slots` (on Linux,
+pointed at exactly `<data_local_dir>/kvcache/slots` (on Linux,
 `~/.local/share/aivyx/kvcache/slots`; the exact path is
-platform-specific — resolved via the `directories` crate, and printed to
-stderr if the daemon's own `/props` probe against your server fails). If
-the flag is missing, or points somewhere else, the feature does not
-error — it silently does nothing useful: every turn pays the save/restore
-round trip's latency for none of its benefit.
+platform-specific — resolved via the `directories` crate). If the flag is
+missing, or points somewhere else, the feature does not error — it
+silently does nothing useful: every turn pays the save/restore round
+trip's latency for none of its benefit.
 
 ```sh
 llama-server -m /path/to/model.gguf -c 32768 \
@@ -1536,13 +1535,19 @@ Nothing else needs configuring — it activates automatically once
 separate `aivyx.toml` field to opt in or out.
 
 Known caveat: this benefits fresh-process turns only today — the
-daemon's own main agent on its very first turn after a restart, and
-every Nonagon specialist/lead turn (each of which runs in a fresh
-process) — not an ongoing conversation's later turns within one already-
-running process (those already reuse KV state for free via
-`llama-server`'s own automatic prefix matching). The on-disk budget is
-also currently a hard-coded default rather than an `aivyx.toml` knob —
-a known follow-up, not something this fix wave adds.
+daemon's own main agent on its very first turn after a restart — not an
+ongoing conversation's later turns within one already-running process
+(those already reuse KV state for free via `llama-server`'s own
+automatic prefix matching). Nonagon specialists/leads benefit too, but
+not because each runs in a fresh process — `SpecialistFactory::build`
+constructs them in-process and they share the daemon's own single
+`Arc<KvSlotPool>` (see `build_shares_one_kv_slot_pool_across_every_specialist_it_builds`
+in `crates/aivyx-team/src/factory.rs`). The real reason they benefit is
+that each distinct soul/role has its own distinct stable system prompt —
+a distinct cache key — so it earns its own slot and cache entry the same
+way a fresh daemon process does. The on-disk budget is also currently a
+hard-coded default rather than an `aivyx.toml` knob — a known follow-up,
+not something this fix wave adds.
 
 **Jan** (open the Jan desktop app, enable "Local API
 Server" in settings):
