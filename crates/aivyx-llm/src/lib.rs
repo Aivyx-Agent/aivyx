@@ -78,12 +78,13 @@ pub mod mistral_rs;
 /// reuse it unchanged.
 pub mod tool_grammar;
 
-/// Phase 134 — KV-cache slot checkout/release pool. A pure numeric
-/// slot-id allocator with no I/O or knowledge of kvcache persistence.
-pub mod kv_slot_pool;
+/// kvcache adoption — KV-cache slot checkout/release pool. A pure
+/// numeric slot-id allocator with no I/O or knowledge of kvcache
+/// persistence.
+mod kv_slot_pool;
 pub use kv_slot_pool::KvSlotPool;
 
-/// Phase 134 — Fetches `total_slots` + `build_info` from a real
+/// kvcache adoption — Fetches `total_slots` + `build_info` from a real
 /// llama-server `/props` response. Used at startup to size the
 /// `KvSlotPool` and detect server upgrades via `build_info`.
 mod kvcache_probe;

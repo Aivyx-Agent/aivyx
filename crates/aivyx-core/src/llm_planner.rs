@@ -525,6 +525,91 @@ struct KvCacheConfig {
 /// transport has no HTTP timeout by design.
 const KVCACHE_WARM_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+// ---------------------------------------------------------------------------
+// One-shot-per-failure-class warning latches (final-review Fix 2).
+// ---------------------------------------------------------------------------
+//
+// Without these, a persistently misconfigured backend (e.g. `llama-server`
+// started without `--slot-save-path`) reprints the identical
+// `ensure_kv_slot_checked_out` warning on every single turn for the life
+// of the process -- exactly the "warning spam loop" the kvcache design
+// doc called out as something to avoid ("not a warning spam loop per
+// turn (rate-limited or one-shot ... )"). Each function below guards its
+// own `eprintln!` with a private `OnceLock<()>`, so it prints the first
+// time this failure class is hit in this process's lifetime and stays
+// silent after that. Deliberately coarse: one latch per distinct failure
+// *class*, not truly "once ever" across every possible message variant
+// (a later call with a different underlying error still prints only the
+// first one observed) -- matches the design doc's own "one-shot"
+// framing. Mirrors `tools/git.rs`'s `should_warn_once` latch shape
+// (a `OnceLock`-backed guard rather than printing every time),
+// simplified here since these classes are a small fixed set rather than
+// a per-repo key.
+
+fn warn_pool_full() {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!("aivyx: kvcache: no free slot in the pool; this turn runs unpinned");
+    });
+}
+
+fn warn_restore_failed(err: &dyn std::fmt::Display) {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!("aivyx: kvcache: restore_into_slot failed: {err}");
+    });
+}
+
+fn warn_restore_timed_out() {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!("aivyx: kvcache: restore_into_slot timed out; treating as a miss");
+    });
+}
+
+fn warn_warm_up_request_failed(err: &dyn std::fmt::Display) {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!("aivyx: kvcache: warm-up request failed: {err}");
+    });
+}
+
+fn warn_warm_up_timed_out() {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!(
+            "aivyx: kvcache: warm-up timed out after {KVCACHE_WARM_UP_TIMEOUT:?}; \
+             skipping save so a partial/corrupt slot is never recorded as a \
+             valid cache entry"
+        );
+    });
+}
+
+fn warn_warm_up_stream_errored() {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!(
+            "aivyx: kvcache: warm-up stream errored mid-response; \
+             skipping save so a partial/corrupt slot is never \
+             recorded as a valid cache entry"
+        );
+    });
+}
+
+fn warn_save_failed(err: &dyn std::fmt::Display) {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+    });
+}
+
+fn warn_save_timed_out() {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WARNED.get_or_init(|| {
+        eprintln!("aivyx: kvcache: save_from_slot timed out");
+    });
+}
+
 impl LlmPlanner {
     pub fn new(
         provider: Arc<dyn LlmProvider>,
@@ -629,8 +714,11 @@ impl LlmPlanner {
         let Some(slot_id) = kv.pool.checkout() else {
             // No `tracing` dependency in this crate (see `tools/git.rs`'s
             // `confiner_for` doc comment) -- `eprintln!` matches the rest
-            // of `aivyx`'s operator-facing warning convention.
-            eprintln!("aivyx: kvcache: no free slot in the pool; this turn runs unpinned");
+            // of `aivyx`'s operator-facing warning convention. Rate-limited
+            // (see the one-shot warning latches above `impl LlmPlanner`)
+            // so a persistently-full pool doesn't spam this line every
+            // single turn forever.
+            warn_pool_full();
             return;
         };
         self.kv_slot_id = Some(slot_id);
@@ -642,6 +730,20 @@ impl LlmPlanner {
             prefix_hash: compute_prefix_hash(self.config.system_prompt.as_deref(), &self.tools),
         };
 
+        // This same process may have already loaded exactly this prefix
+        // into this exact slot -- e.g. `aivyx`'s daemon builds a fresh
+        // `LlmPlanner` every turn, but `KvSlotPool` itself is long-lived
+        // for the process, so a later turn pinned back onto the same
+        // slot id can find its own earlier work still physically live in
+        // llama-server's GPU memory. Restoring here would silently
+        // overwrite that live conversation KV state with the frozen
+        // prefix-only snapshot saved at warm-up time -- a correctness
+        // regression, not just wasted work. Skip straight to pinning
+        // `id_slot` for the real turn in that case.
+        if kv.pool.last_loaded_prefix(slot_id).as_deref() == Some(key.prefix_hash.as_str()) {
+            return;
+        }
+
         let restored = match tokio::time::timeout(
             KVCACHE_WARM_UP_TIMEOUT,
             kv.store.restore_into_slot(&key, slot_id),
@@ -651,14 +753,21 @@ impl LlmPlanner {
             Ok(Ok(true)) => true,
             Ok(Ok(false)) => false,
             Ok(Err(err)) => {
-                eprintln!("aivyx: kvcache: restore_into_slot failed: {err}");
+                warn_restore_failed(&err);
                 false
             }
             Err(_elapsed) => {
-                eprintln!("aivyx: kvcache: restore_into_slot timed out; treating as a miss");
+                warn_restore_timed_out();
                 false
             }
         };
+
+        if restored {
+            // Record so a later checkout of this same slot for this same
+            // prefix (still live from this restore) can skip the redundant
+            // restore above.
+            kv.pool.record_loaded_prefix(slot_id, key.prefix_hash.clone());
+        }
 
         if !restored {
             // Cold (or a stale/rejected restore -- Manifest::insert is an
@@ -701,17 +810,13 @@ impl LlmPlanner {
                             Ok(Some(_)) => {}
                             Ok(None) => break true,
                             Err(_) => {
-                                eprintln!(
-                                    "aivyx: kvcache: warm-up stream errored mid-response; \
-                                     skipping save so a partial/corrupt slot is never \
-                                     recorded as a valid cache entry"
-                                );
+                                warn_warm_up_stream_errored();
                                 break false;
                             }
                         }
                     },
                     Err(err) => {
-                        eprintln!("aivyx: kvcache: warm-up request failed: {err}");
+                        warn_warm_up_request_failed(&err);
                         false
                     }
                 }
@@ -733,22 +838,23 @@ impl LlmPlanner {
                     )
                     .await
                     {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(())) => {
+                            // Record so a later checkout of this same
+                            // slot for this same prefix (still live from
+                            // this warm-up) can skip a redundant restore.
+                            kv.pool.record_loaded_prefix(slot_id, key.prefix_hash.clone());
+                        }
                         Ok(Err(err)) => {
-                            eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+                            warn_save_failed(&err);
                         }
                         Err(_elapsed) => {
-                            eprintln!("aivyx: kvcache: save_from_slot timed out");
+                            warn_save_timed_out();
                         }
                     }
                 }
                 Ok(false) => {} // already logged inside the timed block above
                 Err(_elapsed) => {
-                    eprintln!(
-                        "aivyx: kvcache: warm-up timed out after {KVCACHE_WARM_UP_TIMEOUT:?}; \
-                         skipping save so a partial/corrupt slot is never recorded as a \
-                         valid cache entry"
-                    );
+                    warn_warm_up_timed_out();
                 }
             }
         }
@@ -4762,5 +4868,62 @@ mod tests {
         // The pool must be untouched by this call: slot 1 is still the
         // next free one, not slot 0 re-taken or slot 1 already consumed.
         assert_eq!(pool.checkout(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn ensure_kv_slot_checked_out_skips_restore_when_the_pool_already_has_this_prefix() {
+        // Final-review Fix 1 regression test: a second `begin_turn` (a
+        // fresh `LlmPlanner`, matching how `aivyx` builds one per turn)
+        // that checks out a slot the pool already recorded as holding
+        // this exact prefix must NOT re-run `restore_into_slot` -- doing
+        // so would overwrite this same process's own live conversation
+        // KV state with the frozen prefix-only snapshot. `restore_into_slot`
+        // itself isn't directly instrumentable (`LlamaServerSlotStore` is
+        // a concrete type from `aivyx-kvcache`, not a trait), so this
+        // discriminates via the *next* step instead: the code under test
+        // only ever reaches `provider.chat_stream` (the warm-up call) if
+        // `restore_into_slot` was attempted and returned a miss/failure.
+        // A `FakeLlmProvider` seeded with exactly one scripted step whose
+        // script remains unconsumed after the call is therefore proof
+        // the whole restore-or-warm-up block -- restore included -- was
+        // skipped, not just that warm-up specifically didn't run.
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: String::new(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let mut planner = LlmPlanner::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+        let (kv, _dir) = kv_cache_config_for_test();
+        let pool = kv.pool.clone();
+        // Same prefix `ensure_kv_slot_checked_out` will compute for this
+        // planner: no system prompt, no tools (matches `bare_planner`'s
+        // shape, reproduced by hand here since we need the concrete
+        // `FakeLlmProvider` handle `bare_planner` doesn't expose).
+        let prefix_hash = compute_prefix_hash(None, &[]);
+        pool.record_loaded_prefix(0, prefix_hash);
+        planner.kv_cache = Some(kv);
+
+        planner.ensure_kv_slot_checked_out().await;
+
+        assert_eq!(
+            planner.kv_slot_id,
+            Some(0),
+            "the slot must still be checked out and pinned for the real turn"
+        );
+        assert_eq!(
+            provider.script.lock().unwrap().len(),
+            1,
+            "chat_stream (the warm-up call, only reachable after a restore miss/failure) \
+             must never be invoked when the pool already holds this exact prefix for this \
+             slot -- a consumed script would mean restore_into_slot was redundantly \
+             (and destructively) attempted"
+        );
     }
 }

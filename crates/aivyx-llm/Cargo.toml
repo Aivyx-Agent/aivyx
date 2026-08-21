@@ -83,8 +83,8 @@ tokio-util = { workspace = true }
 # Feature-gated: only compiled when `provider-anthropic`, `provider-openai`,
 # or `provider-ollama` is on. Keeping these optional means `aivyx-core`
 # (which depends on this crate purely for LlmError) never links
-# reqwest/rustls/secrecy. Phase 134 kvcache_probe gates fetch_llama_slots_info
-# behind the same feature set.
+# reqwest/rustls/secrecy. kvcache adoption's kvcache_probe gates
+# fetch_llama_slots_info behind the same feature set.
 reqwest = { workspace = true, optional = true }
 secrecy = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }

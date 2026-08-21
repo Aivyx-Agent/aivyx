@@ -5,6 +5,16 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **KV-cache persistence for `llama-server` users (`provider =
+  "llama_cpp"`).** A fresh daemon process's first turn on a system
+  prompt + tool-def combination it has seen before can now skip
+  re-prefilling that stable prefix, restoring it from disk instead —
+  requires `llama-server` started with `--slot-save-path` pointed at
+  `<data_local_dir>/aivyx/kvcache/slots`; see `docs/INSTALL.md`'s
+  "KV-cache persistence" section. No effect on Ollama or Jan.
+
 ### Changed
 
 - **`shell.exec` and the `git.rs` tools (`git.status`/`git.diff`/
