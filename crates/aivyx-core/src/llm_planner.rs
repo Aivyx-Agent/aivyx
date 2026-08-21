@@ -513,6 +513,17 @@ struct KvCacheConfig {
     build_hash: String,
 }
 
+/// Bounds `ensure_kv_slot_checked_out`'s restore/warm-up round trips.
+/// Deliberately not `aivyx_llm::KVCACHE_PROBE_TIMEOUT` (3s) -- that
+/// constant budgets a `/props` HTTP metadata fetch, not a real LLM
+/// generation call; a slow-but-healthy local model warming a fresh
+/// slot can legitimately take longer than 3s. Without *some* bound
+/// here, a wedged llama-server stalls the whole turn indefinitely:
+/// this runs inside `begin_turn`, before `ConcreteAgent::turn()`'s own
+/// wall-clock deadline task is even spawned, and the production
+/// transport has no HTTP timeout by design.
+const KVCACHE_WARM_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl LlmPlanner {
     pub fn new(
         provider: Arc<dyn LlmProvider>,
@@ -582,14 +593,38 @@ impl LlmPlanner {
     /// prefix (system prompt + tool defs -- never `self.history`, which
     /// may hold real prior conversation seeded by a `ConversationSeeder`)
     /// and saves it for future turns. Every failure mode past the
-    /// pool-checkout itself is fail-open: logged at `warn`, the turn
-    /// simply runs with an un-warmed (but still correctly pool-owned)
-    /// slot. Called once, from `begin_turn`, before anything touches
-    /// `self.history`.
+    /// pool-checkout itself is fail-open: logged, the turn simply runs
+    /// with an un-warmed (but still correctly pool-owned) slot. Called
+    /// once, from `begin_turn`, before anything touches `self.history`.
+    ///
+    /// Idempotent: a no-op if a slot was already checked out earlier
+    /// this turn (guards against a second `begin_turn` call on the same
+    /// planner leaking the first slot -- `next_step`'s own defensive
+    /// "history is empty" branch shows `begin_turn` isn't guaranteed
+    /// exactly-once by every caller).
+    ///
+    /// Skips kvcache entirely (no checkout at all) when
+    /// `config.system_prompt_refiner` is set: the refiner rewrites
+    /// `self.config.system_prompt` *after* this method returns (see
+    /// `begin_turn`'s later Phase 79 step), so warming/keying here would
+    /// use the pre-refined prompt and every future restore would
+    /// mismatch and fall back to cold, forever, silently defeating the
+    /// feature. Running this method after the refiner instead isn't
+    /// safe either -- the refiner's output derives from the user's real
+    /// message, so persisting a warm-up built from it would leak real
+    /// per-session content to disk. The two features are fundamentally
+    /// in tension; a refiner-enabled planner just never gets kvcache
+    /// rather than getting a silently-broken version of it.
     async fn ensure_kv_slot_checked_out(&mut self) {
+        if self.kv_slot_id.is_some() {
+            return; // already checked out earlier this turn
+        }
         let Some(kv) = &self.kv_cache else {
             return; // kvcache not configured for this planner
         };
+        if self.config.system_prompt_refiner.is_some() {
+            return; // see this method's doc comment -- refiner + kvcache are in tension
+        }
         let Some(slot_id) = kv.pool.checkout() else {
             // No `tracing` dependency in this crate (see `tools/git.rs`'s
             // `confiner_for` doc comment) -- `eprintln!` matches the rest
@@ -606,11 +641,20 @@ impl LlmPlanner {
             prefix_hash: compute_prefix_hash(self.config.system_prompt.as_deref(), &self.tools),
         };
 
-        let restored = match kv.store.restore_into_slot(&key, slot_id).await {
-            Ok(true) => true,
-            Ok(false) => false,
-            Err(err) => {
+        let restored = match tokio::time::timeout(
+            KVCACHE_WARM_UP_TIMEOUT,
+            kv.store.restore_into_slot(&key, slot_id),
+        )
+        .await
+        {
+            Ok(Ok(true)) => true,
+            Ok(Ok(false)) => false,
+            Ok(Err(err)) => {
                 eprintln!("aivyx: kvcache: restore_into_slot failed: {err}");
+                false
+            }
+            Err(_elapsed) => {
+                eprintln!("aivyx: kvcache: restore_into_slot timed out; treating as a miss");
                 false
             }
         };
@@ -626,10 +670,14 @@ impl LlmPlanner {
             // required, not decorative: confirmed live against a real
             // llama-server (Qwen3.5's chat template) that a
             // system-message-only request is REJECTED outright (400, "No
-            // user query found in messages").
+            // user query found in messages"). `model` is
+            // `self.config.model`, not `kv.model_id` -- the latter is
+            // reserved for `CacheKey` only, so the two can never
+            // silently diverge from whatever the real turn's own
+            // request sends.
             let warm_up_messages: Vec<LlmMessage> = vec![LlmMessage::user_text("")];
             let warm_up_request = LlmRequest {
-                model: &kv.model_id,
+                model: self.config.model.as_str(),
                 system: self.config.system_prompt.as_deref(),
                 messages: &warm_up_messages,
                 tools: &self.tools,
@@ -638,34 +686,51 @@ impl LlmPlanner {
                 id_slot: Some(slot_id),
             };
             let cancellation = crate::CancellationToken::new();
-            match self.provider.chat_stream(warm_up_request, &cancellation).await {
-                Ok(mut stream) => {
-                    let mut warm_up_failed = false;
-                    loop {
+            let provider = self.provider.clone();
+            // The *entire* round trip -- chat_stream's own return AND
+            // fully draining the resulting stream -- is bounded by one
+            // timeout, not just the initial call: a wedged llama-server
+            // can stall indefinitely either before responding at all or
+            // mid-stream, and this runs before `ConcreteAgent::turn()`'s
+            // own wall-clock deadline task is even spawned.
+            let warm_up_ok = tokio::time::timeout(KVCACHE_WARM_UP_TIMEOUT, async {
+                match provider.chat_stream(warm_up_request, &cancellation).await {
+                    Ok(mut stream) => loop {
                         match stream.next_event().await {
                             Ok(Some(_)) => {}
-                            Ok(None) => break,
+                            Ok(None) => break true,
                             Err(_) => {
-                                warm_up_failed = true;
-                                break;
+                                eprintln!(
+                                    "aivyx: kvcache: warm-up stream errored mid-response; \
+                                     skipping save so a partial/corrupt slot is never \
+                                     recorded as a valid cache entry"
+                                );
+                                break false;
                             }
                         }
-                    }
-                    if warm_up_failed {
-                        eprintln!(
-                            "aivyx: kvcache: warm-up stream errored mid-response; skipping \
-                             save so a partial/corrupt slot is never recorded as a valid \
-                             cache entry"
-                        );
-                    } else {
-                        let meta = CacheMeta { size_bytes: 1, token_count: 1 };
-                        if let Err(err) = kv.store.save_from_slot(&key, slot_id, meta).await {
-                            eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
-                        }
+                    },
+                    Err(err) => {
+                        eprintln!("aivyx: kvcache: warm-up request failed: {err}");
+                        false
                     }
                 }
-                Err(err) => {
-                    eprintln!("aivyx: kvcache: warm-up request failed: {err}");
+            })
+            .await;
+
+            match warm_up_ok {
+                Ok(true) => {
+                    let meta = CacheMeta { size_bytes: 1, token_count: 1 };
+                    if let Err(err) = kv.store.save_from_slot(&key, slot_id, meta).await {
+                        eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+                    }
+                }
+                Ok(false) => {} // already logged inside the timed block above
+                Err(_elapsed) => {
+                    eprintln!(
+                        "aivyx: kvcache: warm-up timed out after {KVCACHE_WARM_UP_TIMEOUT:?}; \
+                         skipping save so a partial/corrupt slot is never recorded as a \
+                         valid cache entry"
+                    );
                 }
             }
         }
@@ -4596,5 +4661,88 @@ mod tests {
     fn compute_prefix_hash_treats_none_system_distinctly_from_empty_string() {
         let tools: Vec<LlmToolDescriptor> = vec![];
         assert_ne!(compute_prefix_hash(None, &tools), compute_prefix_hash(Some(""), &tools));
+    }
+
+    // ---- kvcache Fix 1 / Fix 2 regression tests -----------------
+    //
+    // Both tests below return from `ensure_kv_slot_checked_out` before
+    // it ever performs I/O (the refiner-skip and idempotency guards are
+    // both checked before `pool.checkout()`), so a `LlamaServerSlotStore`
+    // opened against a local tempdir with a never-dialed `base_url` is
+    // sufficient -- `LlamaServerSlotStore::open` itself does no network
+    // I/O (only opens a local sqlite manifest + creates a local slots
+    // dir), and neither test exercises a code path that would ever
+    // reach the store's own HTTP calls. No mock server needed.
+
+    fn kv_cache_config_for_test() -> (KvCacheConfig, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LlamaServerSlotStore::open(dir.path(), "http://127.0.0.1:1", 1_000_000)
+            .expect("open a local-only slot store");
+        let config = KvCacheConfig {
+            pool: Arc::new(KvSlotPool::new(2)),
+            store: Arc::new(store),
+            backend_id: "test-backend".to_string(),
+            model_id: "test-model".to_string(),
+            build_hash: "test-build".to_string(),
+        };
+        // Return the TempDir guard alongside -- the caller holds it for
+        // the test's duration so the directory isn't removed out from
+        // under `store` before the test finishes.
+        (config, dir)
+    }
+
+    #[tokio::test]
+    async fn ensure_kv_slot_checked_out_skips_entirely_when_a_refiner_is_configured() {
+        // Fix 1 regression test: a refiner-enabled planner must never
+        // check out a slot at all (see `ensure_kv_slot_checked_out`'s
+        // doc comment for why warming pre-refined content would
+        // silently defeat the cache forever).
+        let refiner = FakeRefiner::new(Some("REFINED"));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m").with_system_prompt_refiner(refiner),
+        );
+        let (kv, _dir) = kv_cache_config_for_test();
+        let pool = kv.pool.clone();
+        planner.kv_cache = Some(kv);
+
+        planner.ensure_kv_slot_checked_out().await;
+
+        assert_eq!(
+            planner.kv_slot_id, None,
+            "a refiner-enabled planner must never check out a kvcache slot"
+        );
+        // The pool itself must be untouched -- both slots still free.
+        assert_eq!(pool.checkout(), Some(0));
+        assert_eq!(pool.checkout(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn ensure_kv_slot_checked_out_is_idempotent_within_a_turn() {
+        // Fix 2 regression test: a slot already recorded this turn must
+        // never be replaced by a second checkout (which would leak the
+        // first slot forever -- `Drop` only ever releases the last one
+        // recorded).
+        let mut planner = bare_planner(LlmPlannerConfig::new("m"));
+        let (kv, _dir) = kv_cache_config_for_test();
+        let pool = kv.pool.clone();
+        planner.kv_cache = Some(kv);
+        // Simulate "already checked out earlier this turn" directly,
+        // rather than driving a full successful warm-up round trip
+        // through a fake provider -- the guard fires purely off
+        // `kv_slot_id.is_some()`, before any I/O, so this is a faithful
+        // (and hermetic) way to exercise it.
+        planner.kv_slot_id = Some(0);
+        pool.checkout(); // matches: slot 0 is "already checked out"
+
+        planner.ensure_kv_slot_checked_out().await;
+
+        assert_eq!(
+            planner.kv_slot_id,
+            Some(0),
+            "a slot already recorded this turn must not be replaced"
+        );
+        // The pool must be untouched by this call: slot 1 is still the
+        // next free one, not slot 0 re-taken or slot 1 already consumed.
+        assert_eq!(pool.checkout(), Some(1));
     }
 }
