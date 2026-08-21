@@ -41,9 +41,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
+use aivyx_kvcache::{CacheKey, CacheMeta, LlamaServerSlotStore};
 use aivyx_llm::{
-    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
-    LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, ToolCallEnd,
+    ContentBlock, KvSlotPool, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd,
+    LlmStream, LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, ToolCallEnd,
 };
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
@@ -492,6 +493,24 @@ pub struct LlmPlanner {
     /// calls). The pruner now pins this message: if it falls inside
     /// the pruned prefix it is re-inserted right after the sentinel.
     task_message_index: Option<usize>,
+    /// `None` unless `with_kv_cache` was called (only ever true when
+    /// `[agent] provider = "llama_cpp"`) -- every other code path this
+    /// task adds is a complete no-op when this is `None`.
+    kv_cache: Option<KvCacheConfig>,
+    /// The slot id checked out from `kv_cache`'s pool, set as soon as
+    /// `checkout()` succeeds in `begin_turn` (before any `.await` point),
+    /// not only on a fully successful warm-up/restore -- so `Drop` can
+    /// always release it even if the rest of `begin_turn`'s async work
+    /// never completes (e.g. the turn future is dropped mid-warm-up).
+    kv_slot_id: Option<u32>,
+}
+
+struct KvCacheConfig {
+    pool: Arc<KvSlotPool>,
+    store: Arc<LlamaServerSlotStore>,
+    backend_id: String,
+    model_id: String,
+    build_hash: String,
 }
 
 impl LlmPlanner {
@@ -536,6 +555,119 @@ impl LlmPlanner {
             accumulated_usage: crate::TokenUsage::default(),
             pruned_message_count: 0,
             task_message_index: None,
+            kv_cache: None,
+            kv_slot_id: None,
+        }
+    }
+
+    /// Opts this `LlmPlanner` into KV-cache persistence against a
+    /// llama-server backend. Only ever called by whoever builds this
+    /// planner's factory closure when `[agent] provider = "llama_cpp"`
+    /// -- every other provider never calls this, and every code path
+    /// this enables is a complete no-op otherwise.
+    pub fn with_kv_cache(
+        mut self,
+        pool: Arc<KvSlotPool>,
+        store: Arc<LlamaServerSlotStore>,
+        backend_id: String,
+        model_id: String,
+        build_hash: String,
+    ) -> Self {
+        self.kv_cache = Some(KvCacheConfig { pool, store, backend_id, model_id, build_hash });
+        self
+    }
+
+    /// Checks out a slot and either restores a previously-saved matching
+    /// prefix into it, or warms it fresh with exactly this turn's stable
+    /// prefix (system prompt + tool defs -- never `self.history`, which
+    /// may hold real prior conversation seeded by a `ConversationSeeder`)
+    /// and saves it for future turns. Every failure mode past the
+    /// pool-checkout itself is fail-open: logged at `warn`, the turn
+    /// simply runs with an un-warmed (but still correctly pool-owned)
+    /// slot. Called once, from `begin_turn`, before anything touches
+    /// `self.history`.
+    async fn ensure_kv_slot_checked_out(&mut self) {
+        let Some(kv) = &self.kv_cache else {
+            return; // kvcache not configured for this planner
+        };
+        let Some(slot_id) = kv.pool.checkout() else {
+            // No `tracing` dependency in this crate (see `tools/git.rs`'s
+            // `confiner_for` doc comment) -- `eprintln!` matches the rest
+            // of `aivyx`'s operator-facing warning convention.
+            eprintln!("aivyx: kvcache: no free slot in the pool; this turn runs unpinned");
+            return;
+        };
+        self.kv_slot_id = Some(slot_id);
+
+        let key = CacheKey {
+            backend_id: kv.backend_id.clone(),
+            model_id: kv.model_id.clone(),
+            build_hash: kv.build_hash.clone(),
+            prefix_hash: compute_prefix_hash(self.config.system_prompt.as_deref(), &self.tools),
+        };
+
+        let restored = match kv.store.restore_into_slot(&key, slot_id).await {
+            Ok(true) => true,
+            Ok(false) => false,
+            Err(err) => {
+                eprintln!("aivyx: kvcache: restore_into_slot failed: {err}");
+                false
+            }
+        };
+
+        if !restored {
+            // Cold (or a stale/rejected restore -- Manifest::insert is an
+            // upsert, so this cleanly repairs a stuck-cold key too):
+            // warm the slot with exactly the stable prefix, save it, then
+            // proceed. The warm-up goes through the *same* provider the
+            // real turn uses (not a raw HTTP call) so its tokenization
+            // matches exactly -- a mismatch here silently defeats
+            // automatic reuse. The trailing empty User message is
+            // required, not decorative: confirmed live against a real
+            // llama-server (Qwen3.5's chat template) that a
+            // system-message-only request is REJECTED outright (400, "No
+            // user query found in messages").
+            let warm_up_messages: Vec<LlmMessage> = vec![LlmMessage::user_text("")];
+            let warm_up_request = LlmRequest {
+                model: &kv.model_id,
+                system: self.config.system_prompt.as_deref(),
+                messages: &warm_up_messages,
+                tools: &self.tools,
+                max_tokens: 1,
+                temperature: None,
+                id_slot: Some(slot_id),
+            };
+            let cancellation = crate::CancellationToken::new();
+            match self.provider.chat_stream(warm_up_request, &cancellation).await {
+                Ok(mut stream) => {
+                    let mut warm_up_failed = false;
+                    loop {
+                        match stream.next_event().await {
+                            Ok(Some(_)) => {}
+                            Ok(None) => break,
+                            Err(_) => {
+                                warm_up_failed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if warm_up_failed {
+                        eprintln!(
+                            "aivyx: kvcache: warm-up stream errored mid-response; skipping \
+                             save so a partial/corrupt slot is never recorded as a valid \
+                             cache entry"
+                        );
+                    } else {
+                        let meta = CacheMeta { size_bytes: 1, token_count: 1 };
+                        if let Err(err) = kv.store.save_from_slot(&key, slot_id, meta).await {
+                            eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+                        }
+                    }
+                }
+                Err(err) => {
+                    eprintln!("aivyx: kvcache: warm-up request failed: {err}");
+                }
+            }
         }
     }
 
@@ -587,7 +719,7 @@ impl LlmPlanner {
             tools: &self.tools,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            id_slot: None,
+            id_slot: self.kv_slot_id,
         };
 
         let cancellation = channel.cancellation_token();
@@ -722,6 +854,7 @@ impl LlmPlanner {
 #[async_trait]
 impl TurnPlanner for LlmPlanner {
     async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
+        self.ensure_kv_slot_checked_out().await;
         let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
             MessageContent::Image { media_type, data } => {
@@ -1220,6 +1353,21 @@ impl TurnPlanner for LlmPlanner {
 
     fn model(&self) -> &str {
         &self.config.model
+    }
+}
+
+impl Drop for LlmPlanner {
+    /// Releases this turn's checked-out kvcache slot, if any. Pure,
+    /// synchronous, infallible -- `KvSlotPool::release` does no I/O, so
+    /// this is safe to run from `Drop` (which cannot be async). Fires
+    /// naturally when this planner (a local variable inside
+    /// `ConcreteAgent::turn()`, freshly constructed every turn) goes out
+    /// of scope at the end of the turn -- no separate release call site
+    /// needed anywhere.
+    fn drop(&mut self) {
+        if let (Some(slot_id), Some(kv)) = (self.kv_slot_id, &self.kv_cache) {
+            kv.pool.release(slot_id);
+        }
     }
 }
 
