@@ -513,7 +513,8 @@ struct KvCacheConfig {
     build_hash: String,
 }
 
-/// Bounds `ensure_kv_slot_checked_out`'s restore/warm-up round trips.
+/// Bounds `ensure_kv_slot_checked_out`'s three I/O calls: restore,
+/// warm-up (`chat_stream` + its full drain), and save.
 /// Deliberately not `aivyx_llm::KVCACHE_PROBE_TIMEOUT` (3s) -- that
 /// constant budgets a `/props` HTTP metadata fetch, not a real LLM
 /// generation call; a slow-but-healthy local model warming a fresh
@@ -720,8 +721,25 @@ impl LlmPlanner {
             match warm_up_ok {
                 Ok(true) => {
                     let meta = CacheMeta { size_bytes: 1, token_count: 1 };
-                    if let Err(err) = kv.store.save_from_slot(&key, slot_id, meta).await {
-                        eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+                    // Bounded like restore_into_slot above and the
+                    // chat_stream+drain round trip: this POSTs to
+                    // llama-server (serializing a full KV slot to disk)
+                    // on a client with no HTTP timeout, before
+                    // ConcreteAgent::turn()'s own deadline is armed --
+                    // the most likely of the three calls to wedge.
+                    match tokio::time::timeout(
+                        KVCACHE_WARM_UP_TIMEOUT,
+                        kv.store.save_from_slot(&key, slot_id, meta),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => {
+                            eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+                        }
+                        Err(_elapsed) => {
+                            eprintln!("aivyx: kvcache: save_from_slot timed out");
+                        }
                     }
                 }
                 Ok(false) => {} // already logged inside the timed block above
