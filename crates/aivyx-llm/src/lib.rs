@@ -87,7 +87,11 @@ pub use kv_slot_pool::KvSlotPool;
 /// llama-server `/props` response. Used at startup to size the
 /// `KvSlotPool` and detect server upgrades via `build_info`.
 mod kvcache_probe;
-pub use kvcache_probe::{KVCACHE_PROBE_TIMEOUT, LlamaSlotsInfo, fetch_llama_slots_info, parse_llama_slots_info};
+pub use kvcache_probe::{KVCACHE_PROBE_TIMEOUT, LlamaSlotsInfo, parse_llama_slots_info};
+
+/// fetch_llama_slots_info requires the provider-openai feature (for reqwest).
+#[cfg(feature = "provider-openai")]
+pub use kvcache_probe::fetch_llama_slots_info;
 
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible

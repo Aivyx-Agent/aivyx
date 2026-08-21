@@ -12,16 +12,17 @@ readme.workspace = true
 
 [features]
 default = []
-# Opt-in: pulls in rustls + secrecy and compiles the Anthropic
+# Opt-in: pulls in reqwest + rustls + secrecy and compiles the Anthropic
 # reference provider. Downstream crates (e.g. aivyx-core) that only need
 # the LlmProvider trait and LlmError must NOT enable this feature.
-# reqwest is now unconditional for Phase 134 kvcache_probe.
 provider-anthropic = [
+    "dep:reqwest",
     "dep:secrecy",
     "dep:futures-util",
     "dep:bytes",
 ]
 provider-openai = [
+    "dep:reqwest",
     "dep:secrecy",
     "dep:futures-util",
     "dep:bytes",
@@ -30,9 +31,9 @@ provider-openai = [
 # streaming). Distinct from `provider-openai`'s Ollama-via-OpenAI-compat
 # path; the two coexist so the OpenAI-compat code stays for
 # `ProviderKind::OpenAi`. Pulls in the same transport deps as the
-# other providers. reqwest is now unconditional for Phase 134
-# kvcache_probe.
+# other providers.
 provider-ollama = [
+    "dep:reqwest",
     "dep:secrecy",
     "dep:futures-util",
     "dep:bytes",
@@ -79,9 +80,12 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 
-# Phase 134 — Unconditional for kvcache_probe (/props probing).
-# Required to avoid stale kvcache after server upgrades.
-reqwest = { workspace = true }
+# Feature-gated: only compiled when `provider-anthropic`, `provider-openai`,
+# or `provider-ollama` is on. Keeping these optional means `aivyx-core`
+# (which depends on this crate purely for LlmError) never links
+# reqwest/rustls/secrecy. Phase 134 kvcache_probe gates fetch_llama_slots_info
+# behind the same feature set.
+reqwest = { workspace = true, optional = true }
 secrecy = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }

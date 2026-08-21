@@ -36,6 +36,9 @@ pub fn parse_llama_slots_info(json: &serde_json::Value) -> Option<LlamaSlotsInfo
 /// `/slots`, is a native llama-server endpoint, not an OpenAI-compat one.
 /// Fully fail-open: any failure (build, network, timeout, non-2xx,
 /// malformed body) returns `None`, never propagates an error.
+///
+/// Requires the `provider-openai` feature (which gates reqwest availability).
+#[cfg(feature = "provider-openai")]
 pub async fn fetch_llama_slots_info(base_url: &str) -> Option<LlamaSlotsInfo> {
     let client = reqwest::Client::builder()
         .timeout(KVCACHE_PROBE_TIMEOUT)
@@ -75,6 +78,7 @@ mod tests {
         assert!(parse_llama_slots_info(&json).is_none());
     }
 
+    #[cfg(feature = "provider-openai")]
     #[tokio::test]
     async fn fetch_llama_slots_info_returns_none_when_nothing_is_listening() {
         // No server at all on this port -- confirms the fail-open path
