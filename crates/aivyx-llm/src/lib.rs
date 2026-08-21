@@ -83,6 +83,12 @@ pub mod tool_grammar;
 pub mod kv_slot_pool;
 pub use kv_slot_pool::KvSlotPool;
 
+/// Phase 134 — Fetches `total_slots` + `build_info` from a real
+/// llama-server `/props` response. Used at startup to size the
+/// `KvSlotPool` and detect server upgrades via `build_info`.
+mod kvcache_probe;
+pub use kvcache_probe::{KVCACHE_PROBE_TIMEOUT, LlamaSlotsInfo, fetch_llama_slots_info, parse_llama_slots_info};
+
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible
 /// `/v1/embeddings` client whose `base_url` can point at the
