@@ -1237,6 +1237,7 @@ mod tests {
             // promotion doesn't introduce drift. Any decimal that isn't
             // a sum of powers of two (e.g. 0.3) would fail this assertion.
             temperature: Some(0.5),
+            id_slot: None,
         };
         let token = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &token).await.unwrap();

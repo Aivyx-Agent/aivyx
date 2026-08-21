@@ -52,6 +52,7 @@ async fn final_message_against_real_api() {
         tools: &tools,
         max_tokens: 16,
         temperature: Some(0.0),
+        id_slot: None,
     };
 
     let cancel = CancellationToken::new();

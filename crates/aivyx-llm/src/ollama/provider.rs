@@ -786,6 +786,7 @@ mod tests {
             tools,
             max_tokens: 1024,
             temperature: None,
+            id_slot: None,
         }
     }
 
@@ -1014,6 +1015,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: Some(0.7),
+            id_slot: None,
         };
         let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let opts = body["options"].as_object().unwrap();
@@ -1033,6 +1035,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: Some(0.2),
+            id_slot: None,
         };
         let options = OllamaOptions {
             num_ctx: Some(8192),
@@ -1623,6 +1626,7 @@ mod tests {
             tools: &[],
             max_tokens: 1024,
             temperature: Some(0.7),
+            id_slot: None,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
