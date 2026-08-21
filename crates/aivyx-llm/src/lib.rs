@@ -78,6 +78,11 @@ pub mod mistral_rs;
 /// reuse it unchanged.
 pub mod tool_grammar;
 
+/// Phase 134 — KV-cache slot checkout/release pool. A pure numeric
+/// slot-id allocator with no I/O or knowledge of kvcache persistence.
+pub mod kv_slot_pool;
+pub use kv_slot_pool::KvSlotPool;
+
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible
 /// `/v1/embeddings` client whose `base_url` can point at the
