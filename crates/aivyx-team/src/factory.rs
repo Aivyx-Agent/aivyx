@@ -63,8 +63,11 @@ pub struct SpecialistFactory {
     /// The shared kvcache pool/store + served build hash, when `[agent]
     /// provider = "llama_cpp"` -- attached to every built specialist so
     /// its own per-turn `LlmPlanner` shares the exact same `KvSlotPool`
-    /// the daemon's main agent uses, not one each. `None` (the default)
-    /// disables kvcache for every specialist this factory builds.
+    /// the hosting process's main agent uses (the daemon's own agent, or
+    /// the `aivyx team run` CLI invocation's own lead agent, depending on
+    /// which process this factory was built in), not one each. `None`
+    /// (the default) disables kvcache for every specialist this factory
+    /// builds.
     kv_cache_handles: Option<(
         Arc<aivyx_llm::KvSlotPool>,
         Arc<aivyx_kvcache::LlamaServerSlotStore>,
@@ -161,6 +164,14 @@ impl SpecialistFactory {
         let registry_for_planner = Arc::clone(&registry);
         let max_tokens = self.max_tokens;
         let soul = member.soul.clone();
+        // Attached from the daemon/CLI-process's own pool/store regardless
+        // of any per-role backend override (`member_backends`) a specialist
+        // might have — currently safe only because `kv_cache_handles` and
+        // per-role overrides are mutually exclusive in practice (Ollama-only
+        // overrides today, since `member_provider_builder` is only `Some`
+        // for `Ollama` while `kv_cache_handles` is only `Some` for
+        // `LlamaCpp`); revisit if a per-role llama-server override is ever
+        // added.
         let kv_cache_handles = self.kv_cache_handles.clone();
 
         let agent = ConcreteAgent::new(
@@ -245,6 +256,7 @@ mod tests {
     use super::*;
     use aivyx_capability::{Scope, TrustTier};
     use aivyx_core::{Agent, CancellationToken, NullAuditHook, ToolContext, ToolId, ToolOutcome};
+    use aivyx_llm::{LlmError, LlmRequest, LlmStream};
     use async_trait::async_trait;
 
     // --- minimal test fakes ------------------------------------------------
@@ -513,6 +525,181 @@ mod tests {
             "the specialist's fs.write must produce exactly one checkpoint \
              — proves SpecialistFactory::build actually wired the \
              checkpointer through, not just that build() tolerates None: {refs}"
+        );
+    }
+
+    // --- kvcache wiring (Task 6 fix wave) -----------------------------------
+    //
+    // Mirrors `build_attaches_the_checkpointer_when_configured` immediately
+    // above: without these, deleting `with_kv_cache`/the `match
+    // &kv_cache_handles` block in `build`'s closure would leave every other
+    // test in this file green, since `LlmPlanner::new` already defaults
+    // `kv_cache` to `None`.
+
+    /// Wraps `testutil::FakeProvider`, recording the `id_slot` field of
+    /// every `LlmRequest` it receives before delegating. `id_slot` is
+    /// `Some(_)` only when the request came from an `LlmPlanner` that had
+    /// `with_kv_cache` called on it (see `LlmPlanner::begin_turn` /
+    /// `ensure_kv_slot_checked_out` and its `next_step` request builder) —
+    /// so capturing it is a direct, discriminating probe of the wiring
+    /// under test, not an incidental side effect.
+    struct KvSlotCapturingProvider {
+        inner: Arc<crate::testutil::FakeProvider>,
+        captured_id_slots: std::sync::Mutex<Vec<Option<u32>>>,
+    }
+
+    impl KvSlotCapturingProvider {
+        fn wrapping(inner: Arc<crate::testutil::FakeProvider>) -> Arc<Self> {
+            Arc::new(KvSlotCapturingProvider {
+                inner,
+                captured_id_slots: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn captured(&self) -> Vec<Option<u32>> {
+            self.captured_id_slots.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for KvSlotCapturingProvider {
+        async fn chat_stream(
+            &self,
+            request: LlmRequest<'_>,
+            cancel: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            self.captured_id_slots.lock().unwrap().push(request.id_slot);
+            self.inner.chat_stream(request, cancel).await
+        }
+    }
+
+    /// A local-only kvcache store: `LlamaServerSlotStore::open` does no
+    /// network I/O (it only opens a local sqlite manifest + creates a local
+    /// slots dir — see `llm_planner.rs`'s own Task 4 kvcache tests for the
+    /// same reasoning), and a fresh tempdir's manifest is always a miss, so
+    /// `restore_into_slot` returns `Ok(false)` from a local lookup alone,
+    /// never dialing `base_url`. The warm-up that follows a miss goes
+    /// through the *provider* (our fake), not the store; only the trailing
+    /// `save_from_slot` actually dials `base_url`, and a connection to an
+    /// unbound loopback port fails fast (refused, not a hang) and is
+    /// fail-open (logged, non-fatal) in `ensure_kv_slot_checked_out`.
+    fn kv_store_for_test() -> (Arc<aivyx_kvcache::LlamaServerSlotStore>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = aivyx_kvcache::LlamaServerSlotStore::open(dir.path(), "http://127.0.0.1:1", 1_000_000)
+            .expect("open a local-only slot store");
+        (Arc::new(store), dir)
+    }
+
+    /// Fix 1 (Important), first half: proves `SpecialistFactory::with_kv_cache`
+    /// actually reaches the specialist's own `LlmPlanner` — not just that
+    /// `build()` still returns `Ok` when it's configured (which would pass
+    /// identically whether the wiring exists or not).
+    #[tokio::test]
+    async fn build_wires_kv_cache_into_the_specialists_own_llm_planner() {
+        use crate::testutil::{FakeLeadChannel, FakeProvider};
+        use aivyx_core::{ChannelContext, Message};
+
+        let (store, _dir) = kv_store_for_test();
+        let pool = Arc::new(aivyx_llm::KvSlotPool::new(2));
+
+        let provider = KvSlotCapturingProvider::wrapping(FakeProvider::always("ok"));
+        let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let f = SpecialistFactory::new(
+            Arc::clone(&provider) as Arc<dyn LlmProvider>,
+            "test-model",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![],
+        )
+        .with_kv_cache(Some((pool, store, "build-hash".to_string())));
+
+        let specialist = f.build(&member("spec", &["fs.read"], &[]), &lead).expect("build");
+
+        let channel = FakeLeadChannel::at(TrustTier::Trusted);
+        let _ = specialist
+            .turn(Message::text(channel.session_id(), "go"), &channel)
+            .await;
+
+        let captured = provider.captured();
+        assert!(
+            captured.iter().any(|slot| slot.is_some()),
+            "with_kv_cache on the factory must reach the specialist's own \
+             LlmPlanner — expected at least one LlmRequest with \
+             id_slot = Some(_), got {captured:?}"
+        );
+    }
+
+    /// Fix 1 (Important), second half: proves the pool attached via
+    /// `with_kv_cache` is genuinely the SAME `Arc<KvSlotPool>` shared across
+    /// every specialist this factory builds, not a fresh pool duplicated per
+    /// specialist. A 1-slot pool is exhausted directly (deterministic — this
+    /// sidesteps racing `LlmPlanner`'s own end-of-turn `Drop` release, which
+    /// would otherwise hand the slot back before a second turn could
+    /// observe it exhausted; `llm_planner.rs`'s own kvcache regression tests
+    /// use the identical direct-`checkout()` technique). If `build`'s
+    /// closure captured an independent pool per specialist instead of
+    /// cloning the factory's own `Arc`, exhausting the pool this way would
+    /// have no effect on another specialist built from the same factory —
+    /// it would still see a free slot.
+    #[tokio::test]
+    async fn build_shares_one_kv_slot_pool_across_every_specialist_it_builds() {
+        use crate::testutil::{FakeLeadChannel, FakeProvider};
+        use aivyx_core::{ChannelContext, Message};
+
+        let (store, _dir) = kv_store_for_test();
+        // A ONE-slot pool: checking it out once leaves nothing for anyone
+        // else, *if* every specialist is really drawing on the same pool.
+        let pool = Arc::new(aivyx_llm::KvSlotPool::new(1));
+
+        let provider = KvSlotCapturingProvider::wrapping(FakeProvider::always("ok"));
+        let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let f = SpecialistFactory::new(
+            Arc::clone(&provider) as Arc<dyn LlmProvider>,
+            "test-model",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![],
+        )
+        .with_kv_cache(Some((Arc::clone(&pool), store, "build-hash".to_string())));
+
+        // Two independent specialists, both built from the SAME factory.
+        let specialist_a = f.build(&member("spec-a", &["fs.read"], &[]), &lead).expect("build a");
+        let specialist_b = f.build(&member("spec-b", &["fs.read"], &[]), &lead).expect("build b");
+
+        let channel = FakeLeadChannel::at(TrustTier::Trusted);
+
+        // Exhaust the pool's one slot directly (stands in for "specialist A's
+        // turn already checked it out" — see doc comment above for why).
+        assert_eq!(pool.checkout(), Some(0), "the pool starts with its one slot free");
+
+        // Specialist B's turn must find the shared pool already exhausted —
+        // proving it draws on the SAME Arc<KvSlotPool>, not an independent one.
+        let _ = specialist_b
+            .turn(Message::text(channel.session_id(), "go"), &channel)
+            .await;
+        let captured_while_exhausted = provider.captured();
+        assert!(
+            captured_while_exhausted.iter().all(|slot| slot.is_none()),
+            "specialist B must see the pool's one slot already checked out via \
+             the SAME shared Arc<KvSlotPool> — an independent (duplicated) pool \
+             would still have a free slot here (id_slot = Some(_)); \
+             got {captured_while_exhausted:?}"
+        );
+
+        // Control: releasing the slot frees it back up on the SAME shared
+        // pool. Specialist A, built from the same factory, can then check it
+        // out — ruling out "the wiring is just always broken/absent" as an
+        // alternate explanation for the all-None result above.
+        pool.release(0);
+        let _ = specialist_a
+            .turn(Message::text(channel.session_id(), "go"), &channel)
+            .await;
+        let captured_after_release = provider.captured();
+        assert!(
+            captured_after_release.iter().any(|slot| slot.is_some()),
+            "once the shared pool's only slot is released, specialist A — built \
+             from the same factory — must be able to check it out; \
+             got {captured_after_release:?}"
         );
     }
 
