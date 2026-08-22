@@ -200,6 +200,10 @@ impl TeamMissionRecord {
                 TeamStepView {
                     label: format!("{} — {member} ({kind})", step.id),
                     state: self.step_state(&step.id, running_steps),
+                    step_id: step.id.clone(),
+                    member: member.to_string(),
+                    kind: kind.to_string(),
+                    deps: step.deps.clone(),
                 }
             })
             .collect();
@@ -280,6 +284,31 @@ pub struct TeamStepView {
     /// e.g. `"approve — reviewer (gate)"`.
     pub label: String,
     pub state: TeamStepState,
+    /// Chapter Mission Control — the step's own id (`MissionPlan`'s
+    /// `Step::id`). A client that only had `label` before this had to
+    /// parse a formatted display string to recover this — now it's a
+    /// real field.
+    pub step_id: String,
+    /// Chapter Mission Control — the specialist (for a `delegate` step) or
+    /// reviewer (for a `gate` step) this step runs on.
+    pub member: String,
+    /// Chapter Mission Control — `"delegate"` or `"gate"`, matching the
+    /// two `StepKind` variants. A plain `String` rather than a new public
+    /// enum, since these are the only two values `StepKind` has and the
+    /// existing `label` formatting already treated them as a fixed pair.
+    /// (Deliberately not `&'static str`, despite the two literal values
+    /// this always holds: a `Deserialize`-deriving wire type can't carry a
+    /// `&'static str` field — the derive requires `'de: 'static`, which is
+    /// unsatisfiable for `TeamMissionView`'s own generic `Deserialize<'de>`
+    /// impl since `TeamStepView` sits inside it via `Vec<TeamStepView>`;
+    /// confirmed with a minimal repro before choosing `String` here.)
+    pub kind: String,
+    /// Chapter Mission Control — the ids of steps that must complete
+    /// before this one is ready (`Step::deps`, unchanged from the engine
+    /// type) — lets a client draw real dependency edges without touching
+    /// `MissionPlan`/`StepKind` directly.
+    #[serde(default)]
+    pub deps: Vec<String>,
 }
 
 /// The checkpoint-derived state of a step for the feed.
@@ -400,6 +429,31 @@ mod tests {
         let rec: TeamMissionRecord = serde_json::from_str(json).unwrap();
         assert_eq!(rec.spend_tokens, 0);
         assert_eq!(rec.spend_usd, 0.0);
+    }
+
+    #[test]
+    fn to_view_exposes_structured_step_fields_not_just_the_label() {
+        let rec = sample("v1");
+        let view = rec.to_view();
+        // sample()'s fixture: count (delegate, inventory) -> approve
+        // (human gate, manager) -> order (delegate, purchasing).
+        assert_eq!(view.steps[0].step_id, "count");
+        assert_eq!(view.steps[0].member, "inventory");
+        assert_eq!(view.steps[0].kind, "delegate");
+        assert_eq!(view.steps[0].deps, Vec::<String>::new(), "count has no deps");
+
+        assert_eq!(view.steps[1].step_id, "approve");
+        assert_eq!(view.steps[1].member, "manager");
+        assert_eq!(view.steps[1].kind, "gate");
+        assert_eq!(view.steps[1].deps, vec!["count".to_string()]);
+
+        assert_eq!(view.steps[2].step_id, "order");
+        assert_eq!(view.steps[2].member, "purchasing");
+        assert_eq!(view.steps[2].kind, "delegate");
+        assert_eq!(view.steps[2].deps, vec!["approve".to_string()]);
+
+        // label is UNCHANGED -- existing aivyx-tui rendering still works.
+        assert!(view.steps[1].label.contains("manager (gate)"));
     }
 
     #[test]

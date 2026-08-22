@@ -5211,9 +5211,30 @@ mod mission_control_tests {
     fn running_step_indices_finds_the_running_positions() {
         let mut v = view("m1", 10);
         v.steps = vec![
-            TeamStepView { label: "a".into(), state: TeamStepState::Done },
-            TeamStepView { label: "b".into(), state: TeamStepState::Running },
-            TeamStepView { label: "c".into(), state: TeamStepState::Pending },
+            TeamStepView {
+                label: "a".into(),
+                state: TeamStepState::Done,
+                step_id: "a".into(),
+                member: "m".into(),
+                kind: "delegate".into(),
+                deps: vec![],
+            },
+            TeamStepView {
+                label: "b".into(),
+                state: TeamStepState::Running,
+                step_id: "b".into(),
+                member: "m".into(),
+                kind: "delegate".into(),
+                deps: vec!["a".into()],
+            },
+            TeamStepView {
+                label: "c".into(),
+                state: TeamStepState::Pending,
+                step_id: "c".into(),
+                member: "m".into(),
+                kind: "delegate".into(),
+                deps: vec!["b".into()],
+            },
         ];
         let indices = running_step_indices(&v);
         assert_eq!(indices, [1].into_iter().collect());
@@ -5222,7 +5243,14 @@ mod mission_control_tests {
     #[test]
     fn apply_running_overlay_marks_a_still_pending_step_running() {
         let mut v = view("m1", 0);
-        v.steps = vec![TeamStepView { label: "a".into(), state: TeamStepState::Pending }];
+        v.steps = vec![TeamStepView {
+            label: "a".into(),
+            state: TeamStepState::Pending,
+            step_id: "a".into(),
+            member: "m".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
         let mut views = vec![v];
         let mut overlay: HashMap<String, HashSet<usize>> =
             [("m1".to_string(), [0usize].into_iter().collect())].into_iter().collect();
@@ -5236,7 +5264,14 @@ mod mission_control_tests {
         // The fresh poll already shows this step Done -- the overlay must
         // NOT downgrade it back to Running, and must stop tracking it.
         let mut v = view("m1", 100);
-        v.steps = vec![TeamStepView { label: "a".into(), state: TeamStepState::Done }];
+        v.steps = vec![TeamStepView {
+            label: "a".into(),
+            state: TeamStepState::Done,
+            step_id: "a".into(),
+            member: "m".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
         let mut views = vec![v];
         let mut overlay: HashMap<String, HashSet<usize>> =
             [("m1".to_string(), [0usize].into_iter().collect())].into_iter().collect();
