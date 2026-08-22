@@ -2202,8 +2202,68 @@ fn MissionGraphNodeCard(node: MissionGraphNode, selected: bool, onclick: EventHa
 
 #[component]
 fn MissionControls(mission: TeamMissionView) -> Element {
-    let _ = mission;
-    rsx! { div {} }
+    let ws = use_context::<Sender>();
+    let id = mission.id.clone();
+    rsx! {
+        div { class: "mission-controls",
+            if mission.phase == TeamMissionPhase::AwaitingApproval {
+                if let Some(gate) = mission.pending_gate.clone() {
+                    GateControls { mission_id: mission.id.clone(), step: gate }
+                }
+            }
+            if mission.phase == TeamMissionPhase::Executing {
+                button {
+                    class: "btn btn-ghost",
+                    onclick: {
+                        let id = id.clone();
+                        move |_| ws.send(pause_team_mission_query(id.clone()))
+                    },
+                    "Pause"
+                }
+                button {
+                    class: "btn btn-ghost-danger",
+                    onclick: {
+                        let id = id.clone();
+                        move |_| ws.send(abort_team_mission_query(id.clone()))
+                    },
+                    "Abort"
+                }
+            }
+            if mission.phase == TeamMissionPhase::Paused {
+                button {
+                    class: "btn btn-sage",
+                    onclick: move |_| ws.send(resume_team_mission_query(id.clone())),
+                    "Resume"
+                }
+            }
+        }
+    }
+}
+
+/// Chapter Mission Control — which controls a mission's current phase
+/// shows, as opaque tags a test can assert on without a Dioxus runtime.
+/// `MissionControls`'s own rsx! branches on the same phase checks this
+/// function encodes -- kept in sync by both reading `mission.phase`
+/// directly rather than duplicating a separate enum.
+///
+/// Only `mission_controls_shown_for_each_phase` (below, `#[cfg(test)]`)
+/// calls this — the rsx! branches deliberately re-check `mission.phase`
+/// directly rather than calling in, matching `MissionRow`'s existing
+/// `awaiting` boolean precedent. `#[allow(dead_code)]` because that makes
+/// this function otherwise-unreferenced in a non-test build; its value is
+/// the compiler's own exhaustiveness check on the `match` below, not a
+/// runtime call site.
+#[allow(dead_code)]
+fn controls_for_phase(phase: TeamMissionPhase) -> Vec<&'static str> {
+    match phase {
+        TeamMissionPhase::Executing => vec!["pause", "abort"],
+        TeamMissionPhase::Paused => vec!["resume"],
+        TeamMissionPhase::AwaitingApproval => vec!["gate"],
+        TeamMissionPhase::Planning
+        | TeamMissionPhase::Done
+        | TeamMissionPhase::Rejected
+        | TeamMissionPhase::Halted => vec![],
+    }
 }
 
 /// Chapter Mission Control — the lead's declared capability scopes, for
@@ -5265,6 +5325,27 @@ fn resolve_team_query(mission_id: String, step: String, approve: bool) -> Fronte
     }
 }
 
+fn abort_team_mission_query(mission_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-abort".to_string(),
+        payload: QueryPayload::AbortTeamMission { mission_id },
+    }
+}
+
+fn pause_team_mission_query(mission_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-pause".to_string(),
+        payload: QueryPayload::PauseTeamMission { mission_id },
+    }
+}
+
+fn resume_team_mission_query(mission_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-resume".to_string(),
+        payload: QueryPayload::ResumeTeamMission { mission_id },
+    }
+}
+
 fn resolve_gate_query(mission_id: String, gate_id: String, approved: bool) -> FrontendMessage {
     FrontendMessage::ResolveGate { mission_id, gate_id, approved }
 }
@@ -5721,6 +5802,16 @@ mod mission_control_tests {
         let mut roster = sample_roster();
         roster.lead = "nobody".to_string();
         assert!(lead_scopes(&roster).is_empty());
+    }
+
+    #[test]
+    fn mission_controls_shown_for_each_phase() {
+        assert_eq!(controls_for_phase(TeamMissionPhase::Executing), vec!["pause", "abort"]);
+        assert_eq!(controls_for_phase(TeamMissionPhase::Paused), vec!["resume"]);
+        assert_eq!(controls_for_phase(TeamMissionPhase::AwaitingApproval), vec!["gate"]);
+        assert!(controls_for_phase(TeamMissionPhase::Done).is_empty());
+        assert!(controls_for_phase(TeamMissionPhase::Rejected).is_empty());
+        assert!(controls_for_phase(TeamMissionPhase::Halted).is_empty());
     }
 }
 
