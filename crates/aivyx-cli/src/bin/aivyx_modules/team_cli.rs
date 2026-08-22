@@ -89,6 +89,25 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
             println!("{message}");
             Ok(())
         }
+        TeamSubcommand::Pause { mission_id } => {
+            let message =
+                aivyx_channel::daemon_client::pause_team_mission(&socket_path, mission_id)
+                    .await
+                    .map_err(|e| format!("team pause failed: {e}"))?;
+            println!("{message}");
+            Ok(())
+        }
+        TeamSubcommand::Resume { mission_id } => {
+            let phase = aivyx_channel::daemon_client::resume_team_mission(
+                &socket_path,
+                mission_id.clone(),
+            )
+            .await
+            .map_err(|e| format!("team resume failed: {e}"))?;
+            println!("mission {mission_id} resumed (now {phase:?})");
+            println!("track it with `aivyx team status {mission_id}`");
+            Ok(())
+        }
         // The offline / in-process verbs are dispatched elsewhere (`team.rs`).
         TeamSubcommand::Roster { .. }
         | TeamSubcommand::Init { .. }

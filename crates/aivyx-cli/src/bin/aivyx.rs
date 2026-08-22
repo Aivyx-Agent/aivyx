@@ -1983,6 +1983,12 @@ enum TeamSubcommand {
     /// Chapter Belay — `aivyx team abort <id>`: stop a running mission (it
     /// halts gracefully at its next step boundary, preserving completed work).
     Abort { mission_id: String },
+    /// Chapter Mission Control — `aivyx team pause <id>`: pause a running
+    /// mission at its next step boundary — resumable, unlike abort.
+    Pause { mission_id: String },
+    /// Chapter Mission Control — `aivyx team resume <id>`: resume a
+    /// paused mission from its checkpoint.
+    Resume { mission_id: String },
 }
 
 impl TeamSubcommand {
@@ -1998,6 +2004,8 @@ impl TeamSubcommand {
                 | TeamSubcommand::Approve { .. }
                 | TeamSubcommand::Reject { .. }
                 | TeamSubcommand::Abort { .. }
+                | TeamSubcommand::Pause { .. }
+                | TeamSubcommand::Resume { .. }
         )
     }
 }
@@ -3455,17 +3463,30 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 })?;
                 TeamSubcommand::Abort { mission_id }
             }
+            "pause" => {
+                let mission_id = args.get(2).cloned().ok_or_else(|| {
+                    "`aivyx team pause` requires a <mission-id>".to_string()
+                })?;
+                TeamSubcommand::Pause { mission_id }
+            }
+            "resume" => {
+                let mission_id = args.get(2).cloned().ok_or_else(|| {
+                    "`aivyx team resume` requires a <mission-id>".to_string()
+                })?;
+                TeamSubcommand::Resume { mission_id }
+            }
             "" => {
                 return Err(
                     "`aivyx team` requires a subcommand: roster | init | run | start | \
-                     list | status | approve | reject | abort"
+                     list | status | approve | reject | abort | pause | resume"
                         .to_string(),
                 );
             }
             other => {
                 return Err(format!(
                     "unknown `aivyx team` subcommand `{other}` (expected: roster | \
-                     init | run | start | list | status | approve | reject)"
+                     init | run | start | list | status | approve | reject | abort | \
+                     pause | resume)"
                 ));
             }
         };
