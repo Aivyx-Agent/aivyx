@@ -68,6 +68,14 @@ pub enum MissionDriverError {
     /// Chapter Belay — abort was requested on a mission that isn't running.
     #[error("mission {0} cannot be aborted ({1})")]
     NotAbortable(String, String),
+    /// Chapter Mission Control — pause was requested on a mission that
+    /// isn't running.
+    #[error("mission {0} cannot be paused ({1})")]
+    NotPausable(String, String),
+    /// Chapter Mission Control — resume was requested on a mission that
+    /// isn't paused.
+    #[error("mission {0} is not paused (phase {1:?})")]
+    NotResumable(String, TeamMissionPhase),
 }
 
 /// Chapter Ensemble — builds an LLM provider (the daemon's kind) at a given
@@ -787,6 +795,27 @@ pub async fn prepare_gate_resolution(
     Ok(phase)
 }
 
+/// Chapter Mission Control — validate `id` is `Paused`, flip it back to
+/// `Executing`, and persist (`put` broadcasts the transition
+/// automatically). Mirrors `prepare_gate_resolution`'s own split shape:
+/// the daemon flips persisted state before spawning the (long) resume
+/// drive. Unlike gate resolution, there is no "reject" branch here —
+/// resume either succeeds into `Executing` or errors.
+pub async fn prepare_pause_resolution(
+    shared: &SharedMissionState,
+    id: &str,
+) -> Result<TeamMissionPhase, MissionDriverError> {
+    let mut record = shared
+        .snapshot(id)
+        .ok_or_else(|| MissionDriverError::NotFound(id.to_string()))?;
+    if record.phase != TeamMissionPhase::Paused {
+        return Err(MissionDriverError::NotResumable(id.to_string(), record.phase));
+    }
+    record.phase = TeamMissionPhase::Executing;
+    shared.put(record).await?;
+    Ok(TeamMissionPhase::Executing)
+}
+
 /// Chapter Belay — request that a **running** mission stop. Sets the mission's
 /// abort flag; its drive halts gracefully at the next wave boundary (in-flight
 /// specialist turns finish, completed outputs are preserved), landing the
@@ -821,6 +850,45 @@ pub fn abort_mission(
             "it is paused at a human gate — reject the gate instead".to_string(),
         )),
         other => Err(MissionDriverError::NotAbortable(
+            id.to_string(),
+            format!("it is not currently running (phase {other:?})"),
+        )),
+    }
+}
+
+/// Chapter Mission Control — request that a **running** mission pause.
+/// Sets the mission's pause flag; its drive pauses gracefully at the next
+/// wave boundary (in-flight specialist turns finish, completed outputs
+/// are preserved), landing the mission in the new, non-terminal `Paused`
+/// phase — distinct from `abort_mission`, whose landing (`Halted`) is
+/// terminal. A mission paused at a human gate isn't running the same way,
+/// so it can't be paused this way either — resolve its gate instead.
+/// Returns a short status message on success.
+pub fn pause_mission(
+    shared: &SharedMissionState,
+    id: &str,
+) -> Result<String, MissionDriverError> {
+    let record = shared
+        .snapshot(id)
+        .ok_or_else(|| MissionDriverError::NotFound(id.to_string()))?;
+    match record.phase {
+        TeamMissionPhase::Executing => {
+            if shared.request_pause(id) {
+                Ok(format!(
+                    "pause requested — mission {id} will pause at its next step boundary"
+                ))
+            } else {
+                Err(MissionDriverError::NotPausable(
+                    id.to_string(),
+                    "the mission is no longer running".to_string(),
+                ))
+            }
+        }
+        TeamMissionPhase::AwaitingApproval => Err(MissionDriverError::NotPausable(
+            id.to_string(),
+            "it is paused at a human gate — reject the gate instead".to_string(),
+        )),
+        other => Err(MissionDriverError::NotPausable(
             id.to_string(),
             format!("it is not currently running (phase {other:?})"),
         )),
@@ -1001,6 +1069,21 @@ impl TeamMissionService {
         } else if let Some(record) = self.state.snapshot(id) {
             notify_mission_result(&self.deps, &record).await;
         }
+        Ok(phase)
+    }
+
+    /// Chapter Mission Control — request that a running mission pause at
+    /// its next wave boundary. Returns a short status message.
+    pub fn pause(&self, id: &str) -> Result<String, MissionDriverError> {
+        pause_mission(&self.state, id)
+    }
+
+    /// Chapter Mission Control — resume a paused mission, spawning the
+    /// resume drive. Returns the immediate phase (always `Executing` on
+    /// success).
+    pub async fn resume(&self, id: &str) -> Result<TeamMissionPhase, MissionDriverError> {
+        let phase = prepare_pause_resolution(&self.state, id).await?;
+        self.spawn_drive(id.to_string());
         Ok(phase)
     }
 
@@ -2679,6 +2762,57 @@ mod tests {
             }
             other => panic!("expected TeamMissionUpdated, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn pause_mission_requires_executing_phase() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        let mut record = TeamMissionRecord::new("m1", "goal", plan);
+        record.phase = TeamMissionPhase::Done;
+        shared.put(record).await.expect("put");
+
+        let err = pause_mission(&shared, "m1").unwrap_err();
+        assert!(matches!(err, MissionDriverError::NotPausable(..)));
+    }
+
+    #[tokio::test]
+    async fn pause_mission_on_an_unknown_id_is_not_found() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let err = pause_mission(&shared, "no-such-mission").unwrap_err();
+        assert!(matches!(err, MissionDriverError::NotFound(..)));
+    }
+
+    #[tokio::test]
+    async fn prepare_pause_resolution_requires_paused_phase() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        let mut record = TeamMissionRecord::new("m1", "goal", plan);
+        record.phase = TeamMissionPhase::Executing;
+        shared.put(record).await.expect("put");
+
+        let err = prepare_pause_resolution(&shared, "m1").await.unwrap_err();
+        assert!(matches!(err, MissionDriverError::NotResumable(..)));
+    }
+
+    #[tokio::test]
+    async fn prepare_pause_resolution_flips_paused_to_executing() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        let mut record = TeamMissionRecord::new("m1", "goal", plan);
+        record.phase = TeamMissionPhase::Paused;
+        record.outputs.insert("a".to_string(), "partial output".to_string());
+        shared.put(record).await.expect("put");
+
+        let phase = prepare_pause_resolution(&shared, "m1").await.expect("resolve");
+        assert_eq!(phase, TeamMissionPhase::Executing);
+        let after = shared.snapshot("m1").expect("still present");
+        assert_eq!(after.phase, TeamMissionPhase::Executing);
+        assert_eq!(
+            after.outputs.get("a"),
+            Some(&"partial output".to_string()),
+            "checkpoint survives the resume"
+        );
     }
 
     #[test]
