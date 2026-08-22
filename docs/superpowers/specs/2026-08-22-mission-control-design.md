@@ -2,8 +2,10 @@
 
 **Status:** Piece 1 (Live mission state) shipped 2026-08-22 — plan at
 `docs/superpowers/plans/2026-08-22-mission-control-live-state.md`, merged
-to `main` at `2989a043`. Pieces 2 (Pause/Resume) and 3 (the Mission
-Control nav view) are not yet planned or implemented.
+to `main` at `2989a043`. Piece 2 (Pause/Resume) shipped 2026-08-22 — plan
+at `docs/superpowers/plans/2026-08-22-mission-control-pause-resume.md`,
+merged to `main` at `e7023a56`. Piece 3 (the Mission Control nav view) is
+not yet planned or implemented.
 
 ## Motivation
 
