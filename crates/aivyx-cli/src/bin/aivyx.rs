@@ -8817,9 +8817,19 @@ async fn run_async(
         // Nonagon is the team for L.5; vertical-pack configs are a later
         // increment.
         let team_missions = {
-            let state = aivyx_channel::team_mission_driver::SharedMissionState::new(
+            // Chapter Mission Control — share the same broadcaster the
+            // desktop-notification path uses (web_ui_broadcaster, built
+            // above), so a step starting/finishing pushes a live update to
+            // every connected Mission Control client the same way a
+            // desktop notification does. `None` when no Web UI server is
+            // configured -- with_broadcaster is simply not called, and
+            // mark_running/clear_running stay silent no-ops.
+            let mut state = aivyx_channel::team_mission_driver::SharedMissionState::new(
                 storage.domain(KeyDomain::TeamMissions),
             );
+            if let Some(bc) = web_ui_broadcaster.clone() {
+                state = state.with_broadcaster(bc);
+            }
             match state.reload().await {
                 Ok(n) if n > 0 => {
                     eprintln!("aivyx team: reloaded {n} persisted team mission(s)");
