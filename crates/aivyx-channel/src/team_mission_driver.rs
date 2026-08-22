@@ -1229,9 +1229,10 @@ async fn drive(
     // at the next wave boundary if an operator requests an abort.
     let abort = shared.arm_abort(id);
     // Chapter Mission Control — arm this mission's pause flag too. Kept as
-    // a local binding (not just handed to the observer) because drive()
-    // itself checks it AFTER the run completes, to decide whether a
-    // MissionStatus::Halted outcome should land in Paused instead.
+    // a local binding so it can be cloned into the observer below; the
+    // Halted-outcome branch decides Paused vs. Halted from the `reason`
+    // string `should_halt()` already returned (not by re-reading this raw
+    // flag after the run completes — see that branch's own comment for why).
     let pause = shared.arm_pause(id);
     // Chapter Mission Control — from here on, EVERY exit path (the two
     // early `?` returns below, a panic, or normal completion) runs
@@ -1279,20 +1280,20 @@ async fn drive(
                 // chain (same legibility as the headless-refusal path), preserve
                 // the partial outputs above, and stash the reason for the record.
                 MissionStatus::Halted { reason } => {
-                    if pause.load(std::sync::atomic::Ordering::SeqCst) {
-                        // Chapter Mission Control — a pause request
-                        // tripped this halt, not an abort or budget cap
-                        // (should_halt's own priority order guarantees
-                        // this branch is only reached when abort is NOT
-                        // armed) -- land in the new, non-terminal Paused
-                        // phase instead of Halted. No halt_reason is set
-                        // (that field's contract: "set iff phase ==
-                        // Halted") -- outputs are preserved exactly like
-                        // a real Halted landing, ready for resume to
-                        // continue from. Still logged (distinctly) for
-                        // operator visibility, but NOT sent to the audit
-                        // chain -- HeadlessRefusal means "declined," which
-                        // an operator-requested pause isn't.
+                    if reason == "paused by operator" {
+                        // Chapter Mission Control — should_halt()'s own priority order
+                        // (abort checked first, unconditionally) already guarantees this
+                        // exact reason string is only ever returned when abort was NOT
+                        // armed at the check -- trusting `reason` (not re-reading the raw
+                        // pause flag, which has no coupling to abort and can still be
+                        // true even when abort legitimately won) is what actually
+                        // preserves that priority here. Land in the new, non-terminal
+                        // Paused phase instead of Halted. No halt_reason is set (that
+                        // field's contract: "set iff phase == Halted") -- outputs are
+                        // preserved exactly like a real Halted landing, ready for resume
+                        // to continue from. Still logged (distinctly) for operator
+                        // visibility, but NOT sent to the audit chain -- HeadlessRefusal
+                        // means "declined," which an operator-requested pause isn't.
                         eprintln!("aivyx team: mission {id} paused");
                         TeamMissionPhase::Paused
                     } else {
@@ -2263,6 +2264,99 @@ mod tests {
         assert!(rec.outputs.contains_key("a"), "wave 1 output preserved");
         assert!(rec.outputs.contains_key("b"), "wave 2 output preserved");
         assert!(!rec.outputs.contains_key("c"), "wave 3 never ran");
+    }
+
+    #[tokio::test]
+    async fn abort_after_pause_mid_drive_lands_the_mission_in_halted_not_paused() {
+        // Chapter Mission Control — the regression case for the real bug: a
+        // pause requested BEFORE an abort on the same still-`Executing`
+        // mission must not downgrade the abort into a non-terminal Paused.
+        // `pause` and `abort` are two independent flags with no mutual
+        // exclusion, so both land `true`; `should_halt()` already checks
+        // abort first, unconditionally, and returns "aborted by operator" —
+        // `drive()`'s Halted arm must trust that `reason` string, not
+        // re-read the raw (still-true) `pause` flag.
+        let shared = SharedMissionState::new(team_domain().await);
+        let audit = Arc::new(CapturingAuditHook::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut deps = deps("ok");
+        deps.audit = audit.clone();
+        deps.provider = Arc::new(GatedProvider {
+            line: "ok".into(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            gate_at: 1,
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        });
+        let plan = MissionPlan::new(
+            "chain",
+            vec![
+                Step::delegate("a", "researcher", "p"),
+                Step::delegate("b", "writer", "p").after(["a"]),
+                Step::delegate("c", "reviewer", "p").after(["b"]),
+            ],
+        );
+        let id = register_mission(&shared, plan, "abort-after-pause-mid", None)
+            .await
+            .unwrap();
+
+        let shared_task = shared.clone();
+        let deps_task = deps.clone();
+        let id_task = id.clone();
+        let drive = tokio::spawn(async move {
+            drive_registered(
+                &shared_task,
+                &deps_task,
+                default_nonagon(),
+                &id_task,
+                GatePolicy::Interactive,
+            )
+            .await
+        });
+
+        // Block until wave 2 (step "b") has genuinely started.
+        started.notified().await;
+        assert!(
+            shared.request_pause(&id),
+            "drive() must have armed the pause flag by the time wave 2 starts"
+        );
+        // Abort races in on top of the still-armed pause — both flags are
+        // now true, matching the real bug's scenario exactly.
+        abort_mission(&shared, &id).expect("abort accepted while Executing");
+        // Let step "b" finish; wave 3's should_halt() now sees both flags
+        // true and must still return the abort reason (abort checked first).
+        release.notify_one();
+
+        let phase = drive.await.expect("drive task join").expect("drive result");
+        assert_eq!(
+            phase,
+            TeamMissionPhase::Halted,
+            "abort must never be silently downgraded by a pending pause"
+        );
+
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(rec.phase, TeamMissionPhase::Halted);
+        assert_eq!(
+            rec.halt_reason,
+            Some("aborted by operator".to_string()),
+            "halt_reason must reflect the abort, not a swallowed pause"
+        );
+        assert!(rec.outputs.contains_key("a"), "wave 1 output preserved");
+        assert!(rec.outputs.contains_key("b"), "wave 2 output preserved");
+        assert!(!rec.outputs.contains_key("c"), "wave 3 never ran");
+
+        // The audit chain must see this as a real halt (HeadlessRefusal),
+        // exactly like any other Halted landing — not silently skipped the
+        // way a genuine Paused landing skips it.
+        let refusals = audit.refusals.lock().unwrap();
+        assert_eq!(refusals.len(), 1, "the abort halt must reach the audit chain");
+        assert_eq!(refusals[0].0, "<halt>");
+        assert!(
+            refusals[0].1.contains("aborted by operator"),
+            "audit reason must name the abort: {}",
+            refusals[0].1
+        );
     }
 
     #[tokio::test]
