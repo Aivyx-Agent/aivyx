@@ -5703,9 +5703,16 @@ mod mission_control_tests {
     fn lead_scopes_returns_the_leads_own_declared_scopes() {
         let mut roster = sample_roster();
         roster.members[0].capability_scopes = vec!["fs.write".to_string(), "net.fetch".to_string()];
+        // A non-lead member ("inventory", `members[1]` -- confirmed not the
+        // lead, which is "coordinator" at `members[0]` per `sample_roster`)
+        // with DIFFERENT scopes -- these must NOT leak into lead_scopes's
+        // result, or a "union of all members" bug (instead of "just the
+        // lead's own scopes") would silently pass.
+        roster.members[1].capability_scopes = vec!["shell.exec".to_string()];
         let scopes = lead_scopes(&roster);
         assert!(scopes.contains("fs.write"));
         assert!(scopes.contains("net.fetch"));
+        assert!(!scopes.contains("shell.exec"), "a non-lead member's own scope must not leak into lead_scopes");
         assert_eq!(scopes.len(), 2);
     }
 
