@@ -722,7 +722,6 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .mission-control .row1 { display: flex; gap: 12px; align-items: baseline; }
 .mission-control .goal { flex: 1; font-weight: 500; color: var(--color-text-primary); }
 .mission-control .lead { white-space: nowrap; color: var(--color-text-secondary); }
-.mission-control .step { color: var(--color-text-secondary); }
 
 .mission-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
 .mission-pick {

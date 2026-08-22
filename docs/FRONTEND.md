@@ -88,6 +88,7 @@ The Studio is a classic command-center shell, driven by the layout tokens
 |---|---|---|
 | **Command** | dashboard: stat cards + active missions + live audit-trail feed + agent status | ✅ Live (Ch. S — the default landing view) |
 | **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
+| **Mission Control** | one active mission's live LEAD/specialist graph, click-to-drill-in (current step, capability scopes, NT-02 hint), and abort/pause/resume controls | ✅ Live (Ch. Mission Control) |
 | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
 | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
 | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
