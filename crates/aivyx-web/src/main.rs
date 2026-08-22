@@ -5806,6 +5806,7 @@ mod mission_control_tests {
 
     #[test]
     fn mission_controls_shown_for_each_phase() {
+        assert!(controls_for_phase(TeamMissionPhase::Planning).is_empty());
         assert_eq!(controls_for_phase(TeamMissionPhase::Executing), vec!["pause", "abort"]);
         assert_eq!(controls_for_phase(TeamMissionPhase::Paused), vec!["resume"]);
         assert_eq!(controls_for_phase(TeamMissionPhase::AwaitingApproval), vec!["gate"]);
