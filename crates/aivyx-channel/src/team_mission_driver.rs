@@ -165,6 +165,16 @@ pub struct SharedMissionState {
     /// wave boundary; `request_abort` sets it. Not persisted (a flag is
     /// meaningless across a restart — an interrupted mission re-drives fresh).
     abort_flags: Arc<RwLock<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Chapter Mission Control — runtime-only pause flags, keyed by
+    /// mission id, mirroring `abort_flags` exactly (armed by the drive,
+    /// read by the observer at each wave boundary, set by
+    /// `request_pause`). Not persisted for the same reason `abort_flags`
+    /// isn't — an armed-but-unresolved pause flag is meaningless across a
+    /// restart (an interrupted mission simply isn't paused-by-request
+    /// after a restart; `reload`'s own zombie-reconciliation already
+    /// handles the interrupted-mid-drive case by landing such missions in
+    /// `Halted`, not `Paused`).
+    pause_flags: Arc<RwLock<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
     /// Chapter Mission Control — the SET of step ids currently executing,
     /// keyed by mission id. A set, not a single value, because Nonagon
     /// missions run every step in a DAG wave concurrently
@@ -192,6 +202,7 @@ impl SharedMissionState {
             store,
             registry: Arc::new(RwLock::new(BTreeMap::new())),
             abort_flags: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            pause_flags: Arc::new(RwLock::new(std::collections::HashMap::new())),
             running_steps: Arc::new(RwLock::new(std::collections::HashMap::new())),
             broadcaster: None,
         }
@@ -295,6 +306,39 @@ impl SharedMissionState {
     /// `false` if not (already terminal, paused, or unknown).
     pub fn request_abort(&self, id: &str) -> bool {
         match self.abort_flags.read().expect("abort flags lock").get(id) {
+            Some(flag) => {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Chapter Mission Control — arm a fresh pause flag for an executing
+    /// mission and return it, mirroring `arm_abort` exactly (the drive
+    /// hands the clone to the observer's `should_halt`, and keeps its own
+    /// copy to check after the run completes, for phase selection).
+    fn arm_pause(&self, id: &str) -> Arc<std::sync::atomic::AtomicBool> {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.pause_flags
+            .write()
+            .expect("pause flags lock")
+            .insert(id.to_string(), Arc::clone(&flag));
+        flag
+    }
+
+    /// Chapter Mission Control — drop a mission's pause flag once its
+    /// drive ends, mirroring `disarm_abort` exactly.
+    fn disarm_pause(&self, id: &str) {
+        self.pause_flags.write().expect("pause flags lock").remove(id);
+    }
+
+    /// Chapter Mission Control — request that an executing mission pause
+    /// at its next wave boundary, mirroring `request_abort` exactly.
+    /// Returns `true` if the mission was running (a flag was armed),
+    /// `false` if not (already terminal, paused, or unknown).
+    pub fn request_pause(&self, id: &str) -> bool {
+        match self.pause_flags.read().expect("pause flags lock").get(id) {
             Some(flag) => {
                 flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 true
@@ -2034,6 +2078,34 @@ mod tests {
         // Disarmed (drive ended) → request is a no-op again.
         shared.disarm_abort("m");
         assert!(!shared.request_abort("m"));
+    }
+
+    // ---- Chapter Mission Control: pause a running mission ----
+
+    #[tokio::test]
+    async fn request_pause_returns_false_for_an_unarmed_mission() {
+        let shared = SharedMissionState::new(team_domain().await);
+        assert!(!shared.request_pause("no-such-mission"));
+    }
+
+    #[tokio::test]
+    async fn arm_pause_then_request_pause_sets_the_flag() {
+        let shared = SharedMissionState::new(team_domain().await);
+        // arm_pause is private -- call it via the same test-module access
+        // the existing abort tests already use (this test lives inside
+        // `mod tests`, which has access to private items in the same file).
+        let flag = shared.arm_pause("m1");
+        assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(shared.request_pause("m1"));
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn disarm_pause_removes_the_flag() {
+        let shared = SharedMissionState::new(team_domain().await);
+        shared.arm_pause("m1");
+        shared.disarm_pause("m1");
+        assert!(!shared.request_pause("m1"), "no flag left to set");
     }
 
     #[tokio::test]
