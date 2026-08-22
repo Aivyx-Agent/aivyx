@@ -217,13 +217,6 @@ futures-util = { workspace = true }
 # Phase 16 Task 3 — added "net", "time" for the daemon_roundtrip_e2e integration test.
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 serde_json = { workspace = true }
-# Chapter Mission Control — `team_mission_driver`'s own tests build
-# `MissionPlan`/`Step` fixtures via the wasm-clean types crate directly
-# (same types `aivyx-team::MissionPlan`/`Step` re-export, per
-# `aivyx-team/src/mission.rs`) rather than through the fuller `aivyx-team`
-# crate already in `[dependencies]`. Only reachable transitively before
-# this — the extern prelude needs it declared directly to be nameable.
-aivyx-team-types = { path = "../aivyx-team-types" }
 
 # Phase 185 — the `aivyx` binary was extracted to the `aivyx-cli`
 # crate. It depends on both this crate and `aivyx-tui`; keeping it

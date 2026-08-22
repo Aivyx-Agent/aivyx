@@ -2016,9 +2016,9 @@ mod tests {
 
         // Seed a real mission record so broadcast_live_view has something
         // to project.
-        let plan = aivyx_team_types::MissionPlan::new(
+        let plan = MissionPlan::new(
             "goal",
-            vec![aivyx_team_types::Step::delegate("a", "specialist", "do a")],
+            vec![Step::delegate("a", "specialist", "do a")],
         );
         let record = TeamMissionRecord::new("m1", "goal", plan);
         shared.put(record).await.expect("put");
@@ -2052,9 +2052,9 @@ mod tests {
         let bc = Arc::new(WebUiBroadcaster::new());
         let mut rx = bc.subscribe();
         let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
-        let plan = aivyx_team_types::MissionPlan::new(
+        let plan = MissionPlan::new(
             "goal",
-            vec![aivyx_team_types::Step::delegate("a", "specialist", "do a")],
+            vec![Step::delegate("a", "specialist", "do a")],
         );
         shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
 
