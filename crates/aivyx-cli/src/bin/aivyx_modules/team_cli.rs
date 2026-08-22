@@ -8,9 +8,17 @@
 //!   plan LLM decomposition is a later increment per the L.4 decision).
 //! - `aivyx team list` / `aivyx team status [<id>]` — poll the mission feed.
 //! - `aivyx team approve|reject <id> <step>` — resolve a human-approval gate.
+//! - `aivyx team abort <id>` (Chapter Belay) — stop a running mission; it
+//!   halts gracefully at its next wave boundary, landing terminally in
+//!   `Halted`.
+//! - `aivyx team pause <id>` / `aivyx team resume <id>` (Chapter Mission
+//!   Control) — pause a running mission at its next wave boundary (landing
+//!   non-terminally in `Paused`) and later resume it from the preserved
+//!   checkpoint.
 //!
-//! All five talk to the running daemon's `TeamMissionService`. The render
-//! helpers are pure so they unit-test against fixtures without IPC.
+//! All eight (start, list, status, approve, reject, abort, pause, resume)
+//! talk to the running daemon's `TeamMissionService`. The render helpers are
+//! pure so they unit-test against fixtures without IPC.
 
 use std::path::Path;
 
@@ -207,6 +215,11 @@ fn render_mission_list(missions: &[TeamMissionRecord]) -> String {
                 m.id
             ));
         }
+        // Chapter Mission Control — a paused mission's next move is resume,
+        // mirroring the pending-gate hint above.
+        if m.phase == TeamMissionPhase::Paused {
+            out.push_str(&format!("      ↳ resume with `aivyx team resume {}`\n", m.id));
+        }
     }
     out
 }
@@ -231,6 +244,14 @@ fn render_mission_status(record: &TeamMissionRecord) -> String {
         if let Some(reason) = &record.halt_reason {
             out.push_str(&format!("  reason: {reason}\n"));
         }
+    }
+    // Chapter Mission Control — a paused mission's next move is resume,
+    // mirroring the `gate:` hint above.
+    if record.phase == TeamMissionPhase::Paused {
+        out.push_str(&format!(
+            "  ↳ resume with `aivyx team resume {}`\n",
+            record.id
+        ));
     }
     out.push_str("  steps:\n");
     for step in &record.plan.steps {
@@ -325,6 +346,19 @@ mod tests {
         let list = render_mission_list(&[rec]);
         assert!(list.contains("halted"));
         assert!(!list.contains("aborted by operator"));
+    }
+
+    #[test]
+    fn paused_mission_shows_a_resume_hint_in_list_and_status() {
+        // Chapter Mission Control (Fix D.1) — a paused mission's next
+        // operator move is resume, mirroring the pending-gate hint.
+        let rec = sample(TeamMissionPhase::Paused, None);
+        let status = render_mission_status(&rec);
+        assert!(status.contains("phase: paused"));
+        assert!(status.contains("resume with `aivyx team resume m-1`"));
+
+        let list = render_mission_list(&[rec]);
+        assert!(list.contains("↳ resume with `aivyx team resume m-1`"));
     }
 
     #[test]

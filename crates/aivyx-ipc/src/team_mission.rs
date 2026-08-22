@@ -63,7 +63,11 @@ impl TeamMissionPhase {
 /// One persisted team mission: its plan, the checkpoint (completed-step
 /// outputs the runtime resumes from), the lifecycle phase, and — when
 /// `AwaitingApproval` — the gate step pending an operator decision.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Note: no `Eq` here (unlike this file's other wire structs) — `spend_usd`
+// is an `f64`, which has no total-equality relation (NaN != NaN). Nothing
+// in this codebase actually needs `TeamMissionRecord: Eq` (checked: no
+// `HashSet`/`HashMap` key usage), only `PartialEq` for test assertions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TeamMissionRecord {
     /// Stable mission id (the storage key).
     pub id: String,
@@ -101,6 +105,21 @@ pub struct TeamMissionRecord {
     /// `#[serde(default)]` keeps pre-existing records decoding.
     #[serde(default)]
     pub verify_attempts: u32,
+    /// Chapter Mission Control — cumulative metered spend (tokens) across
+    /// this mission's whole lifetime, re-seeded into a fresh
+    /// `MeteringAuditHook` on every `drive_registered` call (start, resume,
+    /// gate-approval continuation, or Chapter Reprise retry) so a
+    /// `[budget]` cap tracks real cumulative spend rather than resetting
+    /// every time the mission is re-driven. Only meaningfully populated
+    /// when the daemon's mission budget is bounded (unbounded missions
+    /// never construct a meter at all — see `assemble_runtime`).
+    /// `#[serde(default)]` keeps pre-existing records decoding.
+    #[serde(default)]
+    pub spend_tokens: u64,
+    /// Chapter Mission Control — cumulative metered spend (USD), same
+    /// rationale as `spend_tokens`.
+    #[serde(default)]
+    pub spend_usd: f64,
     pub started_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
 }
@@ -122,6 +141,8 @@ impl TeamMissionRecord {
             halt_reason: None,
             config: None,
             verify_attempts: 0,
+            spend_tokens: 0,
+            spend_usd: 0.0,
             started_at_unix_ms: now,
             updated_at_unix_ms: now,
         }
@@ -346,6 +367,39 @@ mod tests {
         let back: TeamMissionRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back, rec);
         assert!(back.plan.step("approve").unwrap().is_human_gate());
+    }
+
+    #[test]
+    fn record_with_spend_round_trips_through_serde_json() {
+        // Chapter Mission Control (Fix A) — a record carrying non-zero
+        // metered spend round-trips intact.
+        let mut rec = sample("m2");
+        rec.spend_tokens = 12_345;
+        rec.spend_usd = 0.42;
+        let json = serde_json::to_string(&rec).unwrap();
+        let back: TeamMissionRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, rec);
+        assert_eq!(back.spend_tokens, 12_345);
+        assert!((back.spend_usd - 0.42).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_pre_existing_record_missing_spend_fields_still_decodes() {
+        // Chapter Mission Control (Fix A) — simulate a record persisted
+        // before this change: no `spend_tokens`/`spend_usd` keys at all.
+        // `#[serde(default)]` must default both to zero rather than
+        // failing to decode.
+        let json = r#"{
+            "id": "old1",
+            "goal": "legacy goal",
+            "plan": {"goal": "legacy goal", "steps": []},
+            "phase": "done",
+            "started_at_unix_ms": 1,
+            "updated_at_unix_ms": 1
+        }"#;
+        let rec: TeamMissionRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.spend_tokens, 0);
+        assert_eq!(rec.spend_usd, 0.0);
     }
 
     #[test]

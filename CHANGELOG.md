@@ -14,6 +14,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   requires `llama-server` started with `--slot-save-path` pointed at
   `<data_local_dir>/aivyx/kvcache/slots`; see `docs/INSTALL.md`'s
   "KV-cache persistence" section. No effect on Ollama or Jan.
+- **Pause and resume a running team mission (Chapter Mission Control).**
+  `aivyx team pause <id>` requests a graceful pause at the mission's next
+  wave boundary — unlike abort, this is resumable. `aivyx team resume
+  <id>` continues a paused mission from its preserved checkpoint.
 
 ### Changed
 

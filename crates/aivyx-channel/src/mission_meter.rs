@@ -57,14 +57,36 @@ impl MissionMeter {
 }
 
 impl MeteringAuditHook {
-    /// Wrap `inner`, pricing spend with `pricing`.
-    pub fn new(inner: Arc<dyn AuditHook>, pricing: Arc<aivyx_cost::Pricing>) -> Self {
+    /// Wrap `inner`, pricing spend with `pricing`, starting the running
+    /// totals from `seed_tokens`/`seed_usd` rather than zero. Chapter
+    /// Mission Control — used when a mission's drive is a resume (or a
+    /// gate-approval continuation, or a Chapter Reprise retry), so a
+    /// mission's [`aivyx_cost::MissionBudget`] cap tracks CUMULATIVE spend
+    /// across the whole mission's lifetime, not just the current drive
+    /// invocation. Without this, a `[budget]` cap resets every time
+    /// `drive_registered` is called again for the same mission — trivially
+    /// evadable via repeated pause/resume.
+    pub fn with_seed(
+        inner: Arc<dyn AuditHook>,
+        pricing: Arc<aivyx_cost::Pricing>,
+        seed_tokens: u64,
+        seed_usd: f64,
+    ) -> Self {
+        // Same rounding as on_event's own usd -> micro-dollar conversion,
+        // so a seeded value and an accumulated value are on identical
+        // footing (no drift from two different rounding rules).
+        let seed_micro_usd = (seed_usd.max(0.0) * 1_000_000.0).round() as u64;
         MeteringAuditHook {
             inner,
             pricing,
-            tokens: Arc::new(AtomicU64::new(0)),
-            micro_usd: Arc::new(AtomicU64::new(0)),
+            tokens: Arc::new(AtomicU64::new(seed_tokens)),
+            micro_usd: Arc::new(AtomicU64::new(seed_micro_usd)),
         }
+    }
+
+    /// Wrap `inner`, pricing spend with `pricing`, starting from zero.
+    pub fn new(inner: Arc<dyn AuditHook>, pricing: Arc<aivyx_cost::Pricing>) -> Self {
+        Self::with_seed(inner, pricing, 0, 0.0)
     }
 
     /// A read handle on the running totals for the driver's halt check.
@@ -163,6 +185,29 @@ mod tests {
         // so the dollar meter stays flat while tokens still accrue.
         hook.on_event(llm_cost("ollama:qwen3", 1000, 1000));
         assert_eq!(meter.tokens(), 2000);
+        assert_eq!(meter.usd(), 0.0);
+    }
+
+    #[test]
+    fn with_seed_starts_from_the_given_totals_not_zero() {
+        let inner = Arc::new(CapturingHook::default());
+        let hook = MeteringAuditHook::with_seed(
+            inner,
+            Arc::new(aivyx_cost::Pricing::default()),
+            500,
+            0.02,
+        );
+        let meter = hook.meter();
+        assert_eq!(meter.tokens(), 500);
+        assert!((meter.usd() - 0.02).abs() < 1e-9);
+    }
+
+    #[test]
+    fn new_still_starts_from_zero() {
+        let inner = Arc::new(CapturingHook::default());
+        let hook = MeteringAuditHook::new(inner, Arc::new(aivyx_cost::Pricing::default()));
+        let meter = hook.meter();
+        assert_eq!(meter.tokens(), 0);
         assert_eq!(meter.usd(), 0.0);
     }
 

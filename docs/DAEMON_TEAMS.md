@@ -33,7 +33,10 @@
   `MissionChannel`. The daemon path **reuses** the assembly + channel.
 - **TUI seam (J.7).** `aivyx-tui/src/model.rs`: `MissionsState { rows }`,
   `MissionRow { id, goal, phase, steps, ... }`, `MissionStep { state }`,
-  `MissionPhase::{Planning, Executing, AwaitingApproval, Done, Rejected}`,
+  `MissionPhase::{Planning, Executing, AwaitingApproval, Paused, Done,
+  Rejected, Halted}` (`Paused` — Chapter Mission Control — and `Halted` —
+  Chapter Ballast/Belay — both post-date this table; only `Paused` joins
+  `Planning`/`Executing`/`AwaitingApproval` as non-terminal),
   `StepState::{Pending, Running, Done, Gated, Failed}`,
   `Msg::MissionsUpdated(Vec<MissionRow>)` + `MissionSelectNext/Prev`.
   `render.rs::render_missions` is master/detail. **The `AwaitingApproval`
@@ -119,7 +122,7 @@ struct TeamMissionRecord {
     goal: String,
     plan: MissionPlan,        // the DAG (serde)
     outputs: BTreeMap<String,String>,   // the checkpoint (completed steps)
-    phase: MissionPhase,      // Planning|Executing|AwaitingApproval|Done|Rejected
+    phase: MissionPhase,      // Planning|Executing|AwaitingApproval|Paused|Done|Rejected|Halted
     pending_gate: Option<String>,       // step id when AwaitingApproval
     started_at_unix_ms: u64,
     updated_at_unix_ms: u64,
@@ -175,6 +178,17 @@ future option that doesn't change this contract.
     at a human gate* isn't running, so it can't be aborted this way — `reject`
     its gate instead. Completing the operator control surface over autonomous
     missions: budget-halt (Ballast) + gate approve/reject (L) + **abort**.
+  - `aivyx team pause <id>` / `aivyx team resume <id>` → `PauseTeamMission` /
+    `ResumeTeamMission` (**Chapter Mission Control**): pause requests a
+    graceful stop at the mission's next wave boundary — the same mechanism as
+    abort (in-flight specialist turns finish, completed outputs are
+    preserved) — but lands in the new, **non-terminal** `Paused` phase
+    instead of `Halted`. `resume` continues the DAG walk from the preserved
+    checkpoint, re-seeding the per-mission budget meter from the mission's
+    persisted cumulative spend rather than resetting it, and reusing the
+    same resume machinery gate-approval already uses. A mission *paused at a
+    human gate* isn't running the same way, so it can't be paused this way
+    either — resolve its gate instead.
 - **TUI** (`aivyx-tui`):
   - A periodic mission-poll tick in `app.rs` maps `TeamMissionList`
     snapshots → `MissionRow`s → `Msg::MissionsUpdated`. The panel goes live.

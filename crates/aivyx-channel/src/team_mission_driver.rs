@@ -44,6 +44,13 @@ use crate::team_mission::{
 };
 use aivyx_storage::DomainHandle;
 
+/// Chapter Mission Control — the `should_halt` reason string that means "an
+/// operator paused this mission" (as opposed to any other halt cause, e.g.
+/// an abort or a tripped budget cap). Named so `should_halt`'s producer and
+/// `drive()`'s consumer share one definition instead of two hardcoded
+/// literals that would silently drift apart.
+const PAUSE_HALT_REASON: &str = "paused by operator";
+
 /// Everything wrong a mission run can hit at the daemon boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum MissionDriverError {
@@ -360,12 +367,15 @@ impl SharedMissionState {
     ///
     /// Chapter Reckon — reconcile zombies. A mission left `Executing` when the
     /// daemon stopped has no live drive task in this fresh process, so it would
-    /// otherwise sit `Executing` forever in `team list`. There is no resume
-    /// machinery for team missions (unlike Chapter Helm for the loop), so mark
-    /// each interrupted `Executing` mission `Halted` with a truthful reason and
-    /// persist that — the operator sees an honest terminal state (and can
-    /// re-run) instead of a permanent zombie. `AwaitingApproval` is a legitimate
-    /// pause (an operator gate) and is left untouched.
+    /// otherwise sit `Executing` forever in `team list`. An interrupted
+    /// `Executing` mission has no resume machinery (unlike Chapter Helm for
+    /// the loop) and is reconciled to `Halted` below, with a truthful reason
+    /// persisted — the operator sees an honest terminal state (and can
+    /// re-run) instead of a permanent zombie. `AwaitingApproval` is a
+    /// legitimate pause (an operator gate) and is left untouched. A `Paused`
+    /// mission (Chapter Mission Control), by contrast, IS a deliberate,
+    /// durable pause point that correctly survives a restart and stays
+    /// resumable via `aivyx team resume` — also left untouched here.
     pub async fn reload(&self) -> Result<usize, StorageError> {
         let records = list_team_missions(&self.store).await?;
         let mut reconciled: Vec<TeamMissionRecord> = Vec::new();
@@ -520,11 +530,19 @@ pub async fn drive_registered(
     // "attempt 2/2" lines, four gate prompts at the operator).
     const MAX_MISSION_ATTEMPTS: u32 = 2;
     loop {
-        let config = shared
-            .snapshot(id)
-            .and_then(|r| r.config)
+        // Chapter Mission Control (Fix A) — one snapshot, reused for both the
+        // team config and the meter's seed values, so this doesn't read the
+        // record twice.
+        let record_snapshot = shared.snapshot(id);
+        let config = record_snapshot
+            .as_ref()
+            .and_then(|r| r.config.clone())
             .unwrap_or_else(|| default_config.clone());
-        let (runtime, meter) = assemble_runtime(deps, config)?;
+        let (seed_tokens, seed_usd) = record_snapshot
+            .as_ref()
+            .map(|r| (r.spend_tokens, r.spend_usd))
+            .unwrap_or((0, 0.0));
+        let (runtime, meter) = assemble_runtime(deps, config, seed_tokens, seed_usd)?;
         let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
         let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
         // Only a completed mission is artifact-graded; anything else is terminal.
@@ -1196,6 +1214,14 @@ fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
 fn assemble_runtime(
     deps: &TeamRunDeps,
     mut config: TeamConfig,
+    // Chapter Mission Control (Fix A) — the mission's cumulative spend so
+    // far, read from the persisted record right before this call. Seeded
+    // into the fresh `MeteringAuditHook` below so a `[budget]` cap tracks
+    // spend across the mission's WHOLE lifetime, not just this one drive
+    // invocation (a resume, a gate-approval continuation, and a Chapter
+    // Reprise retry all construct a fresh hook via this same function).
+    seed_tokens: u64,
+    seed_usd: f64,
 ) -> Result<(Arc<TeamRuntime>, Option<crate::mission_meter::MissionMeter>), MissionDriverError> {
     // Chapter Ensemble — bind the daemon's real authority so specialists can
     // actually use their tools (write files, fetch, run commands). See the fn.
@@ -1210,9 +1236,11 @@ fn assemble_runtime(
         if deps.mission_budget.is_unbounded() {
             (Arc::clone(&deps.audit), None)
         } else {
-            let hook = crate::mission_meter::MeteringAuditHook::new(
+            let hook = crate::mission_meter::MeteringAuditHook::with_seed(
                 Arc::clone(&deps.audit),
                 Arc::clone(&deps.pricing),
+                seed_tokens,
+                seed_usd,
             );
             let meter = hook.meter();
             (Arc::new(hook), Some(meter))
@@ -1317,6 +1345,13 @@ async fn drive(
     // string `should_halt()` already returned (not by re-reading this raw
     // flag after the run completes — see that branch's own comment for why).
     let pause = shared.arm_pause(id);
+    // Chapter Mission Control (Fix A) — a cheap handle on the meter (its
+    // atomics are shared via `Arc`, so this keeps reading the SAME running
+    // totals `budget_guard`, once moved into the observer below, is
+    // tracking) so this fn can persist the cumulative spend at its own
+    // landing point below, after `budget_guard` itself is no longer
+    // reachable here (moved into `observer`).
+    let meter_for_persist = budget_guard.as_ref().map(|(m, _)| m.clone());
     // Chapter Mission Control — from here on, EVERY exit path (the two
     // early `?` returns below, a panic, or normal completion) runs
     // cleanup exactly once via Drop, not just the happy path.
@@ -1363,7 +1398,7 @@ async fn drive(
                 // chain (same legibility as the headless-refusal path), preserve
                 // the partial outputs above, and stash the reason for the record.
                 MissionStatus::Halted { reason } => {
-                    if reason == "paused by operator" {
+                    if reason == PAUSE_HALT_REASON {
                         // Chapter Mission Control — should_halt()'s own priority order
                         // (abort checked first, unconditionally) already guarantees this
                         // exact reason string is only ever returned when abort was NOT
@@ -1426,6 +1461,17 @@ async fn drive(
                 record.pending_gate = Some(step);
             }
         }
+    }
+    // Chapter Mission Control (Fix A) — persist the CUMULATIVE spend total
+    // (seed + this drive's own spend, since the meter's atomics already
+    // started from the seed) at every single landing point — Paused,
+    // Halted, Done, Rejected, AwaitingApproval alike — so the next
+    // `drive_registered` call (a resume, a gate-approval continuation, or
+    // a Chapter Reprise retry) re-seeds from the true running total instead
+    // of resetting to zero.
+    if let Some(meter) = &meter_for_persist {
+        record.spend_tokens = meter.tokens();
+        record.spend_usd = meter.usd();
     }
     let phase = record.phase;
     shared.put(record).await?;
@@ -1522,7 +1568,7 @@ impl MissionObserver for RegistryObserver {
         // unconditionally, first).
         if let Some(flag) = &self.pause {
             if flag.load(std::sync::atomic::Ordering::SeqCst) {
-                return Some("paused by operator".to_string());
+                return Some(PAUSE_HALT_REASON.to_string());
             }
         }
         let (meter, budget) = self.budget_guard.as_ref()?;
@@ -1776,6 +1822,12 @@ mod tests {
         /// Notified (by the test) once it has finished acting on `started`
         /// (e.g. requesting a pause) — lets the gated call proceed.
         release: Arc<tokio::sync::Notify>,
+        /// Chapter Mission Control (Fix A) — usage reported by every
+        /// sub-turn, mirroring `FakeProvider`'s own `usage` field. Defaults
+        /// to `LlmUsage::default()` (no spend) for existing callers that
+        /// don't care about metering, via `Default::default()` in each
+        /// struct literal below.
+        usage: LlmUsage,
     }
     #[async_trait]
     impl LlmProvider for GatedProvider {
@@ -1789,11 +1841,17 @@ mod tests {
                 self.started.notify_one();
                 self.release.notified().await;
             }
+            // Chapter Mission Control (Fix B) — embed the call index so
+            // each sub-turn's output is DISCRIMINATING: a test proving a
+            // step was never re-run after a resume needs its pre-resume
+            // output to differ from what a second (buggy) run would
+            // produce, which a static `self.line` for every call can't do.
+            let text = format!("{}-{n}", self.line);
             Ok(Box::new(FakeStream {
-                events: vec![LlmStreamEvent::TextChunk(self.line.clone())].into_iter(),
+                events: vec![LlmStreamEvent::TextChunk(text.clone())].into_iter(),
                 terminal: Some(LlmStepEnd::FinalMessage {
-                    text: self.line.clone(),
-                    usage: LlmUsage::default(),
+                    text,
+                    usage: self.usage,
                 }),
             }))
         }
@@ -2194,6 +2252,97 @@ mod tests {
         );
     }
 
+    /// Chapter Mission Control (Fix A) — a per-mission budget cap must track
+    /// CUMULATIVE spend across a pause/resume cycle, not reset to zero on
+    /// resume.
+    ///
+    /// a -> b -> c, 600 tokens/step, cap 900. Wave 1 (a) spends 600 —
+    /// UNDER the cap on its own, so the pause that lands right after it
+    /// proves this isn't just "the cap was already tripped before the
+    /// pause". The mission is paused (via the real `TeamMissionService`,
+    /// with a `GatedProvider` giving genuine cross-task timing control over
+    /// exactly when the pause is requested — same pattern as
+    /// `pause_requested_mid_drive_lands_the_mission_in_paused_not_halted`)
+    /// after wave 1, then resumed. Only once wave 2's own 600 tokens are
+    /// ADDED to the seeded wave-1 total (600 + 600 = 1200 > 900) does the
+    /// cap trip, on resume, at the wave-3 boundary — proving the resumed
+    /// drive's meter started from the persisted seed, not zero. A
+    /// reset-to-zero bug would have let wave 2 AND wave 3 both run,
+    /// completing the mission instead of halting it.
+    #[tokio::test]
+    async fn budget_cap_survives_a_pause_resume_cycle() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut deps = deps("ok");
+        deps.provider = Arc::new(GatedProvider {
+            line: "ok".into(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            gate_at: 0,
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+            usage: LlmUsage {
+                input_tokens: 400,
+                output_tokens: 200,
+                ..Default::default()
+            },
+        });
+        deps.mission_budget = aivyx_cost::MissionBudget {
+            max_tokens: Some(900),
+            max_usd: None,
+        };
+        let plan = MissionPlan::new(
+            "runaway-resume",
+            vec![
+                Step::delegate("a", "researcher", "p"),
+                Step::delegate("b", "writer", "p").after(["a"]),
+                Step::delegate("c", "reviewer", "p").after(["b"]),
+            ],
+        );
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps,
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let id = svc.start(plan, None).await.unwrap();
+
+        // Block until wave 1 (step "a") has genuinely started, then pause
+        // while it's still in flight -- the pause takes effect at the
+        // wave-2 boundary, so wave 2 never launches on this first drive.
+        started.notified().await;
+        svc.pause(&id).expect("pause accepted while Executing");
+        release.notify_one();
+
+        wait_for(&svc, &id, TeamMissionPhase::Paused).await;
+        let paused = svc.snapshot(&id).unwrap();
+        assert!(paused.outputs.contains_key("a"), "wave 1 preserved");
+        assert!(!paused.outputs.contains_key("b"), "wave 2 never ran before pause");
+        assert_eq!(paused.spend_tokens, 600, "wave 1's spend persisted on pause");
+        assert!(
+            paused.spend_tokens < 900,
+            "the cap has NOT tripped yet -- proves the later halt is really about the seed"
+        );
+
+        // Resume -- assemble_runtime must seed the fresh meter from the
+        // persisted 600, not zero.
+        let phase = svc.resume(&id).await.unwrap();
+        assert_eq!(phase, TeamMissionPhase::Executing);
+
+        wait_for(&svc, &id, TeamMissionPhase::Halted).await;
+        let halted = svc.snapshot(&id).unwrap();
+        assert!(halted.outputs.contains_key("b"), "wave 2 ran after resume");
+        assert!(
+            !halted.outputs.contains_key("c"),
+            "wave 3 never ran -- the cap tripped on the SEEDED cumulative total"
+        );
+        assert!(halted.halt_reason.is_some(), "a real budget halt, not a pause");
+        assert_ne!(
+            halted.halt_reason.as_deref(),
+            Some(PAUSE_HALT_REASON),
+            "this halt is the budget cap, not a second pause request"
+        );
+    }
+
     /// Chapter Ballast — with no cap set, the same multi-wave mission runs to
     /// completion (byte-identical to pre-Ballast).
     #[tokio::test]
@@ -2301,6 +2450,7 @@ mod tests {
             gate_at: 1,
             started: Arc::clone(&started),
             release: Arc::clone(&release),
+            usage: LlmUsage::default(),
         });
         let plan = MissionPlan::new(
             "chain",
@@ -2371,6 +2521,7 @@ mod tests {
             gate_at: 1,
             started: Arc::clone(&started),
             release: Arc::clone(&release),
+            usage: LlmUsage::default(),
         });
         let plan = MissionPlan::new(
             "chain",
@@ -3267,6 +3418,81 @@ mod tests {
         assert_eq!(phase, TeamMissionPhase::Executing);
         wait_for(&svc, &id, TeamMissionPhase::Done).await;
         assert_eq!(svc.snapshot(&id).unwrap().outputs["write"], "ok");
+    }
+
+    /// Fix B (final-review) — the design doc's own required deliverable that
+    /// no task in this plan actually built: a chained proof that resume
+    /// continues the DAG and completes remaining steps, DISCRIMINATING that
+    /// a step already in the checkpoint before the pause is never re-run
+    /// (not just "pause lands correctly" and "resume flips the phase" as
+    /// two disconnected facts). `a -> b -> c`, all `Step::delegate`. Pauses
+    /// (via `svc.pause`, with a `GatedProvider` for genuine cross-task
+    /// timing control — same mechanism as
+    /// `budget_cap_survives_a_pause_resume_cycle` /
+    /// `pause_requested_mid_drive_lands_the_mission_in_paused_not_halted`)
+    /// while step "a" is in flight, so only wave 1 completes before the
+    /// pause takes effect; resumes; and asserts the mission reaches `Done`
+    /// with step "a"'s output BYTE-IDENTICAL to its pre-resume value (each
+    /// `GatedProvider` call embeds its own call index into its output text,
+    /// so a re-run of "a" would produce a visibly different string, not
+    /// just "some string") and every step's output present in the final
+    /// checkpoint.
+    #[tokio::test]
+    async fn service_pause_then_resume_drives_a_mission_to_done_without_rerunning_completed_steps(
+    ) {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut deps = deps("ok");
+        deps.provider = Arc::new(GatedProvider {
+            line: "ok".into(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            gate_at: 0,
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+            usage: LlmUsage::default(),
+        });
+        let plan = MissionPlan::new(
+            "chain",
+            vec![
+                Step::delegate("a", "researcher", "p"),
+                Step::delegate("b", "writer", "p").after(["a"]),
+                Step::delegate("c", "reviewer", "p").after(["b"]),
+            ],
+        );
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps,
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let id = svc.start(plan, None).await.unwrap();
+
+        // Block until wave 1 (step "a") has genuinely started, then pause
+        // while it's still in flight -- the pause takes effect at the
+        // wave-2 boundary, so only "a" is done when the mission parks.
+        started.notified().await;
+        svc.pause(&id).expect("pause accepted while Executing");
+        release.notify_one();
+
+        wait_for(&svc, &id, TeamMissionPhase::Paused).await;
+        let paused = svc.snapshot(&id).unwrap();
+        assert!(paused.outputs.contains_key("a"), "wave 1 preserved");
+        assert!(!paused.outputs.contains_key("b"), "wave 2 never ran before pause");
+        assert!(!paused.outputs.contains_key("c"), "wave 3 never ran before pause");
+        let a_output_before_resume = paused.outputs["a"].clone();
+
+        let phase = svc.resume(&id).await.unwrap();
+        assert_eq!(phase, TeamMissionPhase::Executing);
+
+        wait_for(&svc, &id, TeamMissionPhase::Done).await;
+        let done = svc.snapshot(&id).unwrap();
+        assert_eq!(done.phase, TeamMissionPhase::Done, "the mission completed");
+        assert_eq!(
+            done.outputs["a"], a_output_before_resume,
+            "step \"a\" was never re-run -- its output is byte-identical to the pre-resume snapshot"
+        );
+        assert!(done.outputs.contains_key("b"), "wave 2 ran after resume");
+        assert!(done.outputs.contains_key("c"), "wave 3 ran after resume");
     }
 
     #[tokio::test]
