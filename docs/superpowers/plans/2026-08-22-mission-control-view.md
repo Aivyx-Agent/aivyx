@@ -42,9 +42,16 @@ classes (`glass-card`, `chip`, `btn btn-sage`, `btn btn-ghost-danger`,
   dashboard metric, not scoped to this feature) — a deliberate choice,
   not a reuse of that filter, since a `Halted` mission has nothing left to
   watch or resume.
-- No changes to `aivyx-desktop` or `aivyx-tui` — this plan is entirely
-  within `aivyx-web` (plus the one small, additive `aivyx-ipc` wire-type
-  enrichment in Task 1).
+- No *functional* changes to `aivyx-desktop` or `aivyx-tui` — this plan's
+  real work is entirely within `aivyx-web` (plus the one small, additive
+  `aivyx-ipc` wire-type enrichment in Task 1). Task 1's own execution
+  found this needs one caveat: `TeamStepView` gaining 4 required fields
+  breaks 8 pre-existing `TeamStepView { .. }` test-fixture literals in
+  `aivyx-tui/src/model.rs`'s and this crate's own `#[cfg(test)]` modules
+  (Rust requires every field named in a struct literal) — those got
+  mechanical placeholder values, zero behavior change, purely to keep
+  `cargo test --workspace` compiling. `aivyx-desktop` has zero references
+  to `TeamStepView` (confirmed), so it needs no such fix.
 - No true mid-step interruption — abort/pause both stop at the next wave
   boundary (already true of the underlying mechanism; this plan only adds
   a UI surface for it, not new behavior).
@@ -64,7 +71,7 @@ classes (`glass-card`, `chip`, `btn btn-sage`, `btn btn-ghost-danger`,
 - Modify: `crates/aivyx-ipc/src/team_mission.rs`
 
 **Interfaces:**
-- Produces: `TeamStepView` gains `step_id: String`, `member: String`, `kind: &'static str` (`"delegate"` or `"gate"`), `deps: Vec<String>` — all new fields, `label`/`state` unchanged (backward compatible with `aivyx-tui`'s existing renderer, which only reads `label`/`state` today).
+- Produces: `TeamStepView` gains `step_id: String`, `member: String`, `kind: String` (`"delegate"` or `"gate"` — `String`, not `&'static str`: the latter fails to compile through this struct's `Deserialize` derive, a real constraint found during Task 1's own execution, not a style choice), `deps: Vec<String>` — all new fields, `label`/`state` unchanged (backward compatible with `aivyx-tui`'s existing renderer, which only reads `label`/`state` today).
 
 **Verified**: `to_view_with_running`'s existing step-building closure
 already computes `(kind, member)` locally, right before formatting
@@ -148,10 +155,16 @@ pub struct TeamStepView {
     /// reviewer (for a `gate` step) this step runs on.
     pub member: String,
     /// Chapter Mission Control — `"delegate"` or `"gate"`, matching the
-    /// two `StepKind` variants. A `&'static str` rather than a new public
-    /// enum, since these are the only two values `StepKind` has and the
-    /// existing `label` formatting already treated them as a fixed pair.
-    pub kind: &'static str,
+    /// two `StepKind` variants. `String`, not `&'static str`: this struct
+    /// derives `Deserialize` and reaches the caller through
+    /// `TeamMissionView`'s own generic `Deserialize<'de>` impl (via
+    /// `Vec<TeamStepView>`), which isn't parameterized by a fixed
+    /// lifetime — a `&'static str` field there requires `'de: 'static`,
+    /// which can't be discharged, and fails to compile
+    /// ("lifetime may not live long enough ... requires that `'de` must
+    /// outlive `'static`"). No new public enum either, since these are
+    /// the only two values `StepKind` has.
+    pub kind: String,
     /// Chapter Mission Control — the ids of steps that must complete
     /// before this one is ready (`Step::deps`, unchanged from the engine
     /// type) — lets a client draw real dependency edges without touching
@@ -198,7 +211,7 @@ Change the `TeamStepView` construction to populate the new fields:
                     state: self.step_state(&step.id, running_steps),
                     step_id: step.id.clone(),
                     member: member.to_string(),
-                    kind,
+                    kind: kind.to_string(),
                     deps: step.deps.clone(),
                 }
             })
@@ -559,7 +572,7 @@ own research read it but didn't transcribe every field).
         let mut m = view("v1", 33);
         m.lead = "coordinator".to_string();
         m.steps = vec![
-            TeamStepView { label: "count — inventory (delegate)".into(), state: TeamStepState::Running, step_id: "count".into(), member: "inventory".into(), kind: "delegate", deps: vec![] },
+            TeamStepView { label: "count — inventory (delegate)".into(), state: TeamStepState::Running, step_id: "count".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
         ];
         let roster = sample_roster();
         let graph = build_mission_graph(&m, &roster);
@@ -582,8 +595,8 @@ own research read it but didn't transcribe every field).
     fn build_mission_graph_edges_reflect_step_deps() {
         let mut m = view("v1", 0);
         m.steps = vec![
-            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate", deps: vec![] },
-            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "purchasing".into(), kind: "delegate", deps: vec!["a".to_string()] },
+            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "purchasing".into(), kind: "delegate".into(), deps: vec!["a".to_string()] },
         ];
         let roster = sample_roster();
         let graph = build_mission_graph(&m, &roster);
@@ -599,8 +612,8 @@ own research read it but didn't transcribe every field).
         // read as "finished" when they aren't).
         let mut m = view("v1", 0);
         m.steps = vec![
-            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate", deps: vec![] },
-            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "inventory".into(), kind: "delegate", deps: vec!["a".to_string()] },
+            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec!["a".to_string()] },
         ];
         let roster = sample_roster();
         let graph = build_mission_graph(&m, &roster);
