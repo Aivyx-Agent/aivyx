@@ -1294,8 +1294,14 @@ missed from this view's controls."
       roster member → click a specialist → drill-in shows role/current
       step/scopes/inert-hint → controls show the phase-appropriate set →
       clicking Abort/Pause/Resume fires the right query.
-- [ ] Confirm nothing from this plan touched `aivyx-desktop` or
-      `aivyx-tui` — `git diff --stat 9294b2ef..HEAD` (9294b2ef is the
-      Piece 2 plan-write commit, i.e. Piece 3's own true base) should show
-      only `crates/aivyx-ipc/src/team_mission.rs` and
-      `crates/aivyx-web/src/main.rs`.
+- [ ] Confirm nothing from this plan touched `aivyx-desktop` — `git diff
+      --stat 9ac612a0..HEAD` (9ac612a0 is this plan's own write commit,
+      i.e. Piece 3's true base — NOT 9294b2ef, which is Piece 2's
+      plan-write commit and so also pulls in all of Piece 2's own
+      implementation) should show exactly three files:
+      `crates/aivyx-ipc/src/team_mission.rs`, `crates/aivyx-web/src/main.rs`,
+      and `crates/aivyx-tui/src/model.rs` (Task 1's cross-crate render-site
+      fix for the `TeamStepView` struct-shape change — already caveated in
+      this plan's own Global Constraints as necessary mechanical fallout,
+      not scope creep; `aivyx-tui` IS expected to appear here, just not
+      `aivyx-desktop`).
