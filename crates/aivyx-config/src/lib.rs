@@ -1806,6 +1806,16 @@ impl NotifyWhen {
     }
 }
 
+/// Chapter Muster — the TOML-layer mirror of `aivyx_channel::schedule::
+/// ScheduledTeamMission`. Kept as a separate type (this crate doesn't
+/// depend on `aivyx-channel`), same relationship as `ScheduleConfig`/
+/// `ScheduleRecord` already have for the rest of a schedule's fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledTeamMissionConfig {
+    pub goal: String,
+    pub pack_config: Option<String>,
+}
+
 /// One scheduled execution entry loaded from `[[schedule]]` in the TOML file.
 #[derive(Debug, Clone)]
 pub struct ScheduleConfig {
@@ -1839,6 +1849,9 @@ pub struct ScheduleConfig {
     /// deterministic daemon-assembled report instead of the LLM `prompt`.
     /// `None` (default) = normal LLM-prompt routine.
     pub report_kind: Option<String>,
+    /// Chapter Muster — mutually exclusive with `role`/`prompt`. `None`
+    /// -> an ordinary single-agent-turn schedule.
+    pub team_mission: Option<ScheduledTeamMissionConfig>,
 }
 
 /// One reflection-schedule entry loaded from
@@ -4089,6 +4102,7 @@ struct RawSchedule {
     cron: String,
     #[serde(default = "default_role_name")]
     role: String,
+    #[serde(default)]
     prompt: String,
     #[serde(default = "default_true")]
     enabled: bool,
@@ -4111,6 +4125,17 @@ struct RawSchedule {
     /// Chapter Ledger — `report_kind = "digest"` → deterministic report.
     #[serde(default)]
     report_kind: Option<String>,
+    /// Chapter Muster — `[schedule.team_mission]` sub-table. Mutually
+    /// exclusive with `role`/`prompt` at the loader level (Step 6).
+    #[serde(default)]
+    team_mission: Option<RawScheduledTeamMission>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawScheduledTeamMission {
+    goal: String,
+    #[serde(default)]
+    pack_config: Option<String>,
 }
 
 fn default_reflection_lookback_secs() -> u64 {
@@ -6721,6 +6746,46 @@ impl AivyxConfig {
                     r.notify_targets.clone(),
                     r.notify_when.as_deref(),
                 )?;
+            let team_mission = match &r.team_mission {
+                Some(tm) => {
+                    if !r.prompt.trim().is_empty() {
+                        return Err(ConfigError::Invalid {
+                            field: "schedule.team_mission",
+                            reason: format!(
+                                "schedule {:?} sets both `prompt` and `[schedule.team_mission]` \
+                                 -- a schedule targets one or the other, never both",
+                                r.name
+                            ),
+                        });
+                    }
+                    if tm.goal.trim().is_empty() {
+                        return Err(ConfigError::Invalid {
+                            field: "schedule.team_mission.goal",
+                            reason: format!(
+                                "schedule {:?}'s [schedule.team_mission] needs a non-empty goal",
+                                r.name
+                            ),
+                        });
+                    }
+                    Some(ScheduledTeamMissionConfig {
+                        goal: tm.goal.clone(),
+                        pack_config: tm.pack_config.clone(),
+                    })
+                }
+                None => {
+                    if r.prompt.trim().is_empty() {
+                        return Err(ConfigError::Invalid {
+                            field: "schedule.prompt",
+                            reason: format!(
+                                "schedule {:?} has neither a `prompt` nor a \
+                                 `[schedule.team_mission]` -- it needs one or the other",
+                                r.name
+                            ),
+                        });
+                    }
+                    None
+                }
+            };
             schedules.push(ScheduleConfig {
                 name: r.name,
                 cron: r.cron,
@@ -6732,6 +6797,7 @@ impl AivyxConfig {
                 notify_targets,
                 notify_when,
                 report_kind: r.report_kind,
+                team_mission,
             });
         }
 

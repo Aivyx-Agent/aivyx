@@ -51,21 +51,27 @@ pub fn config_to_records(
     configs
         .iter()
         .map(|c| {
-            ScheduleRecord::new(
-                format!("cfg-{}", c.name),
-                c.cron.clone(),
-                c.role.clone(),
-                c.prompt.clone(),
-            )
-            .map(|mut r| {
-                r.enabled = c.enabled;
-                r.wrap_mission = c.wrap_mission;
-                r.notify_target = c.notify_target.clone();
-                r.notify_targets = c.notify_targets.clone();
-                r.notify_when = c.notify_when;
-                r.report_kind = c.report_kind.clone();
-                r
-            })
+            let mut built = match &c.team_mission {
+                Some(tm) => ScheduleRecord::new_team_mission(
+                    format!("cfg-{}", c.name),
+                    c.cron.clone(),
+                    tm.goal.clone(),
+                    tm.pack_config.clone(),
+                ),
+                None => ScheduleRecord::new(
+                    format!("cfg-{}", c.name),
+                    c.cron.clone(),
+                    c.role.clone(),
+                    c.prompt.clone(),
+                ),
+            }?;
+            built.enabled = c.enabled;
+            built.wrap_mission = c.wrap_mission;
+            built.notify_target = c.notify_target.clone();
+            built.notify_targets = c.notify_targets.clone();
+            built.notify_when = c.notify_when;
+            built.report_kind = c.report_kind.clone();
+            Ok(built)
         })
         .collect()
 }
@@ -411,6 +417,7 @@ mod tests {
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
             report_kind: None,
+            team_mission: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert_eq!(records.len(), 1);
@@ -432,6 +439,7 @@ mod tests {
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
             report_kind: None,
+            team_mission: None,
         }];
         assert!(config_to_records(&configs).is_err());
     }
@@ -449,6 +457,7 @@ mod tests {
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
             report_kind: None,
+            team_mission: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(!records[0].enabled);
@@ -467,8 +476,36 @@ mod tests {
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
             report_kind: None,
+            team_mission: None,
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(records[0].wrap_mission);
+    }
+
+    #[test]
+    fn config_to_records_builds_a_team_mission_record() {
+        let cfg = aivyx_config::ScheduleConfig {
+            name: "nightly-boh-close".to_string(),
+            cron: "0 0 2 * * * *".to_string(),
+            role: "default".to_string(),
+            prompt: String::new(),
+            enabled: true,
+            wrap_mission: false,
+            notify_target: None,
+            notify_targets: vec![],
+            notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
+            team_mission: Some(aivyx_config::ScheduledTeamMissionConfig {
+                goal: "run the overnight close".to_string(),
+                pack_config: None,
+            }),
+        };
+        let records = config_to_records(&[cfg]).expect("valid");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].schedule_id, "cfg-nightly-boh-close");
+        assert_eq!(records[0].role_name, "");
+        assert_eq!(records[0].prompt, "");
+        let tm = records[0].team_mission.as_ref().expect("team_mission set");
+        assert_eq!(tm.goal, "run the overnight close");
     }
 }

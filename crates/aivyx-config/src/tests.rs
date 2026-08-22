@@ -4545,6 +4545,80 @@ fn ledger_schedule_report_kind_parses() {
 }
 
 #[test]
+fn schedule_team_mission_loads_with_no_prompt() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+[[schedule]]
+name = "nightly-boh-close"
+cron = "0 0 2 * * * *"
+[schedule.team_mission]
+goal = "run the overnight close"
+pack_config = "crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml"
+"#,
+        "team-mission-loads",
+    );
+    assert_eq!(cfg.schedules.len(), 1);
+    let tm = cfg.schedules[0]
+        .team_mission
+        .as_ref()
+        .expect("team_mission set");
+    assert_eq!(tm.goal, "run the overnight close");
+    assert_eq!(
+        tm.pack_config.as_deref(),
+        Some("crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml")
+    );
+    drop(env);
+}
+
+#[test]
+fn schedule_rejects_both_prompt_and_team_mission() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result(
+        r#"
+[[schedule]]
+name = "bad"
+cron = "0 0 2 * * * *"
+prompt = "do a thing"
+[schedule.team_mission]
+goal = "run the overnight close"
+"#,
+        "team-mission-both",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigError::Invalid {
+            field: "schedule.team_mission",
+            ..
+        }
+    ));
+    drop(env);
+}
+
+#[test]
+fn schedule_rejects_neither_prompt_nor_team_mission() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result(
+        r#"
+[[schedule]]
+name = "bad"
+cron = "0 0 2 * * * *"
+"#,
+        "team-mission-neither",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigError::Invalid {
+            field: "schedule.prompt",
+            ..
+        }
+    ));
+    drop(env);
+}
+
+#[test]
 fn schedule_notify_target_unknown_target_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-unknown");

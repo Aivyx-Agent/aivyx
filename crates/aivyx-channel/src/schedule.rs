@@ -39,6 +39,23 @@ impl ScheduleProvenance {
     }
 }
 
+/// Chapter Muster — a schedule targets EITHER a single-agent turn
+/// (`role_name` + `prompt`, the original shape) OR a team mission (this
+/// struct, via `ScheduleRecord::new_team_mission`). The two are mutually
+/// exclusive: a team-mission record's `role_name`/`prompt` are always
+/// empty strings, never read by `fire_schedule`'s team-mission branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledTeamMission {
+    pub goal: String,
+    /// A path to a vertical-pack `TeamConfig` TOML file (e.g.
+    /// `crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`).
+    /// `None` -> the daemon's default team. Stored as a path, not a
+    /// pre-loaded `TeamConfig`, so `fire_schedule` always loads the
+    /// pack's current contents at fire time, not whatever it was when
+    /// the schedule was created.
+    pub pack_config: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleRecord {
     pub schedule_id: String,
@@ -75,6 +92,13 @@ pub struct ScheduleRecord {
     /// Chapter Chime — creation provenance. See [`ScheduleProvenance`].
     #[serde(default)]
     pub created_by: ScheduleProvenance,
+    /// Chapter Muster — mutually exclusive with `role_name`/`prompt`
+    /// (which are empty strings on a team-mission record). `None` ->
+    /// this is an ordinary single-agent-turn schedule (every record
+    /// before this field existed). `#[serde(default)]` so every
+    /// pre-existing persisted record deserializes unchanged.
+    #[serde(default)]
+    pub team_mission: Option<ScheduledTeamMission>,
 }
 
 impl ScheduleRecord {
@@ -99,6 +123,40 @@ impl ScheduleRecord {
             notify_when: aivyx_config::NotifyWhen::Always,
             report_kind: None,
             created_by: ScheduleProvenance::Config,
+            team_mission: None,
+        })
+    }
+
+    /// Chapter Muster — a schedule whose fire target is a team mission,
+    /// not a single-agent turn. `role_name`/`prompt` are set to empty
+    /// strings (never read by `fire_schedule`'s team-mission branch, and
+    /// deliberately not `Option` themselves -- see the file's own
+    /// mutual-exclusivity note on `team_mission`).
+    pub fn new_team_mission(
+        schedule_id: String,
+        cron_expr: String,
+        goal: String,
+        pack_config: Option<String>,
+    ) -> Result<Self, String> {
+        validate_cron(&cron_expr)?;
+        if goal.trim().is_empty() {
+            return Err("team-mission schedule requires a non-empty goal".to_string());
+        }
+        Ok(ScheduleRecord {
+            schedule_id,
+            cron_expr,
+            role_name: String::new(),
+            prompt: String::new(),
+            enabled: true,
+            wrap_mission: false,
+            created_at: now_millis(),
+            last_fired_at: None,
+            notify_target: None,
+            notify_targets: Vec::new(),
+            notify_when: aivyx_config::NotifyWhen::Always,
+            report_kind: None,
+            created_by: ScheduleProvenance::Config,
+            team_mission: Some(ScheduledTeamMission { goal, pack_config }),
         })
     }
 
@@ -327,6 +385,94 @@ pub async fn operator_delete_schedule(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_team_mission_builds_a_record_with_no_role_or_prompt() {
+        let record = ScheduleRecord::new_team_mission(
+            "sched-1".to_string(),
+            "0 0 2 * * *".to_string(),
+            "run the overnight close".to_string(),
+            None,
+        )
+        .expect("valid cron");
+        assert!(record.team_mission.is_some());
+        let tm = record.team_mission.as_ref().unwrap();
+        assert_eq!(tm.goal, "run the overnight close");
+        assert_eq!(tm.pack_config, None);
+        assert_eq!(record.role_name, "");
+        assert_eq!(record.prompt, "");
+    }
+
+    #[test]
+    fn new_team_mission_rejects_an_empty_goal() {
+        let err = ScheduleRecord::new_team_mission(
+            "sched-1".to_string(),
+            "0 0 2 * * *".to_string(),
+            "".to_string(),
+            None,
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn new_team_mission_still_validates_cron() {
+        let err = ScheduleRecord::new_team_mission(
+            "sched-1".to_string(),
+            "not a cron expression".to_string(),
+            "run the overnight close".to_string(),
+            None,
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn a_role_prompt_record_has_no_team_mission() {
+        let record = ScheduleRecord::new(
+            "sched-2".to_string(),
+            "0 0 7 * * *".to_string(),
+            "default".to_string(),
+            "check system health".to_string(),
+        )
+        .expect("valid cron");
+        assert_eq!(record.team_mission, None);
+    }
+
+    #[test]
+    fn a_team_mission_record_round_trips_through_json() {
+        let record = ScheduleRecord::new_team_mission(
+            "sched-3".to_string(),
+            "0 0 2 * * *".to_string(),
+            "run the overnight close".to_string(),
+            Some("crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml".to_string()),
+        )
+        .expect("valid cron");
+        let json = serde_json::to_vec(&record).expect("serialize");
+        let back: ScheduleRecord = serde_json::from_slice(&json).expect("deserialize");
+        assert_eq!(back.team_mission, record.team_mission);
+    }
+
+    #[test]
+    fn a_pre_existing_role_prompt_json_record_deserializes_with_no_team_mission() {
+        // No "team_mission" key at all -- simulates a record persisted before
+        // this field existed.
+        let json = br#"{
+            "schedule_id": "old-1",
+            "cron_expr": "0 0 7 * * *",
+            "role_name": "default",
+            "prompt": "check system health",
+            "enabled": true,
+            "wrap_mission": false,
+            "created_at": 1000,
+            "last_fired_at": null,
+            "notify_target": null,
+            "notify_targets": [],
+            "notify_when": "Always",
+            "report_kind": null,
+            "created_by": "config"
+        }"#;
+        let record: ScheduleRecord = serde_json::from_slice(json).expect("deserialize old record");
+        assert_eq!(record.team_mission, None);
+    }
 
     #[test]
     fn pre_chime_record_json_defaults_to_config_provenance() {
