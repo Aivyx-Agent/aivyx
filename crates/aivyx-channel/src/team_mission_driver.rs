@@ -614,7 +614,8 @@ fn render_mission_notify_body(record: &TeamMissionRecord) -> String {
         // Never called for a non-terminal phase — see `notify_mission_result`.
         TeamMissionPhase::Planning
         | TeamMissionPhase::Executing
-        | TeamMissionPhase::AwaitingApproval => String::new(),
+        | TeamMissionPhase::AwaitingApproval
+        | TeamMissionPhase::Paused => String::new(),
     }
 }
 

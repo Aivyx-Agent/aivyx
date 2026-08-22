@@ -132,6 +132,9 @@ pub enum MissionPhase {
     Executing,
     /// Blocked on an operator approval gate.
     AwaitingApproval,
+    /// Chapter Mission Control — paused at a wave boundary by an explicit
+    /// operator pause request. Non-terminal; resumable.
+    Paused,
     /// Every step completed.
     Done,
     /// A quality gate rejected the work (`MissionStatus::GateRejected`).
@@ -146,6 +149,7 @@ impl MissionPhase {
             MissionPhase::Planning => "planning",
             MissionPhase::Executing => "executing",
             MissionPhase::AwaitingApproval => "approval",
+            MissionPhase::Paused => "paused",
             MissionPhase::Done => "done",
             MissionPhase::Rejected => "rejected",
             MissionPhase::Halted => "halted",
@@ -259,6 +263,7 @@ fn phase_from(p: TeamMissionPhase) -> MissionPhase {
         TeamMissionPhase::Planning => MissionPhase::Planning,
         TeamMissionPhase::Executing => MissionPhase::Executing,
         TeamMissionPhase::AwaitingApproval => MissionPhase::AwaitingApproval,
+        TeamMissionPhase::Paused => MissionPhase::Paused,
         TeamMissionPhase::Done => MissionPhase::Done,
         TeamMissionPhase::Rejected => MissionPhase::Rejected,
         TeamMissionPhase::Halted => MissionPhase::Halted,
@@ -1008,6 +1013,22 @@ mod tests {
         assert_eq!(rows[0].phase, MissionPhase::Rejected);
         assert_eq!(rows[0].steps[0].state, StepState::Failed);
         assert!(rows[0].pending_gate.is_none());
+    }
+
+    #[test]
+    fn paused_team_mission_phase_projects_to_paused_mission_phase() {
+        let view = TeamMissionView {
+            id: "m-3".into(),
+            goal: "g".into(),
+            lead: "coordinator".into(),
+            phase: TeamMissionPhase::Paused,
+            pending_gate: None,
+            halt_reason: None,
+            progress: 50,
+            steps: vec![],
+        };
+        let rows = mission_rows_from_views(vec![view]);
+        assert_eq!(rows[0].phase, MissionPhase::Paused);
     }
 
     #[test]

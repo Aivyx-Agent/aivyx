@@ -5093,6 +5093,7 @@ fn phase_label(p: TeamMissionPhase) -> &'static str {
         TeamMissionPhase::Planning => "planning",
         TeamMissionPhase::Executing => "executing",
         TeamMissionPhase::AwaitingApproval => "awaiting approval",
+        TeamMissionPhase::Paused => "paused",
         TeamMissionPhase::Done => "done",
         TeamMissionPhase::Rejected => "rejected",
         TeamMissionPhase::Halted => "halted",
@@ -5102,6 +5103,7 @@ fn phase_label(p: TeamMissionPhase) -> &'static str {
 fn phase_class(p: TeamMissionPhase) -> &'static str {
     match p {
         TeamMissionPhase::AwaitingApproval => "amber",
+        TeamMissionPhase::Paused => "amber",
         TeamMissionPhase::Done => "sage",
         TeamMissionPhase::Rejected => "error",
         TeamMissionPhase::Halted => "error",

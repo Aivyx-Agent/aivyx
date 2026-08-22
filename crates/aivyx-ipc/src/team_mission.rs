@@ -29,6 +29,15 @@ pub enum TeamMissionPhase {
     Executing,
     /// Paused at a human-approval gate, awaiting an operator decision.
     AwaitingApproval,
+    /// Chapter Mission Control — paused at a wave boundary by an explicit
+    /// operator pause request (distinct from `AwaitingApproval`, which is
+    /// a *plan-defined* human gate; this is an operator interrupting an
+    /// otherwise-unattended run). **Non-terminal** — `is_terminal()`
+    /// deliberately omits it. Completed-step outputs are preserved exactly
+    /// like `Halted`'s are; resume continues the DAG walk from them. Never
+    /// carries a `halt_reason` (that field's own contract is "set iff
+    /// phase == Halted").
+    Paused,
     /// Finished — every step ran and any gates passed.
     Done,
     /// Ended by a gate: an auto gate's FAIL verdict, or a human reject.
@@ -375,6 +384,11 @@ mod tests {
         let rec = sample("v1");
         let view = rec.to_view();
         assert!(view.steps.iter().all(|s| s.state != TeamStepState::Running));
+    }
+
+    #[test]
+    fn paused_is_not_terminal() {
+        assert!(!TeamMissionPhase::Paused.is_terminal());
     }
 
     #[test]

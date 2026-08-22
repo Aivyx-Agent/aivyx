@@ -189,6 +189,7 @@ fn phase_badge(phase: MissionPhase) -> Span<'static> {
     let (text, color) = match phase {
         MissionPhase::Executing => ("● executing", palette::OK),
         MissionPhase::AwaitingApproval => ("⚑ approval", palette::AMBER),
+        MissionPhase::Paused => ("⏸ paused", palette::AMBER),
         MissionPhase::Planning => ("◦ planning", palette::DIM),
         MissionPhase::Done => ("✓ done", palette::DIMMER),
         MissionPhase::Rejected => ("✗ rejected", palette::ERR),
