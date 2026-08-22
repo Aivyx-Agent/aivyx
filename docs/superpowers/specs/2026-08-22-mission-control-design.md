@@ -4,8 +4,34 @@
 `docs/superpowers/plans/2026-08-22-mission-control-live-state.md`, merged
 to `main` at `2989a043`. Piece 2 (Pause/Resume) shipped 2026-08-22 — plan
 at `docs/superpowers/plans/2026-08-22-mission-control-pause-resume.md`,
-merged to `main` at `e7023a56`. Piece 3 (the Mission Control nav view) is
-not yet planned or implemented.
+merged to `main` at `e7023a56`. Piece 3 (the Mission Control nav view)
+shipped 2026-08-23 — plan at
+`docs/superpowers/plans/2026-08-22-mission-control-view.md`, merged to
+`main` at `9b34618e`. All three pieces of this design are now shipped —
+this design is complete.
+
+Piece 3 went through 3 review passes before merge (1 full whole-branch
+review, 1 full whole-branch re-review, 1 diff-scoped re-review of the
+second fix wave), closing 5 Important + several Minor findings across two
+fix waves plus 2 more Minor findings directly. Two Minor findings from the
+third pass were left as known, non-blocking follow-ups rather than fixed
+in-branch (both hardening/testability, not live bugs): (1) the
+abort/pause/resume success-response handlers in `aivyx-web`'s `read_task`
+don't guard on the `mc-*` query-id prefix the way the sibling
+`QueryError` arm does, so a future control elsewhere in the app sending a
+`TeamMissionAborted`/`Paused`/`Resumed`-shaped response could silently
+hijack the Mission Control banner; (2) that same success-handling logic
+has no pure-function test seam (unlike `controls_for_phase`, which was
+deliberately extracted so it could be unit-tested without a Dioxus
+runtime). Separately, the review surfaced a structural limitation worth
+tracking as its own future item, not a bug in what shipped: `aivyx-web`
+only ever has the daemon's *current default* `TeamConfig` to project a
+mission's graph and NT-02 hints onto — a pack-pinned mission's own team
+config isn't exposed on `TeamMissionView` today, so the graph's
+roster-membership/off-roster marking and the inert-scope hint are both
+best-effort for such missions rather than exact. The real fix is exposing
+the mission's own pinned config on `TeamMissionView`; nothing in this
+initiative's 3 pieces attempted that.
 
 ## Motivation
 
