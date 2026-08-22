@@ -140,18 +140,24 @@ impl TeamMissionRecord {
     /// (`SharedMissionState::running_steps` in `aivyx-channel`), which this
     /// method has no access to.
     pub fn to_view(&self) -> TeamMissionView {
-        self.to_view_with_running(None)
+        self.to_view_with_running(&std::collections::HashSet::new())
     }
 
     /// Chapter Mission Control — like [`to_view`](Self::to_view), but
-    /// overlays [`TeamStepState::Running`] onto `running_step`'s step id, if
-    /// given. `running_step` should come from the daemon's own live
-    /// in-memory tracking (never from anything persisted) — a wasm client
-    /// projecting a bare `TeamMissionRecord` it already has has no way to
-    /// supply a meaningful value here and should keep calling plain
-    /// `to_view()`; only the daemon, building a `TeamMissionView` to
-    /// broadcast, has the live signal in scope.
-    pub fn to_view_with_running(&self, running_step: Option<&str>) -> TeamMissionView {
+    /// overlays [`TeamStepState::Running`] onto every step id in
+    /// `running_steps`, if any. `running_steps` should come from the
+    /// daemon's own live in-memory tracking (never from anything persisted)
+    /// — a wasm client projecting a bare `TeamMissionRecord` it already has
+    /// has no way to supply a meaningful value here and should keep calling
+    /// plain `to_view()`; only the daemon, building a `TeamMissionView` to
+    /// broadcast, has the live signal in scope. Nonagon missions run every
+    /// step in a DAG wave concurrently (`TeamRuntime::run_until_pause`'s
+    /// `join_all`), so more than one step id can legitimately be in the set
+    /// at once.
+    pub fn to_view_with_running(
+        &self,
+        running_steps: &std::collections::HashSet<String>,
+    ) -> TeamMissionView {
         let steps: Vec<TeamStepView> = self
             .plan
             .steps
@@ -163,7 +169,7 @@ impl TeamMissionRecord {
                 };
                 TeamStepView {
                     label: format!("{} — {member} ({kind})", step.id),
-                    state: self.step_state(&step.id, running_step),
+                    state: self.step_state(&step.id, running_steps),
                 }
             })
             .collect();
@@ -189,17 +195,21 @@ impl TeamMissionRecord {
     }
 
     /// The operator-facing state of one step, derived from the checkpoint
-    /// plus an optional live running-step overlay. Precedence, highest
+    /// plus a live set of currently-running step ids. Precedence, highest
     /// first: a pending human gate is always `Awaiting` (even if
-    /// `running_step` stale-matches it — a step paused for operator input is
-    /// never "running"); then `running_step`'s own match is `Running`; then
-    /// the checkpoint: a rejected output is `Rejected`, any other output is
-    /// `Done`, no output is `Pending`.
-    fn step_state(&self, step_id: &str, running_step: Option<&str>) -> TeamStepState {
+    /// `running_steps` stale-matches it — a step paused for operator input
+    /// is never "running"); then membership in `running_steps` is
+    /// `Running`; then the checkpoint: a rejected output is `Rejected`, any
+    /// other output is `Done`, no output is `Pending`.
+    fn step_state(
+        &self,
+        step_id: &str,
+        running_steps: &std::collections::HashSet<String>,
+    ) -> TeamStepState {
         if self.pending_gate.as_deref() == Some(step_id) {
             return TeamStepState::Awaiting;
         }
-        if running_step == Some(step_id) {
+        if running_steps.contains(step_id) {
             return TeamStepState::Running;
         }
         match self.outputs.get(step_id) {
@@ -250,8 +260,10 @@ pub enum TeamStepState {
     /// Chapter Mission Control — the driver has started this step and it
     /// hasn't finished yet. Set/cleared in-memory only, never persisted
     /// (see `SharedMissionState`'s `running_steps` field in
-    /// `aivyx-channel`); a plain `to_view()` (no live signal available)
-    /// never produces this variant.
+    /// `aivyx-channel`, which tracks a *set* of concurrently-running step
+    /// ids per mission — Nonagon missions run every step in a DAG wave
+    /// concurrently); a plain `to_view()` (no live signal available) never
+    /// produces this variant.
     Running,
     /// Completed (its output is in the checkpoint).
     Done,
@@ -330,7 +342,7 @@ mod tests {
     #[test]
     fn to_view_with_running_marks_the_given_step_running() {
         let rec = sample("v1");
-        let view = rec.to_view_with_running(Some("order"));
+        let view = rec.to_view_with_running(&["order".to_string()].into_iter().collect());
         assert_eq!(view.steps[0].state, TeamStepState::Done, "count unaffected");
         assert_eq!(view.steps[1].state, TeamStepState::Awaiting, "approve unaffected");
         assert_eq!(view.steps[2].state, TeamStepState::Running, "order is now running");
@@ -343,14 +355,17 @@ mod tests {
         // the human-gate pause) must NOT surface as Running -- Awaiting
         // always wins, matching step_state()'s existing precedence.
         let rec = sample("v1");
-        let view = rec.to_view_with_running(Some("approve"));
+        let view = rec.to_view_with_running(&["approve".to_string()].into_iter().collect());
         assert_eq!(view.steps[1].state, TeamStepState::Awaiting);
     }
 
     #[test]
     fn to_view_with_running_of_none_matches_plain_to_view() {
         let rec = sample("v1");
-        assert_eq!(rec.to_view_with_running(None), rec.to_view());
+        assert_eq!(
+            rec.to_view_with_running(&std::collections::HashSet::new()),
+            rec.to_view()
+        );
     }
 
     #[test]
@@ -360,5 +375,24 @@ mod tests {
         let rec = sample("v1");
         let view = rec.to_view();
         assert!(view.steps.iter().all(|s| s.state != TeamStepState::Running));
+    }
+
+    #[test]
+    fn to_view_with_running_marks_multiple_concurrent_steps_running() {
+        // Two independent delegate steps with no dependency between them --
+        // a real concurrent-wave shape, not a sequential chain.
+        let plan = MissionPlan::new(
+            "parallel goal",
+            vec![
+                Step::delegate("a", "specialist-a", "do a"),
+                Step::delegate("b", "specialist-b", "do b"),
+            ],
+        );
+        let rec = TeamMissionRecord::new("v2", "parallel goal", plan);
+        let running: std::collections::HashSet<String> =
+            ["a".to_string(), "b".to_string()].into_iter().collect();
+        let view = rec.to_view_with_running(&running);
+        assert_eq!(view.steps[0].state, TeamStepState::Running, "a is running");
+        assert_eq!(view.steps[1].state, TeamStepState::Running, "b is running too, not clobbered");
     }
 }

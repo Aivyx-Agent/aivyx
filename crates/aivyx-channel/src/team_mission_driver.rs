@@ -165,14 +165,17 @@ pub struct SharedMissionState {
     /// wave boundary; `request_abort` sets it. Not persisted (a flag is
     /// meaningless across a restart — an interrupted mission re-drives fresh).
     abort_flags: Arc<RwLock<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
-    /// Chapter Mission Control — which step id is currently executing, keyed
-    /// by mission id. Same "runtime-only, not persisted" rationale as
-    /// `abort_flags`: a step "running" when the daemon crashed simply isn't
-    /// running after a restart, and the checkpoint (`TeamMissionRecord::
-    /// outputs`) has no business knowing about it. Read by
-    /// `broadcast_live_view` to build a live `TeamMissionView`; never
-    /// written into a record's own `outputs`.
-    running_steps: Arc<RwLock<std::collections::HashMap<String, String>>>,
+    /// Chapter Mission Control — the SET of step ids currently executing,
+    /// keyed by mission id. A set, not a single value, because Nonagon
+    /// missions run every step in a DAG wave concurrently
+    /// (`TeamRuntime::run_until_pause`'s `join_all`) — more than one step
+    /// can legitimately be running for the same mission at once. Same
+    /// "runtime-only, not persisted" rationale as `abort_flags`: a step
+    /// "running" when the daemon crashed simply isn't running after a
+    /// restart, and the checkpoint (`TeamMissionRecord::outputs`) has no
+    /// business knowing about it. Read by `broadcast_live_view` to build a
+    /// live `TeamMissionView`; never written into a record's own `outputs`.
+    running_steps: Arc<RwLock<std::collections::HashMap<String, std::collections::HashSet<String>>>>,
     /// Chapter Mission Control — the Web UI broadcaster, if the daemon has
     /// one configured (`None` for a daemon with no Web UI server running).
     /// `mark_running`/`clear_running` no-op the broadcast half when this is
@@ -206,25 +209,42 @@ impl SharedMissionState {
         self
     }
 
-    /// Chapter Mission Control — mark `step_id` as the currently-executing
-    /// step for mission `id`, then broadcast the mission's live view. Called
-    /// by `RegistryObserver::on_step_started`.
+    /// Chapter Mission Control — mark `step_id` as one of the
+    /// currently-executing steps for mission `id` (added to that mission's
+    /// running set, created on first use), then broadcast the mission's live
+    /// view. Called by `RegistryObserver::on_step_started`.
     pub(crate) fn mark_running(&self, id: &str, step_id: &str) {
         self.running_steps
             .write()
             .expect("running steps lock")
-            .insert(id.to_string(), step_id.to_string());
+            .entry(id.to_string())
+            .or_default()
+            .insert(step_id.to_string());
         self.broadcast_live_view(id);
     }
 
-    /// Chapter Mission Control — clear `id`'s running-step marker (a step
-    /// finished, a gate resolved, or the mission's drive ended) and
-    /// broadcast the update. A no-op removal (nothing was marked running)
-    /// is fine — the broadcast still fires, reflecting whatever the record's
-    /// current state actually is. Called by `RegistryObserver::
-    /// on_step_completed`/`on_gate`, and once more at the end of `drive`
-    /// mirroring `disarm_abort`'s own cleanup-on-drive-end call.
-    pub(crate) fn clear_running(&self, id: &str) {
+    /// Chapter Mission Control — clear ONE step (`step_id`) from mission
+    /// `id`'s set of currently-running steps, then broadcast the update.
+    /// Removing a step that was never marked running is a no-op removal
+    /// (fine — the broadcast still fires). Crucially, this does NOT clear
+    /// any OTHER step concurrently running for the same mission: Nonagon
+    /// missions run every step in a DAG wave concurrently
+    /// (`TeamRuntime::run_until_pause`'s `join_all`), so one step finishing
+    /// must never wipe a still-running sibling's marker. Called by
+    /// `RegistryObserver::on_step_completed`/`on_gate`.
+    pub(crate) fn clear_running(&self, id: &str, step_id: &str) {
+        if let Some(set) = self.running_steps.write().expect("running steps lock").get_mut(id) {
+            set.remove(step_id);
+        }
+        self.broadcast_live_view(id);
+    }
+
+    /// Chapter Mission Control — clear EVERY running-step marker for
+    /// mission `id` (not just one), then broadcast. Used only at the end of
+    /// a drive (mirroring `disarm_abort`'s own cleanup-on-drive-end call) —
+    /// once a mission's drive has ended, nothing is running for it anymore,
+    /// regardless of how many steps were concurrently in flight.
+    pub(crate) fn clear_all_running(&self, id: &str) {
         self.running_steps.write().expect("running steps lock").remove(id);
         self.broadcast_live_view(id);
     }
@@ -243,8 +263,9 @@ impl SharedMissionState {
             .read()
             .expect("running steps lock")
             .get(id)
-            .cloned();
-        let view = record.to_view_with_running(running.as_deref());
+            .cloned()
+            .unwrap_or_default();
+        let view = record.to_view_with_running(&running);
         let _ = broadcaster.broadcast(crate::notify_webui::WebUiBroadcastFrame::TeamMissionUpdated(view));
     }
 
@@ -1245,7 +1266,7 @@ async fn drive(
     // on_gate, but this guarantees no stale entry survives past the
     // drive's own end (and broadcasts the mission's final phase either
     // way), mirroring disarm_abort's own cleanup-on-drive-end call above.
-    shared.clear_running(id);
+    shared.clear_all_running(id);
     Ok(phase)
 }
 
@@ -1280,7 +1301,7 @@ impl MissionObserver for RegistryObserver {
         self.shared.touch_in_memory(&self.id, |r| {
             r.outputs.insert(step_id.to_string(), output.to_string());
         });
-        self.shared.clear_running(&self.id);
+        self.shared.clear_running(&self.id, step_id);
         let _ = self.tx.send(());
     }
 
@@ -1288,7 +1309,7 @@ impl MissionObserver for RegistryObserver {
         self.shared.touch_in_memory(&self.id, |r| {
             r.outputs.insert(step_id.to_string(), verdict.to_string());
         });
-        self.shared.clear_running(&self.id);
+        self.shared.clear_running(&self.id, step_id);
         let _ = self.tx.send(());
     }
 
@@ -2057,11 +2078,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_steps_are_tracked_independently_and_completing_one_does_not_clear_the_other()
+    {
+        use crate::notify_webui::{WebUiBroadcastFrame, WebUiBroadcaster};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+        let plan = MissionPlan::new(
+            "goal",
+            vec![
+                Step::delegate("a", "specialist-a", "do a"),
+                Step::delegate("b", "specialist-b", "do b"),
+            ],
+        );
+        shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+
+        let (tx, _rx_ping) = mpsc::unbounded_channel();
+        let observer = RegistryObserver {
+            shared: shared.clone(),
+            id: "m1".to_string(),
+            tx,
+            budget_guard: None,
+            abort: None,
+        };
+
+        // Both steps start concurrently (as a real DAG wave would).
+        observer.on_step_started("a", "specialist-a");
+        let _ = rx.recv().await.expect("recv a running");
+        observer.on_step_started("b", "specialist-b");
+        match rx.recv().await.expect("recv b running") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.steps[0].state, TeamStepState::Running, "a still running");
+                assert_eq!(view.steps[1].state, TeamStepState::Running, "b now running too");
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+
+        // a finishes -- b must NOT be cleared.
+        observer.on_step_completed("a", "done a");
+        match rx.recv().await.expect("recv a completed") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.steps[0].state, TeamStepState::Done, "a done");
+                assert_eq!(view.steps[1].state, TeamStepState::Running, "b unaffected by a's completion");
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn with_broadcaster_is_none_by_default_and_broadcast_live_view_is_a_silent_noop() {
         let shared = SharedMissionState::new(team_domain().await);
         // No broadcaster configured -- must not panic, must not error.
         shared.mark_running("missing-mission", "step-a");
-        shared.clear_running("missing-mission");
+        shared.clear_running("missing-mission", "step-a");
     }
 
     #[tokio::test]
@@ -2089,7 +2158,7 @@ mod tests {
             other => panic!("expected TeamMissionUpdated, got {other:?}"),
         }
 
-        shared.clear_running("m1");
+        shared.clear_running("m1", "a");
         match rx.recv().await.expect("recv cleared") {
             WebUiBroadcastFrame::TeamMissionUpdated(view) => {
                 assert_eq!(view.steps[0].state, TeamStepState::Pending, "no longer running");
@@ -2115,7 +2184,7 @@ mod tests {
         );
         shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
 
-        shared.clear_running("m1");
+        shared.clear_running("m1", "a");
         match rx.recv().await.expect("recv") {
             WebUiBroadcastFrame::TeamMissionUpdated(view) => {
                 assert_eq!(view.steps[0].state, TeamStepState::Pending);
