@@ -209,7 +209,8 @@ future option that doesn't change this contract.
 | **L.4** | Daemon: `SharedMissionState` + `TeamRun` / `ResolveTeamGate` handlers (assemble over the real tool list, on the shared chain). |
 | **L.5** | IPC variants + `daemon_client` helpers + `aivyx team run\|status\|list\|approve\|reject`. |
 | **L.6** | TUI poll tick + live `MissionsUpdated` feed + `AwaitingApproval` approve/reject UX. |
-| _(deferred)_ | L.7 autonomous-loop ↔ team integration; **Ch.M** web Mission-Control GUI (separate chapter, unblocked by this one). |
+| **Ch.M** ✅ | Web **Mission Control** GUI (separate chapter, unblocked by this one) — shipped 2026-08-22/23: live mission state, pause/resume, and the Studio's Mission Control nav view (LEAD/specialist graph, drill-in, abort/pause/resume controls). See `aivyx-ecosystem/ROADMAP.md`'s Mission Control entry for the full 3-piece account. |
+| _(deferred)_ | L.7 autonomous-loop ↔ team integration. |
 
 ---
 

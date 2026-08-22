@@ -7,8 +7,13 @@
 > **"Create your agent"** flow sequencing Profile → Persona seed → access over
 > existing IPC (GE.3); provider/model kept CLI-set and shown read-only (GE.4,
 > §5). Scope: the **single assistant** identity (Profile + Persona + Soul);
-> **team creation is deferred** (§3, a future "Chapter Roster" that reuses these
-> primitives). A *consolidation* chapter — it extended the Chapter-X persona-seed
+> **team creation was deferred at the time** (§3, to what this doc called "a
+> future 'Chapter Roster'") — **that chapter has since shipped**
+> (`docs/ROSTER.md`, status COMPLETE): the operator can now create and edit a
+> team from the Studio's Teams screen, and a starter-team choice is folded
+> into this very onboarding flow (`OnboardingTeamStep`). §3/§6 below are kept
+> as a historical record of Genesis's own original scope, not a current
+> statement that team creation is still unbuilt. A *consolidation* chapter — it extended the Chapter-X persona-seed
 > unification to the Profile half rather than inventing a mechanism. After it,
 > both the CLI wizard and the web Studio drive the **same** drafters and the
 > **same** config writers (the §1 split is gone).
@@ -66,18 +71,25 @@ is gone.
 
 ## 3. Scope — single assistant now; teams deferred (on purpose)
 
-**In scope:** onboarding the user's one assistant — its **Profile** (declared),
-**Persona** seed (learned), provider/model, and access level.
+**As Genesis originally shipped:** onboarding the user's one assistant — its
+**Profile** (declared), **Persona** seed (learned), provider/model, and access
+level — was in scope; team creation/onboarding was out of scope, on the theory
+that a future "Chapter Roster" would build on Genesis's primitives once they
+existed. **That's since happened** — see `docs/ROSTER.md` (status COMPLETE):
+the Studio Teams screen is no longer read-only, an operator can create/edit a
+full team from the GUI, and a starter-team step now runs as part of this same
+onboarding sequence. The paragraph below is kept verbatim as the original
+design rationale, not a current "still not built" statement.
 
-**Out of scope — team creation/onboarding.** The Nonagon ships today as a
-hardcoded `default_nonagon()` roster (lead + 8 specialists) or a vertical pack's
-`TeamConfig`; the Studio Teams screen is read-only and editing was deferred
-(Chapter Y). Building team *creation* is greenfield and much larger — and it
-would **reuse** the single-assistant onboarding primitives (per-member Profile/
-Soul drafting, the shared drafter, the sequenced flow) once they exist. So
-Genesis is the **foundation** a future "Chapter Roster" (team creation) builds
-on, not a detour from it. Recorded here so the boundary is explicit, not
-forgotten.
+**Out of scope [at Genesis's own original ship] — team creation/onboarding.**
+The Nonagon ships today as a hardcoded `default_nonagon()` roster (lead + 8
+specialists) or a vertical pack's `TeamConfig`; the Studio Teams screen is
+read-only and editing was deferred (Chapter Y). Building team *creation* is
+greenfield and much larger — and it would **reuse** the single-assistant
+onboarding primitives (per-member Profile/Soul drafting, the shared drafter,
+the sequenced flow) once they exist. So Genesis is the **foundation** a future
+"Chapter Roster" (team creation) builds on, not a detour from it. Recorded
+here so the boundary is explicit, not forgotten.
 
 ## 4. The daemon chicken-and-egg — and how Genesis resolves it
 
@@ -127,7 +139,8 @@ becomes necessary rather than redundant.
 
 - **Not a new drafting mechanism.** Genesis reuses the Chapter-X drafter shape;
   the LLM stays daemon-side behind IPC, local-first, operator-as-author.
-- **Not team creation** (§3).
+- **Not team creation** (§3) — **at the time**; `docs/ROSTER.md`'s Chapter
+  Roster has since shipped this.
 - **Not a daemon cold-start web mode** (§4).
 - **Not Soul authoring UI.** The Soul is part of identity but its dedicated
   editor is out of scope; Genesis sequences Profile + Persona + access.
