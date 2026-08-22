@@ -27,7 +27,7 @@ use aivyx_ipc::protocol::{
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
-    TeamStepState, TrustTier,
+    TeamStepState, TeamStepView, TrustTier,
 };
 use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 use aivyx_ipc::graph::{GraphEntity, GraphTriple};
@@ -91,6 +91,12 @@ type Sender = Coroutine<FrontendMessage>;
 enum View {
     Command,
     Missions,
+    /// Chapter Mission Control — a live view of ONE active mission's
+    /// LEAD/specialist graph, with drill-in and controls (approve/reject,
+    /// abort, pause/resume). Distinct from `Missions` (a flat list/history
+    /// plus a "start a new mission" bar) — this is the deep-dive,
+    /// one-mission-at-a-time surface.
+    MissionControl,
     /// Chapter Chime — cron routines: config/operator/agent-created
     /// schedules, with create/toggle/delete + the agent-proposal
     /// approval flow.
@@ -134,10 +140,11 @@ enum View {
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 19] = [
+    const ALL: [View; 20] = [
         View::Command,
         View::Chat,
         View::Missions,
+        View::MissionControl,
         View::Schedules,
         View::Notifications,
         View::Memory,
@@ -161,6 +168,7 @@ impl View {
         match self {
             View::Command => "command",
             View::Missions => "missions",
+            View::MissionControl => "mission-control",
             View::Schedules => "schedules",
             View::Notifications => "notifications",
             View::Chat => "chat",
@@ -191,6 +199,7 @@ impl View {
         match self {
             View::Command => "Command",
             View::Missions => "Missions",
+            View::MissionControl => "Mission Control",
             View::Schedules => "Schedules",
             View::Notifications => "Notifications",
             View::Chat => "Chat",
@@ -301,6 +310,19 @@ struct SettingsState {
     /// True after a successful write — a write updates aivyx.toml but the
     /// running daemon won't pick it up until it restarts.
     restart_required: bool,
+}
+
+/// Chapter Mission Control — the abort/pause/resume control surface's own
+/// last-outcome banner. A dedicated struct (not a bare `Signal<Option<
+/// (bool, String)>>`) matches every other panel's own state-struct-plus-
+/// notice convention (`SettingsState`, `TeamsState`, ...) and can't
+/// collide with any other context by type the way a bare `Signal<Option<
+/// (bool, String)>>` could.
+#[derive(Clone, Default, PartialEq)]
+struct MissionControlUi {
+    /// Last abort/pause/resume outcome: `(ok, message)`. `None` until the
+    /// first control click fails or succeeds.
+    notice: Option<(bool, String)>,
 }
 
 /// Teams screen state — Chapters Y (read) + Roster (RO.3, edit). The active
@@ -616,12 +638,30 @@ fn App() -> Element {
     let transcript = use_signal(Vec::<ChatLine>::new);
     let streaming = use_signal(String::new);
     let gate = use_signal(|| None::<GateInfo>);
+    // Chapter Mission Control — pure UI-navigation state (which mission's
+    // graph is currently open); never written by `ws_task`'s coroutine, so
+    // deliberately not threaded into its parameter list below. Passed to
+    // `MissionControlPanel` as an explicit prop (see its call site below),
+    // NOT via `use_context_provider` -- `Signal<Option<String>>` is also
+    // `session`'s own context type (the Chat state, above), and Dioxus
+    // contexts are keyed purely by type: a second `use_context_provider`
+    // for the same type in the same scope silently overwrites the first.
+    // Providing this one shadowed `session` and broke `ChatPanel`'s own
+    // `use_context::<Signal<Option<String>>>()` read. Do not re-add the
+    // provider call for this signal.
+    let selected_mission = use_signal(|| None::<String>);
+    // Chapter Mission Control — the abort/pause/resume control surface's
+    // last-outcome banner. Safe to provide via context: `MissionControlUi`
+    // is a dedicated struct type (see its definition below), so it can't
+    // collide with any other context the way a bare `Signal<Option<(bool,
+    // String)>>` could.
+    let mission_ui = use_signal(MissionControlUi::default);
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
             teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            connected, session, transcript, streaming, gate,
+            connected, session, transcript, streaming, gate, mission_ui,
         )
     });
     use_context_provider(|| ws);
@@ -656,6 +696,7 @@ fn App() -> Element {
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
     use_context_provider(|| gate);
+    use_context_provider(|| mission_ui);
 
     // Reflect the theme signal onto `<html data-theme>`.
     use_effect(move || apply_theme(light()));
@@ -747,6 +788,7 @@ fn App() -> Element {
     let title = match view() {
         View::Command => "Command Center",
         View::Missions => "Mission Orchestration",
+        View::MissionControl => "Mission Control",
         View::Schedules => "Schedules",
         View::Notifications => "Notifications",
         View::Chat => "Terminal",
@@ -792,6 +834,9 @@ fn App() -> Element {
                             CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected() }
                         },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
+                        View::MissionControl => rsx! {
+                            MissionControlPanel { missions: missions(), selected_mission }
+                        },
                         View::Schedules => rsx! { SchedulesPanel {} },
                         View::Notifications => rsx! { NotificationsPanel {} },
                         View::Chat => rsx! { ChatPanel {} },
@@ -937,6 +982,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             vec![
                 (ICON_CHAT, "Chat", View::Chat),
                 (ICON_MISSIONS, "Missions", View::Missions),
+                (ICON_MISSIONS, "Mission Control", View::MissionControl),
                 (ICON_SCHEDULES, "Schedules", View::Schedules),
             ],
         ),
@@ -2061,6 +2107,349 @@ fn GateControls(mission_id: String, step: String) -> Element {
                 class: "btn btn-ghost-danger",
                 onclick: move |_| ws.send(resolve_team_query(reject.0.clone(), reject.1.clone(), false)),
                 "Reject"
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mission Control view — one active mission's LEAD/specialist graph
+// (selector only in this task; the real graph is a later chapter task).
+// ---------------------------------------------------------------------------
+
+#[component]
+fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<Option<String>>) -> Element {
+    let ws = use_context::<Sender>();
+    let teams = use_context::<Signal<TeamsState>>();
+    let mut mission_ui = use_context::<Signal<MissionControlUi>>();
+    use_effect(move || {
+        ws.send(get_team_roster_query());
+    });
+    let mut selected_node = use_signal(|| None::<String>);
+    let watchable = watchable_missions(&missions);
+    let Some(current_id) = selected_mission() else {
+        return rsx! {
+            div { class: "mission-control",
+                div { class: "panel-head", h3 { "Mission Control" } }
+                if let Some((ok, msg)) = mission_ui().notice.clone() {
+                    div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+                }
+                if watchable.is_empty() {
+                    div { class: "empty card",
+                        p { "No mission is currently executing, paused, or awaiting approval." }
+                        p { class: "label-tech", "Start one from the Missions screen." }
+                    }
+                } else {
+                    div { class: "mission-picker",
+                        for m in watchable.iter() {
+                            button {
+                                class: "glass-card mission-pick",
+                                key: "{m.id}",
+                                onclick: {
+                                    let id = m.id.clone();
+                                    move |_| {
+                                        mission_ui.write().notice = None;
+                                        selected_mission.set(Some(id.clone()));
+                                    }
+                                },
+                                span { class: "chip {phase_class(m.phase)}", "{phase_label(m.phase)}" }
+                                span { class: "goal", "{m.goal}" }
+                                span { class: "lead label-tech", "{m.lead}" }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    };
+    // If the selected mission is no longer watchable (finished/halted
+    // while this view was open), fall back to the selector rather than
+    // showing a stale/missing graph.
+    let Some(current) = watchable.iter().find(|m| m.id == current_id) else {
+        selected_mission.set(None);
+        return rsx! { div { class: "mission-control", "…" } };
+    };
+    let Some(roster) = teams().roster else {
+        return rsx! {
+            div { class: "mission-control",
+                div { class: "panel-head",
+                    h3 { "Mission Control" }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| {
+                            mission_ui.write().notice = None;
+                            selected_mission.set(None);
+                        },
+                        "← All missions"
+                    }
+                }
+                SkeletonList { rows: 3 }
+            }
+        };
+    };
+    let graph = build_mission_graph(current, &roster);
+    rsx! {
+        div { class: "mission-control",
+            div { class: "panel-head",
+                h3 { "Mission Control" }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        mission_ui.write().notice = None;
+                        selected_mission.set(None);
+                    },
+                    "← All missions"
+                }
+            }
+            if let Some((ok, msg)) = mission_ui().notice.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+            }
+            div { class: "row1",
+                span { class: "chip {phase_class(current.phase)}", "{phase_label(current.phase)}" }
+                span { class: "goal", "{current.goal}" }
+            }
+            if graph.nodes.is_empty() {
+                div { class: "empty card",
+                    p { "No roster members to show yet." }
+                }
+            } else {
+                MissionGraphSvg {
+                    graph: graph.clone(),
+                    selected: selected_node(),
+                    on_select: move |name: String| selected_node.set(Some(name)),
+                }
+            }
+            MissionControls { mission: (*current).clone() }
+            if let Some(name) = selected_node() {
+                if let Some(node) = graph.nodes.iter().find(|n| n.name == name) {
+                    SpecialistDrillIn { node: node.clone(), roster: roster.clone(), mission: (*current).clone() }
+                }
+            }
+        }
+    }
+}
+
+/// Chapter Mission Control — one mission's LEAD/specialist graph as a
+/// directed SVG, mirroring `LatticeGraph`'s node/edge/arrow conventions
+/// (Chapter MG) with `layout_mission_nodes`'s deterministic LEAD-centric
+/// ring in place of a force simulation.
+#[component]
+fn MissionGraphSvg(graph: MissionGraph, selected: Option<String>, on_select: EventHandler<String>) -> Element {
+    let pos = layout_mission_nodes(&graph.nodes);
+    let idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.name.as_str(), i)).collect();
+    rsx! {
+        div { class: "glass-card mission-graph",
+            svg {
+                class: "mission-graph-svg",
+                view_box: "0 0 {MC_GRAPH_W} {MC_GRAPH_H}",
+                defs {
+                    marker {
+                        id: "mission-arrow", view_box: "0 0 10 10",
+                        ref_x: "9", ref_y: "5", marker_width: "7", marker_height: "7",
+                        orient: "auto-start-reverse",
+                        path { d: "M 0 0 L 10 5 L 0 10 z", class: "mission-arrowhead" }
+                    }
+                }
+                // Edges first (under the nodes). A step's dependency edge
+                // between two steps owned by the SAME specialist isn't a
+                // meaningful cross-node line, so it's skipped.
+                for e in graph.edges.iter() {
+                    if e.from_member != e.to_member {
+                        if let (Some(&i), Some(&j)) = (idx.get(e.from_member.as_str()), idx.get(e.to_member.as_str())) {
+                            {
+                                let (x1, y1) = pos[i];
+                                let (x2c, y2c) = pos[j];
+                                let dx = x2c - x1;
+                                let dy = y2c - y1;
+                                let d = (dx * dx + dy * dy).sqrt().max(0.01);
+                                let (x2, y2) =
+                                    (x2c - dx / d * (MC_NODE_R + 4.0), y2c - dy / d * (MC_NODE_R + 4.0));
+                                rsx! {
+                                    line {
+                                        x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
+                                        class: "mission-edge", marker_end: "url(#mission-arrow)",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Nodes.
+                for (i, node) in graph.nodes.iter().enumerate() {
+                    {
+                        let (cx, cy) = pos[i];
+                        let state_class = match node.state {
+                            TeamStepState::Running | TeamStepState::Awaiting => "amber",
+                            TeamStepState::Rejected => "error",
+                            TeamStepState::Done => "sage",
+                            TeamStepState::Pending => "",
+                        };
+                        let mut classes = format!("mission-node {state_class}");
+                        if node.is_lead { classes.push_str(" lead"); }
+                        if !node.on_roster { classes.push_str(" off-roster"); }
+                        if selected.as_deref() == Some(node.name.as_str()) { classes.push_str(" selected"); }
+                        let name = node.name.clone();
+                        rsx! {
+                            g { class: "{classes}",
+                                onclick: move |_| on_select.call(name.clone()),
+                                circle { cx: "{cx}", cy: "{cy}", r: "{MC_NODE_R}" }
+                                text { x: "{cx}", y: "{cy + MC_NODE_R + 13.0}", text_anchor: "middle", "{node.name}" }
+                                if node.is_lead {
+                                    text {
+                                        x: "{cx}", y: "{cy - MC_NODE_R - 8.0}", text_anchor: "middle",
+                                        class: "mission-node-badge", "LEAD"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MissionControls(mission: TeamMissionView) -> Element {
+    let ws = use_context::<Sender>();
+    let mut mission_ui = use_context::<Signal<MissionControlUi>>();
+    let id = mission.id.clone();
+    let shown = controls_for_phase(mission.phase);
+    rsx! {
+        div { class: "mission-controls",
+            if shown.contains(&"gate") {
+                if let Some(gate) = mission.pending_gate.clone() {
+                    GateControls { mission_id: mission.id.clone(), step: gate }
+                }
+            }
+            if shown.contains(&"pause") {
+                button {
+                    class: "btn btn-ghost",
+                    onclick: {
+                        let id = id.clone();
+                        move |_| {
+                            mission_ui.write().notice = None;
+                            ws.send(pause_team_mission_query(id.clone()));
+                        }
+                    },
+                    "Pause"
+                }
+            }
+            if shown.contains(&"abort") {
+                button {
+                    class: "btn btn-ghost-danger",
+                    onclick: {
+                        let id = id.clone();
+                        move |_| {
+                            mission_ui.write().notice = None;
+                            ws.send(abort_team_mission_query(id.clone()));
+                        }
+                    },
+                    "Abort"
+                }
+            }
+            if shown.contains(&"resume") {
+                button {
+                    class: "btn btn-sage",
+                    onclick: move |_| {
+                        mission_ui.write().notice = None;
+                        ws.send(resume_team_mission_query(id.clone()));
+                    },
+                    "Resume"
+                }
+            }
+        }
+    }
+}
+
+/// Chapter Mission Control — which controls a mission's current phase
+/// shows, as opaque tags. `MissionControls`'s own rsx! branches on these
+/// tags directly (see its body) rather than re-checking `mission.phase`,
+/// so the two can never drift apart; also exercised standalone by
+/// `mission_controls_shown_for_each_phase` (`#[cfg(test)]`, below)
+/// without needing a Dioxus runtime.
+fn controls_for_phase(phase: TeamMissionPhase) -> Vec<&'static str> {
+    match phase {
+        TeamMissionPhase::Executing => vec!["pause", "abort"],
+        TeamMissionPhase::Paused => vec!["resume"],
+        TeamMissionPhase::AwaitingApproval => vec!["gate"],
+        TeamMissionPhase::Planning
+        | TeamMissionPhase::Done
+        | TeamMissionPhase::Rejected
+        | TeamMissionPhase::Halted => vec![],
+    }
+}
+
+/// Chapter Mission Control / Chapter Y — `lead`'s own declared capability
+/// scopes within `team`, for the NT-02 "inert" hint: a specialist's own
+/// declared scope the lead doesn't also hold is attenuated to nothing at
+/// spawn (never granted). `None` if `lead` isn't a member of `team` at
+/// all — distinct from `Some(<empty set>)` (a real lead with zero
+/// declared scopes, which correctly flags every specialist scope as
+/// inert). An unknown lead should suppress the hint rather than
+/// manufacture a guaranteed false alarm — see `SpecialistDrillIn`.
+fn scopes_of(team: &TeamConfig, lead: &str) -> Option<HashSet<String>> {
+    team.members.iter().find(|m| m.name == lead).map(|m| m.capability_scopes.iter().cloned().collect())
+}
+
+/// Chapter Y — `TeamsPanel`'s own lead-scope lookup. `team.lead` is
+/// always expected to be a real member of `team` (a `TeamConfig`
+/// invariant `TeamsPanel` itself enforces on save), so this collapses
+/// `scopes_of`'s `Option` to an empty set on the should-be-impossible
+/// miss rather than surfacing it. Extracted from `TeamsPanel`'s own
+/// inline computation so both surfaces share one implementation, not two
+/// that could silently drift apart.
+fn lead_scopes(team: &TeamConfig) -> HashSet<String> {
+    scopes_of(team, &team.lead).unwrap_or_default()
+}
+
+#[component]
+fn SpecialistDrillIn(node: MissionGraphNode, roster: TeamConfig, mission: TeamMissionView) -> Element {
+    // The mission's OWN lead, not the current default roster's lead --
+    // a pack-pinned mission's lead can differ from `roster.lead` (see
+    // `scopes_of`'s own doc comment).
+    let scopes = scopes_of(&roster, &mission.lead);
+    let member = roster.members.iter().find(|m| m.name == node.name);
+    let declared: Vec<String> = member.map(|m| m.capability_scopes.clone()).unwrap_or_default();
+    let inert: Vec<String> = match &scopes {
+        Some(s) => declared.iter().filter(|scope| !s.contains(*scope)).cloned().collect(),
+        // The mission's own lead isn't in this (possibly wrong) roster at
+        // all -- we have no real basis to say anything is inert, so stay
+        // silent rather than flag every declared scope as a false alarm.
+        None => Vec::new(),
+    };
+    let current_step_detail = node
+        .current_step
+        .as_ref()
+        .and_then(|id| mission.steps.iter().find(|s| &s.step_id == id));
+    rsx! {
+        div { class: "glass-card drill-in",
+            div { class: "row1",
+                span { class: "goal", "{node.name}" }
+                if node.is_lead { span { class: "chip", "LEAD" } }
+            }
+            if let Some(step) = current_step_detail {
+                p { class: "label-tech", "currently running: {step.label}" }
+            } else {
+                p { class: "label-tech", "idle — no step currently running" }
+            }
+            if !declared.is_empty() {
+                div { class: "scopes",
+                    p { class: "label-tech", "declared capability scopes:" }
+                    for s in declared.iter() {
+                        span { class: "chip", "{s}" }
+                    }
+                }
+            }
+            if !inert.is_empty() {
+                p { class: "label-tech inert-hint",
+                    "Lead lacks {inert.join(\", \")} — inert until the lead holds them (attenuated at spawn)."
+                }
+            }
+            if !node.on_roster {
+                p { class: "label-tech roster-hint",
+                    "Not on the daemon's current default roster — this mission's own team config pinned a different roster."
+                }
             }
         }
     }
@@ -5074,6 +5463,27 @@ fn resolve_team_query(mission_id: String, step: String, approve: bool) -> Fronte
     }
 }
 
+fn abort_team_mission_query(mission_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-abort".to_string(),
+        payload: QueryPayload::AbortTeamMission { mission_id },
+    }
+}
+
+fn pause_team_mission_query(mission_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-pause".to_string(),
+        payload: QueryPayload::PauseTeamMission { mission_id },
+    }
+}
+
+fn resume_team_mission_query(mission_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-resume".to_string(),
+        payload: QueryPayload::ResumeTeamMission { mission_id },
+    }
+}
+
 fn resolve_gate_query(mission_id: String, gate_id: String, approved: bool) -> FrontendMessage {
     FrontendMessage::ResolveGate { mission_id, gate_id, approved }
 }
@@ -5124,6 +5534,25 @@ fn upsert_mission_view(missions: &mut Vec<TeamMissionView>, updated: TeamMission
     }
 }
 
+/// Chapter Mission Control — which missions this view's selector offers:
+/// genuinely worth watching or acting on right now. Narrower than the
+/// Command Center's own "Active" stat (which also counts `Halted`, since
+/// that's a general dashboard metric) — a `Halted` mission has nothing
+/// left to watch or resume, so it's excluded here.
+fn watchable_missions(missions: &[TeamMissionView]) -> Vec<&TeamMissionView> {
+    missions
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.phase,
+                TeamMissionPhase::Executing
+                    | TeamMissionPhase::Paused
+                    | TeamMissionPhase::AwaitingApproval
+            )
+        })
+        .collect()
+}
+
 /// Chapter Mission Control — per-mission set of step INDICES (position in
 /// `TeamMissionView.steps`) the daemon's last broadcast said are running
 /// right now. Fed by `DaemonEnvelope::TeamMissionUpdated`; re-applied by
@@ -5131,10 +5560,12 @@ fn upsert_mission_view(missions: &mut Vec<TeamMissionView>, updated: TeamMission
 /// since the poll re-projects raw records client-side via `to_view()`,
 /// which never yields `Running` on its own — without this overlay, the
 /// poll would silently erase every live signal within one poll interval.
-/// Index-keyed rather than step-id-keyed because `TeamStepView` carries no
-/// step id (only `label`/`state`), and a mission's step order is stable
-/// for the mission's whole lifetime (the `plan` never changes after
-/// creation), so position is a safe, sufficient key.
+/// Index-keyed rather than step-id-keyed: a mission's step order is
+/// stable for the mission's whole lifetime (the `plan` never changes
+/// after creation), so position is already a safe, sufficient key for
+/// aligning two same-shaped step lists (last poll vs. this poll) --
+/// `TeamStepView` does also carry a real `step_id` now (Task 1), but this
+/// overlay has no need to look anything up by it.
 fn running_step_indices(view: &TeamMissionView) -> HashSet<usize> {
     view.steps
         .iter()
@@ -5172,6 +5603,169 @@ fn apply_running_overlay(views: &mut [TeamMissionView], overlay: &mut HashMap<St
     }
 }
 
+/// Chapter Mission Control — one node in a mission's live graph: the LEAD
+/// or a specialist, with the "worst" (most attention-worthy) state across
+/// every step of theirs in this mission.
+#[derive(Debug, Clone, PartialEq)]
+struct MissionGraphNode {
+    name: String,
+    is_lead: bool,
+    state: TeamStepState,
+    /// The step id this node is currently `Running`, if any -- for the
+    /// drill-in panel (Task 5) to show "doing: <step>".
+    current_step: Option<String>,
+    /// False if `name` is not a member of the roster this graph was built
+    /// against (`TeamsState.roster` -- the daemon's *current default*
+    /// team, which a pack-pinned mission's own config can differ from;
+    /// `TeamMissionView` doesn't expose the mission's own pinned config).
+    /// A step-touching member always gets a node either way -- this only
+    /// controls whether the UI flags it as off the visible default roster.
+    on_roster: bool,
+}
+
+/// Chapter Mission Control — one dependency edge between two steps
+/// (`TeamStepView::deps`, Task 1), carrying the owning member of each end
+/// so the graph can draw a node-to-node line without re-deriving step
+/// ownership at render time.
+#[derive(Debug, Clone, PartialEq)]
+struct MissionGraphEdge {
+    from_step: String,
+    to_step: String,
+    from_member: String,
+    to_member: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct MissionGraph {
+    nodes: Vec<MissionGraphNode>,
+    edges: Vec<MissionGraphEdge>,
+}
+
+/// Chapter Mission Control — the pure transform the rendering layer
+/// consumes: project one mission's live steps onto the team roster's real
+/// member list, so every roster member gets a node (including one with no
+/// step run yet -- genuinely idle, not merely absent from the DAG), PLUS a
+/// node for any step-touching member absent from that roster (a
+/// pack-pinned mission's own team can differ from the current default —
+/// see `MissionGraphNode::on_roster`'s doc comment). Edges come from each
+/// step's real `deps` (Task 1), not from parsing `label`. `is_lead` is
+/// read from `mission.lead` (the mission's own real lead), never
+/// `roster.lead` (which may not even be this mission's lead if the
+/// rosters differ).
+fn build_mission_graph(mission: &TeamMissionView, roster: &TeamConfig) -> MissionGraph {
+    let mut nodes: Vec<MissionGraphNode> =
+        roster.members.iter().map(|member| mission_graph_node(mission, &member.name, true)).collect();
+
+    let mut known: HashSet<&str> = roster.members.iter().map(|m| m.name.as_str()).collect();
+    let mut unrostered: Vec<&str> =
+        mission.steps.iter().map(|s| s.member.as_str()).filter(|name| !known.contains(name)).collect();
+    unrostered.sort_unstable();
+    unrostered.dedup();
+    for name in unrostered {
+        nodes.push(mission_graph_node(mission, name, false));
+        known.insert(name);
+    }
+    // The mission's own LEAD must always get a node -- even one who
+    // isn't on the current default roster AND touches no step of their
+    // own (e.g. a pack-pinned lead that only ever delegates/reviews).
+    // Without this, `layout_mission_nodes` has no LEAD to center the
+    // ring on and silently promotes an arbitrary specialist to the hub.
+    if !known.contains(mission.lead.as_str()) {
+        nodes.push(mission_graph_node(mission, &mission.lead, false));
+    }
+
+    let step_member: HashMap<&str, &str> =
+        mission.steps.iter().map(|s| (s.step_id.as_str(), s.member.as_str())).collect();
+    let mut edges = Vec::new();
+    for step in mission.steps.iter() {
+        for dep in step.deps.iter() {
+            if let Some(&from_member) = step_member.get(dep.as_str()) {
+                edges.push(MissionGraphEdge {
+                    from_step: dep.clone(),
+                    to_step: step.step_id.clone(),
+                    from_member: from_member.to_string(),
+                    to_member: step.member.clone(),
+                });
+            }
+        }
+    }
+    MissionGraph { nodes, edges }
+}
+
+/// One `MissionGraphNode` for `name`, from `name`'s own steps in
+/// `mission` (empty if `name` has none — genuinely idle).
+fn mission_graph_node(mission: &TeamMissionView, name: &str, on_roster: bool) -> MissionGraphNode {
+    let member_steps: Vec<&TeamStepView> = mission.steps.iter().filter(|s| s.member == name).collect();
+    let state = step_state_priority(&member_steps);
+    let current_step =
+        member_steps.iter().find(|s| s.state == TeamStepState::Running).map(|s| s.step_id.clone());
+    MissionGraphNode { name: name.to_string(), is_lead: name == mission.lead, state, current_step, on_roster }
+}
+
+/// Chapter Mission Control — the single most attention-worthy state across
+/// a specialist's own steps in this mission, in priority order: `Running`
+/// (something's happening right now), then `Awaiting` (blocked on a
+/// decision), then `Pending` (still work to do, even if some of their
+/// steps are `Done`), then `Rejected`, then `Done` (only if every one of
+/// their steps is `Done`), and `Pending` again for genuinely idle (no
+/// steps at all). Priority order chosen so a specialist with mixed
+/// Done/Pending steps never reads as "finished."
+fn step_state_priority(steps: &[&TeamStepView]) -> TeamStepState {
+    if steps.is_empty() {
+        return TeamStepState::Pending;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Running) {
+        return TeamStepState::Running;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Awaiting) {
+        return TeamStepState::Awaiting;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Pending) {
+        return TeamStepState::Pending;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Rejected) {
+        return TeamStepState::Rejected;
+    }
+    TeamStepState::Done
+}
+
+/// Chapter Mission Control — the graph canvas size (SVG viewBox units).
+/// Deliberately smaller than the Lattice/Memory graphs' 760x460 canvas --
+/// a mission's roster is LEAD + a handful of specialists, not an
+/// open-ended knowledge graph.
+const MC_GRAPH_W: f64 = 520.0;
+const MC_GRAPH_H: f64 = 360.0;
+const MC_NODE_R: f64 = 26.0;
+
+/// Chapter Mission Control — deterministic LEAD-centric layout: the LEAD
+/// sits at the canvas center, every other node is placed evenly around a
+/// fixed-radius ring centered on the LEAD (first specialist at 12
+/// o'clock, clockwise). No force simulation, unlike `compute_layout`
+/// (Chapter MG) -- a mission's roster is small and inherently star-shaped
+/// around its LEAD. Returns one `(x, y)` per node, index-aligned with
+/// `nodes` (mirrors `compute_layout`'s own return convention). Panics
+/// never: an empty slice returns an empty vec. If no node has `is_lead`
+/// set (should not happen — `build_mission_graph` always gives the
+/// mission's own lead a node), `nodes[0]` is centered instead of a real
+/// LEAD; this is a defensive fallback, not the intended path.
+fn layout_mission_nodes(nodes: &[MissionGraphNode]) -> Vec<(f64, f64)> {
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let center = (MC_GRAPH_W / 2.0, MC_GRAPH_H / 2.0);
+    let lead_idx = nodes.iter().position(|n| n.is_lead).unwrap_or(0);
+    let others: Vec<usize> = (0..nodes.len()).filter(|&i| i != lead_idx).collect();
+    let radius = (MC_GRAPH_W.min(MC_GRAPH_H) / 2.0 - MC_NODE_R - 24.0).max(40.0);
+    let mut pos = vec![(0.0_f64, 0.0_f64); nodes.len()];
+    pos[lead_idx] = center;
+    let n = others.len().max(1) as f64;
+    for (k, &i) in others.iter().enumerate() {
+        let ang = -std::f64::consts::FRAC_PI_2 + (k as f64) * (2.0 * std::f64::consts::PI) / n;
+        pos[i] = (center.0 + radius * ang.cos(), center.1 + radius * ang.sin());
+    }
+    pos
+}
+
 #[cfg(test)]
 mod mission_control_tests {
     use super::*;
@@ -5187,6 +5781,45 @@ mod mission_control_tests {
             halt_reason: None,
             progress,
             steps: vec![],
+        }
+    }
+
+    /// Verified real `TeamMember` shape (`crates/aivyx-team-types/src/config.rs`)
+    /// has 8 fields, not just `name`/`capability_scopes` — this literal
+    /// matches the exact construction pattern already used elsewhere in
+    /// this same file (`TeamsPanel`'s own "add specialist" button, which
+    /// pushes a `TeamMember { .. }` literal with all 8 fields).
+    fn sample_member(name: &str) -> TeamMember {
+        TeamMember {
+            name: name.to_string(),
+            role: "Specialist".to_string(),
+            soul: String::new(),
+            tool_allowlist: vec!["team.message".to_string()],
+            capability_scopes: vec![],
+            trust_ceiling: TrustTier::SemiTrusted,
+            model: None,
+            base_url: None,
+        }
+    }
+
+    /// `TeamConfig` also carries `name`/`description`/`dialogue`, not just
+    /// `lead`/`members` (verified against the real struct in
+    /// `crates/aivyx-team-types/src/config.rs`, which has no `Default` impl
+    /// of its own) -- `dialogue` uses `Default::default()` since
+    /// `DialogueConfig` itself does derive-free-`impl Default` but isn't
+    /// re-exported through `aivyx_ipc`, so it's inferred from the field's
+    /// type rather than named directly.
+    fn sample_roster() -> TeamConfig {
+        TeamConfig {
+            name: "test-team".to_string(),
+            description: String::new(),
+            lead: "coordinator".to_string(),
+            members: vec![
+                sample_member("coordinator"),
+                sample_member("inventory"),
+                sample_member("purchasing"),
+            ],
+            dialogue: Default::default(),
         }
     }
 
@@ -5211,9 +5844,30 @@ mod mission_control_tests {
     fn running_step_indices_finds_the_running_positions() {
         let mut v = view("m1", 10);
         v.steps = vec![
-            TeamStepView { label: "a".into(), state: TeamStepState::Done },
-            TeamStepView { label: "b".into(), state: TeamStepState::Running },
-            TeamStepView { label: "c".into(), state: TeamStepState::Pending },
+            TeamStepView {
+                label: "a".into(),
+                state: TeamStepState::Done,
+                step_id: "a".into(),
+                member: "m".into(),
+                kind: "delegate".into(),
+                deps: vec![],
+            },
+            TeamStepView {
+                label: "b".into(),
+                state: TeamStepState::Running,
+                step_id: "b".into(),
+                member: "m".into(),
+                kind: "delegate".into(),
+                deps: vec!["a".into()],
+            },
+            TeamStepView {
+                label: "c".into(),
+                state: TeamStepState::Pending,
+                step_id: "c".into(),
+                member: "m".into(),
+                kind: "delegate".into(),
+                deps: vec!["b".into()],
+            },
         ];
         let indices = running_step_indices(&v);
         assert_eq!(indices, [1].into_iter().collect());
@@ -5222,7 +5876,14 @@ mod mission_control_tests {
     #[test]
     fn apply_running_overlay_marks_a_still_pending_step_running() {
         let mut v = view("m1", 0);
-        v.steps = vec![TeamStepView { label: "a".into(), state: TeamStepState::Pending }];
+        v.steps = vec![TeamStepView {
+            label: "a".into(),
+            state: TeamStepState::Pending,
+            step_id: "a".into(),
+            member: "m".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
         let mut views = vec![v];
         let mut overlay: HashMap<String, HashSet<usize>> =
             [("m1".to_string(), [0usize].into_iter().collect())].into_iter().collect();
@@ -5232,17 +5893,301 @@ mod mission_control_tests {
     }
 
     #[test]
+    fn watchable_missions_excludes_terminal_and_halted() {
+        let mut done = view("m1", 100);
+        done.phase = TeamMissionPhase::Done;
+        let mut rejected = view("m2", 0);
+        rejected.phase = TeamMissionPhase::Rejected;
+        let mut halted = view("m3", 50);
+        halted.phase = TeamMissionPhase::Halted;
+        let mut executing = view("m4", 20);
+        executing.phase = TeamMissionPhase::Executing;
+        let mut paused = view("m5", 60);
+        paused.phase = TeamMissionPhase::Paused;
+        let mut awaiting = view("m6", 40);
+        awaiting.phase = TeamMissionPhase::AwaitingApproval;
+
+        let all = vec![done, rejected, halted, executing.clone(), paused.clone(), awaiting.clone()];
+        let watchable = watchable_missions(&all);
+        let ids: Vec<&str> = watchable.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m4", "m5", "m6"], "only Executing/Paused/AwaitingApproval, in original order");
+    }
+
+    #[test]
     fn apply_running_overlay_prunes_a_resolved_step_and_does_not_downgrade_it() {
         // The fresh poll already shows this step Done -- the overlay must
         // NOT downgrade it back to Running, and must stop tracking it.
         let mut v = view("m1", 100);
-        v.steps = vec![TeamStepView { label: "a".into(), state: TeamStepState::Done }];
+        v.steps = vec![TeamStepView {
+            label: "a".into(),
+            state: TeamStepState::Done,
+            step_id: "a".into(),
+            member: "m".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
         let mut views = vec![v];
         let mut overlay: HashMap<String, HashSet<usize>> =
             [("m1".to_string(), [0usize].into_iter().collect())].into_iter().collect();
         apply_running_overlay(&mut views, &mut overlay);
         assert_eq!(views[0].steps[0].state, TeamStepState::Done, "checkpoint wins, not overwritten");
         assert!(!overlay.contains_key("m1"), "pruned once resolved");
+    }
+
+    #[test]
+    fn build_mission_graph_has_one_node_per_roster_member_including_idle_ones() {
+        let mut m = view("v1", 33);
+        m.lead = "coordinator".to_string();
+        m.steps = vec![
+            TeamStepView { label: "count — inventory (delegate)".into(), state: TeamStepState::Running, step_id: "count".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+        ];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        // All 3 roster members get a node, even "purchasing" (idle -- no
+        // step of theirs has run or is running yet).
+        let names: Vec<&str> = graph.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"coordinator"));
+        assert!(names.contains(&"inventory"));
+        assert!(names.contains(&"purchasing"));
+        let lead_node = graph.nodes.iter().find(|n| n.name == "coordinator").unwrap();
+        assert!(lead_node.is_lead);
+        let inventory_node = graph.nodes.iter().find(|n| n.name == "inventory").unwrap();
+        assert!(!inventory_node.is_lead);
+        assert_eq!(inventory_node.state, TeamStepState::Running, "inventory is running the 'count' step");
+        let purchasing_node = graph.nodes.iter().find(|n| n.name == "purchasing").unwrap();
+        assert_eq!(purchasing_node.state, TeamStepState::Pending, "idle -- no step touches purchasing yet");
+    }
+
+    #[test]
+    fn build_mission_graph_edges_reflect_step_deps() {
+        let mut m = view("v1", 0);
+        m.steps = vec![
+            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "purchasing".into(), kind: "delegate".into(), deps: vec!["a".to_string()] },
+        ];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].from_step, "a");
+        assert_eq!(graph.edges[0].to_step, "b");
+    }
+
+    #[test]
+    fn build_mission_graph_a_specialist_with_multiple_steps_shows_the_most_attention_worthy_state() {
+        // A specialist who ran one step to Done and has another Pending
+        // should show Pending (still work to do), not Done (which would
+        // read as "finished" when they aren't).
+        let mut m = view("v1", 0);
+        m.steps = vec![
+            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec!["a".to_string()] },
+        ];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        let inventory_node = graph.nodes.iter().find(|n| n.name == "inventory").unwrap();
+        assert_eq!(inventory_node.state, TeamStepState::Pending);
+    }
+
+    #[test]
+    fn build_mission_graph_includes_a_specialist_pinned_off_the_current_default_roster() {
+        // A pack-pinned mission's own TeamConfig can differ from the daemon's
+        // current default roster (all `build_mission_graph` is given --
+        // `TeamMissionView` doesn't expose the mission's own pinned config).
+        // A specialist named in `mission.steps` but absent from
+        // `roster.members` must still get a node -- not silently vanish --
+        // marked `on_roster: false`.
+        let mut m = view("v1", 0);
+        m.lead = "coordinator".to_string();
+        m.steps = vec![TeamStepView {
+            label: "audit".into(),
+            state: TeamStepState::Running,
+            step_id: "audit".into(),
+            member: "auditor".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
+        let roster = sample_roster(); // coordinator/inventory/purchasing -- no "auditor"
+        let graph = build_mission_graph(&m, &roster);
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.name == "auditor")
+            .expect("an unrostered but step-touching member still gets a node");
+        assert!(!node.on_roster, "auditor is not on the current default roster");
+        assert!(!node.is_lead);
+        assert_eq!(node.state, TeamStepState::Running);
+        assert!(graph.nodes.iter().any(|n| n.name == "coordinator" && n.on_roster));
+    }
+
+    #[test]
+    fn build_mission_graph_is_lead_follows_the_missions_own_lead_not_the_default_rosters() {
+        let mut m = view("v1", 0);
+        m.lead = "inventory".to_string(); // differs from roster.lead ("coordinator")
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        let inventory_node = graph.nodes.iter().find(|n| n.name == "inventory").unwrap();
+        assert!(inventory_node.is_lead, "is_lead follows mission.lead, not roster.lead");
+        let coordinator_node = graph.nodes.iter().find(|n| n.name == "coordinator").unwrap();
+        assert!(!coordinator_node.is_lead);
+    }
+
+    #[test]
+    fn build_mission_graph_gives_the_missions_own_lead_a_node_even_when_they_touch_no_step() {
+        // A pack-pinned lead who only ever delegates/reviews (owns no step of
+        // their own) and isn't a member of the current default roster must
+        // still get a node -- otherwise there's no LEAD to center the graph
+        // on.
+        let mut m = view("v1", 0);
+        m.lead = "packlead".to_string();
+        m.steps = vec![TeamStepView {
+            label: "count".into(),
+            state: TeamStepState::Pending,
+            step_id: "count".into(),
+            member: "inventory".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
+        let roster = sample_roster(); // coordinator/inventory/purchasing -- no "packlead"
+        let graph = build_mission_graph(&m, &roster);
+        let lead_node = graph
+            .nodes
+            .iter()
+            .find(|n| n.name == "packlead")
+            .expect("the mission's own lead always gets a node, even off-roster and step-touching-free");
+        assert!(lead_node.is_lead);
+        assert!(!lead_node.on_roster);
+    }
+
+    #[test]
+    fn build_mission_graph_does_not_duplicate_an_off_roster_lead_who_also_touches_a_step() {
+        // The more likely pack-pinned shape: the lead is off-roster AND
+        // owns a step themselves (unlike the previous test, where the
+        // lead touches no step at all). The `unrostered` loop already
+        // gives them a node from their own step -- the later "give the
+        // lead a node" union must recognize that and NOT add a second
+        // one, or the graph would draw two circles for the same person
+        // (one centered, one on the ring), both badged LEAD, with edges
+        // landing on whichever one a name-keyed lookup finds last.
+        let mut m = view("v1", 0);
+        m.lead = "packlead".to_string();
+        m.steps = vec![TeamStepView {
+            label: "audit".into(),
+            state: TeamStepState::Running,
+            step_id: "audit".into(),
+            member: "packlead".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
+        let roster = sample_roster(); // coordinator/inventory/purchasing -- no "packlead"
+        let graph = build_mission_graph(&m, &roster);
+        let count = graph.nodes.iter().filter(|n| n.name == "packlead").count();
+        assert_eq!(count, 1, "an off-roster, step-touching lead gets exactly one node, not two");
+    }
+
+    #[test]
+    fn build_mission_graph_skips_an_edge_whose_dep_step_id_is_not_in_the_mission() {
+        let mut m = view("v1", 0);
+        m.steps = vec![TeamStepView {
+            label: "b".into(),
+            state: TeamStepState::Pending,
+            step_id: "b".into(),
+            member: "inventory".into(),
+            kind: "delegate".into(),
+            deps: vec!["nope".to_string()],
+        }];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        assert!(graph.edges.is_empty(), "a dep referencing an unknown step id is skipped, not fabricated");
+    }
+
+    #[test]
+    fn layout_mission_nodes_centers_the_lead_and_rings_the_specialists_equidistant() {
+        let nodes = vec![
+            MissionGraphNode {
+                name: "inventory".into(), is_lead: false, state: TeamStepState::Pending,
+                current_step: None, on_roster: true,
+            },
+            MissionGraphNode {
+                name: "coordinator".into(), is_lead: true, state: TeamStepState::Pending,
+                current_step: None, on_roster: true,
+            },
+            MissionGraphNode {
+                name: "purchasing".into(), is_lead: false, state: TeamStepState::Pending,
+                current_step: None, on_roster: true,
+            },
+        ];
+        let pos = layout_mission_nodes(&nodes);
+        assert_eq!(pos.len(), 3);
+        let center = (MC_GRAPH_W / 2.0, MC_GRAPH_H / 2.0);
+        assert_eq!(pos[1], center, "the LEAD (deliberately at index 1, not 0) sits at the canvas center");
+        let dist = |p: (f64, f64)| ((p.0 - center.0).powi(2) + (p.1 - center.1).powi(2)).sqrt();
+        let (d0, d2) = (dist(pos[0]), dist(pos[2]));
+        assert!(d0 > 10.0, "specialists are not collapsed onto the LEAD");
+        assert!((d0 - d2).abs() < 0.01, "every specialist sits on the same ring around the LEAD");
+        assert!(
+            (pos[0].0 - pos[2].0).abs() > 1.0 || (pos[0].1 - pos[2].1).abs() > 1.0,
+            "distinct specialists get distinct positions"
+        );
+    }
+
+    #[test]
+    fn layout_mission_nodes_handles_a_lead_only_roster() {
+        let nodes = vec![MissionGraphNode {
+            name: "coordinator".into(), is_lead: true, state: TeamStepState::Pending,
+            current_step: None, on_roster: true,
+        }];
+        let pos = layout_mission_nodes(&nodes);
+        assert_eq!(pos, vec![(MC_GRAPH_W / 2.0, MC_GRAPH_H / 2.0)]);
+    }
+
+    #[test]
+    fn lead_scopes_returns_the_leads_own_declared_scopes() {
+        let mut roster = sample_roster();
+        roster.members[0].capability_scopes = vec!["fs.write".to_string(), "net.fetch".to_string()];
+        // A non-lead member ("inventory", `members[1]` -- confirmed not the
+        // lead, which is "coordinator" at `members[0]` per `sample_roster`)
+        // with DIFFERENT scopes -- these must NOT leak into lead_scopes's
+        // result, or a "union of all members" bug (instead of "just the
+        // lead's own scopes") would silently pass.
+        roster.members[1].capability_scopes = vec!["shell.exec".to_string()];
+        let scopes = lead_scopes(&roster);
+        assert!(scopes.contains("fs.write"));
+        assert!(scopes.contains("net.fetch"));
+        assert!(!scopes.contains("shell.exec"), "a non-lead member's own scope must not leak into lead_scopes");
+        assert_eq!(scopes.len(), 2);
+    }
+
+    #[test]
+    fn lead_scopes_is_empty_when_the_lead_is_not_in_members() {
+        let mut roster = sample_roster();
+        roster.lead = "nobody".to_string();
+        assert!(lead_scopes(&roster).is_empty());
+    }
+
+    #[test]
+    fn scopes_of_returns_the_named_leads_own_scopes_not_the_default_rosters_lead() {
+        let mut roster = sample_roster(); // lead = "coordinator"
+        roster.members[0].capability_scopes = vec!["fs.write".to_string()]; // coordinator
+        roster.members[1].capability_scopes = vec!["net.fetch".to_string()]; // inventory
+        let scopes = scopes_of(&roster, "inventory");
+        assert_eq!(scopes, Some(["net.fetch".to_string()].into_iter().collect()));
+    }
+
+    #[test]
+    fn scopes_of_returns_none_for_a_lead_not_on_the_given_roster() {
+        let roster = sample_roster();
+        assert_eq!(scopes_of(&roster, "packlead"), None);
+    }
+
+    #[test]
+    fn mission_controls_shown_for_each_phase() {
+        assert!(controls_for_phase(TeamMissionPhase::Planning).is_empty());
+        assert_eq!(controls_for_phase(TeamMissionPhase::Executing), vec!["pause", "abort"]);
+        assert_eq!(controls_for_phase(TeamMissionPhase::Paused), vec!["resume"]);
+        assert_eq!(controls_for_phase(TeamMissionPhase::AwaitingApproval), vec!["gate"]);
+        assert!(controls_for_phase(TeamMissionPhase::Done).is_empty());
+        assert!(controls_for_phase(TeamMissionPhase::Rejected).is_empty());
+        assert!(controls_for_phase(TeamMissionPhase::Halted).is_empty());
     }
 }
 
@@ -5304,12 +6249,7 @@ fn TeamsPanel() -> Element {
     };
 
     // The lead's declared scopes — for the NT-02 "inert" hint on specialists.
-    let lead_scopes: std::collections::HashSet<String> = team
-        .members
-        .iter()
-        .find(|m| m.name == team.lead)
-        .map(|m| m.capability_scopes.iter().cloned().collect())
-        .unwrap_or_default();
+    let lead_scopes = lead_scopes(&team);
     let specialist_count = team.members.iter().filter(|m| m.name != team.lead).count();
     let active = missions()
         .iter()
@@ -6015,6 +6955,7 @@ async fn ws_task(
     transcript: Signal<Vec<ChatLine>>,
     streaming: Signal<String>,
     gate: Signal<Option<GateInfo>>,
+    mission_ui: Signal<MissionControlUi>,
 ) {
     // Vitrine walkthrough fix (2026-07-05, third operator casualty): a
     // daemon restart used to END this task — the socket died, `connected`
@@ -6048,7 +6989,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
             teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            connected, session, transcript, streaming, gate,
+            connected, session, transcript, streaming, gate, mission_ui,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -6148,6 +7089,7 @@ async fn read_task(
     mut transcript: Signal<Vec<ChatLine>>,
     mut streaming: Signal<String>,
     mut gate: Signal<Option<GateInfo>>,
+    mut mission_ui: Signal<MissionControlUi>,
 ) {
     {
         while let Some(Ok(Message::Text(text))) = read.next().await {
@@ -6600,6 +7542,38 @@ async fn read_task(
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-teams") => {
                     teams.write().notice = Some((false, message));
+                }
+                // Chapter Mission Control — an abort/pause/resume rejected by
+                // the daemon (e.g. resume on a mission that isn't paused).
+                // Ids are prefixed `mc-abort`/`mc-pause`/`mc-resume` so it
+                // lands on the Mission Control banner, not silently dropped.
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-abort") || id.starts_with("mc-pause") || id.starts_with("mc-resume") => {
+                    mission_ui.write().notice = Some((false, message));
+                }
+                // Chapter Mission Control — the abort/pause requests
+                // succeeded (they always do once the daemon accepts them;
+                // the mission itself halts/pauses asynchronously at its
+                // next wave boundary, reflected later via the existing
+                // `TeamMissionUpdated` broadcast, not here).
+                DaemonEnvelope::QueryResponse {
+                    payload:
+                        QueryResponsePayload::TeamMissionAborted { message, .. }
+                        | QueryResponsePayload::TeamMissionPaused { message, .. },
+                    ..
+                } => {
+                    mission_ui.write().notice = Some((true, message));
+                }
+                // Chapter Mission Control — the resume succeeded; the
+                // mission moves back to `Executing` and drives in the
+                // background (again reflected via `TeamMissionUpdated`).
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::TeamMissionResumed { phase, .. },
+                    ..
+                } => {
+                    mission_ui.write().notice = Some((true, format!("Resumed — now {}.", phase_label(phase))));
                 }
                 DaemonEnvelope::StreamEvent { event, .. } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),

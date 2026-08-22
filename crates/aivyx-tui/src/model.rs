@@ -961,9 +961,30 @@ mod tests {
             halt_reason: None,
             progress: 33,
             steps: vec![
-                TeamStepView { label: "research — researcher (delegate)".into(), state: TeamStepState::Done },
-                TeamStepView { label: "approve — reviewer (gate)".into(), state: TeamStepState::Awaiting },
-                TeamStepView { label: "write — writer (delegate)".into(), state: TeamStepState::Pending },
+                TeamStepView {
+                    label: "research — researcher (delegate)".into(),
+                    state: TeamStepState::Done,
+                    step_id: "research".into(),
+                    member: "researcher".into(),
+                    kind: "delegate".into(),
+                    deps: vec![],
+                },
+                TeamStepView {
+                    label: "approve — reviewer (gate)".into(),
+                    state: TeamStepState::Awaiting,
+                    step_id: "approve".into(),
+                    member: "reviewer".into(),
+                    kind: "gate".into(),
+                    deps: vec!["research".into()],
+                },
+                TeamStepView {
+                    label: "write — writer (delegate)".into(),
+                    state: TeamStepState::Pending,
+                    step_id: "write".into(),
+                    member: "writer".into(),
+                    kind: "delegate".into(),
+                    deps: vec!["approve".into()],
+                },
             ],
         };
         let rows = mission_rows_from_views(vec![view]);
@@ -1007,6 +1028,10 @@ mod tests {
             steps: vec![TeamStepView {
                 label: "approve — reviewer (gate)".into(),
                 state: TeamStepState::Rejected,
+                step_id: "approve".into(),
+                member: "reviewer".into(),
+                kind: "gate".into(),
+                deps: vec![],
             }],
         };
         let rows = mission_rows_from_views(vec![view]);
