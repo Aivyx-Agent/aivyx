@@ -169,6 +169,7 @@ dependencies = [
  "aivyx-slack",
  "aivyx-storage",
  "aivyx-team",
+ "aivyx-team-types",
  "aivyx-telegram",
  "aivyx-voice",
  "async-trait",

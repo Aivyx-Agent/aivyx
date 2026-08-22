@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::team_mission::{
-    list_team_missions, save_team_mission, TeamMissionPhase, TeamMissionRecord,
+    list_team_missions, save_team_mission, TeamMissionPhase, TeamMissionRecord, TeamStepState,
 };
 use aivyx_storage::DomainHandle;
 
@@ -165,6 +165,20 @@ pub struct SharedMissionState {
     /// wave boundary; `request_abort` sets it. Not persisted (a flag is
     /// meaningless across a restart — an interrupted mission re-drives fresh).
     abort_flags: Arc<RwLock<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Chapter Mission Control — which step id is currently executing, keyed
+    /// by mission id. Same "runtime-only, not persisted" rationale as
+    /// `abort_flags`: a step "running" when the daemon crashed simply isn't
+    /// running after a restart, and the checkpoint (`TeamMissionRecord::
+    /// outputs`) has no business knowing about it. Read by
+    /// `broadcast_live_view` to build a live `TeamMissionView`; never
+    /// written into a record's own `outputs`.
+    running_steps: Arc<RwLock<std::collections::HashMap<String, String>>>,
+    /// Chapter Mission Control — the Web UI broadcaster, if the daemon has
+    /// one configured (`None` for a daemon with no Web UI server running).
+    /// `mark_running`/`clear_running` no-op the broadcast half when this is
+    /// `None`, matching how `budget_guard: Option<...>` already makes the
+    /// Ballast check a no-op when unset.
+    broadcaster: Option<Arc<crate::notify_webui::WebUiBroadcaster>>,
 }
 
 impl SharedMissionState {
@@ -175,7 +189,63 @@ impl SharedMissionState {
             store,
             registry: Arc::new(RwLock::new(BTreeMap::new())),
             abort_flags: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            running_steps: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            broadcaster: None,
         }
+    }
+
+    /// Chapter Mission Control — attach a Web UI broadcaster so live
+    /// step-state changes are pushed to connected Mission Control clients.
+    /// Builder-style, matching this codebase's own established shape for an
+    /// optional cross-cutting collaborator (e.g. `SpecialistFactory::
+    /// with_kv_cache`/`with_checkpointer` in `aivyx-team`). Omit for daemon
+    /// configurations with no Web UI server — `mark_running`/`clear_running`
+    /// stay silent no-ops in that case.
+    pub fn with_broadcaster(mut self, broadcaster: Arc<crate::notify_webui::WebUiBroadcaster>) -> Self {
+        self.broadcaster = Some(broadcaster);
+        self
+    }
+
+    /// Chapter Mission Control — mark `step_id` as the currently-executing
+    /// step for mission `id`, then broadcast the mission's live view. Called
+    /// by `RegistryObserver::on_step_started`.
+    pub(crate) fn mark_running(&self, id: &str, step_id: &str) {
+        self.running_steps
+            .write()
+            .expect("running steps lock")
+            .insert(id.to_string(), step_id.to_string());
+        self.broadcast_live_view(id);
+    }
+
+    /// Chapter Mission Control — clear `id`'s running-step marker (a step
+    /// finished, a gate resolved, or the mission's drive ended) and
+    /// broadcast the update. A no-op removal (nothing was marked running)
+    /// is fine — the broadcast still fires, reflecting whatever the record's
+    /// current state actually is. Called by `RegistryObserver::
+    /// on_step_completed`/`on_gate`, and once more at the end of `drive`
+    /// mirroring `disarm_abort`'s own cleanup-on-drive-end call.
+    pub(crate) fn clear_running(&self, id: &str) {
+        self.running_steps.write().expect("running steps lock").remove(id);
+        self.broadcast_live_view(id);
+    }
+
+    /// Chapter Mission Control — project `id`'s current record (with
+    /// whatever running-step marker is currently set, if any) and push it
+    /// onto the broadcaster. Silently does nothing if no broadcaster is
+    /// configured, or if `id` isn't a known mission (e.g. a race against a
+    /// mission that was just deleted — not a real scenario today, but a
+    /// defensive no-op costs nothing here).
+    fn broadcast_live_view(&self, id: &str) {
+        let Some(broadcaster) = &self.broadcaster else { return };
+        let Some(record) = self.snapshot(id) else { return };
+        let running = self
+            .running_steps
+            .read()
+            .expect("running steps lock")
+            .get(id)
+            .cloned();
+        let view = record.to_view_with_running(running.as_deref());
+        let _ = broadcaster.broadcast(crate::notify_webui::WebUiBroadcastFrame::TeamMissionUpdated(view));
     }
 
     /// Chapter Belay — arm a fresh abort flag for an executing mission and
@@ -1927,6 +1997,74 @@ mod tests {
         // Operator abort → the runtime's wave-boundary check halts the mission.
         flag.store(true, Ordering::SeqCst);
         assert_eq!(obs.should_halt(), Some("aborted by operator".to_string()));
+    }
+
+    #[tokio::test]
+    async fn with_broadcaster_is_none_by_default_and_broadcast_live_view_is_a_silent_noop() {
+        let shared = SharedMissionState::new(team_domain().await);
+        // No broadcaster configured -- must not panic, must not error.
+        shared.mark_running("missing-mission", "step-a");
+        shared.clear_running("missing-mission");
+    }
+
+    #[tokio::test]
+    async fn mark_running_then_clear_running_round_trips_through_a_broadcast() {
+        use crate::notify_webui::{WebUiBroadcastFrame, WebUiBroadcaster};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+
+        // Seed a real mission record so broadcast_live_view has something
+        // to project.
+        let plan = aivyx_team_types::MissionPlan::new(
+            "goal",
+            vec![aivyx_team_types::Step::delegate("a", "specialist", "do a")],
+        );
+        let record = TeamMissionRecord::new("m1", "goal", plan);
+        shared.put(record).await.expect("put");
+
+        shared.mark_running("m1", "a");
+        match rx.recv().await.expect("recv running") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.id, "m1");
+                assert_eq!(view.steps[0].state, TeamStepState::Running);
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+
+        shared.clear_running("m1");
+        match rx.recv().await.expect("recv cleared") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.steps[0].state, TeamStepState::Pending, "no longer running");
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_running_on_a_mission_with_no_running_marker_is_a_noop_broadcast() {
+        // Clearing a mission that was never marked running still broadcasts
+        // its current (unchanged) view -- this is fine and expected (Task 4
+        // relies on it: on_step_completed/on_gate always call clear_running
+        // unconditionally, whether or not on_step_started happened to run
+        // first).
+        use crate::notify_webui::{WebUiBroadcastFrame, WebUiBroadcaster};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+        let plan = aivyx_team_types::MissionPlan::new(
+            "goal",
+            vec![aivyx_team_types::Step::delegate("a", "specialist", "do a")],
+        );
+        shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+
+        shared.clear_running("m1");
+        match rx.recv().await.expect("recv") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.steps[0].state, TeamStepState::Pending);
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
     }
 
     #[test]
