@@ -91,6 +91,12 @@ type Sender = Coroutine<FrontendMessage>;
 enum View {
     Command,
     Missions,
+    /// Chapter Mission Control — a live view of ONE active mission's
+    /// LEAD/specialist graph, with drill-in and controls (approve/reject,
+    /// abort, pause/resume). Distinct from `Missions` (a flat list/history
+    /// plus a "start a new mission" bar) — this is the deep-dive,
+    /// one-mission-at-a-time surface.
+    MissionControl,
     /// Chapter Chime — cron routines: config/operator/agent-created
     /// schedules, with create/toggle/delete + the agent-proposal
     /// approval flow.
@@ -134,10 +140,11 @@ enum View {
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 19] = [
+    const ALL: [View; 20] = [
         View::Command,
         View::Chat,
         View::Missions,
+        View::MissionControl,
         View::Schedules,
         View::Notifications,
         View::Memory,
@@ -161,6 +168,7 @@ impl View {
         match self {
             View::Command => "command",
             View::Missions => "missions",
+            View::MissionControl => "mission-control",
             View::Schedules => "schedules",
             View::Notifications => "notifications",
             View::Chat => "chat",
@@ -191,6 +199,7 @@ impl View {
         match self {
             View::Command => "Command",
             View::Missions => "Missions",
+            View::MissionControl => "Mission Control",
             View::Schedules => "Schedules",
             View::Notifications => "Notifications",
             View::Chat => "Chat",
@@ -616,6 +625,10 @@ fn App() -> Element {
     let transcript = use_signal(Vec::<ChatLine>::new);
     let streaming = use_signal(String::new);
     let gate = use_signal(|| None::<GateInfo>);
+    // Chapter Mission Control — pure UI-navigation state (which mission's
+    // graph is currently open); never written by `ws_task`'s coroutine, so
+    // deliberately not threaded into its parameter list below.
+    let selected_mission = use_signal(|| None::<String>);
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
@@ -656,6 +669,7 @@ fn App() -> Element {
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
     use_context_provider(|| gate);
+    use_context_provider(|| selected_mission);
 
     // Reflect the theme signal onto `<html data-theme>`.
     use_effect(move || apply_theme(light()));
@@ -747,6 +761,7 @@ fn App() -> Element {
     let title = match view() {
         View::Command => "Command Center",
         View::Missions => "Mission Orchestration",
+        View::MissionControl => "Mission Control",
         View::Schedules => "Schedules",
         View::Notifications => "Notifications",
         View::Chat => "Terminal",
@@ -792,6 +807,9 @@ fn App() -> Element {
                             CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected() }
                         },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
+                        View::MissionControl => rsx! {
+                            MissionControlPanel { missions: missions(), selected_mission }
+                        },
                         View::Schedules => rsx! { SchedulesPanel {} },
                         View::Notifications => rsx! { NotificationsPanel {} },
                         View::Chat => rsx! { ChatPanel {} },
@@ -937,6 +955,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             vec![
                 (ICON_CHAT, "Chat", View::Chat),
                 (ICON_MISSIONS, "Missions", View::Missions),
+                (ICON_MISSIONS, "Mission Control", View::MissionControl),
                 (ICON_SCHEDULES, "Schedules", View::Schedules),
             ],
         ),
@@ -2062,6 +2081,61 @@ fn GateControls(mission_id: String, step: String) -> Element {
                 onclick: move |_| ws.send(resolve_team_query(reject.0.clone(), reject.1.clone(), false)),
                 "Reject"
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mission Control view — one active mission's LEAD/specialist graph
+// (selector only in this task; the real graph is a later chapter task).
+// ---------------------------------------------------------------------------
+
+#[component]
+fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<Option<String>>) -> Element {
+    let watchable = watchable_missions(&missions);
+    let Some(current_id) = selected_mission() else {
+        return rsx! {
+            div { class: "mission-control",
+                div { class: "panel-head", h3 { "Mission Control" } }
+                if watchable.is_empty() {
+                    div { class: "empty card",
+                        p { "No mission is currently executing, paused, or awaiting approval." }
+                        p { class: "label-tech", "Start one from the Missions screen." }
+                    }
+                } else {
+                    div { class: "mission-picker",
+                        for m in watchable.iter() {
+                            button {
+                                class: "glass-card mission-pick",
+                                key: "{m.id}",
+                                onclick: {
+                                    let id = m.id.clone();
+                                    move |_| selected_mission.set(Some(id.clone()))
+                                },
+                                span { class: "chip {phase_class(m.phase)}", "{phase_label(m.phase)}" }
+                                span { class: "goal", "{m.goal}" }
+                                span { class: "lead label-tech", "{m.lead}" }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    };
+    // If the selected mission is no longer watchable (finished/halted
+    // while this view was open), fall back to the selector rather than
+    // showing a stale/missing graph.
+    let Some(current) = watchable.iter().find(|m| m.id == current_id) else {
+        selected_mission.set(None);
+        return rsx! { div { class: "mission-control", "…" } };
+    };
+    rsx! {
+        div { class: "mission-control",
+            div { class: "panel-head",
+                h3 { "Mission Control" }
+                button { class: "btn btn-ghost", onclick: move |_| selected_mission.set(None), "← All missions" }
+            }
+            div { class: "glass-card", "{current.goal}" }
         }
     }
 }
@@ -5124,6 +5198,25 @@ fn upsert_mission_view(missions: &mut Vec<TeamMissionView>, updated: TeamMission
     }
 }
 
+/// Chapter Mission Control — which missions this view's selector offers:
+/// genuinely worth watching or acting on right now. Narrower than the
+/// Command Center's own "Active" stat (which also counts `Halted`, since
+/// that's a general dashboard metric) — a `Halted` mission has nothing
+/// left to watch or resume, so it's excluded here.
+fn watchable_missions(missions: &[TeamMissionView]) -> Vec<&TeamMissionView> {
+    missions
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.phase,
+                TeamMissionPhase::Executing
+                    | TeamMissionPhase::Paused
+                    | TeamMissionPhase::AwaitingApproval
+            )
+        })
+        .collect()
+}
+
 /// Chapter Mission Control — per-mission set of step INDICES (position in
 /// `TeamMissionView.steps`) the daemon's last broadcast said are running
 /// right now. Fed by `DaemonEnvelope::TeamMissionUpdated`; re-applied by
@@ -5257,6 +5350,27 @@ mod mission_control_tests {
         apply_running_overlay(&mut views, &mut overlay);
         assert_eq!(views[0].steps[0].state, TeamStepState::Running);
         assert!(overlay.contains_key("m1"), "still tracked -- still pending after overlay applied");
+    }
+
+    #[test]
+    fn watchable_missions_excludes_terminal_and_halted() {
+        let mut done = view("m1", 100);
+        done.phase = TeamMissionPhase::Done;
+        let mut rejected = view("m2", 0);
+        rejected.phase = TeamMissionPhase::Rejected;
+        let mut halted = view("m3", 50);
+        halted.phase = TeamMissionPhase::Halted;
+        let mut executing = view("m4", 20);
+        executing.phase = TeamMissionPhase::Executing;
+        let mut paused = view("m5", 60);
+        paused.phase = TeamMissionPhase::Paused;
+        let mut awaiting = view("m6", 40);
+        awaiting.phase = TeamMissionPhase::AwaitingApproval;
+
+        let all = vec![done, rejected, halted, executing.clone(), paused.clone(), awaiting.clone()];
+        let watchable = watchable_missions(&all);
+        let ids: Vec<&str> = watchable.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m4", "m5", "m6"], "only Executing/Paused/AwaitingApproval, in original order");
     }
 
     #[test]
