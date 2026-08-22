@@ -130,12 +130,28 @@ impl TeamMissionRecord {
         self.updated_at_unix_ms = now_millis();
     }
 
-    /// Project this record onto the client-agnostic [`TeamMissionView`] (Chapter
-    /// L.6) — the **driver seam**: per-step state is derived from the checkpoint
-    /// here, where the engine types are in scope, so a client (TUI rows, the
-    /// browser GUI) maps `TeamMissionView` without touching `MissionPlan` /
-    /// `StepKind`.
+    /// Project this record onto the client-agnostic [`TeamMissionView`]
+    /// (Chapter L.6), with no running-step overlay. Delegates to
+    /// [`to_view_with_running`](Self::to_view_with_running) — see it for the
+    /// full derivation. Every existing caller uses this; it never shows
+    /// [`TeamStepState::Running`], since the checkpoint alone (a
+    /// `TeamMissionRecord`'s own fields) has no notion of "executing right
+    /// now" — that lives only in the daemon's in-memory driver state
+    /// (`SharedMissionState::running_steps` in `aivyx-channel`), which this
+    /// method has no access to.
     pub fn to_view(&self) -> TeamMissionView {
+        self.to_view_with_running(None)
+    }
+
+    /// Chapter Mission Control — like [`to_view`](Self::to_view), but
+    /// overlays [`TeamStepState::Running`] onto `running_step`'s step id, if
+    /// given. `running_step` should come from the daemon's own live
+    /// in-memory tracking (never from anything persisted) — a wasm client
+    /// projecting a bare `TeamMissionRecord` it already has has no way to
+    /// supply a meaningful value here and should keep calling plain
+    /// `to_view()`; only the daemon, building a `TeamMissionView` to
+    /// broadcast, has the live signal in scope.
+    pub fn to_view_with_running(&self, running_step: Option<&str>) -> TeamMissionView {
         let steps: Vec<TeamStepView> = self
             .plan
             .steps
@@ -147,7 +163,7 @@ impl TeamMissionRecord {
                 };
                 TeamStepView {
                     label: format!("{} — {member} ({kind})", step.id),
-                    state: self.step_state(&step.id),
+                    state: self.step_state(&step.id, running_step),
                 }
             })
             .collect();
@@ -172,12 +188,19 @@ impl TeamMissionRecord {
         }
     }
 
-    /// The operator-facing state of one step, derived from the checkpoint: the
-    /// pending human gate is `Awaiting`; a step whose output marks a rejection
-    /// is `Rejected`; any other completed step is `Done`; the rest `Pending`.
-    fn step_state(&self, step_id: &str) -> TeamStepState {
+    /// The operator-facing state of one step, derived from the checkpoint
+    /// plus an optional live running-step overlay. Precedence, highest
+    /// first: a pending human gate is always `Awaiting` (even if
+    /// `running_step` stale-matches it — a step paused for operator input is
+    /// never "running"); then `running_step`'s own match is `Running`; then
+    /// the checkpoint: a rejected output is `Rejected`, any other output is
+    /// `Done`, no output is `Pending`.
+    fn step_state(&self, step_id: &str, running_step: Option<&str>) -> TeamStepState {
         if self.pending_gate.as_deref() == Some(step_id) {
             return TeamStepState::Awaiting;
+        }
+        if running_step == Some(step_id) {
+            return TeamStepState::Running;
         }
         match self.outputs.get(step_id) {
             Some(v) if v.starts_with("rejected") => TeamStepState::Rejected,
@@ -224,6 +247,12 @@ pub struct TeamStepView {
 pub enum TeamStepState {
     /// Not yet run.
     Pending,
+    /// Chapter Mission Control — the driver has started this step and it
+    /// hasn't finished yet. Set/cleared in-memory only, never persisted
+    /// (see `SharedMissionState`'s `running_steps` field in
+    /// `aivyx-channel`); a plain `to_view()` (no live signal available)
+    /// never produces this variant.
+    Running,
     /// Completed (its output is in the checkpoint).
     Done,
     /// The human gate awaiting an operator decision.
@@ -296,5 +325,40 @@ mod tests {
         let back: TeamMissionRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back, rec);
         assert!(back.plan.step("approve").unwrap().is_human_gate());
+    }
+
+    #[test]
+    fn to_view_with_running_marks_the_given_step_running() {
+        let rec = sample("v1");
+        let view = rec.to_view_with_running(Some("order"));
+        assert_eq!(view.steps[0].state, TeamStepState::Done, "count unaffected");
+        assert_eq!(view.steps[1].state, TeamStepState::Awaiting, "approve unaffected");
+        assert_eq!(view.steps[2].state, TeamStepState::Running, "order is now running");
+    }
+
+    #[test]
+    fn to_view_with_running_never_overrides_a_pending_gate() {
+        // "approve" is the mission's pending_gate. A stale running-step
+        // marker for it (e.g. left over from on_step_started firing before
+        // the human-gate pause) must NOT surface as Running -- Awaiting
+        // always wins, matching step_state()'s existing precedence.
+        let rec = sample("v1");
+        let view = rec.to_view_with_running(Some("approve"));
+        assert_eq!(view.steps[1].state, TeamStepState::Awaiting);
+    }
+
+    #[test]
+    fn to_view_with_running_of_none_matches_plain_to_view() {
+        let rec = sample("v1");
+        assert_eq!(rec.to_view_with_running(None), rec.to_view());
+    }
+
+    #[test]
+    fn to_view_still_shows_no_running_step_at_all() {
+        // Unchanged behavior for every existing caller: to_view() never
+        // shows Running, since it never knows about the live signal.
+        let rec = sample("v1");
+        let view = rec.to_view();
+        assert!(view.steps.iter().all(|s| s.state != TeamStepState::Running));
     }
 }

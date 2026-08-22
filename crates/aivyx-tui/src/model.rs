@@ -268,6 +268,7 @@ fn phase_from(p: TeamMissionPhase) -> MissionPhase {
 fn step_state_from(s: TeamStepState) -> StepState {
     match s {
         TeamStepState::Pending => StepState::Pending,
+        TeamStepState::Running => StepState::Running,
         TeamStepState::Done => StepState::Done,
         TeamStepState::Awaiting => StepState::Gated,
         TeamStepState::Rejected => StepState::Failed,
