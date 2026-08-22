@@ -717,6 +717,51 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 }
 .mem-node:hover text { fill: var(--color-primary); }
 
+/* ── Mission Control (Chapter Mission Control) — LEAD-centric graph. ── */
+.mission-control { display: flex; flex-direction: column; gap: 14px; }
+.mission-control .row1 { display: flex; gap: 12px; align-items: baseline; }
+.mission-control .goal { flex: 1; font-weight: 500; color: var(--color-text-primary); }
+.mission-control .lead { white-space: nowrap; color: var(--color-text-secondary); }
+.mission-control .step { color: var(--color-text-secondary); }
+
+.mission-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.mission-pick {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  text-align: left; cursor: pointer; font: inherit; color: inherit; width: 100%;
+}
+.mission-pick:hover { border-color: var(--color-primary); }
+
+.mission-graph { padding: 12px; }
+.mission-graph-svg { width: 100%; height: auto; display: block; }
+.mission-edge { stroke: var(--color-secondary); stroke-width: 1.4; opacity: 0.55; }
+.mission-arrowhead { fill: var(--color-secondary); opacity: 0.7; }
+.mission-node { cursor: pointer; }
+.mission-node circle {
+  fill: var(--color-secondary-dim); stroke: var(--color-secondary);
+  stroke-width: 1.5; transition: fill 0.15s, stroke 0.15s;
+}
+.mission-node.amber circle { stroke: var(--color-warning); }
+.mission-node.sage circle { stroke: var(--color-sage); }
+.mission-node.error circle { stroke: var(--color-error); }
+.mission-node.lead circle { stroke-width: 3; }
+.mission-node.off-roster circle { stroke-dasharray: 4 3; }
+.mission-node.selected circle { fill: var(--color-primary); stroke: var(--color-primary); }
+.mission-node text {
+  font-family: var(--font-mono); font-size: 11px; fill: var(--color-text-secondary);
+  pointer-events: none;
+}
+.mission-node:hover text { fill: var(--color-primary); }
+.mission-node-badge {
+  font-family: var(--font-mono); font-size: 8px; font-weight: 700;
+  fill: var(--color-primary); letter-spacing: 0.05em; pointer-events: none;
+}
+
+.mission-controls { display: flex; gap: 8px; align-items: center; }
+
+.drill-in { display: flex; flex-direction: column; gap: 8px; }
+.scopes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.inert-hint, .roster-hint { color: var(--color-warning); }
+
 /* ── Chapter Genesis — onboarding flow (GE.3) ── */
 .view-stack { display: flex; flex-direction: column; gap: 16px; }
 .field-label {

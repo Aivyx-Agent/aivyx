@@ -18,6 +18,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
   `aivyx team pause <id>` requests a graceful pause at the mission's next
   wave boundary — unlike abort, this is resumable. `aivyx team resume
   <id>` continues a paused mission from its preserved checkpoint.
+- **A Mission Control screen (`aivyx-web`, Chapter Mission Control).** A
+  new "Mission Control" nav destination shows one active mission's
+  LEAD/specialist graph live — click a specialist to drill in (current
+  step, declared capability scopes, the NT-02 "inert" hint) — plus the
+  first UI controls for gate approve/reject, abort, and the new
+  pause/resume.
 
 ### Changed
 
