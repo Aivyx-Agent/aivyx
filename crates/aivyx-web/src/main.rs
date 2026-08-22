@@ -2092,6 +2092,11 @@ fn GateControls(mission_id: String, step: String) -> Element {
 
 #[component]
 fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<Option<String>>) -> Element {
+    let ws = use_context::<Sender>();
+    let teams = use_context::<Signal<TeamsState>>();
+    use_effect(move || {
+        ws.send(get_team_roster_query());
+    });
     let watchable = watchable_missions(&missions);
     let Some(current_id) = selected_mission() else {
         return rsx! {
@@ -2129,15 +2134,82 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
         selected_mission.set(None);
         return rsx! { div { class: "mission-control", "…" } };
     };
+    let Some(roster) = teams().roster else {
+        return rsx! {
+            div { class: "mission-control",
+                div { class: "panel-head", h3 { "Mission Control" } }
+                SkeletonList { rows: 3 }
+            }
+        };
+    };
+    let graph = build_mission_graph(current, &roster);
+    let mut selected_node = use_signal(|| None::<String>);
     rsx! {
         div { class: "mission-control",
             div { class: "panel-head",
                 h3 { "Mission Control" }
                 button { class: "btn btn-ghost", onclick: move |_| selected_mission.set(None), "← All missions" }
             }
-            div { class: "glass-card", "{current.goal}" }
+            div { class: "row1",
+                span { class: "chip {phase_class(current.phase)}", "{phase_label(current.phase)}" }
+                span { class: "goal", "{current.goal}" }
+            }
+            div { class: "mission-graph",
+                div { class: "mission-graph-lead" }
+                for node in graph.nodes.iter() {
+                    MissionGraphNodeCard {
+                        key: "{node.name}",
+                        node: node.clone(),
+                        selected: selected_node() == Some(node.name.clone()),
+                        onclick: {
+                            let name = node.name.clone();
+                            move |_| selected_node.set(Some(name.clone()))
+                        },
+                    }
+                }
+            }
+            MissionControls { mission: (*current).clone() }
+            if let Some(name) = selected_node() {
+                if let Some(node) = graph.nodes.iter().find(|n| n.name == name) {
+                    SpecialistDrillIn { node: node.clone(), roster: roster.clone(), mission: (*current).clone() }
+                }
+            }
         }
     }
+}
+
+#[component]
+fn MissionGraphNodeCard(node: MissionGraphNode, selected: bool, onclick: EventHandler<MouseEvent>) -> Element {
+    let state_class = match node.state {
+        TeamStepState::Running => "amber",
+        TeamStepState::Awaiting => "amber",
+        TeamStepState::Rejected => "error",
+        TeamStepState::Done => "sage",
+        TeamStepState::Pending => "",
+    };
+    rsx! {
+        button {
+            class: if selected { "glass-card mission-node selected" } else { "glass-card mission-node" },
+            onclick: move |e| onclick.call(e),
+            span { class: "chip {state_class}", if node.is_lead { "LEAD" } else { "specialist" } }
+            span { class: "goal", "{node.name}" }
+            if let Some(step) = &node.current_step {
+                span { class: "step label-tech", "running: {step}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn MissionControls(mission: TeamMissionView) -> Element {
+    let _ = mission;
+    rsx! { div {} }
+}
+
+#[component]
+fn SpecialistDrillIn(node: MissionGraphNode, roster: TeamConfig, mission: TeamMissionView) -> Element {
+    let _ = (node, roster, mission);
+    rsx! { div {} }
 }
 
 // ---------------------------------------------------------------------------
