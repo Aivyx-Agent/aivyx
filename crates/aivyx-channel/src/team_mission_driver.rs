@@ -1240,6 +1240,12 @@ async fn drive(
     shared.put(record).await?;
     // Chapter Belay — the drive is over; drop the abort flag.
     shared.disarm_abort(id);
+    // Chapter Mission Control — belt-and-braces: every step that starts
+    // should already clear its own running marker via on_step_completed/
+    // on_gate, but this guarantees no stale entry survives past the
+    // drive's own end (and broadcasts the mission's final phase either
+    // way), mirroring disarm_abort's own cleanup-on-drive-end call above.
+    shared.clear_running(id);
     Ok(phase)
 }
 
@@ -1260,10 +1266,21 @@ struct RegistryObserver {
 }
 
 impl MissionObserver for RegistryObserver {
+    /// Chapter Mission Control — the runtime is about to run this step's
+    /// specialist/reviewer sub-turn. Marks it running (broadcasts
+    /// immediately); if this step turns out to be a human gate that pauses
+    /// the mission, `step_state`'s own pending-gate precedence (Task 1)
+    /// keeps it showing `Awaiting`, not `Running`, regardless of this
+    /// marker's stale presence until the gate resolves.
+    fn on_step_started(&self, step_id: &str, _member: &str) {
+        self.shared.mark_running(&self.id, step_id);
+    }
+
     fn on_step_completed(&self, step_id: &str, output: &str) {
         self.shared.touch_in_memory(&self.id, |r| {
             r.outputs.insert(step_id.to_string(), output.to_string());
         });
+        self.shared.clear_running(&self.id);
         let _ = self.tx.send(());
     }
 
@@ -1271,6 +1288,7 @@ impl MissionObserver for RegistryObserver {
         self.shared.touch_in_memory(&self.id, |r| {
             r.outputs.insert(step_id.to_string(), verdict.to_string());
         });
+        self.shared.clear_running(&self.id);
         let _ = self.tx.send(());
     }
 
@@ -1997,6 +2015,45 @@ mod tests {
         // Operator abort → the runtime's wave-boundary check halts the mission.
         flag.store(true, Ordering::SeqCst);
         assert_eq!(obs.should_halt(), Some("aborted by operator".to_string()));
+    }
+
+    #[tokio::test]
+    async fn on_step_started_marks_running_then_completion_clears_it() {
+        use crate::notify_webui::{WebUiBroadcastFrame, WebUiBroadcaster};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+
+        let (tx, _rx_ping) = mpsc::unbounded_channel();
+        let observer = RegistryObserver {
+            shared: shared.clone(),
+            id: "m1".to_string(),
+            tx,
+            budget_guard: None,
+            abort: None,
+        };
+
+        observer.on_step_started("a", "specialist");
+        match rx.recv().await.expect("recv running") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.steps[0].state, TeamStepState::Running);
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+
+        observer.on_step_completed("a", "done output");
+        match rx.recv().await.expect("recv completed") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(
+                    view.steps[0].state,
+                    TeamStepState::Done,
+                    "cleared running, checkpoint now shows Done"
+                );
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
     }
 
     #[tokio::test]
