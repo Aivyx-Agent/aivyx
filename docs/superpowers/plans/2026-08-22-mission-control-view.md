@@ -781,6 +781,17 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
     use_effect(move || {
         ws.send(get_team_roster_query());
     });
+    // Chapter Mission Control — declared here, before either early
+    // return below, deliberately: Dioxus (like React) requires hooks to
+    // run in the same order on every render ("Rules of Hooks"). A
+    // `use_signal` call reachable only on SOME renders (e.g. placed
+    // after the `let Some(current) = ... else { return ... }` guards
+    // below) is a real correctness risk the moment a second conditional
+    // hook is ever added nearby, not just a style nit -- so it's hoisted
+    // above every early return in this function, unconditionally called
+    // on every render, even though it's only *read* in the branch below
+    // that actually reaches the graph.
+    let mut selected_node = use_signal(|| None::<String>);
     let watchable = watchable_missions(&missions);
 ```
 
@@ -809,7 +820,8 @@ guarded on the roster actually being loaded:
         };
     };
     let graph = build_mission_graph(current, &roster);
-    let mut selected_node = use_signal(|| None::<String>);
+    // selected_node is declared earlier in this function, above both
+    // early-return guards (see Step 1) -- not re-declared here.
     rsx! {
         div { class: "mission-control",
             div { class: "panel-head",
