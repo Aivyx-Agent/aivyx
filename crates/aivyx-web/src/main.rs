@@ -27,7 +27,7 @@ use aivyx_ipc::protocol::{
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
-    TeamStepState, TrustTier,
+    TeamStepState, TeamStepView, TrustTier,
 };
 use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 use aivyx_ipc::graph::{GraphEntity, GraphTriple};
@@ -5265,6 +5265,101 @@ fn apply_running_overlay(views: &mut [TeamMissionView], overlay: &mut HashMap<St
     }
 }
 
+/// Chapter Mission Control — one node in a mission's live graph: the LEAD
+/// or a specialist, with the "worst" (most attention-worthy) state across
+/// every step of theirs in this mission.
+#[derive(Debug, Clone, PartialEq)]
+struct MissionGraphNode {
+    name: String,
+    is_lead: bool,
+    state: TeamStepState,
+    /// The step id this node is currently `Running`, if any -- for the
+    /// drill-in panel (Task 5) to show "doing: <step>".
+    current_step: Option<String>,
+}
+
+/// Chapter Mission Control — one dependency edge between two steps
+/// (`TeamStepView::deps`, Task 1).
+#[derive(Debug, Clone, PartialEq)]
+struct MissionGraphEdge {
+    from_step: String,
+    to_step: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct MissionGraph {
+    nodes: Vec<MissionGraphNode>,
+    edges: Vec<MissionGraphEdge>,
+}
+
+/// Chapter Mission Control — the pure transform Task 4's rendering
+/// consumes: project one mission's live steps onto the team roster's real
+/// member list, so every roster member gets a node (including one with no
+/// step run yet -- genuinely idle, not merely absent from the DAG), and
+/// edges come from each step's real `deps` (Task 1), not from parsing
+/// `label`.
+fn build_mission_graph(mission: &TeamMissionView, roster: &TeamConfig) -> MissionGraph {
+    let nodes = roster
+        .members
+        .iter()
+        .map(|member| {
+            let member_steps: Vec<&TeamStepView> = mission
+                .steps
+                .iter()
+                .filter(|s| s.member == member.name)
+                .collect();
+            let state = step_state_priority(&member_steps);
+            let current_step = member_steps
+                .iter()
+                .find(|s| s.state == TeamStepState::Running)
+                .map(|s| s.step_id.clone());
+            MissionGraphNode {
+                name: member.name.clone(),
+                is_lead: member.name == roster.lead,
+                state,
+                current_step,
+            }
+        })
+        .collect();
+    let edges = mission
+        .steps
+        .iter()
+        .flat_map(|step| {
+            step.deps
+                .iter()
+                .map(move |dep| MissionGraphEdge { from_step: dep.clone(), to_step: step.step_id.clone() })
+        })
+        .collect();
+    MissionGraph { nodes, edges }
+}
+
+/// Chapter Mission Control — the single most attention-worthy state across
+/// a specialist's own steps in this mission, in priority order: `Running`
+/// (something's happening right now), then `Awaiting` (blocked on a
+/// decision), then `Pending` (still work to do, even if some of their
+/// steps are `Done`), then `Rejected`, then `Done` (only if every one of
+/// their steps is `Done`), and `Pending` again for genuinely idle (no
+/// steps at all). Priority order chosen so a specialist with mixed
+/// Done/Pending steps never reads as "finished."
+fn step_state_priority(steps: &[&TeamStepView]) -> TeamStepState {
+    if steps.is_empty() {
+        return TeamStepState::Pending;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Running) {
+        return TeamStepState::Running;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Awaiting) {
+        return TeamStepState::Awaiting;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Pending) {
+        return TeamStepState::Pending;
+    }
+    if steps.iter().any(|s| s.state == TeamStepState::Rejected) {
+        return TeamStepState::Rejected;
+    }
+    TeamStepState::Done
+}
+
 #[cfg(test)]
 mod mission_control_tests {
     use super::*;
@@ -5280,6 +5375,45 @@ mod mission_control_tests {
             halt_reason: None,
             progress,
             steps: vec![],
+        }
+    }
+
+    /// Verified real `TeamMember` shape (`crates/aivyx-team-types/src/config.rs`)
+    /// has 8 fields, not just `name`/`capability_scopes` — this literal
+    /// matches the exact construction pattern already used elsewhere in
+    /// this same file (`TeamsPanel`'s own "add specialist" button, which
+    /// pushes a `TeamMember { .. }` literal with all 8 fields).
+    fn sample_member(name: &str) -> TeamMember {
+        TeamMember {
+            name: name.to_string(),
+            role: "Specialist".to_string(),
+            soul: String::new(),
+            tool_allowlist: vec!["team.message".to_string()],
+            capability_scopes: vec![],
+            trust_ceiling: TrustTier::SemiTrusted,
+            model: None,
+            base_url: None,
+        }
+    }
+
+    /// `TeamConfig` also carries `name`/`description`/`dialogue`, not just
+    /// `lead`/`members` (verified against the real struct in
+    /// `crates/aivyx-team-types/src/config.rs`, which has no `Default` impl
+    /// of its own) -- `dialogue` uses `Default::default()` since
+    /// `DialogueConfig` itself does derive-free-`impl Default` but isn't
+    /// re-exported through `aivyx_ipc`, so it's inferred from the field's
+    /// type rather than named directly.
+    fn sample_roster() -> TeamConfig {
+        TeamConfig {
+            name: "test-team".to_string(),
+            description: String::new(),
+            lead: "coordinator".to_string(),
+            members: vec![
+                sample_member("coordinator"),
+                sample_member("inventory"),
+                sample_member("purchasing"),
+            ],
+            dialogue: Default::default(),
         }
     }
 
@@ -5392,6 +5526,60 @@ mod mission_control_tests {
         apply_running_overlay(&mut views, &mut overlay);
         assert_eq!(views[0].steps[0].state, TeamStepState::Done, "checkpoint wins, not overwritten");
         assert!(!overlay.contains_key("m1"), "pruned once resolved");
+    }
+
+    #[test]
+    fn build_mission_graph_has_one_node_per_roster_member_including_idle_ones() {
+        let mut m = view("v1", 33);
+        m.lead = "coordinator".to_string();
+        m.steps = vec![
+            TeamStepView { label: "count — inventory (delegate)".into(), state: TeamStepState::Running, step_id: "count".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+        ];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        // All 3 roster members get a node, even "purchasing" (idle -- no
+        // step of theirs has run or is running yet).
+        let names: Vec<&str> = graph.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"coordinator"));
+        assert!(names.contains(&"inventory"));
+        assert!(names.contains(&"purchasing"));
+        let lead_node = graph.nodes.iter().find(|n| n.name == "coordinator").unwrap();
+        assert!(lead_node.is_lead);
+        let inventory_node = graph.nodes.iter().find(|n| n.name == "inventory").unwrap();
+        assert!(!inventory_node.is_lead);
+        assert_eq!(inventory_node.state, TeamStepState::Running, "inventory is running the 'count' step");
+        let purchasing_node = graph.nodes.iter().find(|n| n.name == "purchasing").unwrap();
+        assert_eq!(purchasing_node.state, TeamStepState::Pending, "idle -- no step touches purchasing yet");
+    }
+
+    #[test]
+    fn build_mission_graph_edges_reflect_step_deps() {
+        let mut m = view("v1", 0);
+        m.steps = vec![
+            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "purchasing".into(), kind: "delegate".into(), deps: vec!["a".to_string()] },
+        ];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].from_step, "a");
+        assert_eq!(graph.edges[0].to_step, "b");
+    }
+
+    #[test]
+    fn build_mission_graph_a_specialist_with_multiple_steps_shows_the_most_attention_worthy_state() {
+        // A specialist who ran one step to Done and has another Pending
+        // should show Pending (still work to do), not Done (which would
+        // read as "finished" when they aren't).
+        let mut m = view("v1", 0);
+        m.steps = vec![
+            TeamStepView { label: "a".into(), state: TeamStepState::Done, step_id: "a".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec![] },
+            TeamStepView { label: "b".into(), state: TeamStepState::Pending, step_id: "b".into(), member: "inventory".into(), kind: "delegate".into(), deps: vec!["a".to_string()] },
+        ];
+        let roster = sample_roster();
+        let graph = build_mission_graph(&m, &roster);
+        let inventory_node = graph.nodes.iter().find(|n| n.name == "inventory").unwrap();
+        assert_eq!(inventory_node.state, TeamStepState::Pending);
     }
 }
 
