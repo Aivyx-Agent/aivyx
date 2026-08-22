@@ -5101,6 +5101,54 @@ fn phase_class(p: TeamMissionPhase) -> &'static str {
     }
 }
 
+/// Chapter Mission Control — apply a live `TeamMissionUpdated` broadcast to
+/// the current missions list: replace the entry with a matching id, or
+/// append it if this is a mission the client hasn't seen yet (e.g. it was
+/// created after the last poll). Pure and Signal-free so it's unit-testable
+/// without a Dioxus runtime.
+fn upsert_mission_view(missions: &mut Vec<TeamMissionView>, updated: TeamMissionView) {
+    if let Some(existing) = missions.iter_mut().find(|m| m.id == updated.id) {
+        *existing = updated;
+    } else {
+        missions.push(updated);
+    }
+}
+
+#[cfg(test)]
+mod mission_control_tests {
+    use super::*;
+
+    fn view(id: &str, progress: u16) -> TeamMissionView {
+        TeamMissionView {
+            id: id.to_string(),
+            goal: "goal".into(),
+            lead: "coordinator".into(),
+            phase: TeamMissionPhase::Executing,
+            pending_gate: None,
+            halt_reason: None,
+            progress,
+            steps: vec![],
+        }
+    }
+
+    #[test]
+    fn upsert_replaces_an_existing_mission_by_id() {
+        let mut missions = vec![view("m1", 10), view("m2", 50)];
+        upsert_mission_view(&mut missions, view("m1", 30));
+        assert_eq!(missions.len(), 2, "no duplicate inserted");
+        assert_eq!(missions[0].progress, 30);
+        assert_eq!(missions[1].progress, 50, "m2 untouched");
+    }
+
+    #[test]
+    fn upsert_appends_an_unseen_mission() {
+        let mut missions = vec![view("m1", 10)];
+        upsert_mission_view(&mut missions, view("m2", 0));
+        assert_eq!(missions.len(), 2);
+        assert_eq!(missions[1].id, "m2");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Teams — the Nonagon roster (Chapters Y read + Roster RO.3 edit). Renders the
 // daemon's active TeamConfig as an editable form: team name/description, the
@@ -6014,6 +6062,15 @@ async fn read_task(
                     ..
                 } => {
                     missions.set(records.iter().map(|r| r.to_view()).collect());
+                }
+                // Chapter Mission Control — a live push: apply it in place
+                // rather than waiting for the next poll. The poll above
+                // stays as-is (a reconnect/missed-broadcast reconciliation
+                // fallback), not removed.
+                DaemonEnvelope::TeamMissionUpdated { view } => {
+                    let mut current = missions();
+                    upsert_mission_view(&mut current, view);
+                    missions.set(current);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetTeamRoster { roster: cfg },
