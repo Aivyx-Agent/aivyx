@@ -1300,6 +1300,52 @@ pub async fn abort_team_mission(
     }
 }
 
+/// Chapter Mission Control — request that a running team mission pause
+/// (resumable, unlike abort). Returns the daemon's status message.
+pub async fn pause_team_mission(
+    socket_path: &Path,
+    mission_id: String,
+) -> Result<String, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "pause-team-mission",
+        QueryPayload::PauseTeamMission { mission_id },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::TeamMissionPaused { message, .. } => Ok(message),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamMissionPaused, got {other:?}"
+        ))),
+    }
+}
+
+/// Chapter Mission Control — resume a paused team mission. Returns the
+/// phase the resume moved it to (always `Executing`).
+pub async fn resume_team_mission(
+    socket_path: &Path,
+    mission_id: String,
+) -> Result<crate::team_mission::TeamMissionPhase, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "resume-team-mission",
+        QueryPayload::ResumeTeamMission { mission_id },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::TeamMissionResumed { phase, .. } => Ok(phase),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected TeamMissionResumed, got {other:?}"
+        ))),
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(

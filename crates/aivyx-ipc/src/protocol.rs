@@ -448,6 +448,18 @@ pub enum QueryPayload {
     AbortTeamMission {
         mission_id: String,
     },
+    /// Chapter Mission Control — request that a running mission pause at
+    /// its next wave boundary (resumable, unlike abort). Responds with
+    /// [`QueryResponsePayload::TeamMissionPaused`].
+    PauseTeamMission {
+        mission_id: String,
+    },
+    /// Chapter Mission Control — resume a paused mission; the resume
+    /// drives in the background. Responds with
+    /// [`QueryResponsePayload::TeamMissionResumed`].
+    ResumeTeamMission {
+        mission_id: String,
+    },
     /// Chapter U — read the daemon's effective config snapshot for the
     /// Settings screen: access level + resolved `fs_root` + confirm posture,
     /// provider / model / `num_ctx`, the `[budget]` caps, and whether an
@@ -1140,6 +1152,21 @@ pub enum QueryResponsePayload {
     TeamMissionAborted {
         mission_id: String,
         message: String,
+    },
+    /// Chapter Mission Control — response to
+    /// [`QueryPayload::PauseTeamMission`]. A short human-readable status
+    /// (the mission will pause at its next wave boundary).
+    TeamMissionPaused {
+        mission_id: String,
+        message: String,
+    },
+    /// Chapter Mission Control — response to
+    /// [`QueryPayload::ResumeTeamMission`]. The phase the resume moved the
+    /// mission to (always `Executing` — the resume drives in the
+    /// background).
+    TeamMissionResumed {
+        mission_id: String,
+        phase: crate::TeamMissionPhase,
     },
     /// Chapter Y — response to [`QueryPayload::GetTeamRoster`]. The daemon's
     /// active team configuration, rendered as-is by the Studio's Teams screen.
@@ -3574,6 +3601,36 @@ mod tests {
         let frame = encode_frame(&resolved).expect("encode");
         let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
         assert_eq!(back, resolved);
+
+        // Chapter Mission Control — pause request/response, a short status
+        // message like abort.
+        let pause_req = QueryPayload::PauseTeamMission { mission_id: "m1".into() };
+        let frame = encode_frame(&pause_req).expect("encode");
+        let (back, _): (QueryPayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, pause_req);
+
+        let paused = QueryResponsePayload::TeamMissionPaused {
+            mission_id: "m1".into(),
+            message: "mission will pause at its next wave boundary".into(),
+        };
+        let frame = encode_frame(&paused).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, paused);
+
+        // Chapter Mission Control — resume request/response, a phase
+        // response like resolve.
+        let resume_req = QueryPayload::ResumeTeamMission { mission_id: "m1".into() };
+        let frame = encode_frame(&resume_req).expect("encode");
+        let (back, _): (QueryPayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resume_req);
+
+        let resumed = QueryResponsePayload::TeamMissionResumed {
+            mission_id: "m1".into(),
+            phase: crate::TeamMissionPhase::Executing,
+        };
+        let frame = encode_frame(&resumed).expect("encode");
+        let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(back, resumed);
     }
 
     #[test]

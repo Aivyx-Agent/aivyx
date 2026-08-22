@@ -4278,6 +4278,36 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::PauseTeamMission { mission_id } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            match svc.pause(&mission_id) {
+                Ok(message) => QueryResponsePayload::TeamMissionPaused {
+                    mission_id,
+                    message,
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "pause_team_mission_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        QueryPayload::ResumeTeamMission { mission_id } => {
+            let Some(svc) = team_missions else {
+                return no_team_missions();
+            };
+            match svc.resume(&mission_id).await {
+                Ok(phase) => QueryResponsePayload::TeamMissionResumed {
+                    mission_id,
+                    phase,
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "resume_team_mission_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
         QueryPayload::GetProfile { from_disk } => {
             // `from_disk = false` (default): the running snapshot the daemon
             // is using (the Command-Center / status meaning). `true`: re-read
