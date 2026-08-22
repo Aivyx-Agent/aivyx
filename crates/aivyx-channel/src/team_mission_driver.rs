@@ -233,9 +233,14 @@ impl SharedMissionState {
     /// must never wipe a still-running sibling's marker. Called by
     /// `RegistryObserver::on_step_completed`/`on_gate`.
     pub(crate) fn clear_running(&self, id: &str, step_id: &str) {
-        if let Some(set) = self.running_steps.write().expect("running steps lock").get_mut(id) {
+        let mut steps = self.running_steps.write().expect("running steps lock");
+        if let Some(set) = steps.get_mut(id) {
             set.remove(step_id);
+            if set.is_empty() {
+                steps.remove(id);
+            }
         }
+        drop(steps);
         self.broadcast_live_view(id);
     }
 
@@ -355,14 +360,22 @@ impl SharedMissionState {
 
     /// Persist a record to the store **and** the in-memory registry — the
     /// single transition primitive, called on every state change. Stamps
-    /// `updated_at`.
+    /// `updated_at`. Chapter Mission Control — also broadcasts a live
+    /// `TeamMissionUpdated` view on every successful write (a silent no-op
+    /// when no broadcaster is configured or the mission is otherwise
+    /// unknown — see `broadcast_live_view`): `put` is already the single
+    /// write primitive every mutation path uses, so broadcasting from
+    /// inside it covers every current and future call site with no
+    /// per-caller wiring.
     pub async fn put(&self, mut record: TeamMissionRecord) -> Result<(), StorageError> {
         record.touch();
         save_team_mission(&self.store, &record).await?;
+        let id = record.id.clone();
         self.registry
             .write()
             .expect("mission registry lock")
             .insert(record.id.clone(), record);
+        self.broadcast_live_view(&id);
         Ok(())
     }
 
@@ -1170,6 +1183,10 @@ async fn drive(
     // Chapter Belay — arm this mission's abort flag; the observer halts the run
     // at the next wave boundary if an operator requests an abort.
     let abort = shared.arm_abort(id);
+    // Chapter Mission Control — from here on, EVERY exit path (the two
+    // early `?` returns below, a panic, or normal completion) runs
+    // cleanup exactly once via Drop, not just the happy path.
+    let _cleanup_guard = DriveCleanupGuard { shared, id };
     let (tx, mut rx) = mpsc::unbounded_channel();
     let observer = RegistryObserver {
         shared: shared.clone(),
@@ -1259,15 +1276,30 @@ async fn drive(
     }
     let phase = record.phase;
     shared.put(record).await?;
-    // Chapter Belay — the drive is over; drop the abort flag.
-    shared.disarm_abort(id);
-    // Chapter Mission Control — belt-and-braces: every step that starts
-    // should already clear its own running marker via on_step_completed/
-    // on_gate, but this guarantees no stale entry survives past the
-    // drive's own end (and broadcasts the mission's final phase either
-    // way), mirroring disarm_abort's own cleanup-on-drive-end call above.
-    shared.clear_all_running(id);
     Ok(phase)
+}
+
+/// Chapter Belay/Mission Control — ensures `drive()`'s abort flag and
+/// running-step markers are cleaned up on every exit path (an early `?`
+/// return inside the drive loop, a panic, or normal completion), not just
+/// the happy path. Before this guard, an error partway through a drive
+/// left both `abort_flags` and `running_steps` entries stuck for that
+/// mission forever — `abort_flags`'s leak was harmless (the next
+/// `arm_abort` call overwrites it), but a leaked `running_steps` entry
+/// outranks the checkpoint in `step_state`'s own precedence order, so an
+/// already-finished step (with a real output already recorded) would
+/// render as permanently `Running` in every future projection of that
+/// mission until the daemon restarts.
+struct DriveCleanupGuard<'a> {
+    shared: &'a SharedMissionState,
+    id: &'a str,
+}
+
+impl Drop for DriveCleanupGuard<'_> {
+    fn drop(&mut self) {
+        self.shared.disarm_abort(self.id);
+        self.shared.clear_all_running(self.id);
+    }
 }
 
 /// Feeds step progress into the registry as the DAG is walked. Updates are
@@ -1289,10 +1321,12 @@ struct RegistryObserver {
 impl MissionObserver for RegistryObserver {
     /// Chapter Mission Control — the runtime is about to run this step's
     /// specialist/reviewer sub-turn. Marks it running (broadcasts
-    /// immediately); if this step turns out to be a human gate that pauses
-    /// the mission, `step_state`'s own pending-gate precedence (Task 1)
-    /// keeps it showing `Awaiting`, not `Running`, regardless of this
-    /// marker's stale presence until the gate resolves.
+    /// immediately). Defensive, not currently reachable: `run_until_pause`
+    /// filters human gates out of the runnable set before building futures,
+    /// so this never fires for a gate step today — but if that ever
+    /// changed, `step_state`'s pending-gate precedence (checked first,
+    /// unconditionally) would still keep a gated step showing `Awaiting`,
+    /// never `Running`.
     fn on_step_started(&self, step_id: &str, _member: &str) {
         self.shared.mark_running(&self.id, step_id);
     }
@@ -2002,6 +2036,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn drive_cleanup_guard_disarms_abort_and_clears_running_on_drop() {
+        // Fix 2 — no existing test forces `drive`'s own early-`?`-return
+        // paths cleanly (there's no storage-failure injection fixture in
+        // this file), so this proves the guard's `Drop` impl directly:
+        // arm an abort flag and mark a step running exactly as `drive`
+        // does right after `shared.arm_abort(id)`, then drop the guard and
+        // assert both effects the guard promises -- via the same public
+        // surfaces `anchor_request_abort_sets_the_armed_flag` and the
+        // running-step broadcast tests already use above.
+        use crate::notify_webui::{WebUiBroadcastFrame, WebUiBroadcaster};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+        let _ = rx.recv().await.expect("recv put's own broadcast");
+
+        // Arm the abort flag and mark a step running, exactly as `drive`
+        // does before constructing the guard.
+        let _flag = shared.arm_abort("m1");
+        assert!(shared.request_abort("m1"), "flag is armed");
+        shared.mark_running("m1", "a");
+        match rx.recv().await.expect("recv running") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.steps[0].state, TeamStepState::Running);
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+
+        // Simulate an early-return exit from `drive`: construct the guard,
+        // then drop it explicitly (a real early `?` return would drop it
+        // implicitly the same way).
+        let guard = DriveCleanupGuard { shared: &shared, id: "m1" };
+        drop(guard);
+
+        // 1. The abort flag was disarmed.
+        assert!(
+            !shared.request_abort("m1"),
+            "DriveCleanupGuard::drop must disarm the abort flag"
+        );
+        // 2. The running-step marker was cleared (and its own broadcast fired).
+        match rx.recv().await.expect("recv cleared-on-drop") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(
+                    view.steps[0].state,
+                    TeamStepState::Pending,
+                    "DriveCleanupGuard::drop must clear the running-step marker"
+                );
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn anchor_abort_mission_rejects_non_running() {
         let shared = SharedMissionState::new(team_domain().await);
         // Unknown mission.
@@ -2046,6 +2134,9 @@ mod tests {
         let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
         let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
         shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+        // Chapter Mission Control (Fix 3) — `put` itself now broadcasts too;
+        // drain that one before asserting on the ones this test cares about.
+        let _ = rx.recv().await.expect("recv put's own broadcast");
 
         let (tx, _rx_ping) = mpsc::unbounded_channel();
         let observer = RegistryObserver {
@@ -2092,6 +2183,9 @@ mod tests {
             ],
         );
         shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+        // Chapter Mission Control (Fix 3) — `put` itself now broadcasts too;
+        // drain that one before asserting on the ones this test cares about.
+        let _ = rx.recv().await.expect("recv put's own broadcast");
 
         let (tx, _rx_ping) = mpsc::unbounded_channel();
         let observer = RegistryObserver {
@@ -2126,11 +2220,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_broadcaster_is_none_by_default_and_broadcast_live_view_is_a_silent_noop() {
+    async fn with_broadcaster_is_none_by_default_and_is_a_silent_noop() {
         let shared = SharedMissionState::new(team_domain().await);
         // No broadcaster configured -- must not panic, must not error.
         shared.mark_running("missing-mission", "step-a");
         shared.clear_running("missing-mission", "step-a");
+    }
+
+    #[tokio::test]
+    async fn broadcast_live_view_is_a_silent_noop_for_an_unknown_mission_even_with_a_broadcaster() {
+        use crate::notify_webui::WebUiBroadcaster;
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+        // No mission "unknown-mission" was ever `put` -- snapshot(id) misses,
+        // and broadcast_live_view must return early rather than panic or
+        // broadcast a bogus view.
+        shared.mark_running("unknown-mission", "a");
+        shared.clear_running("unknown-mission", "a");
+        assert!(
+            rx.try_recv().is_err(),
+            "no frame should have been broadcast for an unknown mission"
+        );
     }
 
     #[tokio::test]
@@ -2148,6 +2259,9 @@ mod tests {
         );
         let record = TeamMissionRecord::new("m1", "goal", plan);
         shared.put(record).await.expect("put");
+        // Chapter Mission Control (Fix 3) — `put` itself now broadcasts too;
+        // drain that one before asserting on the ones this test cares about.
+        let _ = rx.recv().await.expect("recv put's own broadcast");
 
         shared.mark_running("m1", "a");
         match rx.recv().await.expect("recv running") {
@@ -2183,11 +2297,32 @@ mod tests {
             vec![Step::delegate("a", "specialist", "do a")],
         );
         shared.put(TeamMissionRecord::new("m1", "goal", plan)).await.expect("put");
+        // Chapter Mission Control (Fix 3) — `put` itself now broadcasts too;
+        // drain that one before asserting on the ones this test cares about.
+        let _ = rx.recv().await.expect("recv put's own broadcast");
 
         shared.clear_running("m1", "a");
         match rx.recv().await.expect("recv") {
             WebUiBroadcastFrame::TeamMissionUpdated(view) => {
                 assert_eq!(view.steps[0].state, TeamStepState::Pending);
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn put_broadcasts_the_new_phase_even_outside_drive() {
+        use crate::notify_webui::{WebUiBroadcastFrame, WebUiBroadcaster};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let shared = SharedMissionState::new(team_domain().await).with_broadcaster(bc);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        let mut record = TeamMissionRecord::new("m1", "goal", plan);
+        record.phase = TeamMissionPhase::Rejected;
+        shared.put(record).await.expect("put");
+        match rx.recv().await.expect("recv") {
+            WebUiBroadcastFrame::TeamMissionUpdated(view) => {
+                assert_eq!(view.phase, TeamMissionPhase::Rejected);
             }
             other => panic!("expected TeamMissionUpdated, got {other:?}"),
         }

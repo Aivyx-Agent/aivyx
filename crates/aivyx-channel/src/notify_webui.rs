@@ -1,4 +1,6 @@
-//! Phase 69 — Web UI desktop notification backend (Reach Phase 4).
+//! Phase 69 — Web UI desktop notification backend (Reach Phase 4),
+//! generalized in Chapter Mission Control to also carry live mission
+//! updates.
 //!
 //! Fourth notify backend after Telegram (Phase 62), webhook
 //! (Phase 62), and email (Phase 68). Delivers OS-level desktop
@@ -6,7 +8,10 @@
 //! Web UI (`127.0.0.1:7843`) open, by fanning frames out over a
 //! [`tokio::sync::broadcast`] channel and relaying them onto
 //! every connected Web UI WebSocket as
-//! [`crate::daemon_ipc::DaemonMessage::DesktopNotification`].
+//! [`crate::daemon_ipc::DaemonMessage::DesktopNotification`]. The same
+//! channel also carries live team-mission phase/step-state pushes,
+//! relayed as `DaemonMessage::TeamMissionUpdated` — see [`WebUiBroadcastFrame`]
+//! below.
 //!
 //! ## Shape
 //!

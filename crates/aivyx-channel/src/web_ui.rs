@@ -927,9 +927,13 @@ async fn handle_websocket(
     // Broadcast→WS (Phase 69 Task 5): if a WebUiBroadcaster is
     // configured, subscribe a fresh receiver and relay every
     // `WebUiBroadcastFrame` onto its matching `DaemonEnvelope`
-    // variant. On `Lagged` we drop the missed frames silently —
-    // desktop notifications for a tab the operator isn't
-    // watching are by definition discardable.
+    // variant. On `Lagged` we drop the missed frames silently:
+    // desktop notifications are inherently discardable (a tab the
+    // operator isn't watching missing one is fine); a missed
+    // TeamMissionUpdated is tolerable because the poll reconciles
+    // (see aivyx-web's running_overlay, which self-heals once a
+    // poll's checkpoint state supersedes a stale remembered marker)
+    // — either way, keep listening rather than closing the connection.
     let broadcast_to_ws = {
         let ws_sink = Arc::clone(&ws_sink);
         let mut rx_opt = web_ui_broadcaster.as_ref().map(|bc| bc.subscribe());

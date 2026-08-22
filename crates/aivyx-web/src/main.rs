@@ -27,10 +27,11 @@ use aivyx_ipc::protocol::{
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
-    TrustTier,
+    TeamStepState, TrustTier,
 };
 use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 use aivyx_ipc::graph::{GraphEntity, GraphTriple};
+use std::collections::{HashMap, HashSet};
 
 /// End-user guide content + markdown rendering for the Guide screen.
 mod guide;
@@ -589,6 +590,12 @@ fn App() -> Element {
     // The Guide's current page — App-owned so the topbar "?" can deep-link it.
     let guide_page = use_signal(|| 0usize);
     let missions = use_signal(Vec::<TeamMissionView>::new);
+    // Chapter Mission Control — see `apply_running_overlay`'s own doc
+    // comment: the poll's `to_view()` projection can never produce
+    // `Running` on its own, so this overlay is what keeps a live
+    // `TeamMissionUpdated`'s Running marker from being erased by the next
+    // poll tick.
+    let running_overlay = use_signal(HashMap::<String, HashSet<usize>>::new);
     let dashboard = use_signal(Dashboard::default);
     let memory = use_signal(MemoryState::default);
     let wiki = use_signal(WikiState::default);
@@ -612,9 +619,9 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, dashboard, memory, wiki, lattice, settings, agents, teams, documents,
-            voice, skills, mcp, tools, gallery, schedules_ui, notifications, connected, session,
-            transcript, streaming, gate,
+            rx, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
+            teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
+            connected, session, transcript, streaming, gate,
         )
     });
     use_context_provider(|| ws);
@@ -644,6 +651,7 @@ fn App() -> Element {
     // switches the active view.
     use_context_provider(|| view);
     use_context_provider(|| missions);
+    use_context_provider(|| running_overlay);
     use_context_provider(|| session);
     use_context_provider(|| transcript);
     use_context_provider(|| streaming);
@@ -5114,9 +5122,58 @@ fn upsert_mission_view(missions: &mut Vec<TeamMissionView>, updated: TeamMission
     }
 }
 
+/// Chapter Mission Control — per-mission set of step INDICES (position in
+/// `TeamMissionView.steps`) the daemon's last broadcast said are running
+/// right now. Fed by `DaemonEnvelope::TeamMissionUpdated`; re-applied by
+/// the poll (`QueryResponsePayload::TeamMissionList`) after each refresh,
+/// since the poll re-projects raw records client-side via `to_view()`,
+/// which never yields `Running` on its own — without this overlay, the
+/// poll would silently erase every live signal within one poll interval.
+/// Index-keyed rather than step-id-keyed because `TeamStepView` carries no
+/// step id (only `label`/`state`), and a mission's step order is stable
+/// for the mission's whole lifetime (the `plan` never changes after
+/// creation), so position is a safe, sufficient key.
+fn running_step_indices(view: &TeamMissionView) -> HashSet<usize> {
+    view.steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.state == TeamStepState::Running)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Chapter Mission Control — re-apply `overlay`'s remembered running
+/// indices onto `views` (a freshly poll-projected list), and prune the
+/// overlay in the same pass: an index only stays overlaid (and only stays
+/// in `overlay`) if the fresh poll's own checkpoint-derived state for that
+/// step is still `Pending` — once a step's real output lands (`Done`/
+/// `Rejected`/`Awaiting`), that is strictly more authoritative than a
+/// possibly-stale remembered "was running" marker (e.g. if a broadcast was
+/// missed on a lagged/reconnecting WebSocket), so the overlay self-heals
+/// and never leaks a stale entry forever. Returns nothing; mutates both
+/// arguments in place.
+fn apply_running_overlay(views: &mut [TeamMissionView], overlay: &mut HashMap<String, HashSet<usize>>) {
+    for view in views.iter_mut() {
+        let Some(indices) = overlay.get_mut(&view.id) else { continue };
+        indices.retain(|&i| {
+            let Some(step) = view.steps.get_mut(i) else { return false };
+            if step.state == TeamStepState::Pending {
+                step.state = TeamStepState::Running;
+                true
+            } else {
+                false
+            }
+        });
+        if indices.is_empty() {
+            overlay.remove(&view.id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod mission_control_tests {
     use super::*;
+    use aivyx_ipc::TeamStepView;
 
     fn view(id: &str, progress: u16) -> TeamMissionView {
         TeamMissionView {
@@ -5146,6 +5203,44 @@ mod mission_control_tests {
         upsert_mission_view(&mut missions, view("m2", 0));
         assert_eq!(missions.len(), 2);
         assert_eq!(missions[1].id, "m2");
+    }
+
+    #[test]
+    fn running_step_indices_finds_the_running_positions() {
+        let mut v = view("m1", 10);
+        v.steps = vec![
+            TeamStepView { label: "a".into(), state: TeamStepState::Done },
+            TeamStepView { label: "b".into(), state: TeamStepState::Running },
+            TeamStepView { label: "c".into(), state: TeamStepState::Pending },
+        ];
+        let indices = running_step_indices(&v);
+        assert_eq!(indices, [1].into_iter().collect());
+    }
+
+    #[test]
+    fn apply_running_overlay_marks_a_still_pending_step_running() {
+        let mut v = view("m1", 0);
+        v.steps = vec![TeamStepView { label: "a".into(), state: TeamStepState::Pending }];
+        let mut views = vec![v];
+        let mut overlay: HashMap<String, HashSet<usize>> =
+            [("m1".to_string(), [0usize].into_iter().collect())].into_iter().collect();
+        apply_running_overlay(&mut views, &mut overlay);
+        assert_eq!(views[0].steps[0].state, TeamStepState::Running);
+        assert!(overlay.contains_key("m1"), "still tracked -- still pending after overlay applied");
+    }
+
+    #[test]
+    fn apply_running_overlay_prunes_a_resolved_step_and_does_not_downgrade_it() {
+        // The fresh poll already shows this step Done -- the overlay must
+        // NOT downgrade it back to Running, and must stop tracking it.
+        let mut v = view("m1", 100);
+        v.steps = vec![TeamStepView { label: "a".into(), state: TeamStepState::Done }];
+        let mut views = vec![v];
+        let mut overlay: HashMap<String, HashSet<usize>> =
+            [("m1".to_string(), [0usize].into_iter().collect())].into_iter().collect();
+        apply_running_overlay(&mut views, &mut overlay);
+        assert_eq!(views[0].steps[0].state, TeamStepState::Done, "checkpoint wins, not overwritten");
+        assert!(!overlay.contains_key("m1"), "pruned once resolved");
     }
 }
 
@@ -5897,6 +5992,7 @@ fn fmt_size(bytes: u64) -> String {
 async fn ws_task(
     mut rx: UnboundedReceiver<FrontendMessage>,
     missions: Signal<Vec<TeamMissionView>>,
+    running_overlay: Signal<HashMap<String, HashSet<usize>>>,
     dashboard: Signal<Dashboard>,
     memory: Signal<MemoryState>,
     wiki: Signal<WikiState>,
@@ -5948,9 +6044,9 @@ async fn ws_task(
         let (mut write, read) = ws.split();
 
         spawn(read_task(
-            read, missions, dashboard, memory, wiki, lattice, settings, agents, teams,
-            documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications, connected,
-            session, transcript, streaming, gate,
+            read, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
+            teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
+            connected, session, transcript, streaming, gate,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -6029,6 +6125,7 @@ fn reconnect_boot_queries() -> Vec<FrontendMessage> {
 async fn read_task(
     mut read: futures_util::stream::SplitStream<WebSocket>,
     mut missions: Signal<Vec<TeamMissionView>>,
+    mut running_overlay: Signal<HashMap<String, HashSet<usize>>>,
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
     mut wiki: Signal<WikiState>,
@@ -6061,13 +6158,26 @@ async fn read_task(
                     payload: QueryResponsePayload::TeamMissionList { missions: records },
                     ..
                 } => {
-                    missions.set(records.iter().map(|r| r.to_view()).collect());
+                    let mut views: Vec<TeamMissionView> =
+                        records.iter().map(|r| r.to_view()).collect();
+                    let mut overlay = running_overlay();
+                    apply_running_overlay(&mut views, &mut overlay);
+                    running_overlay.set(overlay);
+                    missions.set(views);
                 }
                 // Chapter Mission Control — a live push: apply it in place
                 // rather than waiting for the next poll. The poll above
                 // stays as-is (a reconnect/missed-broadcast reconciliation
                 // fallback), not removed.
                 DaemonEnvelope::TeamMissionUpdated { view } => {
+                    let indices = running_step_indices(&view);
+                    let mut overlay = running_overlay();
+                    if indices.is_empty() {
+                        overlay.remove(&view.id);
+                    } else {
+                        overlay.insert(view.id.clone(), indices);
+                    }
+                    running_overlay.set(overlay);
                     let mut current = missions();
                     upsert_mission_view(&mut current, view);
                     missions.set(current);
