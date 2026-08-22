@@ -2784,6 +2784,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pause_mission_succeeds_while_executing() {
+        // `pause_mission`'s `Executing` arm calls `shared.request_pause(id)`,
+        // which (per `request_pause_returns_false_for_an_unarmed_mission`)
+        // only flips an ALREADY-armed flag to `true` -- it does not arm one
+        // itself. So this fixture must arm the flag first, exactly as a real
+        // drive does via `arm_pause`, or `pause_mission` would hit its own
+        // "no longer running" error instead of succeeding.
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
+        let mut record = TeamMissionRecord::new("m1", "goal", plan);
+        record.phase = TeamMissionPhase::Executing;
+        shared.put(record).await.expect("put");
+        let flag = shared.arm_pause("m1");
+        assert!(!flag.load(std::sync::atomic::Ordering::SeqCst), "not armed-true yet");
+
+        let message = pause_mission(&shared, "m1").expect("pause accepted while Executing");
+        assert!(message.contains("m1"), "message names the mission: {message}");
+        // The real, meaningful assertion: pause_mission genuinely armed the
+        // pause flag as a SIDE EFFECT of calling `shared.request_pause`, not
+        // just returned an `Ok` string. This is what a no-op stand-in for
+        // the `request_pause` call (unconditionally `Ok(...)`) would fail to
+        // produce, and what a swap with the `AwaitingApproval` arm would
+        // never even reach.
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "pause_mission must have set the armed flag true via request_pause"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_mission_rejects_a_mission_awaiting_a_human_gate() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new(
+            "goal",
+            vec![Step::human_gate("approve", "manager", "ok?")],
+        );
+        let mut record = TeamMissionRecord::new("m1", "goal", plan);
+        record.phase = TeamMissionPhase::AwaitingApproval;
+        record.pending_gate = Some("approve".to_string());
+        shared.put(record).await.expect("put");
+
+        let err = pause_mission(&shared, "m1").unwrap_err();
+        assert!(matches!(err, MissionDriverError::NotPausable(..)));
+        // The error message must point the operator at gate resolution, not
+        // pause -- the exact wording from `pause_mission`'s `AwaitingApproval`
+        // arm, mirroring `abort_mission`'s identical branch.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("reject the gate instead"),
+            "message should point the operator at gate resolution, not pause: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn prepare_pause_resolution_requires_paused_phase() {
         let shared = SharedMissionState::new(team_domain().await);
         let plan = MissionPlan::new("goal", vec![Step::delegate("a", "specialist", "do a")]);
