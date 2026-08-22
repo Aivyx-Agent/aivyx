@@ -2097,6 +2097,7 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
     use_effect(move || {
         ws.send(get_team_roster_query());
     });
+    let mut selected_node = use_signal(|| None::<String>);
     let watchable = watchable_missions(&missions);
     let Some(current_id) = selected_mission() else {
         return rsx! {
@@ -2143,7 +2144,6 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
         };
     };
     let graph = build_mission_graph(current, &roster);
-    let mut selected_node = use_signal(|| None::<String>);
     rsx! {
         div { class: "mission-control",
             div { class: "panel-head",
@@ -2206,10 +2206,55 @@ fn MissionControls(mission: TeamMissionView) -> Element {
     rsx! { div {} }
 }
 
+/// Chapter Mission Control — the lead's declared capability scopes, for
+/// the NT-02 "inert" hint: a specialist's own declared scope the lead
+/// doesn't also hold is attenuated to nothing at spawn (never granted).
+/// Extracted from `TeamsPanel`'s own inline computation so both surfaces
+/// share one implementation, not two that could silently drift apart.
+fn lead_scopes(team: &TeamConfig) -> std::collections::HashSet<String> {
+    team.members
+        .iter()
+        .find(|m| m.name == team.lead)
+        .map(|m| m.capability_scopes.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
 #[component]
 fn SpecialistDrillIn(node: MissionGraphNode, roster: TeamConfig, mission: TeamMissionView) -> Element {
-    let _ = (node, roster, mission);
-    rsx! { div {} }
+    let scopes = lead_scopes(&roster);
+    let member = roster.members.iter().find(|m| m.name == node.name);
+    let declared: Vec<String> = member.map(|m| m.capability_scopes.clone()).unwrap_or_default();
+    let inert: Vec<String> = declared.iter().filter(|s| !scopes.contains(*s)).cloned().collect();
+    let current_step_detail = node
+        .current_step
+        .as_ref()
+        .and_then(|id| mission.steps.iter().find(|s| &s.step_id == id));
+    rsx! {
+        div { class: "glass-card drill-in",
+            div { class: "row1",
+                span { class: "goal", "{node.name}" }
+                if node.is_lead { span { class: "chip", "LEAD" } }
+            }
+            if let Some(step) = current_step_detail {
+                p { class: "label-tech", "currently running: {step.label}" }
+            } else {
+                p { class: "label-tech", "idle — no step currently running" }
+            }
+            if !declared.is_empty() {
+                div { class: "scopes",
+                    p { class: "label-tech", "declared capability scopes:" }
+                    for s in declared.iter() {
+                        span { class: "chip", "{s}" }
+                    }
+                }
+            }
+            if !inert.is_empty() {
+                p { class: "label-tech inert-hint",
+                    "Lead lacks {inert.join(\", \")} — inert until the lead holds them (attenuated at spawn)."
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5653,6 +5698,23 @@ mod mission_control_tests {
         let inventory_node = graph.nodes.iter().find(|n| n.name == "inventory").unwrap();
         assert_eq!(inventory_node.state, TeamStepState::Pending);
     }
+
+    #[test]
+    fn lead_scopes_returns_the_leads_own_declared_scopes() {
+        let mut roster = sample_roster();
+        roster.members[0].capability_scopes = vec!["fs.write".to_string(), "net.fetch".to_string()];
+        let scopes = lead_scopes(&roster);
+        assert!(scopes.contains("fs.write"));
+        assert!(scopes.contains("net.fetch"));
+        assert_eq!(scopes.len(), 2);
+    }
+
+    #[test]
+    fn lead_scopes_is_empty_when_the_lead_is_not_in_members() {
+        let mut roster = sample_roster();
+        roster.lead = "nobody".to_string();
+        assert!(lead_scopes(&roster).is_empty());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5713,12 +5775,7 @@ fn TeamsPanel() -> Element {
     };
 
     // The lead's declared scopes — for the NT-02 "inert" hint on specialists.
-    let lead_scopes: std::collections::HashSet<String> = team
-        .members
-        .iter()
-        .find(|m| m.name == team.lead)
-        .map(|m| m.capability_scopes.iter().cloned().collect())
-        .unwrap_or_default();
+    let lead_scopes = lead_scopes(&team);
     let specialist_count = team.members.iter().filter(|m| m.name != team.lead).count();
     let active = missions()
         .iter()
