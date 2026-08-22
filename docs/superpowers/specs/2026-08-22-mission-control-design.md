@@ -1,6 +1,9 @@
 # Mission Control — Live Nonagon Visualization Design
 
-**Status:** Approved, not yet planned/implemented.
+**Status:** Piece 1 (Live mission state) shipped 2026-08-22 — plan at
+`docs/superpowers/plans/2026-08-22-mission-control-live-state.md`, merged
+to `main` at `2989a043`. Pieces 2 (Pause/Resume) and 3 (the Mission
+Control nav view) are not yet planned or implemented.
 
 ## Motivation
 
