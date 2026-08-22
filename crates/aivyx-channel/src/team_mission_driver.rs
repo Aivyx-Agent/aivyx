@@ -1228,6 +1228,11 @@ async fn drive(
     // Chapter Belay — arm this mission's abort flag; the observer halts the run
     // at the next wave boundary if an operator requests an abort.
     let abort = shared.arm_abort(id);
+    // Chapter Mission Control — arm this mission's pause flag too. Kept as
+    // a local binding (not just handed to the observer) because drive()
+    // itself checks it AFTER the run completes, to decide whether a
+    // MissionStatus::Halted outcome should land in Paused instead.
+    let pause = shared.arm_pause(id);
     // Chapter Mission Control — from here on, EVERY exit path (the two
     // early `?` returns below, a panic, or normal completion) runs
     // cleanup exactly once via Drop, not just the happy path.
@@ -1239,6 +1244,7 @@ async fn drive(
         tx,
         budget_guard,
         abort: Some(abort),
+        pause: Some(Arc::clone(&pause)),
     };
     let channel = MissionLeadChannel::new();
     let run = tokio::spawn(async move {
@@ -1273,16 +1279,34 @@ async fn drive(
                 // chain (same legibility as the headless-refusal path), preserve
                 // the partial outputs above, and stash the reason for the record.
                 MissionStatus::Halted { reason } => {
-                    eprintln!(
-                        "aivyx team: mission {id} halted — {reason}"
-                    );
-                    audit.on_event(AuditTag::HeadlessRefusal {
-                        run_id: id.to_string(),
-                        step: "<halt>".to_string(),
-                        reason: format!("team mission halted: {reason}"),
-                    });
-                    halted_reason = Some(reason);
-                    TeamMissionPhase::Halted
+                    if pause.load(std::sync::atomic::Ordering::SeqCst) {
+                        // Chapter Mission Control — a pause request
+                        // tripped this halt, not an abort or budget cap
+                        // (should_halt's own priority order guarantees
+                        // this branch is only reached when abort is NOT
+                        // armed) -- land in the new, non-terminal Paused
+                        // phase instead of Halted. No halt_reason is set
+                        // (that field's contract: "set iff phase ==
+                        // Halted") -- outputs are preserved exactly like
+                        // a real Halted landing, ready for resume to
+                        // continue from. Still logged (distinctly) for
+                        // operator visibility, but NOT sent to the audit
+                        // chain -- HeadlessRefusal means "declined," which
+                        // an operator-requested pause isn't.
+                        eprintln!("aivyx team: mission {id} paused");
+                        TeamMissionPhase::Paused
+                    } else {
+                        eprintln!(
+                            "aivyx team: mission {id} halted — {reason}"
+                        );
+                        audit.on_event(AuditTag::HeadlessRefusal {
+                            run_id: id.to_string(),
+                            step: "<halt>".to_string(),
+                            reason: format!("team mission halted: {reason}"),
+                        });
+                        halted_reason = Some(reason);
+                        TeamMissionPhase::Halted
+                    }
                 }
             };
             record.halt_reason = halted_reason;
@@ -1343,6 +1367,7 @@ struct DriveCleanupGuard<'a> {
 impl Drop for DriveCleanupGuard<'_> {
     fn drop(&mut self) {
         self.shared.disarm_abort(self.id);
+        self.shared.disarm_pause(self.id);
         self.shared.clear_all_running(self.id);
     }
 }
@@ -1361,6 +1386,11 @@ struct RegistryObserver {
     /// Chapter Belay — the mission's abort flag. Set by `request_abort`; read at
     /// each wave boundary in `should_halt`.
     abort: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Chapter Mission Control — the mission's pause flag, mirroring
+    /// `abort` exactly. Read at each wave boundary in `should_halt`, with
+    /// lower priority than an abort but higher than the Ballast budget
+    /// check.
+    pause: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl MissionObserver for RegistryObserver {
@@ -1396,10 +1426,19 @@ impl MissionObserver for RegistryObserver {
     /// the mission's metered spend so far against its caps; a breach returns the
     /// reason, halting the mission gracefully before the next wave launches.
     fn should_halt(&self) -> Option<String> {
-        // Chapter Belay — an operator abort takes priority over the budget check.
+        // Chapter Belay — an operator abort takes priority over pause and
+        // the budget check.
         if let Some(flag) = &self.abort {
             if flag.load(std::sync::atomic::Ordering::SeqCst) {
                 return Some("aborted by operator".to_string());
+            }
+        }
+        // Chapter Mission Control — a pause request takes priority over
+        // the budget check, but never over an abort (checked above,
+        // unconditionally, first).
+        if let Some(flag) = &self.pause {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                return Some("paused by operator".to_string());
             }
         }
         let (meter, budget) = self.budget_guard.as_ref()?;
@@ -1628,6 +1667,51 @@ mod tests {
         }
         async fn finish(mut self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
             Ok(self.terminal.take().expect("finish once"))
+        }
+    }
+
+    /// Chapter Mission Control — a provider whose Nth sub-turn call (0
+    /// -indexed, `gate_at`) blocks on a real async signal until the test
+    /// releases it, giving genuine cross-task timing control over exactly
+    /// which wave a real, spawned `drive()` is inside when the test injects
+    /// `shared.request_pause(id)`. Mirrors `aivyx-team::runtime`'s own
+    /// `BarrierProvider` concurrency-testing precedent (`runtime.rs`'s
+    /// `independent_steps_run_concurrently`) — the only established pattern
+    /// in this codebase for making a fake-provider-backed drive test
+    /// genuinely race against another task instead of running start-to-
+    /// finish in one uninterrupted poll (this file's own `FakeProvider` has
+    /// no real await point to race against at all).
+    struct GatedProvider {
+        line: String,
+        calls: std::sync::atomic::AtomicUsize,
+        gate_at: usize,
+        /// Notified (by this provider) the instant the gated call begins —
+        /// the test's signal that the wave containing it has genuinely
+        /// started (and every prior wave has genuinely finished).
+        started: Arc<tokio::sync::Notify>,
+        /// Notified (by the test) once it has finished acting on `started`
+        /// (e.g. requesting a pause) — lets the gated call proceed.
+        release: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait]
+    impl LlmProvider for GatedProvider {
+        async fn chat_stream(
+            &self,
+            _req: LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == self.gate_at {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            Ok(Box::new(FakeStream {
+                events: vec![LlmStreamEvent::TextChunk(self.line.clone())].into_iter(),
+                terminal: Some(LlmStepEnd::FinalMessage {
+                    text: self.line.clone(),
+                    usage: LlmUsage::default(),
+                }),
+            }))
         }
     }
 
@@ -2109,6 +2193,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pause_requested_mid_drive_lands_the_mission_in_paused_not_halted() {
+        // Chapter Mission Control — the real proof this task exists for: a
+        // pause requested WHILE a real drive() is genuinely in flight (not
+        // before it starts) lands the mission in the new, non-terminal
+        // Paused phase — not Halted — with no halt_reason set and the
+        // checkpoint preserved exactly like a real halt's is.
+        //
+        // a (wave 1) -> b (wave 2, gated) -> c (wave 3, never runs). The
+        // gate on step "b"'s sub-turn (call index 1) proves wave 1 already
+        // completed (its output is checkpointed) and wave 2 has genuinely
+        // started before the test injects `shared.request_pause(id)` — the
+        // exact mid-flight window the budget-cap tests never need, since
+        // their halt trips on accumulated state alone rather than a request
+        // racing a live drive.
+        let shared = SharedMissionState::new(team_domain().await);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut deps = deps("ok");
+        deps.provider = Arc::new(GatedProvider {
+            line: "ok".into(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            gate_at: 1,
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        });
+        let plan = MissionPlan::new(
+            "chain",
+            vec![
+                Step::delegate("a", "researcher", "p"),
+                Step::delegate("b", "writer", "p").after(["a"]),
+                Step::delegate("c", "reviewer", "p").after(["b"]),
+            ],
+        );
+        let id = register_mission(&shared, plan, "pause-mid", None).await.unwrap();
+
+        let shared_task = shared.clone();
+        let deps_task = deps.clone();
+        let id_task = id.clone();
+        let drive = tokio::spawn(async move {
+            drive_registered(
+                &shared_task,
+                &deps_task,
+                default_nonagon(),
+                &id_task,
+                GatePolicy::Interactive,
+            )
+            .await
+        });
+
+        // Block until wave 2 (step "b") has genuinely started.
+        started.notified().await;
+        assert!(
+            shared.request_pause(&id),
+            "drive() must have armed the pause flag by the time wave 2 starts"
+        );
+        // Let step "b" finish; wave 3's should_halt() now sees pause=true.
+        release.notify_one();
+
+        let phase = drive.await.expect("drive task join").expect("drive result");
+        assert_eq!(phase, TeamMissionPhase::Paused, "not Halted");
+
+        let rec = shared.snapshot(&id).unwrap();
+        assert_eq!(rec.phase, TeamMissionPhase::Paused);
+        assert!(
+            rec.halt_reason.is_none(),
+            "Paused must never carry a halt_reason -- that field's contract is \"set iff phase == Halted\""
+        );
+        assert!(rec.outputs.contains_key("a"), "wave 1 output preserved");
+        assert!(rec.outputs.contains_key("b"), "wave 2 output preserved");
+        assert!(!rec.outputs.contains_key("c"), "wave 3 never ran");
+    }
+
+    #[tokio::test]
     async fn drive_cleanup_guard_disarms_abort_and_clears_running_on_drop() {
         // Fix 2 — no existing test forces `drive`'s own early-`?`-return
         // paths cleanly (there's no storage-failure injection fixture in
@@ -2191,12 +2348,39 @@ mod tests {
             tx,
             budget_guard: None,
             abort: Some(Arc::clone(&flag)),
+            pause: None,
         };
         // Not aborted, no budget → no halt.
         assert!(obs.should_halt().is_none());
         // Operator abort → the runtime's wave-boundary check halts the mission.
         flag.store(true, Ordering::SeqCst);
         assert_eq!(obs.should_halt(), Some("aborted by operator".to_string()));
+    }
+
+    #[tokio::test]
+    async fn should_halt_prioritizes_abort_over_pause_over_budget() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let shared = SharedMissionState::new(team_domain().await);
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        // Pause armed and tripped, abort armed but NOT tripped, no budget:
+        // pause's own reason wins.
+        let pause = Arc::new(AtomicBool::new(true));
+        let abort = Arc::new(AtomicBool::new(false));
+        let observer = RegistryObserver {
+            shared: shared.clone(),
+            id: "m1".to_string(),
+            tx: tx.clone(),
+            budget_guard: None,
+            abort: Some(Arc::clone(&abort)),
+            pause: Some(Arc::clone(&pause)),
+        };
+        assert_eq!(observer.should_halt(), Some("paused by operator".to_string()));
+
+        // Now also trip abort -- abort must win over pause, even though
+        // pause is still armed and tripped too.
+        abort.store(true, Ordering::SeqCst);
+        assert_eq!(observer.should_halt(), Some("aborted by operator".to_string()));
     }
 
     #[tokio::test]
@@ -2218,6 +2402,7 @@ mod tests {
             tx,
             budget_guard: None,
             abort: None,
+            pause: None,
         };
 
         observer.on_step_started("a", "specialist");
@@ -2267,6 +2452,7 @@ mod tests {
             tx,
             budget_guard: None,
             abort: None,
+            pause: None,
         };
 
         // Both steps start concurrently (as a real DAG wave would).
