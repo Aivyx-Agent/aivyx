@@ -2121,7 +2121,7 @@ fn GateControls(mission_id: String, step: String) -> Element {
 fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<Option<String>>) -> Element {
     let ws = use_context::<Sender>();
     let teams = use_context::<Signal<TeamsState>>();
-    let mission_ui = use_context::<Signal<MissionControlUi>>();
+    let mut mission_ui = use_context::<Signal<MissionControlUi>>();
     use_effect(move || {
         ws.send(get_team_roster_query());
     });
@@ -2147,7 +2147,10 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
                                 key: "{m.id}",
                                 onclick: {
                                     let id = m.id.clone();
-                                    move |_| selected_mission.set(Some(id.clone()))
+                                    move |_| {
+                                        mission_ui.write().notice = None;
+                                        selected_mission.set(Some(id.clone()));
+                                    }
                                 },
                                 span { class: "chip {phase_class(m.phase)}", "{phase_label(m.phase)}" }
                                 span { class: "goal", "{m.goal}" }
@@ -2171,7 +2174,14 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
             div { class: "mission-control",
                 div { class: "panel-head",
                     h3 { "Mission Control" }
-                    button { class: "btn btn-ghost", onclick: move |_| selected_mission.set(None), "← All missions" }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| {
+                            mission_ui.write().notice = None;
+                            selected_mission.set(None);
+                        },
+                        "← All missions"
+                    }
                 }
                 SkeletonList { rows: 3 }
             }
@@ -2182,7 +2192,14 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
         div { class: "mission-control",
             div { class: "panel-head",
                 h3 { "Mission Control" }
-                button { class: "btn btn-ghost", onclick: move |_| selected_mission.set(None), "← All missions" }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        mission_ui.write().notice = None;
+                        selected_mission.set(None);
+                    },
+                    "← All missions"
+                }
             }
             if let Some((ok, msg)) = mission_ui().notice.clone() {
                 div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
@@ -6039,6 +6056,32 @@ mod mission_control_tests {
             .expect("the mission's own lead always gets a node, even off-roster and step-touching-free");
         assert!(lead_node.is_lead);
         assert!(!lead_node.on_roster);
+    }
+
+    #[test]
+    fn build_mission_graph_does_not_duplicate_an_off_roster_lead_who_also_touches_a_step() {
+        // The more likely pack-pinned shape: the lead is off-roster AND
+        // owns a step themselves (unlike the previous test, where the
+        // lead touches no step at all). The `unrostered` loop already
+        // gives them a node from their own step -- the later "give the
+        // lead a node" union must recognize that and NOT add a second
+        // one, or the graph would draw two circles for the same person
+        // (one centered, one on the ring), both badged LEAD, with edges
+        // landing on whichever one a name-keyed lookup finds last.
+        let mut m = view("v1", 0);
+        m.lead = "packlead".to_string();
+        m.steps = vec![TeamStepView {
+            label: "audit".into(),
+            state: TeamStepState::Running,
+            step_id: "audit".into(),
+            member: "packlead".into(),
+            kind: "delegate".into(),
+            deps: vec![],
+        }];
+        let roster = sample_roster(); // coordinator/inventory/purchasing -- no "packlead"
+        let graph = build_mission_graph(&m, &roster);
+        let count = graph.nodes.iter().filter(|n| n.name == "packlead").count();
+        assert_eq!(count, 1, "an off-roster, step-touching lead gets exactly one node, not two");
     }
 
     #[test]
