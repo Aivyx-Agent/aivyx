@@ -673,7 +673,14 @@ mod tests {
             .await
             .expect("dispatch");
         let frame = rx.recv().await.expect("recv");
-        assert_eq!(frame.title, "Aivyx");
-        assert_eq!(frame.body, "build done");
+        match frame {
+            crate::notify_webui::WebUiBroadcastFrame::DesktopNotification(
+                crate::notify_webui::DesktopNotificationFrame { title, body },
+            ) => {
+                assert_eq!(title, "Aivyx");
+                assert_eq!(body, "build done");
+            }
+            other => panic!("expected DesktopNotification, got {other:?}"),
+        }
     }
 }

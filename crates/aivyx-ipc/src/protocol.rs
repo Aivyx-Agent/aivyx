@@ -2280,6 +2280,16 @@ pub enum DaemonMessage {
         title: String,
         body: String,
     },
+    /// Chapter Mission Control — broadcast-style team-mission live update.
+    /// Fired by the daemon's `RegistryObserver` whenever a step starts,
+    /// finishes, or the mission's phase transitions, and relayed onto
+    /// every connected Web UI WebSocket. Same broadcast shape as
+    /// `DesktopNotification` (no session correlation) — carries the
+    /// already-projected view rather than the raw record, since only the
+    /// daemon has the live running-step signal in scope.
+    TeamMissionUpdated {
+        view: crate::TeamMissionView,
+    },
 }
 
 /// Phase 70 — success payload for
@@ -2586,6 +2596,10 @@ pub enum DaemonEnvelope {
     DesktopNotification {
         title: String,
         body: String,
+    },
+    // Chapter Mission Control — team-mission live update (broadcast).
+    TeamMissionUpdated {
+        view: crate::TeamMissionView,
     },
     // Phase 70 — Persona proposal resolution result.
     PersonaProposalResolved {
@@ -3402,6 +3416,18 @@ mod tests {
             DaemonMessage::DesktopNotification {
                 title: "Trigger fired".into(),
                 body: String::new(),
+            },
+            DaemonMessage::TeamMissionUpdated {
+                view: crate::TeamMissionView {
+                    id: "m1".into(),
+                    goal: "test goal".into(),
+                    lead: "coordinator".into(),
+                    phase: crate::TeamMissionPhase::Executing,
+                    pending_gate: None,
+                    halt_reason: None,
+                    progress: 42,
+                    steps: vec![],
+                },
             },
         ];
         for msg in cases {
@@ -4409,6 +4435,30 @@ mod tests {
                 assert_eq!(body, "world");
             }
             other => panic!("expected DesktopNotification, got {other:?}"),
+        }
+
+        // Chapter Mission Control — TeamMissionUpdated demux from a
+        // DaemonMessage frame.
+        let update = DaemonMessage::TeamMissionUpdated {
+            view: crate::TeamMissionView {
+                id: "m2".into(),
+                goal: "another goal".into(),
+                lead: "coordinator".into(),
+                phase: crate::TeamMissionPhase::Done,
+                pending_gate: None,
+                halt_reason: None,
+                progress: 100,
+                steps: vec![],
+            },
+        };
+        let frame = encode_frame(&update).expect("encode update");
+        let (envelope, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
+        match envelope {
+            DaemonEnvelope::TeamMissionUpdated { view } => {
+                assert_eq!(view.id, "m2");
+                assert_eq!(view.progress, 100);
+            }
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
         }
     }
 

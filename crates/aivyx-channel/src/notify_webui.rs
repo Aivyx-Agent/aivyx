@@ -11,16 +11,17 @@
 //! ## Shape
 //!
 //! - [`WebUiBroadcaster`] wraps a single
-//!   `broadcast::Sender<DesktopNotificationFrame>`. Constructed
+//!   `broadcast::Sender<WebUiBroadcastFrame>`. Constructed
 //!   once at daemon startup and `Arc`-shared between:
 //!     1. The [`NotifyWebUiBackend`] registered in the notify
-//!        dispatcher (push side).
+//!        dispatcher (push side, `DesktopNotification` frames only).
 //!     2. The Web UI WS handler in `web_ui.rs`, which subscribes
 //!        a fresh receiver per connection (pop side).
-//! - [`DesktopNotificationFrame`] is the internal channel-carried
-//!   message; the WS write-side translates it into
-//!   `DaemonMessage::DesktopNotification` (Phase 69 Task 3)
-//!   before encoding the on-wire frame.
+//! - [`WebUiBroadcastFrame`] is the internal channel-carried
+//!   enum (Chapter Mission Control) — [`DesktopNotificationFrame`]
+//!   is one of its variants; the WS write-side translates each
+//!   variant into its matching `DaemonMessage`/`DaemonEnvelope`
+//!   shape before encoding the on-wire frame.
 //! - [`NotifyWebUiBackend`] implements [`NotifyBackend::send`] by
 //!   pushing a frame onto the broadcaster. Per Phase 69 Q1(a),
 //!   `Ok(())` is returned even when no receivers are subscribed
@@ -52,12 +53,27 @@ pub struct DesktopNotificationFrame {
     pub body: String,
 }
 
+/// Chapter Mission Control — the broadcast channel now carries either kind
+/// of Web UI push. `WebUiBroadcaster` itself stays a single channel/single
+/// subscribe-point per connection (not two separate broadcasters + a
+/// `select!` per connection) — the WS relay loop matches on this enum and
+/// forwards each variant onto its own `DaemonEnvelope` shape.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WebUiBroadcastFrame {
+    DesktopNotification(DesktopNotificationFrame),
+    /// A team mission's live state changed (a step started/finished, or the
+    /// mission's phase transitioned) — carries the already-projected view,
+    /// computed daemon-side where the live running-step signal is in scope
+    /// (see `TeamMissionRecord::to_view_with_running` in `aivyx-ipc`).
+    TeamMissionUpdated(aivyx_ipc::TeamMissionView),
+}
+
 /// Broadcaster handle. Cheap-clonable (the inner sender is
 /// already `Clone`); the daemon's startup path wraps it in an
 /// `Arc` so both the dispatcher and the WS handler can hold the
 /// same instance without juggling clones at every site.
 pub struct WebUiBroadcaster {
-    sender: broadcast::Sender<DesktopNotificationFrame>,
+    sender: broadcast::Sender<WebUiBroadcastFrame>,
 }
 
 impl WebUiBroadcaster {
@@ -78,7 +94,7 @@ impl WebUiBroadcaster {
 
     /// Subscribe a fresh receiver. The Web UI WS handler calls
     /// this once per accepted browser connection.
-    pub fn subscribe(&self) -> broadcast::Receiver<DesktopNotificationFrame> {
+    pub fn subscribe(&self) -> broadcast::Receiver<WebUiBroadcastFrame> {
         self.sender.subscribe()
     }
 
@@ -90,7 +106,7 @@ impl WebUiBroadcaster {
 
     /// Push a frame onto the channel. Returns `Ok(())` even
     /// when there are zero subscribers (per Phase 69 Q1(a)).
-    pub fn broadcast(&self, frame: DesktopNotificationFrame) -> Result<(), NotifyError> {
+    pub fn broadcast(&self, frame: WebUiBroadcastFrame) -> Result<(), NotifyError> {
         // `broadcast::Sender::send` returns `Err(SendError(...))`
         // only when there are no active receivers. Per Q1(a)
         // that's an Ok outcome — the notification fired into a
@@ -143,7 +159,9 @@ impl NotifyBackend for NotifyWebUiBackend {
         let title = subject.unwrap_or("Aivyx").to_string();
         let body = message.to_string();
         self.broadcaster
-            .broadcast(DesktopNotificationFrame { title, body })
+            .broadcast(WebUiBroadcastFrame::DesktopNotification(
+                DesktopNotificationFrame { title, body },
+            ))
     }
 
     fn kind(&self) -> &'static str {
@@ -177,8 +195,16 @@ mod tests {
             .await
             .expect("send");
         let frame = rx.recv().await.expect("recv");
-        assert_eq!(frame.title, "Schedule");
-        assert_eq!(frame.body, "trigger fired");
+        match frame {
+            WebUiBroadcastFrame::DesktopNotification(DesktopNotificationFrame {
+                title,
+                body,
+            }) => {
+                assert_eq!(title, "Schedule");
+                assert_eq!(body, "trigger fired");
+            }
+            other => panic!("expected DesktopNotification, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -192,8 +218,16 @@ mod tests {
         backend.send("hello", None).await.expect("send");
         for rx in [&mut rx1, &mut rx2, &mut rx3] {
             let frame = rx.recv().await.expect("recv");
-            assert_eq!(frame.title, "Aivyx");
-            assert_eq!(frame.body, "hello");
+            match frame {
+                WebUiBroadcastFrame::DesktopNotification(DesktopNotificationFrame {
+                    title,
+                    body,
+                }) => {
+                    assert_eq!(title, "Aivyx");
+                    assert_eq!(body, "hello");
+                }
+                other => panic!("expected DesktopNotification, got {other:?}"),
+            }
         }
     }
 
@@ -204,8 +238,16 @@ mod tests {
         let backend = NotifyWebUiBackend::new(Arc::clone(&bc));
         backend.send("no subject", None).await.expect("send");
         let frame = rx.recv().await.expect("recv");
-        assert_eq!(frame.title, "Aivyx");
-        assert_eq!(frame.body, "no subject");
+        match frame {
+            WebUiBroadcastFrame::DesktopNotification(DesktopNotificationFrame {
+                title,
+                body,
+            }) => {
+                assert_eq!(title, "Aivyx");
+                assert_eq!(body, "no subject");
+            }
+            other => panic!("expected DesktopNotification, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -222,5 +264,28 @@ mod tests {
         let s = format!("{bc:?}");
         assert!(s.contains("receiver_count"), "got: {s}");
         assert!(s.contains("1"), "got: {s}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_relays_a_team_mission_updated_frame() {
+        use aivyx_ipc::{TeamMissionPhase, TeamMissionView};
+        let bc = Arc::new(WebUiBroadcaster::new());
+        let mut rx = bc.subscribe();
+        let view = TeamMissionView {
+            id: "m1".into(),
+            goal: "test".into(),
+            lead: "coordinator".into(),
+            phase: TeamMissionPhase::Executing,
+            pending_gate: None,
+            halt_reason: None,
+            progress: 0,
+            steps: vec![],
+        };
+        bc.broadcast(WebUiBroadcastFrame::TeamMissionUpdated(view.clone()))
+            .expect("broadcast");
+        match rx.recv().await.expect("recv") {
+            WebUiBroadcastFrame::TeamMissionUpdated(got) => assert_eq!(got, view),
+            other => panic!("expected TeamMissionUpdated, got {other:?}"),
+        }
     }
 }

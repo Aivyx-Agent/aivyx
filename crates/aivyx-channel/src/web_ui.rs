@@ -30,7 +30,7 @@ use crate::daemon_ipc::{
     DaemonEnvelope, FrameError, FrontendMessage, FrontendType, decode_frame, encode_frame,
 };
 use crate::daemon_server::DaemonError;
-use crate::notify_webui::{DesktopNotificationFrame, WebUiBroadcaster};
+use crate::notify_webui::{DesktopNotificationFrame, WebUiBroadcastFrame, WebUiBroadcaster};
 
 /// Default web UI port. Adjacent to webhook (7842).
 pub const DEFAULT_WEB_UI_PORT: u16 = 7843;
@@ -926,11 +926,10 @@ async fn handle_websocket(
 
     // Broadcast→WS (Phase 69 Task 5): if a WebUiBroadcaster is
     // configured, subscribe a fresh receiver and relay every
-    // DesktopNotificationFrame onto the WS as
-    // DaemonEnvelope::DesktopNotification. On `Lagged` we drop
-    // the missed frames silently — desktop notifications for a
-    // tab the operator isn't watching are by definition
-    // discardable.
+    // `WebUiBroadcastFrame` onto its matching `DaemonEnvelope`
+    // variant. On `Lagged` we drop the missed frames silently —
+    // desktop notifications for a tab the operator isn't
+    // watching are by definition discardable.
     let broadcast_to_ws = {
         let ws_sink = Arc::clone(&ws_sink);
         let mut rx_opt = web_ui_broadcaster.as_ref().map(|bc| bc.subscribe());
@@ -943,30 +942,34 @@ async fn handle_websocket(
                 return;
             };
             loop {
-                match rx.recv().await {
-                    Ok(DesktopNotificationFrame { title, body }) => {
-                        let envelope = DaemonEnvelope::DesktopNotification { title, body };
-                        let json = match serde_json::to_string(&envelope) {
-                            Ok(j) => j,
-                            Err(e) => {
-                                eprintln!("aivyx web ui: broadcast serialize error: {e}");
-                                continue;
-                            }
-                        };
-                        let mut sink = ws_sink.lock().await;
-                        if sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(json.into()))
-                            .await
-                            .is_err()
-                        {
-                            return; // WebSocket closed
-                        }
+                let envelope = match rx.recv().await {
+                    Ok(WebUiBroadcastFrame::DesktopNotification(DesktopNotificationFrame {
+                        title,
+                        body,
+                    })) => DaemonEnvelope::DesktopNotification { title, body },
+                    Ok(WebUiBroadcastFrame::TeamMissionUpdated(view)) => {
+                        DaemonEnvelope::TeamMissionUpdated { view }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         // Skipped some frames; keep listening.
                         continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                };
+                let json = match serde_json::to_string(&envelope) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        eprintln!("aivyx web ui: broadcast serialize error: {e}");
+                        continue;
+                    }
+                };
+                let mut sink = ws_sink.lock().await;
+                if sink
+                    .send(tokio_tungstenite::tungstenite::Message::Text(json.into()))
+                    .await
+                    .is_err()
+                {
+                    return; // WebSocket closed
                 }
             }
         }
