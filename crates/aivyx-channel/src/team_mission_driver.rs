@@ -503,6 +503,31 @@ pub async fn register_mission(
     Ok(id)
 }
 
+/// Chapter Muster — like [`register_mission`], but tags the resulting
+/// record with the schedule that started it. A separate function rather
+/// than a new parameter on `register_mission` itself, specifically to
+/// avoid touching that function's own 10+ existing call sites (production
+/// and test) that have no schedule to tag.
+pub async fn register_mission_for_schedule(
+    shared: &SharedMissionState,
+    plan: MissionPlan,
+    id: impl Into<String>,
+    config: Option<TeamConfig>,
+    schedule_id: &str,
+) -> Result<String, MissionDriverError> {
+    let id = id.into();
+    plan.validate()?;
+    let goal = plan.goal.clone();
+    shared
+        .put(
+            TeamMissionRecord::new(&id, goal, plan)
+                .with_config(config)
+                .with_triggered_by(schedule_id),
+        )
+        .await?;
+    Ok(id)
+}
+
 /// Assemble the team and drive an **already-registered** mission from its
 /// checkpoint to the next pause / terminal state. The mission runs on the team
 /// it was registered with (`record.config`); `default_config` is the fallback
@@ -1023,6 +1048,39 @@ impl TeamMissionService {
         )
         .await?;
         self.start(plan, config).await
+    }
+
+    /// Chapter Muster — like [`start_from_goal`], but the resulting
+    /// mission is tagged with the schedule that started it (`triggered_by`)
+    /// so Mission Control / `aivyx team status` can show "started by
+    /// schedule: <id>", and so the notify-on-gate/terminal-phase hook
+    /// (Task 5) can look up that schedule's own `notify_targets`.
+    pub async fn start_from_goal_for_schedule(
+        &self,
+        goal: &str,
+        config: Option<TeamConfig>,
+        schedule_id: &str,
+    ) -> Result<String, MissionDriverError> {
+        let cancel = aivyx_core::CancellationToken::new();
+        let plan = aivyx_team::decompose_goal(
+            self.deps.provider.as_ref(),
+            &self.deps.model,
+            goal,
+            config.as_ref().unwrap_or(&self.config),
+            &cancel,
+            true,
+        )
+        .await?;
+        let id = register_mission_for_schedule(
+            &self.state,
+            plan,
+            uuid::Uuid::new_v4().to_string(),
+            config,
+            schedule_id,
+        )
+        .await?;
+        self.spawn_drive(id.clone());
+        Ok(id)
     }
 
     /// Chapter Foreman — decompose `goal`, register the mission, and **drive it
@@ -3593,6 +3651,22 @@ mod tests {
             other => panic!("expected Completed, got {other:?}"),
         }
         assert_eq!(svc.list().len(), 1, "the mission was registered on the service");
+    }
+
+    #[tokio::test]
+    async fn start_from_goal_for_schedule_tags_the_record_with_the_schedule_id() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps(TOOL_PLAN_JSON),
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let id = svc
+            .start_from_goal_for_schedule("do the nightly close", None, "cfg-nightly-boh-close")
+            .await
+            .expect("starts");
+        let record = svc.list().into_iter().find(|r| r.id == id).expect("registered");
+        assert_eq!(record.triggered_by.as_deref(), Some("cfg-nightly-boh-close"));
     }
 
     #[tokio::test]
