@@ -362,6 +362,7 @@ enum TelegramIncomingOutcome {
 /// its position relative to this function is not part of the invariant
 /// under test. It stays inline in the loop, checked after this function
 /// returns `ForwardToChatTurn`.
+#[allow(clippy::too_many_arguments)]
 async fn handle_telegram_incoming_command(
     text: &str,
     socket_path: &Path,
