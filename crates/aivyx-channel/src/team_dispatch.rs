@@ -70,6 +70,11 @@ pub async fn dispatch(socket_path: &Path, cmd: TeamCommand) -> String {
             }
         }
         TeamCommand::Usage => "✗ Usage: /team status [<id>] | /team approve|reject <id> <step> | /team pause|resume <id> | /team abort <id>".to_string(),
+        TeamCommand::Run { .. } => {
+            "✗ /team run requires confirmation and must go through the channel's own \
+             confirm-first flow — this should never be dispatched directly."
+                .to_string()
+        }
     }
 }
 
@@ -434,5 +439,25 @@ mod tests {
         let reply = dispatch(std::path::Path::new("/nonexistent/unused.sock"), TeamCommand::Usage).await;
         assert!(reply.starts_with('✗'));
         assert!(reply.contains("Usage"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_run_is_never_reached_in_normal_flow_and_fails_closed_if_it_is() {
+        // TeamCommand::Run's real flow (confirm-first, rate-limit, the
+        // identity-declaring daemon_client::run_team_mission_channel one-
+        // shot call) is handled directly by each channel's own daemon-
+        // frontend loop, BEFORE team_command::parse's result ever reaches
+        // this function — see Tasks 11-13. This arm exists only so
+        // dispatch()'s match stays exhaustive; if it's ever hit anyway
+        // (a wiring bug), it must fail closed with a clear message, never
+        // silently start a mission or panic.
+        let reply = dispatch(
+            std::path::Path::new("/nonexistent/unused.sock"),
+            TeamCommand::Run {
+                goal: "close the books".to_string(),
+            },
+        )
+        .await;
+        assert!(reply.starts_with('✗'));
     }
 }
