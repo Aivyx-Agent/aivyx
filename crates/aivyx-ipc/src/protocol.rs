@@ -1774,6 +1774,19 @@ pub enum FrontendMessage {
         id: String,
         payload: QueryPayload,
     },
+    /// Piece C (2026-08-23) — start a new Nonagon team mission from a
+    /// channel's native `/team run <goal>` command. Unlike `Query`,
+    /// this is only ever sent over a connection that has already sent
+    /// `StartSession` with a real `frontend_type` — the daemon's own
+    /// authorization check (Chapter — `ChannelTriggerAuthz` in
+    /// `daemon_server.rs`) depends on knowing which channel is asking,
+    /// which the anonymous one-shot `Query` path cannot provide.
+    /// Responds with [`DaemonMessage::TeamMissionChannelStarted`] or
+    /// `Error` (capability-denied, no team-mission service configured,
+    /// or a decomposition/start failure).
+    RunTeamMissionChannel {
+        goal: String,
+    },
     /// Phase 60 — operator-initiated Persona revert (PRODUCT.md P14
     /// commit 4). The daemon appends a `Revert` op delta to the
     /// persona chain referencing `target_delta_id` and recomputes
@@ -2107,6 +2120,14 @@ pub enum DaemonMessage {
         mission_id: String,
         gate_id: String,
         approved: bool,
+    },
+    /// Piece C — response to [`FrontendMessage::RunTeamMissionChannel`]
+    /// on success. The new mission's id; the drive runs in the
+    /// background (poll via the existing `QueryPayload::
+    /// TeamMissionStatus`, same as every other team-mission start
+    /// path).
+    TeamMissionChannelStarted {
+        mission_id: String,
     },
     /// Protocol version accepted (Phase 41 Task 5).
     ProtocolAccepted {
@@ -2542,6 +2563,10 @@ pub enum DaemonEnvelope {
         mission_id: String,
         gate_id: String,
         approved: bool,
+    },
+    // Piece C — mirrors `DaemonMessage::TeamMissionChannelStarted`.
+    TeamMissionChannelStarted {
+        mission_id: String,
     },
     // DaemonLifecycleEvent variants
     DaemonReady {
@@ -4725,5 +4750,36 @@ mod tests {
         let json = serde_json::to_string(&att).expect("ser");
         let back: IpcAttachment = serde_json::from_str(&json).expect("de");
         assert_eq!(back, att);
+    }
+
+    // ---- Piece C (2026-08-23) — RunTeamMissionChannel IPC ----
+
+    #[test]
+    fn run_team_mission_channel_round_trips_through_frontend_message() {
+        let msg = FrontendMessage::RunTeamMissionChannel {
+            goal: "close the books".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let back: FrontendMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn team_mission_channel_started_round_trips_daemon_message_to_envelope() {
+        // DaemonMessage (what the daemon writes) must decode as the
+        // matching DaemonEnvelope variant (what the client reads) — the
+        // same cross-type compatibility every other daemon->client
+        // message in this protocol already relies on.
+        let msg = DaemonMessage::TeamMissionChannelStarted {
+            mission_id: "m-1".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let envelope: DaemonEnvelope = serde_json::from_str(&json).expect("deserialize as envelope");
+        assert_eq!(
+            envelope,
+            DaemonEnvelope::TeamMissionChannelStarted {
+                mission_id: "m-1".to_string()
+            }
+        );
     }
 }
