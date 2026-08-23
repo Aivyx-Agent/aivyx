@@ -45,8 +45,9 @@ pub async fn dispatch(socket_path: &Path, cmd: TeamCommand) -> String {
             approve,
         } => {
             let verb = if approve { "approve" } else { "reject" };
+            let past_tense = if approve { "approved" } else { "rejected" };
             match daemon_client::resolve_team_gate(socket_path, mission_id, step, approve).await {
-                Ok(phase) => format!("✓ Gate {verb}d. Mission now {}.", phase_label(phase)),
+                Ok(phase) => format!("✓ Gate {past_tense}. Mission now {}.", phase_label(phase)),
                 Err(e) => format!("✗ Gate {verb} failed: {e}"),
             }
         }
@@ -333,6 +334,32 @@ mod tests {
         assert!(reply.starts_with('✓'));
         assert!(reply.contains("approved"));
         assert!(reply.contains("executing"));
+
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn dispatch_reject_renders_confirmation() {
+        use aivyx_ipc::protocol::QueryResponsePayload;
+        let (sock, server) = fake_daemon_returning(QueryResponsePayload::TeamGateResolved {
+            mission_id: "m-1".to_string(),
+            phase: TeamMissionPhase::Rejected,
+        })
+        .await;
+
+        let reply = dispatch(
+            &sock,
+            TeamCommand::ResolveGate {
+                mission_id: "m-1".to_string(),
+                step: "approve".to_string(),
+                approve: false,
+            },
+        )
+        .await;
+        assert!(reply.starts_with('✓'));
+        assert!(reply.contains("rejected"));
+        assert!(!reply.contains("rejectd"));
 
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
