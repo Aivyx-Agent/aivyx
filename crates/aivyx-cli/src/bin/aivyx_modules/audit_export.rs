@@ -231,6 +231,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
         AuditEvent::DocumentMutated { .. } => "DocumentMutated",
         AuditEvent::ScheduleMutated { .. } => "ScheduleMutated",
+        AuditEvent::TeamMissionChannelTriggered { .. } => "TeamMissionChannelTriggered",
     }
 }
 
@@ -433,5 +434,18 @@ mod tests {
             source: None,
         };
         assert_eq!(event_type_label(&sap), "SkillAutoProposal");
+    }
+
+    #[test]
+    fn event_type_label_for_team_mission_channel_triggered() {
+        // Review finding C1 — the missing arm broke compilation
+        // entirely; this pins the label so a future variant addition
+        // can't silently regress it the same way.
+        let event = AuditEvent::TeamMissionChannelTriggered {
+            platform: "telegram".to_string(),
+            goal: "close the books".to_string(),
+            mission_id: "m-1".to_string(),
+        };
+        assert_eq!(event_type_label(&event), "TeamMissionChannelTriggered");
     }
 }

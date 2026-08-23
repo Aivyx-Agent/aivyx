@@ -1486,27 +1486,61 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // process claims about its own authorization. `None` (env-only
     // launch, no config file) or a failed re-read both fail closed to
     // all-`false` (`ChannelTriggerAuthz::default()`), never fail-open.
-    let channel_trigger_authz = config_toml_path
-        .as_deref()
-        .and_then(|p| load_settings_config(p).ok())
-        .map(|cfg| ChannelTriggerAuthz {
-            telegram: cfg
-                .telegram
-                .as_ref()
-                .map(|t| t.team_run_channel)
-                .unwrap_or(false),
-            discord: cfg
-                .discord
-                .as_ref()
-                .map(|d| d.team_run_channel)
-                .unwrap_or(false),
-            slack: cfg
-                .slack
-                .as_ref()
-                .map(|s| s.team_run_channel)
-                .unwrap_or(false),
-        })
-        .unwrap_or_default();
+    //
+    // Known gap (review finding I2): this re-read calls
+    // `load_settings_config` with `role_override: None` hardcoded,
+    // because `run_daemon`/`DaemonConfig` has no field carrying the
+    // real `--role` the process was actually started with (adding
+    // one would touch every `DaemonConfig` construction site,
+    // including the round-trip test fixtures — out of scope for this
+    // fix). If the primary config load *was* started with a non-
+    // default `--role` against a config with no role literally named
+    // "default", this re-read's role resolution can diverge from the
+    // primary load's and fail with `ConfigError::UnknownRole`. That
+    // still fails closed (never grants), but previously did so
+    // silently via `.ok()` — logged below instead so an operator
+    // running a custom role gets a diagnosable signal rather than an
+    // inert, unexplained `team_run_channel = true` doing nothing.
+    let channel_trigger_authz = match config_toml_path.as_deref() {
+        Some(p) => match load_settings_config(p) {
+            Ok(cfg) => ChannelTriggerAuthz {
+                telegram: cfg
+                    .telegram
+                    .as_ref()
+                    .map(|t| t.team_run_channel)
+                    .unwrap_or(false),
+                discord: cfg
+                    .discord
+                    .as_ref()
+                    .map(|d| d.team_run_channel)
+                    .unwrap_or(false),
+                slack: cfg
+                    .slack
+                    .as_ref()
+                    .map(|s| s.team_run_channel)
+                    .unwrap_or(false),
+            },
+            Err(e) => {
+                eprintln!(
+                    "aivyx daemon: WARNING — failed to re-read {} for /team run channel \
+                     authorization: {e} (if this daemon was started with a non-default \
+                     --role, this re-read does not carry that override and may be the \
+                     cause); falling back to all-channels-denied (fail closed)",
+                    p.display()
+                );
+                ChannelTriggerAuthz::default()
+            }
+        },
+        None => ChannelTriggerAuthz::default(),
+    };
+
+    // Finding I3(a) — an operator has no other way to confirm what
+    // the daemon actually granted; log it once at startup next to
+    // the other startup-time daemon state.
+    eprintln!(
+        "aivyx daemon: /team run channel authorization — telegram: {}, discord: {}, slack: {}",
+        channel_trigger_authz.telegram, channel_trigger_authz.discord, channel_trigger_authz.slack
+    );
 
     loop {
         let (stream, _addr) = tokio::select! {
@@ -1628,13 +1662,32 @@ pub fn channel_trigger_authorized(
 }
 
 /// Pure: the `triggered_by` tag a channel-started mission's record
-/// carries, and the `platform` field the audit event logs.
+/// carries. `register_mission_for_channel_trigger`'s own notify path
+/// (`team_mission_driver.rs`) depends on this exact `"channel:"`
+/// prefix to disambiguate a channel-triggered mission from a
+/// schedule id — do not strip it here.
 pub fn channel_trigger_tag(platform: Option<aivyx_core::ChannelPlatform>) -> String {
     match platform {
         Some(aivyx_core::ChannelPlatform::Telegram) => "channel:telegram".to_string(),
         Some(aivyx_core::ChannelPlatform::Discord) => "channel:discord".to_string(),
         Some(aivyx_core::ChannelPlatform::Slack) => "channel:slack".to_string(),
         _ => "channel:unknown".to_string(),
+    }
+}
+
+/// Pure: the bare platform name for `AuditEvent::TeamMissionChannelTriggered`'s
+/// `platform` field — Task 4's documented contract is a bare name
+/// (`"telegram"`/`"discord"`/`"slack"`/`"unknown"`), *not* the
+/// `"channel:"`-prefixed `channel_trigger_tag` form used for
+/// `triggered_by`. Kept as a separate helper (rather than stripping
+/// the prefix off `channel_trigger_tag`'s output at the call site) so
+/// the two contracts can't accidentally drift back together.
+pub fn channel_trigger_audit_platform(platform: Option<aivyx_core::ChannelPlatform>) -> String {
+    match platform {
+        Some(aivyx_core::ChannelPlatform::Telegram) => "telegram".to_string(),
+        Some(aivyx_core::ChannelPlatform::Discord) => "discord".to_string(),
+        Some(aivyx_core::ChannelPlatform::Slack) => "slack".to_string(),
+        _ => "unknown".to_string(),
     }
 }
 
@@ -1657,6 +1710,16 @@ async fn handle_run_team_mission_channel(
     goal: String,
 ) -> DaemonMessage {
     if !channel_trigger_authorized(authz, platform) {
+        // Finding I3(b) — a denied `/team run` otherwise leaves zero
+        // forensic trace (only successful starts are audited via
+        // `TeamMissionChannelTriggered`). No new `AuditEvent` variant
+        // here (out of scope for this fix); a startup-log-style
+        // eprintln is the narrowest fix.
+        eprintln!(
+            "aivyx daemon: /team run denied for channel {} (not authorized via \
+             team_run_channel in aivyx.toml)",
+            channel_trigger_audit_platform(platform)
+        );
         return DaemonMessage::Error {
             code: "team_run_channel_denied".into(),
             message: "this channel is not authorized to start team missions (operator \
@@ -1675,7 +1738,7 @@ async fn handle_run_team_mission_channel(
         Ok(mission_id) => {
             if let Some(log) = audit_log {
                 if let Err(e) = log.append(aivyx_audit::AuditEvent::TeamMissionChannelTriggered {
-                    platform: tag.clone(),
+                    platform: channel_trigger_audit_platform(platform),
                     goal: goal.clone(),
                     mission_id: mission_id.clone(),
                 }) {
@@ -7183,6 +7246,41 @@ mod tests {
             "channel:slack"
         );
         assert_eq!(channel_trigger_tag(None), "channel:unknown");
+    }
+
+    #[test]
+    fn channel_trigger_audit_platform_is_bare_not_channel_prefixed() {
+        // Review finding I1 — the `AuditEvent::TeamMissionChannelTriggered`
+        // `platform` field's documented contract (Task 4) is a bare
+        // platform name, e.g. `"telegram"`, *not* the `"channel:"`-
+        // prefixed `channel_trigger_tag` form used for `triggered_by`.
+        // `handle_run_team_mission_channel` calls this helper (not
+        // `channel_trigger_tag`) to build the audit event's `platform`
+        // field — this test pins that contract at the source.
+        assert_eq!(
+            channel_trigger_audit_platform(Some(aivyx_core::ChannelPlatform::Telegram)),
+            "telegram"
+        );
+        assert_eq!(
+            channel_trigger_audit_platform(Some(aivyx_core::ChannelPlatform::Discord)),
+            "discord"
+        );
+        assert_eq!(
+            channel_trigger_audit_platform(Some(aivyx_core::ChannelPlatform::Slack)),
+            "slack"
+        );
+        assert_eq!(channel_trigger_audit_platform(None), "unknown");
+
+        // None of these should ever carry the `"channel:"` prefix —
+        // that prefix is exclusively `channel_trigger_tag`'s contract.
+        for p in [
+            Some(aivyx_core::ChannelPlatform::Telegram),
+            Some(aivyx_core::ChannelPlatform::Discord),
+            Some(aivyx_core::ChannelPlatform::Slack),
+            None,
+        ] {
+            assert!(!channel_trigger_audit_platform(p).starts_with("channel:"));
+        }
     }
 
     #[tokio::test]
