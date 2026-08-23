@@ -45,6 +45,10 @@ pub enum TeamCommand {
     Resume { mission_id: String },
     /// `/team abort <id>`.
     Abort { mission_id: String },
+    /// `/team run <goal>` — Piece C. `goal` is everything after `run`,
+    /// re-joined with single spaces (multi-word goals are the norm;
+    /// unlike every other variant's single-token ids).
+    Run { goal: String },
     /// Recognized as a `/team` command but didn't match any known form —
     /// wrong argument count or unknown subcommand. Renders a usage hint
     /// instead of falling through to the chat-turn path.
@@ -61,6 +65,15 @@ pub fn parse(text: &str) -> Option<TeamCommand> {
     let parts: Vec<&str> = text.split_whitespace().collect();
     if parts.first() != Some(&"/team") {
         return None;
+    }
+    if parts.get(1) == Some(&"run") {
+        return if parts.len() >= 3 {
+            Some(TeamCommand::Run {
+                goal: parts[2..].join(" "),
+            })
+        } else {
+            Some(TeamCommand::Usage)
+        };
     }
     match parts.as_slice() {
         ["/team", "status"] => Some(TeamCommand::Status(None)),
@@ -213,5 +226,42 @@ mod tests {
         assert!(parse("").is_none());
         assert!(parse("   ").is_none());
         assert!(parse("hello team status").is_none());
+    }
+
+    #[test]
+    fn parse_run_canonical_single_word_goal() {
+        assert_eq!(
+            parse("/team run close-the-books"),
+            Some(TeamCommand::Run {
+                goal: "close-the-books".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_run_joins_multi_word_goal() {
+        assert_eq!(
+            parse("/team run close the books"),
+            Some(TeamCommand::Run {
+                goal: "close the books".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_run_collapses_internal_multiple_spaces() {
+        // split_whitespace collapses runs — matches this file's own
+        // existing parse_accepts_multiple_spaces_between_tokens precedent.
+        assert_eq!(
+            parse("/team run close   the   books"),
+            Some(TeamCommand::Run {
+                goal: "close the books".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_run_with_no_goal_is_usage() {
+        assert_eq!(parse("/team run"), Some(TeamCommand::Usage));
     }
 }

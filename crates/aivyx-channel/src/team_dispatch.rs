@@ -69,7 +69,13 @@ pub async fn dispatch(socket_path: &Path, cmd: TeamCommand) -> String {
                 Err(e) => format!("✗ Abort failed: {e}"),
             }
         }
-        TeamCommand::Usage => "✗ Usage: /team status [<id>] | /team approve|reject <id> <step> | /team pause|resume <id> | /team abort <id>".to_string(),
+        TeamCommand::Run { goal } => {
+            match daemon_client::team_run_goal(socket_path, goal, None).await {
+                Ok(mission_id) => format!("✓ Started mission {mission_id}"),
+                Err(e) => format!("✗ Run failed: {e}"),
+            }
+        }
+        TeamCommand::Usage => "✗ Usage: /team status [<id>] | /team approve|reject <id> <step> | /team pause|resume <id> | /team abort <id> | /team run <goal>".to_string(),
     }
 }
 
