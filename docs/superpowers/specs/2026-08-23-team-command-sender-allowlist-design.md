@@ -1,5 +1,32 @@
 # Team-Command Sender Allowlist Design
 
+**Status:** Shipped 2026-08-24 — plan at
+`docs/superpowers/plans/2026-08-23-team-command-sender-allowlist.md`,
+merged to `main` at `0bd05511`. Closes the sender-restriction gap Piece
+B's own final review deferred (see below).
+
+The final whole-branch review found a real, security-relevant gap this
+design doc did not anticipate: `/team run`'s own confirm-first flow (a
+bare "yes"/"no" reply, not a `/team`-prefixed command) doesn't parse as
+a `/team ...` command at all, so it skipped the allowlist check entirely
+— any sender in the chat, not just the one who staged the trigger, could
+confirm or cancel another sender's pending mission-start within the
+5-minute window. Fixed by making `PendingTrigger` generic over the
+sender-id type and recording who staged each trigger, so only that same
+sender's confirm reply resolves it — a mismatched sender's reply falls
+through silently (no denial reply, to avoid revealing a pending
+trigger's existence to an uninvolved chat member) and the original
+trigger survives untouched, still waiting for its real sender. The
+review's own re-review independently re-derived the fix's mutation-proof
+on a different channel than the one the fix report demonstrated before
+approving.
+
+The review also found this initiative's now-fourth consecutive instance
+of the same pattern: a new, deny-by-default, deliberately
+upgrade-breaking config knob shipped with zero operator documentation —
+fixed before merge, correcting one doc (`docs/INSTALL.md`) that had
+actively claimed something no longer true.
+
 ## Motivation
 
 The Team-Mission Triggers initiative (Pieces A, B, and C, all shipped

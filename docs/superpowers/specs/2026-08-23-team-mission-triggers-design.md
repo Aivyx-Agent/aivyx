@@ -81,8 +81,16 @@ regression Piece B introduced, but Piece B widens the blast radius from
 single-agent mission gates to full autonomous multi-agent mission control
 including abort. **User chose to scope this as its own future follow-on
 plan (a per-channel operator allowlist for `/team` commands) rather than
-fold it into Piece B or Piece C** — logged to the ecosystem backlog, not
-yet planned.
+fold it into Piece B or Piece C** — logged to the ecosystem backlog.
+
+**That follow-on shipped 2026-08-24** — see
+`docs/superpowers/specs/2026-08-23-team-command-sender-allowlist-design.md`,
+plan at `docs/superpowers/plans/2026-08-23-team-command-sender-allowlist.md`,
+merged `0bd05511`. A new, deny-by-default `team_command_allowed_senders`
+config gates the whole `/team` surface (including Piece C's `/team run`,
+and its own confirm-first "yes"/"no" reply step, which the follow-on's
+own final review found needed its own dedicated fix) uniformly across
+all three channels.
 
 Piece A's final whole-branch review found a real Critical security gap
 this design doc did not anticipate: the `pack_config` parameter this doc
