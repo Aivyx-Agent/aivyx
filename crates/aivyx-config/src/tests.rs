@@ -381,6 +381,71 @@ passphrase = "toml-passphrase"
 }
 
 // ------------------------------------------------------------------
+// Piece C Task 2 — team_run_channel / team_trigger_rate_limit
+// ------------------------------------------------------------------
+
+#[test]
+fn telegram_team_run_channel_defaults_to_false_and_unset_rate_limit() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [telegram]
+        token = "t"
+    "#,
+        "team-run-telegram-defaults",
+    );
+    let tg = cfg.telegram.expect("telegram section present");
+    assert!(!tg.team_run_channel);
+    assert_eq!(tg.team_trigger_rate_limit, None);
+    drop(env);
+}
+
+#[test]
+fn telegram_team_run_channel_and_rate_limit_round_trip_from_toml() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [telegram]
+        token = "t"
+        team_run_channel = true
+        team_trigger_rate_limit = 5
+    "#,
+        "team-run-telegram-round-trip",
+    );
+    let tg = cfg.telegram.expect("telegram section present");
+    assert!(tg.team_run_channel);
+    assert_eq!(tg.team_trigger_rate_limit, Some(5));
+    drop(env);
+}
+
+#[test]
+fn discord_and_slack_team_run_channel_round_trip_from_toml() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [discord]
+        token = "t"
+        team_run_channel = true
+        team_trigger_rate_limit = 3
+
+        [slack]
+        bot_token = "b"
+        app_token = "a"
+        team_run_channel = true
+        team_trigger_rate_limit = 7
+    "#,
+        "team-run-discord-slack-round-trip",
+    );
+    let discord = cfg.discord.expect("discord section present");
+    assert!(discord.team_run_channel);
+    assert_eq!(discord.team_trigger_rate_limit, Some(3));
+    let slack = cfg.slack.expect("slack section present");
+    assert!(slack.team_run_channel);
+    assert_eq!(slack.team_trigger_rate_limit, Some(7));
+    drop(env);
+}
+
+// ------------------------------------------------------------------
 // Phase 3: env-over-TOML precedence
 // ------------------------------------------------------------------
 

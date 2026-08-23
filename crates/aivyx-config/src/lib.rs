@@ -1581,6 +1581,14 @@ pub struct TelegramConfig {
     /// Optional chat_id filter. `None` = accept all chats (Phase 9
     /// multi-chat mode). `Some` = single-chat compat mode.
     pub chat_filter: Option<Sourced<i64>>,
+    /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
+    /// from this channel. No env-var override (TOML-only, matching
+    /// how narrow this knob is) so it stays a plain `bool`, not
+    /// `Sourced`-wrapped like `chat_filter`.
+    pub team_run_channel: bool,
+    /// Piece C — max `/team run` confirmations per rolling hour from
+    /// this channel. `None` = unlimited.
+    pub team_trigger_rate_limit: Option<u32>,
 }
 
 /// Phase 107 — Discord-specific configuration. Loaded from the
@@ -1604,6 +1612,14 @@ pub struct DiscordConfig {
     /// re-shaping `DiscordConfig`). `None` until the
     /// operator sets it.
     pub application_id: Option<Sourced<u64>>,
+    /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
+    /// from this channel. No env-var override (TOML-only, matching
+    /// how narrow this knob is) so it stays a plain `bool`, not
+    /// `Sourced`-wrapped like `chat_filter`.
+    pub team_run_channel: bool,
+    /// Piece C — max `/team run` confirmations per rolling hour from
+    /// this channel. `None` = unlimited.
+    pub team_trigger_rate_limit: Option<u32>,
 }
 
 /// Phase 109 — `[git]` configuration for the `git.status` /
@@ -1645,6 +1661,14 @@ pub struct SlackConfig {
     /// a defensive "this bot is only allowed in workspace X"
     /// constraint.
     pub team_id: Option<Sourced<String>>,
+    /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
+    /// from this channel. No env-var override (TOML-only, matching
+    /// how narrow this knob is) so it stays a plain `bool`, not
+    /// `Sourced`-wrapped like `chat_filter`.
+    pub team_run_channel: bool,
+    /// Piece C — max `/team run` confirmations per rolling hour from
+    /// this channel. `None` = unlimited.
+    pub team_trigger_rate_limit: Option<u32>,
 }
 
 /// Transport kind for an MCP server connection.
@@ -4558,6 +4582,17 @@ struct RawTelegram {
     token: Option<String>,
     #[serde(default)]
     chat_id: Option<i64>,
+    /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
+    /// from this channel. Absent/false: the command is recognized but
+    /// always replies with a capability-denial message, both client-
+    /// side (fail-fast UX) and server-side (the real enforcement).
+    #[serde(default)]
+    team_run_channel: bool,
+    /// Piece C — max `/team run` confirmations accepted per rolling
+    /// hour from this channel (client-side enforced). `None` =
+    /// unlimited.
+    #[serde(default)]
+    team_trigger_rate_limit: Option<u32>,
 }
 
 /// Phase 107 — `[discord]` TOML section deserialize target.
@@ -4569,6 +4604,17 @@ struct RawDiscord {
     token: Option<String>,
     #[serde(default)]
     application_id: Option<u64>,
+    /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
+    /// from this channel. Absent/false: the command is recognized but
+    /// always replies with a capability-denial message, both client-
+    /// side (fail-fast UX) and server-side (the real enforcement).
+    #[serde(default)]
+    team_run_channel: bool,
+    /// Piece C — max `/team run` confirmations accepted per rolling
+    /// hour from this channel (client-side enforced). `None` =
+    /// unlimited.
+    #[serde(default)]
+    team_trigger_rate_limit: Option<u32>,
 }
 
 /// Phase 108 — `[slack]` TOML section deserialize target.
@@ -4582,6 +4628,17 @@ struct RawSlack {
     app_token: Option<String>,
     #[serde(default)]
     team_id: Option<String>,
+    /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
+    /// from this channel. Absent/false: the command is recognized but
+    /// always replies with a capability-denial message, both client-
+    /// side (fail-fast UX) and server-side (the real enforcement).
+    #[serde(default)]
+    team_run_channel: bool,
+    /// Piece C — max `/team run` confirmations accepted per rolling
+    /// hour from this channel (client-side enforced). `None` =
+    /// unlimited.
+    #[serde(default)]
+    team_trigger_rate_limit: Option<u32>,
 }
 
 /// Phase 109 — `[git]` TOML section deserialize target. One
@@ -5956,6 +6013,8 @@ impl AivyxConfig {
             Some(TelegramConfig {
                 token: telegram_token,
                 chat_filter: telegram_chat_filter,
+                team_run_channel: toml.telegram.team_run_channel,
+                team_trigger_rate_limit: toml.telegram.team_trigger_rate_limit,
             })
         } else {
             None
@@ -5995,6 +6054,8 @@ impl AivyxConfig {
             Some(DiscordConfig {
                 token: discord_token,
                 application_id: discord_application_id,
+                team_run_channel: toml.discord.team_run_channel,
+                team_trigger_rate_limit: toml.discord.team_trigger_rate_limit,
             })
         } else {
             None
@@ -6039,6 +6100,8 @@ impl AivyxConfig {
                 bot_token: slack_bot_token,
                 app_token: slack_app_token,
                 team_id: slack_team_id,
+                team_run_channel: toml.slack.team_run_channel,
+                team_trigger_rate_limit: toml.slack.team_trigger_rate_limit,
             })
         } else {
             None
