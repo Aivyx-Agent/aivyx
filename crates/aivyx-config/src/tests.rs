@@ -446,6 +446,70 @@ fn discord_and_slack_team_run_channel_round_trip_from_toml() {
 }
 
 // ------------------------------------------------------------------
+// Sender Allowlist Task 1 — team_command_allowed_senders
+// ------------------------------------------------------------------
+
+#[test]
+fn telegram_team_command_allowed_senders_defaults_to_empty() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [telegram]
+        token = "t"
+    "#,
+        "telegram-allowlist-default",
+    );
+    let tg = cfg.telegram.expect("telegram section present");
+    assert!(tg.team_command_allowed_senders.is_empty());
+    drop(env);
+}
+
+#[test]
+fn telegram_team_command_allowed_senders_round_trips_from_toml() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [telegram]
+        token = "t"
+        team_command_allowed_senders = [123456789, 987654321]
+    "#,
+        "telegram-allowlist-round-trip",
+    );
+    let tg = cfg.telegram.expect("telegram section present");
+    assert_eq!(tg.team_command_allowed_senders, vec![123456789, 987654321]);
+    drop(env);
+}
+
+#[test]
+fn discord_and_slack_team_command_allowed_senders_round_trip_from_toml() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [discord]
+        token = "t"
+        team_command_allowed_senders = [111111111, 222222222]
+
+        [slack]
+        bot_token = "b"
+        app_token = "a"
+        team_command_allowed_senders = ["U012ABCDEF", "U098ZYXWVU"]
+    "#,
+        "discord-slack-allowlist-round-trip",
+    );
+    let discord = cfg.discord.expect("discord section present");
+    assert_eq!(
+        discord.team_command_allowed_senders,
+        vec![111111111u64, 222222222u64]
+    );
+    let slack = cfg.slack.expect("slack section present");
+    assert_eq!(
+        slack.team_command_allowed_senders,
+        vec!["U012ABCDEF".to_string(), "U098ZYXWVU".to_string()]
+    );
+    drop(env);
+}
+
+// ------------------------------------------------------------------
 // Phase 3: env-over-TOML precedence
 // ------------------------------------------------------------------
 

@@ -1589,6 +1589,10 @@ pub struct TelegramConfig {
     /// Piece C — max `/team run` confirmations per rolling hour from
     /// this channel. `None` = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
+    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// ids allowed to issue any `/team ...` command from this channel.
+    /// Empty: no sender is authorized (deny by default).
+    pub team_command_allowed_senders: Vec<i64>,
 }
 
 /// Phase 107 — Discord-specific configuration. Loaded from the
@@ -1620,6 +1624,10 @@ pub struct DiscordConfig {
     /// Piece C — max `/team run` confirmations per rolling hour from
     /// this channel. `None` = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
+    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// ids allowed to issue any `/team ...` command from this channel.
+    /// Empty: no sender is authorized (deny by default).
+    pub team_command_allowed_senders: Vec<u64>,
 }
 
 /// Phase 109 — `[git]` configuration for the `git.status` /
@@ -1669,6 +1677,10 @@ pub struct SlackConfig {
     /// Piece C — max `/team run` confirmations per rolling hour from
     /// this channel. `None` = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
+    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// ids allowed to issue any `/team ...` command from this channel.
+    /// Empty: no sender is authorized (deny by default).
+    pub team_command_allowed_senders: Vec<String>,
 }
 
 /// Transport kind for an MCP server connection.
@@ -4593,6 +4605,13 @@ struct RawTelegram {
     /// unlimited.
     #[serde(default)]
     team_trigger_rate_limit: Option<u32>,
+    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// ids allowed to issue any `/team ...` command (status/approve/
+    /// reject/pause/resume/abort/run) from this channel. Empty/absent:
+    /// no sender is authorized — deny by default, closing a real gap
+    /// (previously, any sender in a connected chat could act).
+    #[serde(default)]
+    team_command_allowed_senders: Vec<i64>,
 }
 
 /// Phase 107 — `[discord]` TOML section deserialize target.
@@ -4615,6 +4634,13 @@ struct RawDiscord {
     /// unlimited.
     #[serde(default)]
     team_trigger_rate_limit: Option<u32>,
+    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// ids allowed to issue any `/team ...` command (status/approve/
+    /// reject/pause/resume/abort/run) from this channel. Empty/absent:
+    /// no sender is authorized — deny by default, closing a real gap
+    /// (previously, any sender in a connected chat could act).
+    #[serde(default)]
+    team_command_allowed_senders: Vec<u64>,
 }
 
 /// Phase 108 — `[slack]` TOML section deserialize target.
@@ -4639,6 +4665,13 @@ struct RawSlack {
     /// unlimited.
     #[serde(default)]
     team_trigger_rate_limit: Option<u32>,
+    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// ids allowed to issue any `/team ...` command (status/approve/
+    /// reject/pause/resume/abort/run) from this channel. Empty/absent:
+    /// no sender is authorized — deny by default, closing a real gap
+    /// (previously, any sender in a connected chat could act).
+    #[serde(default)]
+    team_command_allowed_senders: Vec<String>,
 }
 
 /// Phase 109 — `[git]` TOML section deserialize target. One
@@ -6015,6 +6048,7 @@ impl AivyxConfig {
                 chat_filter: telegram_chat_filter,
                 team_run_channel: toml.telegram.team_run_channel,
                 team_trigger_rate_limit: toml.telegram.team_trigger_rate_limit,
+                team_command_allowed_senders: toml.telegram.team_command_allowed_senders.clone(),
             })
         } else {
             None
@@ -6056,6 +6090,7 @@ impl AivyxConfig {
                 application_id: discord_application_id,
                 team_run_channel: toml.discord.team_run_channel,
                 team_trigger_rate_limit: toml.discord.team_trigger_rate_limit,
+                team_command_allowed_senders: toml.discord.team_command_allowed_senders.clone(),
             })
         } else {
             None
@@ -6102,6 +6137,7 @@ impl AivyxConfig {
                 team_id: slack_team_id,
                 team_run_channel: toml.slack.team_run_channel,
                 team_trigger_rate_limit: toml.slack.team_trigger_rate_limit,
+                team_command_allowed_senders: toml.slack.team_command_allowed_senders.clone(),
             })
         } else {
             None
