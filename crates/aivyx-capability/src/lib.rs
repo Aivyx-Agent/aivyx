@@ -472,6 +472,20 @@ const KNOWN_BASES: &[&str] = &[
     // Trusted (like the loop tools); distinct from `team.delegate` (the
     // in-assembly lead authority) — `team.run` *starts a whole mission*.
     "team.run",
+    // team.run.channel — Chapter (Piece C, 2026-08-23). Narrow,
+    // channel-only sibling to team.run: starts a new Nonagon team
+    // mission from a chat command (`/team run <goal>`), never from
+    // the model. Deliberately absent from every real trust-tier
+    // ceiling (Trusted included) — this base is never granted via
+    // the normal CapabilitySet/TrustTier intersection at all.
+    // Authorization is a bespoke, daemon-side, per-channel-type
+    // config check (see `daemon_server.rs`'s `ChannelTriggerAuthz`),
+    // since the trust-tier ceiling mechanism has no per-channel-type
+    // granularity to hang this on (every channel type hardcodes the
+    // same SemiTrusted tier). Present in KNOWN_BASES purely for
+    // audit-trail/drift-guard consistency with every other gated
+    // capability surface in this codebase.
+    "team.run.channel",
 ];
 
 /// The capability bases whose actions are **irreversible, outbound, or
@@ -2002,6 +2016,26 @@ mod tests {
     }
 
     #[test]
+    fn team_run_channel_is_known_but_granted_by_no_real_tier() {
+        let s = |x: &str| Scope::parse(x).unwrap();
+        assert!(KNOWN_BASES.contains(&"team.run.channel"));
+        assert!(!TrustTier::SemiTrusted
+            .default_ceiling()
+            .grants(&s("team.run.channel")));
+        assert!(!TrustTier::Trusted
+            .default_ceiling()
+            .grants(&s("team.run.channel")));
+        assert!(!TrustTier::Untrusted
+            .default_ceiling()
+            .grants(&s("team.run.channel")));
+        // Kernel grants every KNOWN_BASES entry unconditionally — pre-existing,
+        // unrelated behavior this base does not special-case around.
+        assert!(TrustTier::Kernel
+            .default_ceiling()
+            .grants(&s("team.run.channel")));
+    }
+
+    #[test]
     fn git_read_is_in_trusted_ceiling_only() {
         // Regression for a second real bug of the same shape (found
         // 2026-07-07 via Chapter Almanac's full-93-base tier audit,
@@ -2234,7 +2268,7 @@ mod tests {
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            93,
+            94,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
