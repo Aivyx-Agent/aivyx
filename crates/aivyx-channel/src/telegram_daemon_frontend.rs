@@ -23,7 +23,7 @@ use crate::daemon_client::{self, DaemonSession};
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::daemon_server::DaemonError;
 use crate::gate_command;
-use crate::team_command::{self, TeamCommand};
+use crate::team_command::{self, sender_allowed, TeamCommand};
 use crate::team_dispatch;
 use crate::team_trigger_state::{
     check_and_record_trigger, parse_confirm_reply, ConfirmReply, PendingTrigger,
@@ -121,6 +121,7 @@ struct ChatRoute {
 /// Streamed `StreamEventPayload` events are accumulated per turn and
 /// sent as a single Telegram message at `TurnComplete` (Q3→(b)).
 /// `/cancel` is forwarded as `CancelTurn` over IPC.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_telegram_daemon_multi_session(
     transport: Arc<ReqwestTransport>,
     chat_filter: Option<i64>,
@@ -129,6 +130,7 @@ pub async fn run_telegram_daemon_multi_session(
     shutdown: CancellationToken,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    team_command_allowed_senders: Vec<i64>,
 ) -> Result<(), DaemonError> {
     let mut routes: HashMap<i64, ChatRoute> = HashMap::new();
     let mut offset: i64 = 0;
@@ -172,6 +174,7 @@ pub async fn run_telegram_daemon_multi_session(
                 let sp = socket_path.clone();
                 let role_clone = role.clone();
                 let shutdown_clone = shutdown.clone();
+                let team_command_allowed_senders = team_command_allowed_senders.clone();
                 let handle = tokio::spawn(async move {
                     run_telegram_daemon_chat_task(
                         transport_clone,
@@ -182,6 +185,7 @@ pub async fn run_telegram_daemon_multi_session(
                         shutdown_clone,
                         team_run_channel,
                         team_trigger_rate_limit,
+                        team_command_allowed_senders,
                     )
                     .await
                 });
@@ -365,7 +369,21 @@ async fn handle_telegram_incoming_command(
     trigger_history: &mut Vec<Instant>,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    sender_id: i64,
+    allowed_senders: &[i64],
 ) -> TelegramIncomingOutcome {
+    // Team-Command Sender Allowlist (2026-08-23) — must run before
+    // BOTH handle_telegram_team_run_message (or an unauthorized /team
+    // run would still reach the confirm-first flow) and the generic
+    // team_command::parse dispatch below. Checked only when the text
+    // actually parses as a /team command at all -- ordinary chat text
+    // from an unauthorized sender is completely unaffected.
+    if team_command::parse(text).is_some() && !sender_allowed(allowed_senders, &sender_id) {
+        return TelegramIncomingOutcome::Reply(
+            "✗ you are not authorized to issue /team commands.".to_string(),
+        );
+    }
+
     match handle_telegram_team_run_message(
         text,
         socket_path,
@@ -400,6 +418,7 @@ async fn run_telegram_daemon_chat_task(
     shutdown: CancellationToken,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    team_command_allowed_senders: Vec<i64>,
 ) -> Result<(), DaemonError> {
     let mut session = DaemonSession::connect(
         &socket_path,
@@ -439,6 +458,8 @@ async fn run_telegram_daemon_chat_task(
             &mut trigger_history,
             team_run_channel,
             team_trigger_rate_limit,
+            msg.user_id,
+            &team_command_allowed_senders,
         )
         .await
         {
@@ -855,6 +876,8 @@ mod tests {
             &mut trigger_history,
             true,  // team_run_channel
             None,  // team_trigger_rate_limit
+            123,   // sender_id -- IS in the allowlist
+            &[123i64, 456],
         )
         .await;
         match outcome {
@@ -875,5 +898,131 @@ mod tests {
             }
         }
         assert!(pending_trigger.is_some(), "a pending trigger should now be set");
+    }
+
+    // --- Sender Allowlist Task 3 --------------------------------------
+
+    #[tokio::test]
+    async fn unauthorized_sender_is_denied_before_team_run_recognition() {
+        // This is the test that proves the ordering: the sender check must
+        // run BEFORE handle_telegram_team_run_message's own call, or an
+        // unauthorized sender's /team run would still reach the confirm-
+        // first flow (team_run_channel: true below would otherwise let it
+        // succeed). Piece C's own analogous ordering test needed two review
+        // rounds because an earlier version only proved a narrower helper's
+        // internals, never the real call-site order — this test is written
+        // to avoid that exact failure mode by asserting on the SPECIFIC
+        // confirm-prompt text that would appear if the check were bypassed.
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_telegram_incoming_command(
+            "/team run close the books",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            true, // team_run_channel -- would otherwise let this succeed
+            None, // team_trigger_rate_limit
+            999,  // sender_id -- NOT in the allowlist
+            &[123i64, 456],
+        )
+        .await;
+        match outcome {
+            TelegramIncomingOutcome::Reply(text) => {
+                assert!(
+                    text.contains("not authorized to issue /team commands"),
+                    "expected the sender-denial reply, got: {text}"
+                );
+                assert!(
+                    !text.contains("Reply yes/no"),
+                    "got the confirm-first prompt instead of the sender-denial \
+                     reply -- this means the sender-allowlist check is being \
+                     bypassed by /team run's own recognition, the exact bug \
+                     this test exists to catch: {text}"
+                );
+            }
+            TelegramIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a denial reply, not a forward to chat turn")
+            }
+        }
+        assert!(
+            pending_trigger.is_none(),
+            "an unauthorized /team run must not set a pending trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_sender_is_denied_for_the_generic_team_surface_too() {
+        // Confirms the check gates the WHOLE /team surface, not just Run --
+        // /team status is a Piece B command with no team_run_channel
+        // involvement at all.
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_telegram_incoming_command(
+            "/team status",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            false,
+            None,
+            999,
+            &[123i64, 456],
+        )
+        .await;
+        match outcome {
+            TelegramIncomingOutcome::Reply(text) => {
+                assert!(text.contains("not authorized to issue /team commands"));
+            }
+            TelegramIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a denial reply, not a forward to chat turn")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_sender_reaches_dispatch_not_the_denial() {
+        // Confirms the check doesn't false-positive-deny a legitimate
+        // sender. socket_path points nowhere, so team_dispatch::dispatch
+        // itself will fail (daemon unreachable) -- the point is the reply
+        // is THAT failure, not the sender-denial message, proving the
+        // authorized sender got past this check and reached real dispatch.
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_telegram_incoming_command(
+            "/team status",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            false,
+            None,
+            123, // sender_id -- IS in the allowlist
+            &[123i64, 456],
+        )
+        .await;
+        match outcome {
+            TelegramIncomingOutcome::Reply(text) => {
+                assert!(!text.contains("not authorized to issue /team commands"));
+            }
+            TelegramIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a Reply (dispatch attempted), not ForwardToChatTurn")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn non_team_text_is_unaffected_regardless_of_sender() {
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_telegram_incoming_command(
+            "hello, just chatting",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            false,
+            None,
+            999, // unauthorized sender -- must not matter here
+            &[123i64, 456],
+        )
+        .await;
+        assert_eq!(outcome, TelegramIncomingOutcome::ForwardToChatTurn);
     }
 }
