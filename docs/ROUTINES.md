@@ -105,6 +105,23 @@ team mission — the agent's own `schedule.create` tool accepts `goal`
 (never `pack_config`, which is operator-only, set via `aivyx.toml`
 directly) as an alternative to `prompt`.
 
+### A third way to start one: `/team run <goal>` from chat
+
+Besides `aivyx team run "<goal>"` (CLI) and a `[schedule.team_mission]`
+routine (above), a team mission can also be started **on demand from
+Telegram/Discord/Slack** by typing `/team run <goal>` in an opted-in
+channel — no daemon restart or config edit needed per-mission, unlike a
+schedule. The operator opts a channel in with `team_run_channel = true`
+in that channel's config (`[telegram]`/`[discord]`/`[slack]` in
+`aivyx.toml`; default `false` — off everywhere until set), and an
+optional `team_trigger_rate_limit` caps how many confirmed starts one
+chat can trigger per rolling hour. Every `/team run` is confirm-first:
+the bot asks "Start '<goal>' on the default team? Reply yes/no." and
+only starts the mission on a bare "yes" within 5 minutes. See
+`docs/DAEMON_TEAMS.md` §6 (Chat surface) for the full command set and
+`docs/INSTALL.md`'s Telegram/Discord/Slack sections for the config
+knobs.
+
 ## Editing, disabling, adding
 
 - **Disable one:** set `enabled = false` on its `[[schedule]]` block and restart

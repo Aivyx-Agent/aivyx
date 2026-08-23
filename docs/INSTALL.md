@@ -643,6 +643,8 @@ Persona + mission-gate behavior.
    [discord]
    token = "your_bot_token_here"
    # application_id = 12345...  # Reserved for slash commands; not used in v1.
+   # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
+   # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
    ```
 
 5. **Talk to the bot** — open a DM, type a message, watch the
@@ -660,6 +662,19 @@ set for Nonagon team-mission control — `/team status [<id>]`,
 `/team approve|reject <id> <step>`, `/team pause|resume <id>`,
 `/team abort <id>` — routed the same way, across all three
 channels (Telegram, Discord, Slack).
+
+**`/team run <goal>`** (Piece C) is the one `/team` command that
+*starts* a mission rather than controlling an existing one, so it's
+off by default: the operator must opt a channel in with
+`team_run_channel = true` in that channel's `[telegram]`/`[discord]`/
+`[slack]` config block (see the TOML examples below). Once opted in,
+the bot confirms before acting — it replies "Start '<goal>' on the
+default team? Reply yes/no." and only starts the mission on a bare
+"yes" within 5 minutes; "no" (or a stale "yes") cancels instead. An
+optional `team_trigger_rate_limit` caps how many confirmed starts one
+chat can trigger per rolling hour. See `docs/DAEMON_TEAMS.md` §6 and
+`docs/ROUTINES.md` for the full behavior and how it compares to the
+CLI and scheduled ways to start a team mission.
 
 ## Running Aivyx on Slack (Phase 108)
 
@@ -704,6 +719,8 @@ collide.
    bot_token = "xoxb-..."
    app_token = "xapp-..."
    # team_id = "T0123456789"  # optional: constrain to one workspace
+   # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
+   # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
    ```
 
 8. **Talk to the bot** — open a DM with the bot or mention

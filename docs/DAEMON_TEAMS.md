@@ -197,12 +197,29 @@ future option that doesn't change this contract.
     (the driver maps snapshots → rows, same seam as J.7).
 - **Chat** (Telegram/Discord/Slack daemon-frontends): a `/team ...`
   command set recognized before the normal chat-turn path (`team_command.rs`
-  parses, `team_dispatch.rs` dispatches over the same daemon IPC the CLI
-  uses) — `/team status [<id>]`, `/team approve|reject <id> <step>`,
-  `/team pause|resume <id>`, `/team abort <id>`. Same semantics as the CLI
+  parses; `team_dispatch.rs` dispatches the monitoring/control subcommands —
+  `/team status [<id>]`, `/team approve|reject <id> <step>`,
+  `/team pause|resume <id>`, `/team abort <id>` — over the same
+  daemon-internal call pattern the CLI uses). Same semantics as the CLI
   surface above (a mission paused at a human gate can't be paused/aborted,
   resolve its gate instead); replies are chat-appropriate text, not the
   CLI's fixed-width tables.
+  - **`/team run <goal>`** (Piece C) starts a *new* mission instead of
+    controlling an existing one, so it does **not** go through
+    `team_dispatch.rs` or the CLI's anonymous `Query` IPC path — that path
+    has no per-caller authorization and would let any chat message start a
+    mission. It uses its own separate, identity-declaring path instead
+    (`daemon_client::run_team_mission_channel`, which does its own
+    `StartSession` handshake so the daemon knows which real channel is
+    asking) and is confirm-first: the bot replies "Start '<goal>' on the
+    default team? Reply yes/no." and only calls
+    `run_team_mission_channel` on a bare "yes" within 5 minutes ("no" or a
+    stale "yes" cancels instead). The daemon only honors the request if the
+    operator opted the channel in via `team_run_channel = true` in
+    `aivyx.toml` (default `false` — off for every channel until set); an
+    optional `team_trigger_rate_limit` caps confirmed starts per rolling
+    hour per chat. See `docs/INSTALL.md` and `docs/ROUTINES.md` for the
+    operator-facing config and usage.
 
 ---
 

@@ -751,6 +751,35 @@ test pins the new total at **90**, so this addendum and the runtime stay
 in sync. *(Chapter Abacus is complete: three group bases — `calc.eval`,
 `convert.units`, `date.compute` — for the five-tool utilities pack.)*
 
+## Piece C addendum — `team.run.channel` (2026-08-23)
+
+> *Added at Piece C (channel-triggered team missions, `docs/DAEMON_TEAMS.md`
+> §6's Chat surface). One base, `team.run.channel`, gates the narrow,
+> channel-only `/team run <goal>` trigger — starting a new Nonagon team
+> mission from a chat command, never from the model. Unlike every other
+> base in this file, it is deliberately absent from every real trust-tier
+> ceiling (Trusted included): authorization is a bespoke, daemon-side,
+> per-channel-type config check (`ChannelTriggerAuthz` in
+> `daemon_server.rs`, driven by the operator's own `team_run_channel`
+> TOML opt-in), since the ordinary CapabilitySet/TrustTier ceiling has no
+> per-channel-type granularity to hang this on. Present in `KNOWN_BASES`
+> purely for audit-trail/drift-guard consistency with every other gated
+> capability surface, not because any tier grants it.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Piece C | `team.run.channel` | Channel-only sibling to `team.run` — gates `/team run <goal>` from Telegram/Discord/Slack; granted by no real tier ceiling, authorized instead by the daemon's own per-channel `team_run_channel` config check |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **93 → 94** (the one new `team.run.channel`
+base). The `known_bases_count_matches_phase_143_a3_addendum` test pins
+the new total at **94**, so this addendum and the runtime stay in sync.
+(This file's own local running-count chain above had already fallen
+behind the real `KNOWN_BASES.len()` before this base was added — a
+pre-existing gap this entry doesn't attempt to reconcile, only to not
+compound.)
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

@@ -190,7 +190,11 @@ parallel-ready — adding wide parallelism is a *flip*, not a redesign.
 >
 > To actually run this unattended every night rather than by hand, see
 > `docs/ROUTINES.md`'s "Scheduling a team mission" section --
-> `[schedule.team_mission]` in `aivyx.toml`.
+> `[schedule.team_mission]` in `aivyx.toml`. A mission can also be
+> started on demand from chat -- typing `/team run <goal>` in an
+> operator-opted-in Telegram/Discord/Slack channel -- see that same
+> doc's "A third way to start one" subsection and `docs/DAEMON_TEAMS.md`
+> §6 for the confirm-first flow and the `team_run_channel` opt-in.
 
 A second example: delegating a bounded coding task to `aivyx-coder`
 running out-of-process, bridged in as an MCP server (see

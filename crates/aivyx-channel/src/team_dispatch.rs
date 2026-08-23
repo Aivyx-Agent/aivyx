@@ -69,7 +69,7 @@ pub async fn dispatch(socket_path: &Path, cmd: TeamCommand) -> String {
                 Err(e) => format!("✗ Abort failed: {e}"),
             }
         }
-        TeamCommand::Usage => "✗ Usage: /team status [<id>] | /team approve|reject <id> <step> | /team pause|resume <id> | /team abort <id>".to_string(),
+        TeamCommand::Usage => "✗ Usage: /team status [<id>] | /team approve|reject <id> <step> | /team pause|resume <id> | /team abort <id> | /team run <goal>".to_string(),
         TeamCommand::Run { .. } => {
             "✗ /team run requires confirmation and must go through the channel's own \
              confirm-first flow — this should never be dispatched directly."
@@ -439,6 +439,9 @@ mod tests {
         let reply = dispatch(std::path::Path::new("/nonexistent/unused.sock"), TeamCommand::Usage).await;
         assert!(reply.starts_with('✗'));
         assert!(reply.contains("Usage"));
+        // Finding I3 — the hint must mention `/team run <goal>` too, not
+        // just the other five subcommands.
+        assert!(reply.contains("/team run <goal>"));
     }
 
     #[tokio::test]

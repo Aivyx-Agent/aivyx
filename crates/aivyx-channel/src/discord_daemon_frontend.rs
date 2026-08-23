@@ -17,7 +17,7 @@
 //! SemiTrusted adapters.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aivyx_core::{
@@ -202,6 +202,111 @@ pub async fn run_discord_daemon_multi_session(
     Ok(())
 }
 
+/// Outcome of [`handle_discord_team_run_message`] — mirrors
+/// `telegram_daemon_frontend::TelegramChatOutcome` exactly.
+#[derive(Debug, PartialEq, Eq)]
+enum DiscordChatOutcome {
+    /// Reply immediately with this text; do not forward to the LLM turn
+    /// path or the generic `gate_command`/`team_command` dispatch below.
+    Reply(String),
+    /// Nothing here matched (not a pending confirm resolution, not a
+    /// fresh `/team run`) — the caller should fall through to its own
+    /// existing `gate_command`/`team_command` dispatch and, ultimately,
+    /// `session.submit_input`.
+    NotHandled,
+}
+
+/// Extracted from `run_discord_daemon_channel_task` specifically so the
+/// ordering invariant (the pending-confirm check and `/team run`
+/// recognition MUST be checked before the generic `team_command`
+/// dispatch, or `/team run` becomes permanently unreachable dead code —
+/// a real bug this exact branch shipped once and had to fix in all
+/// three channels, see the final-review report) is directly testable
+/// without a live transport or socket. Mirrors
+/// `telegram_daemon_frontend::handle_telegram_team_run_message` exactly
+/// (same control flow, same fall-through-overwrite semantics) — see that
+/// function's own doc comment for the detailed rationale.
+async fn handle_discord_team_run_message(
+    text: &str,
+    socket_path: &Path,
+    pending_trigger: &mut Option<PendingTrigger>,
+    trigger_history: &mut Vec<Instant>,
+    team_run_channel: bool,
+    team_trigger_rate_limit: Option<u32>,
+) -> DiscordChatOutcome {
+    // Piece C — a pending confirm-first prompt takes priority over
+    // everything else (including a stray gate_command/team_command
+    // match, though "yes"/"no" never collide with either's own
+    // `/`-prefixed syntax). Must run before both the gate_command
+    // check below and Piece B's own generic `team_command::parse`
+    // dispatch — the latter matches every `TeamCommand` variant
+    // including `Run` and would otherwise route a fresh `/team run`
+    // straight into `team_dispatch::dispatch`'s deliberate "should
+    // never be dispatched directly" stub reply.
+    if let Some(pending) = pending_trigger.take() {
+        let now = Instant::now();
+        match parse_confirm_reply(text) {
+            Some(ConfirmReply::Yes) if pending.is_expired(now) => {
+                return DiscordChatOutcome::Reply(
+                    "✗ that request expired, ask again.".to_string(),
+                );
+            }
+            Some(ConfirmReply::Yes) => {
+                let reply = match daemon_client::run_team_mission_channel(
+                    socket_path,
+                    FrontendType::Discord,
+                    pending.goal.clone(),
+                )
+                .await
+                {
+                    Ok(mission_id) => format!("✓ Started mission {mission_id}."),
+                    Err(e) => format!("✗ Could not start the mission: {e}"),
+                };
+                return DiscordChatOutcome::Reply(reply);
+            }
+            Some(ConfirmReply::No) => {
+                return DiscordChatOutcome::Reply("Cancelled.".to_string());
+            }
+            None => {
+                // Not a yes/no reply — put the pending trigger back
+                // (unless it just expired) and fall through to the
+                // normal command/chat-turn handling below.
+                if !pending.is_expired(now) {
+                    *pending_trigger = Some(pending);
+                }
+            }
+        }
+    }
+
+    // Piece C — `/team run <goal>` itself. Must also run before
+    // Piece B's generic `team_command::parse` block below, for the
+    // same reason as the pending-trigger check above.
+    if let Some(TeamCommand::Run { goal }) = team_command::parse(text) {
+        if !team_run_channel {
+            return DiscordChatOutcome::Reply(
+                "✗ this channel is not authorized to start team missions.".to_string(),
+            );
+        }
+        let allowed = match team_trigger_rate_limit {
+            Some(limit) => check_and_record_trigger(trigger_history, limit, Instant::now()),
+            None => true,
+        };
+        if !allowed {
+            let limit = team_trigger_rate_limit.unwrap_or(0);
+            return DiscordChatOutcome::Reply(format!(
+                "✗ too many mission-start requests (max {limit} per hour), \
+                 try again later."
+            ));
+        }
+        *pending_trigger = Some(PendingTrigger::new(goal.clone()));
+        return DiscordChatOutcome::Reply(format!(
+            "Start '{goal}' on the default team? Reply yes/no."
+        ));
+    }
+
+    DiscordChatOutcome::NotHandled
+}
+
 /// Per-channel inner task: connect a `DaemonSession`, submit
 /// turns, accumulate streamed events, send one Discord message
 /// per turn. Mirrors `run_telegram_daemon_chat_task` from Phase
@@ -242,89 +347,25 @@ async fn run_discord_daemon_channel_task(
             continue;
         }
 
-        // Piece C — a pending confirm-first prompt takes priority over
-        // everything else (including a stray gate_command/team_command
-        // match, though "yes"/"no" never collide with either's own
-        // `/`-prefixed syntax). Must run before both the gate_command
-        // check below and Piece B's own generic `team_command::parse`
-        // dispatch — the latter matches every `TeamCommand` variant
-        // including `Run` and would otherwise route a fresh `/team run`
-        // straight into `team_dispatch::dispatch`'s deliberate "should
-        // never be dispatched directly" stub reply.
-        if let Some(pending) = pending_trigger.take() {
-            let now = Instant::now();
-            match parse_confirm_reply(msg.text.trim()) {
-                Some(ConfirmReply::Yes) if pending.is_expired(now) => {
-                    transport
-                        .send_message(OutgoingMessage {
-                            channel_id,
-                            text: "✗ that request expired, ask again.".to_string(),
-                        })
-                        .await
-                        .map_err(|e| {
-                            DaemonError::Internal(format!(
-                                "send_message to channel {channel_id}: {e}"
-                            ))
-                        })?;
-                    continue;
-                }
-                Some(ConfirmReply::Yes) => {
-                    let reply = match daemon_client::run_team_mission_channel(
-                        &socket_path,
-                        FrontendType::Discord,
-                        pending.goal.clone(),
-                    )
-                    .await
-                    {
-                        Ok(mission_id) => format!("✓ Started mission {mission_id}."),
-                        Err(e) => format!("✗ Could not start the mission: {e}"),
-                    };
-                    transport
-                        .send_message(OutgoingMessage { channel_id, text: reply })
-                        .await
-                        .map_err(|e| {
-                            DaemonError::Internal(format!(
-                                "send_message to channel {channel_id}: {e}"
-                            ))
-                        })?;
-                    continue;
-                }
-                Some(ConfirmReply::No) => {
-                    transport
-                        .send_message(OutgoingMessage {
-                            channel_id,
-                            text: "Cancelled.".to_string(),
-                        })
-                        .await
-                        .map_err(|e| {
-                            DaemonError::Internal(format!(
-                                "send_message to channel {channel_id}: {e}"
-                            ))
-                        })?;
-                    continue;
-                }
-                None => {
-                    // Not a yes/no reply — put the pending trigger back
-                    // (unless it just expired) and fall through to the
-                    // normal command/chat-turn handling below.
-                    if !pending.is_expired(now) {
-                        pending_trigger = Some(pending);
-                    }
-                }
-            }
-        }
-
-        // Piece C — `/team run <goal>` itself. Must also run before
-        // Piece B's generic `team_command::parse` block below, for the
-        // same reason as the pending-trigger check above.
-        if let Some(TeamCommand::Run { goal }) = team_command::parse(msg.text.trim()) {
-            if !team_run_channel {
+        // Piece C — pending confirm-first resolution and fresh `/team run`
+        // recognition both live in `handle_discord_team_run_message`,
+        // extracted specifically so this ordering (both MUST run before
+        // Piece B's own generic `team_command::parse` dispatch below, or
+        // `/team run` becomes permanently unreachable dead code) is
+        // directly testable. See that function's own doc comment.
+        match handle_discord_team_run_message(
+            msg.text.trim(),
+            &socket_path,
+            &mut pending_trigger,
+            &mut trigger_history,
+            team_run_channel,
+            team_trigger_rate_limit,
+        )
+        .await
+        {
+            DiscordChatOutcome::Reply(text) => {
                 transport
-                    .send_message(OutgoingMessage {
-                        channel_id,
-                        text: "✗ this channel is not authorized to start team missions."
-                            .to_string(),
-                    })
+                    .send_message(OutgoingMessage { channel_id, text })
                     .await
                     .map_err(|e| {
                         DaemonError::Internal(format!(
@@ -333,41 +374,7 @@ async fn run_discord_daemon_channel_task(
                     })?;
                 continue;
             }
-            let allowed = match team_trigger_rate_limit {
-                Some(limit) => {
-                    check_and_record_trigger(&mut trigger_history, limit, Instant::now())
-                }
-                None => true,
-            };
-            if !allowed {
-                let limit = team_trigger_rate_limit.unwrap_or(0);
-                transport
-                    .send_message(OutgoingMessage {
-                        channel_id,
-                        text: format!(
-                            "✗ too many mission-start requests (max {limit} per hour), \
-                             try again later."
-                        ),
-                    })
-                    .await
-                    .map_err(|e| {
-                        DaemonError::Internal(format!(
-                            "send_message to channel {channel_id}: {e}"
-                        ))
-                    })?;
-                continue;
-            }
-            pending_trigger = Some(PendingTrigger::new(goal.clone()));
-            transport
-                .send_message(OutgoingMessage {
-                    channel_id,
-                    text: format!("Start '{goal}' on the default team? Reply yes/no."),
-                })
-                .await
-                .map_err(|e| {
-                    DaemonError::Internal(format!("send_message to channel {channel_id}: {e}"))
-                })?;
-            continue;
+            DiscordChatOutcome::NotHandled => {}
         }
 
         if let Some(gate_cmd) = gate_command::parse(msg.text.trim()) {
@@ -569,5 +576,184 @@ mod tests {
         assert!(out.contains("⚑ APPROVAL GATE [m-001/g-abc]"));
         assert!(out.contains("Reply /approve m-001 g-abc"));
         assert!(out.contains("or    /reject  m-001 g-abc"));
+    }
+
+    // --- I5 (final-review) — the ordering invariant that keeps
+    // `/team run` from being permanently unreachable, locked in by
+    // testing `handle_discord_team_run_message` directly.
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+
+    /// A fake daemon that does the `StartSession` handshake then
+    /// replies `TeamMissionChannelStarted` — mirrors
+    /// `daemon_client.rs`'s own
+    /// `run_team_mission_channel_does_the_start_session_handshake_then_sends_the_request`
+    /// fixture, since `handle_discord_team_run_message`'s "yes" path
+    /// calls the real `daemon_client::run_team_mission_channel`.
+    async fn fake_daemon_starting_mission(
+        mission_id: &str,
+    ) -> (PathBuf, tokio::task::JoinHandle<()>) {
+        use crate::daemon_ipc::{encode_frame, DaemonEnvelope};
+
+        let sock = std::env::temp_dir().join(format!(
+            "aivyx-discord-teamrun-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let listener = UnixListener::bind(&sock).expect("bind fake daemon");
+        let sock_clone = sock.clone();
+        let mission_id = mission_id.to_string();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let ready = encode_frame(&DaemonEnvelope::DaemonReady {
+                version: "0.1".into(),
+            })
+            .expect("encode ready");
+            stream.write_all(&ready).await.expect("write ready");
+
+            let mut tmp = [0u8; 2048];
+            let _ = stream.read(&mut tmp).await; // client's StartSession
+            let started = encode_frame(&DaemonEnvelope::SessionStarted {
+                session_id: "sess-1".into(),
+            })
+            .expect("encode started");
+            stream.write_all(&started).await.expect("write started");
+
+            let _ = stream.read(&mut tmp).await; // client's RunTeamMissionChannel
+            let resp = encode_frame(&DaemonEnvelope::TeamMissionChannelStarted { mission_id })
+                .expect("encode resp");
+            stream.write_all(&resp).await.expect("write resp");
+            let _ = stream.read(&mut tmp).await;
+        });
+
+        (sock_clone, server)
+    }
+
+    #[tokio::test]
+    async fn team_run_authorized_and_under_limit_prompts_for_confirmation() {
+        // This is the test that would have caught the original ordering
+        // bug: if the generic `team_command`/`team_dispatch` dispatch
+        // ran first, `/team run` would hit `team_dispatch::dispatch`'s
+        // "should never be dispatched directly" stub instead of this
+        // confirm prompt.
+        let mut pending: Option<PendingTrigger> = None;
+        let mut history: Vec<Instant> = Vec::new();
+
+        let outcome = handle_discord_team_run_message(
+            "/team run close the books",
+            Path::new("/nonexistent/unused.sock"),
+            &mut pending,
+            &mut history,
+            true,
+            None,
+        )
+        .await;
+
+        match outcome {
+            DiscordChatOutcome::Reply(text) => {
+                assert!(
+                    !text.contains("should never be dispatched directly"),
+                    "must not fall through to the generic team_dispatch stub: {text}"
+                );
+                assert!(
+                    text.contains("Reply yes/no"),
+                    "must prompt for confirmation: {text}"
+                );
+            }
+            DiscordChatOutcome::NotHandled => panic!("expected a Reply, got NotHandled"),
+        }
+        assert!(pending.is_some(), "a pending trigger must now be recorded");
+    }
+
+    #[tokio::test]
+    async fn team_run_denied_when_channel_not_opted_in() {
+        let mut pending: Option<PendingTrigger> = None;
+        let mut history: Vec<Instant> = Vec::new();
+
+        let outcome = handle_discord_team_run_message(
+            "/team run close the books",
+            Path::new("/nonexistent/unused.sock"),
+            &mut pending,
+            &mut history,
+            false,
+            None,
+        )
+        .await;
+
+        match outcome {
+            DiscordChatOutcome::Reply(text) => {
+                assert!(text.contains("not authorized"), "got: {text}");
+            }
+            DiscordChatOutcome::NotHandled => panic!("expected a Reply, got NotHandled"),
+        }
+        assert!(pending.is_none(), "an unauthorized attempt must not arm a pending trigger");
+    }
+
+    #[tokio::test]
+    async fn ordinary_text_with_no_pending_trigger_is_not_handled() {
+        let mut pending: Option<PendingTrigger> = None;
+        let mut history: Vec<Instant> = Vec::new();
+
+        let outcome = handle_discord_team_run_message(
+            "just chatting, nothing special",
+            Path::new("/nonexistent/unused.sock"),
+            &mut pending,
+            &mut history,
+            true,
+            None,
+        )
+        .await;
+
+        assert_eq!(outcome, DiscordChatOutcome::NotHandled);
+        assert!(pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_trigger_plus_yes_starts_the_mission_via_the_real_daemon_client_call() {
+        let (sock, server) = fake_daemon_starting_mission("m-42").await;
+
+        let mut pending = Some(PendingTrigger::new("close the books"));
+        let mut history: Vec<Instant> = Vec::new();
+
+        let outcome =
+            handle_discord_team_run_message("yes", &sock, &mut pending, &mut history, true, None)
+                .await;
+
+        match outcome {
+            DiscordChatOutcome::Reply(text) => {
+                assert!(text.contains("Started mission"), "got: {text}");
+                assert!(text.contains("m-42"));
+            }
+            DiscordChatOutcome::NotHandled => panic!("expected a Reply, got NotHandled"),
+        }
+        assert!(pending.is_none(), "the pending trigger is consumed on yes");
+
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn pending_trigger_plus_no_cancels() {
+        let mut pending = Some(PendingTrigger::new("close the books"));
+        let mut history: Vec<Instant> = Vec::new();
+
+        let outcome = handle_discord_team_run_message(
+            "no",
+            Path::new("/nonexistent/unused.sock"),
+            &mut pending,
+            &mut history,
+            true,
+            None,
+        )
+        .await;
+
+        match outcome {
+            DiscordChatOutcome::Reply(text) => {
+                assert!(text.contains("Cancelled."), "got: {text}");
+            }
+            DiscordChatOutcome::NotHandled => panic!("expected a Reply, got NotHandled"),
+        }
+        assert!(pending.is_none(), "a 'no' reply clears the pending trigger");
     }
 }
