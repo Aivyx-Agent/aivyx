@@ -9797,6 +9797,7 @@ async fn run_async(
                 .value;
             let team_run_channel = dc.team_run_channel;
             let team_trigger_rate_limit = dc.team_trigger_rate_limit;
+            let team_command_allowed_senders = dc.team_command_allowed_senders.clone();
 
             let shutdown = CancellationToken::new();
             let shutdown_for_signal = shutdown.clone();
@@ -9842,6 +9843,7 @@ async fn run_async(
                     shutdown.clone(),
                     team_run_channel,
                     team_trigger_rate_limit,
+                    team_command_allowed_senders,
                 )
                 .await
                 {

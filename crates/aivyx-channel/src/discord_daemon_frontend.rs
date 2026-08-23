@@ -32,7 +32,7 @@ use crate::daemon_client::{self, DaemonSession};
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::daemon_server::DaemonError;
 use crate::gate_command;
-use crate::team_command::{self, TeamCommand};
+use crate::team_command::{self, sender_allowed, TeamCommand};
 use crate::team_dispatch;
 use crate::team_trigger_state::{
     check_and_record_trigger, parse_confirm_reply, ConfirmReply, PendingTrigger,
@@ -127,6 +127,7 @@ struct ChannelRoute {
 /// channel. Mirrors `run_telegram_daemon_multi_session` from
 /// Phase 19 exactly — same outer-loop shape, same per-route
 /// inner-task spawn, same shutdown drain.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_discord_daemon_multi_session(
     transport: Arc<TwilightTransport>,
     socket_path: PathBuf,
@@ -134,6 +135,7 @@ pub async fn run_discord_daemon_multi_session(
     shutdown: CancellationToken,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    team_command_allowed_senders: Vec<u64>,
 ) -> Result<(), DaemonError> {
     let mut routes: HashMap<u64, ChannelRoute> = HashMap::new();
 
@@ -165,6 +167,7 @@ pub async fn run_discord_daemon_multi_session(
             let sp = socket_path.clone();
             let role_clone = role.clone();
             let shutdown_clone = shutdown.clone();
+            let team_command_allowed_senders = team_command_allowed_senders.clone();
             let handle = tokio::spawn(async move {
                 run_discord_daemon_channel_task(
                     transport_clone,
@@ -175,6 +178,7 @@ pub async fn run_discord_daemon_multi_session(
                     shutdown_clone,
                     team_run_channel,
                     team_trigger_rate_limit,
+                    team_command_allowed_senders,
                 )
                 .await
             });
@@ -330,6 +334,7 @@ enum DiscordIncomingOutcome {
 /// `gate_command::parse` is deliberately NOT folded in here — see the
 /// Telegram sibling's doc comment for why it's safe to leave inline in
 /// the loop.
+#[allow(clippy::too_many_arguments)]
 async fn handle_discord_incoming_command(
     text: &str,
     socket_path: &Path,
@@ -337,7 +342,21 @@ async fn handle_discord_incoming_command(
     trigger_history: &mut Vec<Instant>,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    sender_id: u64,
+    allowed_senders: &[u64],
 ) -> DiscordIncomingOutcome {
+    // Team-Command Sender Allowlist (2026-08-23) — must run before
+    // BOTH handle_discord_team_run_message (or an unauthorized /team
+    // run would still reach the confirm-first flow) and the generic
+    // team_command::parse dispatch below. Checked only when the text
+    // actually parses as a /team command at all -- ordinary chat text
+    // from an unauthorized sender is completely unaffected.
+    if team_command::parse(text).is_some() && !sender_allowed(allowed_senders, &sender_id) {
+        return DiscordIncomingOutcome::Reply(
+            "✗ you are not authorized to issue /team commands.".to_string(),
+        );
+    }
+
     match handle_discord_team_run_message(
         text,
         socket_path,
@@ -374,6 +393,7 @@ async fn run_discord_daemon_channel_task(
     shutdown: CancellationToken,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    team_command_allowed_senders: Vec<u64>,
 ) -> Result<(), DaemonError> {
     let mut session = DaemonSession::connect(
         &socket_path,
@@ -413,6 +433,8 @@ async fn run_discord_daemon_channel_task(
             &mut trigger_history,
             team_run_channel,
             team_trigger_rate_limit,
+            msg.author_id,
+            &team_command_allowed_senders,
         )
         .await
         {
@@ -823,6 +845,8 @@ mod tests {
             &mut trigger_history,
             true,  // team_run_channel
             None,  // team_trigger_rate_limit
+            123u64, // sender_id -- IS in the allowlist
+            &[123u64, 456],
         )
         .await;
         match outcome {
@@ -843,5 +867,114 @@ mod tests {
             }
         }
         assert!(pending_trigger.is_some(), "a pending trigger should now be set");
+    }
+
+    // --- Sender Allowlist Task 4 ----------------------------------------
+
+    #[tokio::test]
+    async fn unauthorized_sender_is_denied_before_team_run_recognition() {
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_discord_incoming_command(
+            "/team run close the books",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,
+            None,
+            999u64,
+            &[123u64, 456],
+        )
+        .await;
+        match outcome {
+            DiscordIncomingOutcome::Reply(text) => {
+                assert!(
+                    text.contains("not authorized to issue /team commands"),
+                    "expected the sender-denial reply, got: {text}"
+                );
+                assert!(
+                    !text.contains("Reply yes/no"),
+                    "got the confirm-first prompt instead of the sender-denial \
+                     reply -- this means the sender-allowlist check is being \
+                     bypassed by /team run's own recognition, the exact bug \
+                     this test exists to catch: {text}"
+                );
+            }
+            DiscordIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a denial reply, not a forward to chat turn")
+            }
+        }
+        assert!(
+            pending_trigger.is_none(),
+            "an unauthorized /team run must not set a pending trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_sender_is_denied_for_the_generic_team_surface_too() {
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_discord_incoming_command(
+            "/team status",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            false,
+            None,
+            999u64,
+            &[123u64, 456],
+        )
+        .await;
+        match outcome {
+            DiscordIncomingOutcome::Reply(text) => {
+                assert!(text.contains("not authorized to issue /team commands"));
+            }
+            DiscordIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a denial reply, not a forward to chat turn")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_sender_reaches_dispatch_not_the_denial() {
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_discord_incoming_command(
+            "/team status",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            false,
+            None,
+            123u64,
+            &[123u64, 456],
+        )
+        .await;
+        match outcome {
+            DiscordIncomingOutcome::Reply(text) => {
+                assert!(!text.contains("not authorized to issue /team commands"));
+            }
+            DiscordIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a Reply (dispatch attempted), not ForwardToChatTurn")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn non_team_text_is_unaffected_regardless_of_sender() {
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_discord_incoming_command(
+            "hello, just chatting",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            false,
+            None,
+            999u64,
+            &[123u64, 456],
+        )
+        .await;
+        assert_eq!(outcome, DiscordIncomingOutcome::ForwardToChatTurn);
     }
 }
