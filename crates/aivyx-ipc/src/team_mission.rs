@@ -120,6 +120,13 @@ pub struct TeamMissionRecord {
     /// rationale as `spend_tokens`.
     #[serde(default)]
     pub spend_usd: f64,
+    /// Chapter Muster — the id of the `[[schedule]]` entry that started
+    /// this mission, if any. `None` for every mission started any other
+    /// way (manual `aivyx team run`, the Studio, the autonomous loop's
+    /// auto-delegation, ...). `#[serde(default)]` keeps pre-existing
+    /// records decoding.
+    #[serde(default)]
+    pub triggered_by: Option<String>,
     pub started_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
 }
@@ -143,6 +150,7 @@ impl TeamMissionRecord {
             verify_attempts: 0,
             spend_tokens: 0,
             spend_usd: 0.0,
+            triggered_by: None,
             started_at_unix_ms: now,
             updated_at_unix_ms: now,
         }
@@ -152,6 +160,13 @@ impl TeamMissionRecord {
     /// leaves it on the daemon default.
     pub fn with_config(mut self, config: Option<TeamConfig>) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Chapter Muster — tag this mission with the schedule that started
+    /// it. Mirrors `with_config`'s exact shape.
+    pub fn with_triggered_by(mut self, source: impl Into<String>) -> Self {
+        self.triggered_by = Some(source.into());
         self
     }
 
@@ -429,6 +444,43 @@ mod tests {
         let rec: TeamMissionRecord = serde_json::from_str(json).unwrap();
         assert_eq!(rec.spend_tokens, 0);
         assert_eq!(rec.spend_usd, 0.0);
+    }
+
+    #[test]
+    fn with_triggered_by_sets_the_field_and_leaves_everything_else_unchanged() {
+        let plan = MissionPlan { goal: "g".to_string(), steps: vec![] };
+        let record = TeamMissionRecord::new("m1", "goal", plan.clone())
+            .with_triggered_by("cfg-nightly-boh-close");
+        assert_eq!(record.triggered_by.as_deref(), Some("cfg-nightly-boh-close"));
+        assert_eq!(record.id, "m1");
+        assert_eq!(record.phase, TeamMissionPhase::Planning);
+    }
+
+    #[test]
+    fn a_record_with_no_triggered_by_call_has_none() {
+        let plan = MissionPlan { goal: "g".to_string(), steps: vec![] };
+        let record = TeamMissionRecord::new("m1", "goal", plan);
+        assert_eq!(record.triggered_by, None);
+    }
+
+    #[test]
+    fn a_pre_existing_json_record_deserializes_with_no_triggered_by() {
+        // Simulates a record persisted before this field existed -- no
+        // "triggered_by" key at all. Use the real current field set (check
+        // the struct definition for anything this literal is missing before
+        // trusting it -- TeamMissionRecord has grown fields across several
+        // chapters, most recently spend_tokens/spend_usd).
+        let json = br#"{
+            "id": "m1",
+            "goal": "goal",
+            "plan": {"goal": "goal", "steps": []},
+            "outputs": {},
+            "phase": "planning",
+            "started_at_unix_ms": 1000,
+            "updated_at_unix_ms": 1000
+        }"#;
+        let record: TeamMissionRecord = serde_json::from_slice(json).expect("deserialize old record");
+        assert_eq!(record.triggered_by, None);
     }
 
     #[test]
