@@ -104,10 +104,18 @@ impl ScheduleCreateTool {
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "The prompt text submitted as a turn when the schedule fires."
+                        "description": "The prompt text submitted as a turn when the schedule fires. Mutually exclusive with `goal` -- set exactly one."
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Instead of `prompt`, delegate this goal to a durable team mission (the Nonagon) when the schedule fires, rather than a single-agent turn. Mutually exclusive with `prompt` -- set exactly one."
+                    },
+                    "pack_config": {
+                        "type": "string",
+                        "description": "Only meaningful with `goal`: a path to a vertical-pack team config TOML file. Omit to use the daemon's default team."
                     }
                 },
-                "required": ["cron", "prompt"]
+                "required": ["cron"]
             }),
             store: OnceLock::new(),
             growth: OnceLock::new(),
@@ -138,6 +146,9 @@ impl Tool for ScheduleCreateTool {
     fn description(&self) -> &str {
         "Create a new cron-triggered schedule. When the schedule fires, \
          the daemon submits the prompt as a turn under the specified role. \
+         Alternatively, set `goal` (and optionally `pack_config`) instead \
+         of `prompt` to delegate to a durable team mission (the Nonagon) \
+         instead of a single-agent turn -- the two are mutually exclusive. \
          The cron expression uses 7 fields: sec min hour dom month dow year. \
          Returns the schedule_id for future reference."
     }
@@ -163,27 +174,47 @@ impl Tool for ScheduleCreateTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let prompt = input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let role = input
-            .get("role")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string();
-
         if cron.is_empty() {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "schedule.create requires a non-empty `cron` field".to_string(),
             });
         }
-        if prompt.is_empty() {
+
+        let prompt = input
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let goal = input
+            .get("goal")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pack_config = input
+            .get("pack_config")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let role = input
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string();
+
+        // Chapter Muster — `prompt` (single-agent turn) and `goal`
+        // (team mission) are mutually exclusive, same rule as the
+        // ScheduleRecord/ScheduleConfig layers below this tool.
+        if !prompt.is_empty() && !goal.is_empty() {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
-                detail: "schedule.create requires a non-empty `prompt` field".to_string(),
+                detail: "schedule.create: set exactly one of `prompt` or `goal`, not both"
+                    .to_string(),
+            });
+        }
+        if prompt.is_empty() && goal.is_empty() {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.create requires exactly one of `prompt` or `goal`".to_string(),
             });
         }
 
@@ -237,18 +268,25 @@ impl Tool for ScheduleCreateTool {
         }
 
         let schedule_id = format!("agt-{}", uuid::Uuid::new_v4().as_simple());
-        let mut record = match ScheduleRecord::new(
-            schedule_id.clone(),
-            cron,
-            role,
-            prompt,
-        ) {
-            Ok(r) => r.with_provenance(ScheduleProvenance::Agent),
-            Err(e) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!("schedule.create: {e}"),
-                });
+        let mut record = if !goal.is_empty() {
+            match ScheduleRecord::new_team_mission(schedule_id.clone(), cron, goal, pack_config) {
+                Ok(r) => r.with_provenance(ScheduleProvenance::Agent),
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!("schedule.create: {e}"),
+                    });
+                }
+            }
+        } else {
+            match ScheduleRecord::new(schedule_id.clone(), cron, role, prompt) {
+                Ok(r) => r.with_provenance(ScheduleProvenance::Agent),
+                Err(e) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!("schedule.create: {e}"),
+                    });
+                }
             }
         };
         let armed = growth_arms_directly(growth);
@@ -763,6 +801,157 @@ impl Tool for ScheduleUpdateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aivyx_core::{
+        AgentId, CancellationToken, ChannelContext, ChannelError,
+        ChannelPlatform, SessionId, StreamEvent, TurnId, TurnOutcome,
+    };
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // NoopChannel/NoopAudit/ctx_parts/make_ctx -- copied from
+    // reminder_tool.rs's own test module (the closest real, working
+    // ToolContext fixture in this crate; this file's own tests never
+    // called `.execute()` before this task).
+    struct NoopChannel {
+        session: SessionId,
+        token: CancellationToken,
+    }
+    #[async_trait]
+    impl ChannelContext for NoopChannel {
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn channel_name(&self) -> &str {
+            "test"
+        }
+        fn trust_tier(&self) -> aivyx_capability::TrustTier {
+            aivyx_capability::TrustTier::Trusted
+        }
+        async fn stream_event(
+            &self,
+            _event: StreamEvent<'_>,
+        ) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(
+            &self,
+            _outcome: &TurnOutcome,
+        ) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+    struct NoopAudit;
+    impl aivyx_core::AuditHook for NoopAudit {
+        fn on_event(&self, _tag: aivyx_core::AuditTag) {}
+    }
+    fn ctx_parts() -> (NoopChannel, NoopAudit) {
+        (
+            NoopChannel {
+                session: SessionId::new(),
+                token: CancellationToken::new(),
+            },
+            NoopAudit,
+        )
+    }
+    fn make_ctx<'a>(
+        ch: &'a NoopChannel,
+        audit: &'a dyn aivyx_core::AuditHook,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: AgentId::new(),
+            session_id: ch.session,
+            turn_id: TurnId::new(),
+            channel: ch,
+            audit,
+            cancellation: &ch.token,
+        }
+    }
+
+    /// A `KeyDomain::Schedules` handle, mirroring
+    /// `team_mission_driver.rs`'s own `team_domain()` shape.
+    async fn schedule_domain() -> DomainHandle {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-schedule-tool-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let storage: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .expect("open storage");
+        storage.domain(KeyDomain::Schedules)
+    }
+
+    #[tokio::test]
+    async fn schedule_create_builds_a_team_mission_record() {
+        let tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        tool.set_schedule_store(store.clone()).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+        let outcome = tool
+            .execute(
+                json!({
+                    "cron": "0 0 2 * * * *",
+                    "goal": "run the overnight close"
+                }),
+                &ctx,
+            )
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected success, got {outcome:?}");
+        };
+        let schedule_id = output["schedule_id"].as_str().unwrap().to_string();
+        let record = crate::schedule::get_schedule(&store, &schedule_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(record.team_mission.is_some());
+        assert_eq!(record.team_mission.as_ref().unwrap().goal, "run the overnight close");
+    }
+
+    #[tokio::test]
+    async fn schedule_create_rejects_both_prompt_and_goal() {
+        let tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        tool.set_schedule_store(store).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+        let outcome = tool
+            .execute(
+                json!({
+                    "cron": "0 0 2 * * * *",
+                    "prompt": "check system health",
+                    "goal": "run the overnight close"
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn schedule_create_rejects_neither_prompt_nor_goal() {
+        let tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        tool.set_schedule_store(store).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+        let outcome = tool.execute(json!({"cron": "0 0 2 * * * *"}), &ctx).await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
+    }
 
     #[test]
     fn schedule_create_scope() {
@@ -779,7 +968,7 @@ mod tests {
         assert_eq!(tool.name(), "schedule.create");
         let schema = tool.input_schema();
         assert!(schema["required"].as_array().unwrap().contains(&json!("cron")));
-        assert!(schema["required"].as_array().unwrap().contains(&json!("prompt")));
+        assert!(!schema["required"].as_array().unwrap().contains(&json!("prompt")));
     }
 
     #[test]

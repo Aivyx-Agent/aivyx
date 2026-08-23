@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::team_mission::{
-    list_team_missions, save_team_mission, TeamMissionPhase, TeamMissionRecord, TeamStepState,
+    list_team_missions, save_team_mission, TeamMissionPhase, TeamMissionRecord,
 };
 use aivyx_storage::DomainHandle;
 
@@ -1880,6 +1880,7 @@ pub(crate) mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::team_mission::TeamStepState;
     use aivyx_core::NullAuditHook;
     use aivyx_crypto::MasterKey;
     use aivyx_llm::{
