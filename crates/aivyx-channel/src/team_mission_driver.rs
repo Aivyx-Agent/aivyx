@@ -151,6 +151,13 @@ pub struct TeamRunDeps {
     /// notify dispatch lands an `AutoNotifyDispatched` entry, same
     /// as the schedule/webhook/file-watch notify path.
     pub audit_log: Option<Arc<PersistentAuditLog>>,
+    /// Chapter Muster — the schedule store, so `notify_mission_result` can
+    /// look up a schedule-triggered mission's OWN `notify_targets`/
+    /// `notify_when` instead of the operator's global default. `None` ⇒
+    /// every mission notifies via the global default, same as before this
+    /// field existed (harmless on a daemon build that, for whatever
+    /// reason, doesn't wire it).
+    pub schedule_store: Option<aivyx_storage::DomainHandle>,
     /// `aivyx-checkpoint` — passed through to every specialist's
     /// `SpecialistFactory` so fs_root-mutating tool calls made during a team
     /// mission are checkpointed, same as every other agent construction path.
@@ -679,10 +686,12 @@ async fn verify_mission_artifact(
     TeamMissionPhase::Rejected
 }
 
-/// Chapter Herald — render a mission's terminal-phase result into a
+/// Chapter Herald — render a mission's result-worth-notifying phase into a
 /// short notify body. Mirrors `trigger::render_notify_body`'s spirit
 /// (grounded, no invented detail) for missions instead of turn
-/// outcomes.
+/// outcomes. Covers the four phases `notify_mission_result` fires on
+/// (Done/Rejected/Halted/AwaitingApproval, Chapter Muster) — the
+/// remaining phases are never passed in (see that function's own guard).
 fn render_mission_notify_body(record: &TeamMissionRecord) -> String {
     match record.phase {
         TeamMissionPhase::Done => {
@@ -706,37 +715,101 @@ fn render_mission_notify_body(record: &TeamMissionRecord) -> String {
                 .map(|r| format!(" — {r}"))
                 .unwrap_or_default()
         ),
-        // Never called for a non-terminal phase — see `notify_mission_result`.
-        TeamMissionPhase::Planning
-        | TeamMissionPhase::Executing
-        | TeamMissionPhase::AwaitingApproval
-        | TeamMissionPhase::Paused => String::new(),
+        // Chapter Muster — a mission parked at a human gate is now a
+        // notify-worthy result too (see `notify_mission_result`'s own
+        // doc comment for why).
+        TeamMissionPhase::AwaitingApproval => format!(
+            "Mission awaiting approval: {}{}",
+            record.goal,
+            record
+                .pending_gate
+                .as_ref()
+                .map(|g| format!(" (gate: {g})"))
+                .unwrap_or_default()
+        ),
+        // Never called for these — see `notify_mission_result`'s own guard.
+        TeamMissionPhase::Planning | TeamMissionPhase::Executing | TeamMissionPhase::Paused => {
+            String::new()
+        }
     }
 }
 
-/// Chapter Herald — dispatch a mission-result notification if the
-/// phase is genuinely terminal (never `AwaitingApproval`, a pause —
-/// not a result — nor the transient `Planning`/`Executing` phases) and
-/// a dispatcher + resolvable target exist. Single-attempt (missions are
-/// low-frequency; unlike the cron/webhook/file-watch triggers this
-/// mirrors, there's no per-mission retry/rate-limit policy to look up),
-/// but lands the SAME `AutoNotifyDispatched` audit event schedules do,
-/// so the Notifications screen's history table has one source, not two.
+/// Chapter Herald (extended by Chapter Muster) — dispatch a
+/// mission-result notification when the mission has reached a
+/// human-gate pause (`AwaitingApproval`) or a terminal phase
+/// (Done/Rejected/Halted) — anything the operator would want to know
+/// about, as opposed to the transient `Planning`/`Executing`/`Paused`
+/// phases — and a dispatcher + resolvable target exist.
+///
+/// Chapter Muster: when `record.triggered_by` names a schedule AND
+/// `deps.schedule_store` is wired, that schedule's OWN
+/// `notify_targets` (falling back to the operator's global default if
+/// empty, via `resolve_notify_targets`) is used instead of the global
+/// default outright — so a schedule that configured e.g. an
+/// "ops-channel" target doesn't also spam the operator's personal
+/// default target. Every other mission (manual runs, autonomous-loop
+/// auto-delegation, or a schedule-triggered mission whose originating
+/// schedule was since deleted) keeps the pre-Muster global-default
+/// behavior.
+///
+/// Single-attempt (missions are low-frequency; unlike the
+/// cron/webhook/file-watch triggers this mirrors, there's no
+/// per-mission retry/rate-limit policy to look up), but lands the SAME
+/// `AutoNotifyDispatched` audit event schedules do, so the
+/// Notifications screen's history table has one source, not two.
 async fn notify_mission_result(deps: &TeamRunDeps, record: &TeamMissionRecord) {
     if !matches!(
         record.phase,
-        TeamMissionPhase::Done | TeamMissionPhase::Rejected | TeamMissionPhase::Halted
+        TeamMissionPhase::Done
+            | TeamMissionPhase::Rejected
+            | TeamMissionPhase::Halted
+            | TeamMissionPhase::AwaitingApproval
     ) {
         return;
     }
     let Some(dispatcher) = &deps.notify_dispatcher else {
         return;
     };
-    let targets =
-        crate::trigger::resolve_notify_targets(&[], deps.default_notify_target.as_deref());
+    // Chapter Muster — a schedule-triggered mission uses that schedule's
+    // own configured notify_targets/notify_when instead of the operator's
+    // global default, when both a schedule store and a matching record
+    // are available. Falls back to the pre-existing global-default
+    // behavior for every other mission (manual runs, the autonomous
+    // loop's auto-delegation, ...) and for a schedule-triggered mission
+    // whose originating schedule was since deleted.
+    let (targets, notify_when) = match (&record.triggered_by, &deps.schedule_store) {
+        (Some(schedule_id), Some(store)) => {
+            match crate::schedule::get_schedule(store, schedule_id).await {
+                Ok(Some(sched)) => {
+                    let resolved = crate::trigger::resolve_notify_targets(
+                        &sched.notify_targets,
+                        deps.default_notify_target.as_deref(),
+                    );
+                    (resolved, sched.notify_when)
+                }
+                _ => (
+                    crate::trigger::resolve_notify_targets(&[], deps.default_notify_target.as_deref()),
+                    aivyx_config::NotifyWhen::Always,
+                ),
+            }
+        }
+        _ => (
+            crate::trigger::resolve_notify_targets(&[], deps.default_notify_target.as_deref()),
+            aivyx_config::NotifyWhen::Always,
+        ),
+    };
     if targets.is_empty() {
         return;
     }
+    // Chapter Muster leaves notify_when's condition-gating (what
+    // "on_failed"/"on_completed_non_empty" MEAN for a team mission, vs. the
+    // single-agent TurnOutcome `condition_gate_passes` gates on in
+    // trigger.rs) unresolved — a real, deliberately out-of-scope design
+    // question. Every qualifying phase notifies regardless of the
+    // schedule's own `notify_when`, a conservative (never silently drops a
+    // notification), non-regressive default (nothing team-mission-aware
+    // respected `notify_when` before this task either).
+    let _ = notify_when;
     let body = render_mission_notify_body(record);
     let subject = format!("mission: {}", record.id);
     // A session id correlates the audit entry to a chat turn elsewhere;
@@ -1816,6 +1889,7 @@ pub(crate) mod tests {
     use aivyx_capability::TrustTier;
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
     use aivyx_team::{default_nonagon, MissionPlan, Step, TeamMember};
+    use crate::schedule::ScheduleRecord;
 
     // --- a fake provider: every sub-turn completes with one fixed line -------
 
@@ -1932,6 +2006,27 @@ pub(crate) mod tests {
         storage.domain(KeyDomain::TeamMissions)
     }
 
+    /// Chapter Muster — a `KeyDomain::Schedules` handle, so a test can
+    /// exercise `notify_mission_result`'s schedule-lookup branch without
+    /// standing up a full daemon. Byte-for-byte `team_domain()`'s own
+    /// shape, targeting `KeyDomain::Schedules` instead.
+    async fn schedule_domain() -> DomainHandle {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-schedule-notify-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let storage: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .expect("open storage");
+        storage.domain(KeyDomain::Schedules)
+    }
+
     pub(crate) fn deps(line: &str) -> TeamRunDeps {
         TeamRunDeps {
             provider: Arc::new(FakeProvider { line: line.into(), usage: LlmUsage::default() }),
@@ -1950,6 +2045,7 @@ pub(crate) mod tests {
             notify_dispatcher: None,
             default_notify_target: None,
             audit_log: None,
+            schedule_store: None,
             checkpointer: None,
             kv_cache_handles: None,
         }
@@ -1986,6 +2082,7 @@ pub(crate) mod tests {
             notify_dispatcher: None,
             default_notify_target: None,
             audit_log: None,
+            schedule_store: None,
             checkpointer: None,
             kv_cache_handles: None,
         }
@@ -2053,6 +2150,37 @@ pub(crate) mod tests {
         let prompt = seen.lock().unwrap().clone();
         assert!(prompt.contains("ground-truth evidence"), "evidence block present");
         assert!(prompt.contains("Melatonin"), "artifact reached the delegated judge");
+    }
+
+    /// Chapter Muster — records every `send` call in memory so a test can
+    /// assert whether a specific registered target was notified. A local,
+    /// smaller equivalent of `notify_dispatcher.rs`'s own private `MockBackend`
+    /// (not reused directly -- it's private to that file's own test module).
+    struct RecordingNotifyBackend {
+        calls: std::sync::Mutex<Vec<(String, Option<String>)>>,
+    }
+    impl RecordingNotifyBackend {
+        fn new() -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()) })
+        }
+    }
+    #[async_trait]
+    impl crate::notify_dispatcher::NotifyBackend for RecordingNotifyBackend {
+        async fn send(
+            &self,
+            message: &str,
+            subject: Option<&str>,
+        ) -> Result<(), crate::notify_dispatcher::NotifyError> {
+            self.calls.lock().unwrap().push((message.to_string(), subject.map(str::to_string)));
+            Ok(())
+        }
+        // Deviation from the brief's verbatim code: `NotifyBackend::kind` has
+        // no default impl (confirmed against the real trait in
+        // notify_dispatcher.rs) — omitting it doesn't compile. Mirrors
+        // `RecordingBackend::kind` in aivyx.rs's own test module.
+        fn kind(&self) -> &'static str {
+            "test"
+        }
     }
 
     /// research → [human gate] → write.
@@ -3288,13 +3416,22 @@ pub(crate) mod tests {
         let id = team_run(&shared, &d, default_nonagon(), gated_plan(), "m-notify-reject")
             .await
             .unwrap();
+        // Chapter Muster — `team_run` itself now parks at the gate AND
+        // notifies (AwaitingApproval is notify-worthy since this task), so
+        // by the time the mission is rejected below there are TWO calls:
+        // the gate-park notify, then the reject notify.
         let phase = resolve_team_gate(&shared, &d, default_nonagon(), &id, "approve", false)
             .await
             .unwrap();
         assert_eq!(phase, TeamMissionPhase::Rejected);
         let calls = backend.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "a gate rejection is a result worth notifying too");
-        assert!(calls[0].0.contains("rejected"));
+        assert_eq!(
+            calls.len(),
+            2,
+            "gate-park notifies, then a gate rejection is a result worth notifying too"
+        );
+        assert!(calls[0].0.contains("awaiting approval"), "first call is the gate-park notify");
+        assert!(calls[1].0.contains("rejected"), "second call is the reject notify");
     }
 
     #[tokio::test]
@@ -3311,6 +3448,88 @@ pub(crate) mod tests {
             .unwrap();
         let rec = shared.snapshot(&id).unwrap();
         assert_eq!(rec.phase, TeamMissionPhase::Done);
+    }
+
+    #[tokio::test]
+    async fn notify_mission_result_fires_when_a_mission_reaches_awaiting_approval() {
+        let backend = RecordingNotifyBackend::new();
+        let mut dispatcher = crate::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register("studio", backend.clone());
+        let mut deps = deps("unused");
+        deps.notify_dispatcher = Some(std::sync::Arc::new(dispatcher));
+        deps.default_notify_target = Some("studio".to_string());
+
+        let mut record = TeamMissionRecord::new("m1", "goal", gated_plan());
+        record.phase = TeamMissionPhase::AwaitingApproval;
+        record.pending_gate = Some("approve".to_string());
+        notify_mission_result(&deps, &record).await;
+        assert_eq!(backend.calls.lock().unwrap().len(), 1, "AwaitingApproval now notifies, not just terminal phases");
+    }
+
+    #[tokio::test]
+    async fn notify_mission_result_still_fires_on_terminal_phases() {
+        let backend = RecordingNotifyBackend::new();
+        let mut dispatcher = crate::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register("studio", backend.clone());
+        let mut deps = deps("unused");
+        deps.notify_dispatcher = Some(std::sync::Arc::new(dispatcher));
+        deps.default_notify_target = Some("studio".to_string());
+
+        let mut record = TeamMissionRecord::new("m1", "goal", artifact_plan());
+        record.phase = TeamMissionPhase::Done;
+        notify_mission_result(&deps, &record).await;
+        assert_eq!(backend.calls.lock().unwrap().len(), 1, "no regression on the existing terminal-phase path");
+    }
+
+    #[tokio::test]
+    async fn notify_mission_result_does_not_fire_on_executing_or_planning() {
+        let backend = RecordingNotifyBackend::new();
+        let mut dispatcher = crate::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register("studio", backend.clone());
+        let mut deps = deps("unused");
+        deps.notify_dispatcher = Some(std::sync::Arc::new(dispatcher));
+        deps.default_notify_target = Some("studio".to_string());
+
+        let mut record = TeamMissionRecord::new("m1", "goal", artifact_plan());
+        record.phase = TeamMissionPhase::Executing;
+        notify_mission_result(&deps, &record).await;
+        assert!(backend.calls.lock().unwrap().is_empty(), "still a no-op mid-run");
+    }
+
+    #[tokio::test]
+    async fn a_schedule_triggered_mission_uses_the_schedules_own_notify_targets() {
+        // Two named targets on one dispatcher: "ops-channel" (the schedule's
+        // own configured target) and "studio" (the operator's global
+        // default). Only the schedule's own target should receive the call.
+        let ops_backend = RecordingNotifyBackend::new();
+        let studio_backend = RecordingNotifyBackend::new();
+        let mut dispatcher = crate::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register("ops-channel", ops_backend.clone());
+        dispatcher.register("studio", studio_backend.clone());
+
+        let store = schedule_domain().await;
+        let mut sched = ScheduleRecord::new_team_mission(
+            "cfg-nightly-boh-close".to_string(),
+            "0 0 2 * * * *".to_string(),
+            "run the overnight close".to_string(),
+            None,
+        )
+        .unwrap();
+        sched.notify_targets = vec!["ops-channel".to_string()];
+        crate::schedule::create_schedule(&store, &sched).await.unwrap();
+
+        let mut deps = deps("unused");
+        deps.notify_dispatcher = Some(std::sync::Arc::new(dispatcher));
+        deps.default_notify_target = Some("studio".to_string());
+        deps.schedule_store = Some(store);
+
+        let mut record = TeamMissionRecord::new("m1", "goal", artifact_plan())
+            .with_triggered_by("cfg-nightly-boh-close");
+        record.phase = TeamMissionPhase::Done;
+        notify_mission_result(&deps, &record).await;
+
+        assert_eq!(ops_backend.calls.lock().unwrap().len(), 1, "used the schedule's own target");
+        assert!(studio_backend.calls.lock().unwrap().is_empty(), "not the global default");
     }
 
     #[tokio::test]

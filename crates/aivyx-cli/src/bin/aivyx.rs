@@ -8912,6 +8912,12 @@ async fn run_async(
                 notify_dispatcher: Some(Arc::clone(&notify_dispatcher)),
                 default_notify_target: default_notify_target_name.clone(),
                 audit_log: Some(Arc::clone(&persistent_audit_for_query)),
+                // Chapter Muster — so a schedule-triggered mission's own
+                // notify_targets/notify_when (not the operator's global
+                // default) drives its Done/Rejected/Halted/AwaitingApproval
+                // notify. Same domain the schedule tools/TriggerDispatch
+                // already use (see `set_schedule_store` above).
+                schedule_store: Some(storage.domain(KeyDomain::Schedules)),
                 checkpointer: checkpointer.clone(),
                 // Task 6 — reuse the daemon's own shared kvcache pool/store
                 // (Task 5), not a second probe: every specialist sub-turn a
