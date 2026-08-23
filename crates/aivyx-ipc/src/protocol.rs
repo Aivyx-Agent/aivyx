@@ -2564,7 +2564,7 @@ pub enum DaemonEnvelope {
         gate_id: String,
         approved: bool,
     },
-    // Piece C — mirrors `DaemonMessage::TeamMissionChannelStarted`.
+    /// Piece C — mirrors `DaemonMessage::TeamMissionChannelStarted`.
     TeamMissionChannelStarted {
         mission_id: String,
     },
