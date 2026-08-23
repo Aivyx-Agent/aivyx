@@ -1340,6 +1340,35 @@ fn scope_base(s: &str) -> &str {
     s.split(':').next().unwrap_or(s)
 }
 
+/// Piece D (2026-08-24) — separates a pack's own declared capability_scopes
+/// for the LEAD role into what's allowed through (`kept`: narrow
+/// orchestration markers — team bus + qualified MCP grants, mirroring the
+/// specialist branch's own already-correct filter below) and what must be
+/// clamped (`dropped`: any domain scope — fs.*/shell.*/net.*/etc. — a pack
+/// tried to add beyond the real daemon floor). Pure and side-effect-free
+/// specifically so the "what got clamped" computation is directly testable
+/// without needing to capture the warning log's own text.
+///
+/// This closes a real defense-in-depth gap: `TeamConfig::load` only
+/// validates that a pack's own declared scopes *parse*, never that
+/// they're authorized against the daemon's real floor — so an operator
+/// installing an unaudited third-party vertical pack could otherwise have
+/// its own declared lead scopes silently escalate beyond what the
+/// operator's own `aivyx.toml`/trust-tier config actually grants.
+fn filter_lead_pack_scopes(pack_declared: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for s in pack_declared {
+        let b = scope_base(s);
+        if b == "team.message" || b == "team.delegate" || (b.starts_with("mcp.") && s.contains(':')) {
+            kept.push(s.clone());
+        } else {
+            dropped.push(s.clone());
+        }
+    }
+    (kept, dropped)
+}
+
 /// Chapter Ensemble — bind the daemon's REAL authority into a team config so
 /// specialists can actually USE their tools.
 ///
@@ -1361,10 +1390,22 @@ fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
     let lead_name = config.lead.clone();
     for m in &mut config.members {
         if m.name == lead_name {
-            // The lead holds the full daemon authority (to grant), plus its own
-            // orchestration scopes (team.delegate / team.message).
+            // The lead holds the full daemon authority (to grant), plus only
+            // narrow orchestration scopes (team.delegate / team.message /
+            // qualified MCP) a pack's own capability_scopes declared for it
+            // — never an arbitrary domain scope beyond the real floor. See
+            // `filter_lead_pack_scopes`'s own doc comment for the full
+            // defense-in-depth rationale.
             let mut caps: Vec<String> = lead_scopes.to_vec();
-            caps.extend(m.capability_scopes.iter().cloned());
+            let (kept, dropped) = filter_lead_pack_scopes(&m.capability_scopes);
+            if !dropped.is_empty() {
+                eprintln!(
+                    "aivyx team: pack's own declared lead scopes exceed the daemon \
+                     floor, clamped: {}",
+                    dropped.join(", ")
+                );
+            }
+            caps.extend(kept);
             caps.sort();
             caps.dedup();
             m.capability_scopes = caps;
@@ -2286,6 +2327,53 @@ pub(crate) mod tests {
     // ---- Chapter Keystone — mission-level artifact grounding ----------------
 
     #[test]
+    fn filter_lead_pack_scopes_keeps_only_orchestration_markers() {
+        let declared: Vec<String> = [
+            "team.delegate",
+            "team.message",
+            "mcp.call:aviation-weather:*",
+            "mcp.call", // bare marker — must NOT be kept (would grant every server)
+            "shell.exec:cwd:/etc/**",
+            "fs.write:/root/**",
+            "net.fetch",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let (kept, dropped) = filter_lead_pack_scopes(&declared);
+
+        assert!(kept.contains(&"team.delegate".to_string()));
+        assert!(kept.contains(&"team.message".to_string()));
+        assert!(kept.contains(&"mcp.call:aviation-weather:*".to_string()));
+        assert_eq!(kept.len(), 3, "only the three real orchestration markers are kept, got: {kept:?}");
+
+        assert!(dropped.contains(&"mcp.call".to_string()), "the bare marker is dropped, not kept");
+        assert!(dropped.contains(&"shell.exec:cwd:/etc/**".to_string()));
+        assert!(dropped.contains(&"fs.write:/root/**".to_string()));
+        assert!(dropped.contains(&"net.fetch".to_string()));
+        assert_eq!(dropped.len(), 4, "the four out-of-floor domain scopes are dropped, got: {dropped:?}");
+    }
+
+    #[test]
+    fn filter_lead_pack_scopes_drops_nothing_when_pack_declares_only_markers() {
+        let declared: Vec<String> = ["team.delegate", "team.message"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (kept, dropped) = filter_lead_pack_scopes(&declared);
+        assert_eq!(kept.len(), 2);
+        assert!(dropped.is_empty(), "nothing to clamp when the pack only declares markers");
+    }
+
+    #[test]
+    fn filter_lead_pack_scopes_handles_empty_input() {
+        let (kept, dropped) = filter_lead_pack_scopes(&[]);
+        assert!(kept.is_empty());
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
     fn bind_lead_scopes_grants_per_role_and_stays_least_privilege() {
         // A stand-in daemon floor with the real qualified forms.
         let floor: Vec<String> = [
@@ -2380,6 +2468,58 @@ pub(crate) mod tests {
                 "{role} does not declare mcp and stays MCP-blind"
             );
         }
+    }
+
+    #[test]
+    fn bind_lead_scopes_clamps_pack_declared_domain_scopes_for_the_lead() {
+        let floor: Vec<String> = [
+            "memory.read",
+            "memory.write",
+            "fs.read:/root/**",
+            "net.fetch",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut config = default_nonagon();
+        // Simulate a careless or malicious third-party pack: the lead's OWN
+        // declared capability_scopes claim a domain scope the real floor
+        // never granted (fs.write, and shell.exec entirely).
+        {
+            let lead_name = config.lead.clone();
+            let lead = config.members.iter_mut().find(|m| m.name == lead_name).unwrap();
+            lead.capability_scopes.push("fs.write:/root/**".to_string());
+            lead.capability_scopes.push("shell.exec:cwd:/root/**".to_string());
+        }
+
+        bind_lead_scopes(&mut config, &floor);
+
+        let lead_name = config.lead.clone();
+        let lead_caps = config
+            .members
+            .iter()
+            .find(|m| m.name == lead_name)
+            .unwrap()
+            .capability_scopes
+            .clone();
+
+        // The floor's own scopes still flow through unconditionally.
+        assert!(lead_caps.contains(&"net.fetch".to_string()));
+        assert!(lead_caps.contains(&"fs.read:/root/**".to_string()));
+        // The pack's own out-of-floor domain declarations do NOT survive —
+        // this is the actual fix: previously these would have been unioned
+        // in via the pack's own claim, regardless of the real floor.
+        assert!(
+            !lead_caps.contains(&"fs.write:/root/**".to_string()),
+            "a pack-declared domain scope beyond the floor must be clamped"
+        );
+        assert!(
+            !lead_caps.iter().any(|s| s.starts_with("shell.exec")),
+            "a pack-declared shell scope, entirely absent from the floor, must be clamped"
+        );
+        // Legitimate orchestration markers the default roster already
+        // declares for the lead still flow through unchanged.
+        assert!(lead_caps.iter().any(|s| s == "team.delegate"));
     }
 
     fn artifact_plan() -> MissionPlan {
