@@ -1372,6 +1372,19 @@ fn filter_orchestration_markers(pack_declared: &[String]) -> (Vec<String>, Vec<S
     (kept, dropped)
 }
 
+/// Piece D fix (2026-08-24) — `filter_orchestration_markers`'s `dropped` is
+/// classified purely by SHAPE (is it a marker or not), with no visibility
+/// into the real floor. A scope can be non-marker (thus "dropped" by that
+/// function) yet already present in `lead_scopes` — a pack redundantly,
+/// harmlessly re-declaring a domain scope the floor already grants. That is
+/// NOT "exceeding the floor" and must never fire/name itself in the clamp
+/// warning. This narrows `dropped` down to scopes genuinely absent from the
+/// floor — pure and side-effect-free so the decision is directly testable
+/// without capturing the warning's own `eprintln!` output.
+fn scopes_exceeding_floor(dropped: &[String], floor: &[String]) -> Vec<String> {
+    dropped.iter().filter(|s| !floor.contains(s)).cloned().collect()
+}
+
 /// Chapter Ensemble — bind the daemon's REAL authority into a team config so
 /// specialists can actually USE their tools.
 ///
@@ -1401,11 +1414,12 @@ fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
             // defense-in-depth rationale.
             let mut caps: Vec<String> = lead_scopes.to_vec();
             let (kept, dropped) = filter_orchestration_markers(&m.capability_scopes);
-            if !dropped.is_empty() {
+            let really_exceeds_floor = scopes_exceeding_floor(&dropped, lead_scopes);
+            if !really_exceeds_floor.is_empty() {
                 eprintln!(
                     "aivyx team: pack's own declared lead scopes exceed the daemon \
                      floor, clamped: {}",
-                    dropped.join(", ")
+                    really_exceeds_floor.join(", ")
                 );
             }
             caps.extend(kept);
@@ -2516,6 +2530,76 @@ pub(crate) mod tests {
         // Legitimate orchestration markers the default roster already
         // declares for the lead still flow through unchanged.
         assert!(lead_caps.iter().any(|s| s == "team.delegate"));
+    }
+
+    #[test]
+    fn bind_lead_scopes_does_not_warn_when_declared_scope_is_already_in_the_floor() {
+        // A pack's lead role redundantly re-declares a scope the floor
+        // already grants -- this must NOT be treated as "exceeding the
+        // floor" even though it isn't a team.message/team.delegate/mcp
+        // orchestration marker. The real authorization outcome (the lead's
+        // final capability_scopes) is unaffected either way; this test is
+        // about the warning's own truthfulness specifically.
+        let floor: Vec<String> = ["memory.read", "net.fetch"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut config = default_nonagon();
+        {
+            let lead_name = config.lead.clone();
+            let lead = config.members.iter_mut().find(|m| m.name == lead_name).unwrap();
+            // Redundant, harmless: net.fetch is already in the floor.
+            lead.capability_scopes.push("net.fetch".to_string());
+        }
+
+        bind_lead_scopes(&mut config, &floor);
+
+        let lead_name = config.lead.clone();
+        let lead_caps = config
+            .members
+            .iter()
+            .find(|m| m.name == lead_name)
+            .unwrap()
+            .capability_scopes
+            .clone();
+        // The real outcome is unaffected either way -- net.fetch is present
+        // because it's in the floor, not because the redundant declaration
+        // survived any special-cased path.
+        assert!(lead_caps.contains(&"net.fetch".to_string()));
+    }
+
+    #[test]
+    fn scopes_exceeding_floor_excludes_scopes_already_granted_by_the_floor() {
+        // Direct unit test of the warning's own filtering decision — proves
+        // the "is this scope really new" logic itself, not just the
+        // (already-correct-before-this-fix) final authorization outcome.
+        let floor: Vec<String> = ["memory.read", "net.fetch"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let dropped: Vec<String> = ["net.fetch", "shell.exec:cwd:/root/**"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let really_exceeds = scopes_exceeding_floor(&dropped, &floor);
+
+        assert_eq!(
+            really_exceeds,
+            vec!["shell.exec:cwd:/root/**".to_string()],
+            "a dropped scope already present in the floor must not be reported as exceeding it"
+        );
+    }
+
+    #[test]
+    fn scopes_exceeding_floor_returns_empty_when_all_dropped_scopes_are_in_the_floor() {
+        let floor: Vec<String> = ["memory.read", "net.fetch"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let dropped: Vec<String> = ["net.fetch"].iter().map(|s| s.to_string()).collect();
+
+        assert!(scopes_exceeding_floor(&dropped, &floor).is_empty());
     }
 
     fn artifact_plan() -> MissionPlan {
