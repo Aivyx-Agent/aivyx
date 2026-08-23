@@ -28,12 +28,16 @@ use aivyx_discord::transport::{
     DiscordTransport, IncomingMessage, OutgoingMessage, TwilightTransport,
 };
 
-use crate::daemon_client::DaemonSession;
+use crate::daemon_client::{self, DaemonSession};
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::daemon_server::DaemonError;
 use crate::gate_command;
-use crate::team_command;
+use crate::team_command::{self, TeamCommand};
 use crate::team_dispatch;
+use crate::team_trigger_state::{
+    check_and_record_trigger, parse_confirm_reply, ConfirmReply, PendingTrigger,
+};
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // DiscordDaemonChannel — identity stub for the daemon's ChannelFactory
@@ -128,6 +132,8 @@ pub async fn run_discord_daemon_multi_session(
     socket_path: PathBuf,
     role: Option<String>,
     shutdown: CancellationToken,
+    team_run_channel: bool,
+    team_trigger_rate_limit: Option<u32>,
 ) -> Result<(), DaemonError> {
     let mut routes: HashMap<u64, ChannelRoute> = HashMap::new();
 
@@ -167,6 +173,8 @@ pub async fn run_discord_daemon_multi_session(
                     role_clone,
                     rx,
                     shutdown_clone,
+                    team_run_channel,
+                    team_trigger_rate_limit,
                 )
                 .await
             });
@@ -198,6 +206,7 @@ pub async fn run_discord_daemon_multi_session(
 /// turns, accumulate streamed events, send one Discord message
 /// per turn. Mirrors `run_telegram_daemon_chat_task` from Phase
 /// 19.
+#[allow(clippy::too_many_arguments)]
 async fn run_discord_daemon_channel_task(
     transport: Arc<TwilightTransport>,
     channel_id: u64,
@@ -205,6 +214,8 @@ async fn run_discord_daemon_channel_task(
     role: Option<String>,
     mut mailbox: tokio::sync::mpsc::Receiver<IncomingMessage>,
     shutdown: CancellationToken,
+    team_run_channel: bool,
+    team_trigger_rate_limit: Option<u32>,
 ) -> Result<(), DaemonError> {
     let mut session = DaemonSession::connect(
         &socket_path,
@@ -212,6 +223,9 @@ async fn run_discord_daemon_channel_task(
         Some(FrontendType::Discord),
     )
     .await?;
+
+    let mut pending_trigger: Option<PendingTrigger> = None;
+    let mut trigger_history: Vec<Instant> = Vec::new();
 
     loop {
         let msg = tokio::select! {
@@ -225,6 +239,134 @@ async fn run_discord_daemon_channel_task(
 
         if msg.text.trim() == "/cancel" {
             let _ = session.cancel_turn().await;
+            continue;
+        }
+
+        // Piece C — a pending confirm-first prompt takes priority over
+        // everything else (including a stray gate_command/team_command
+        // match, though "yes"/"no" never collide with either's own
+        // `/`-prefixed syntax). Must run before both the gate_command
+        // check below and Piece B's own generic `team_command::parse`
+        // dispatch — the latter matches every `TeamCommand` variant
+        // including `Run` and would otherwise route a fresh `/team run`
+        // straight into `team_dispatch::dispatch`'s deliberate "should
+        // never be dispatched directly" stub reply.
+        if let Some(pending) = pending_trigger.take() {
+            let now = Instant::now();
+            match parse_confirm_reply(msg.text.trim()) {
+                Some(ConfirmReply::Yes) if pending.is_expired(now) => {
+                    transport
+                        .send_message(OutgoingMessage {
+                            channel_id,
+                            text: "✗ that request expired, ask again.".to_string(),
+                        })
+                        .await
+                        .map_err(|e| {
+                            DaemonError::Internal(format!(
+                                "send_message to channel {channel_id}: {e}"
+                            ))
+                        })?;
+                    continue;
+                }
+                Some(ConfirmReply::Yes) => {
+                    let reply = match daemon_client::run_team_mission_channel(
+                        &socket_path,
+                        FrontendType::Discord,
+                        pending.goal.clone(),
+                    )
+                    .await
+                    {
+                        Ok(mission_id) => format!("✓ Started mission {mission_id}."),
+                        Err(e) => format!("✗ Could not start the mission: {e}"),
+                    };
+                    transport
+                        .send_message(OutgoingMessage { channel_id, text: reply })
+                        .await
+                        .map_err(|e| {
+                            DaemonError::Internal(format!(
+                                "send_message to channel {channel_id}: {e}"
+                            ))
+                        })?;
+                    continue;
+                }
+                Some(ConfirmReply::No) => {
+                    transport
+                        .send_message(OutgoingMessage {
+                            channel_id,
+                            text: "Cancelled.".to_string(),
+                        })
+                        .await
+                        .map_err(|e| {
+                            DaemonError::Internal(format!(
+                                "send_message to channel {channel_id}: {e}"
+                            ))
+                        })?;
+                    continue;
+                }
+                None => {
+                    // Not a yes/no reply — put the pending trigger back
+                    // (unless it just expired) and fall through to the
+                    // normal command/chat-turn handling below.
+                    if !pending.is_expired(now) {
+                        pending_trigger = Some(pending);
+                    }
+                }
+            }
+        }
+
+        // Piece C — `/team run <goal>` itself. Must also run before
+        // Piece B's generic `team_command::parse` block below, for the
+        // same reason as the pending-trigger check above.
+        if let Some(TeamCommand::Run { goal }) = team_command::parse(msg.text.trim()) {
+            if !team_run_channel {
+                transport
+                    .send_message(OutgoingMessage {
+                        channel_id,
+                        text: "✗ this channel is not authorized to start team missions."
+                            .to_string(),
+                    })
+                    .await
+                    .map_err(|e| {
+                        DaemonError::Internal(format!(
+                            "send_message to channel {channel_id}: {e}"
+                        ))
+                    })?;
+                continue;
+            }
+            let allowed = match team_trigger_rate_limit {
+                Some(limit) => {
+                    check_and_record_trigger(&mut trigger_history, limit, Instant::now())
+                }
+                None => true,
+            };
+            if !allowed {
+                let limit = team_trigger_rate_limit.unwrap_or(0);
+                transport
+                    .send_message(OutgoingMessage {
+                        channel_id,
+                        text: format!(
+                            "✗ too many mission-start requests (max {limit} per hour), \
+                             try again later."
+                        ),
+                    })
+                    .await
+                    .map_err(|e| {
+                        DaemonError::Internal(format!(
+                            "send_message to channel {channel_id}: {e}"
+                        ))
+                    })?;
+                continue;
+            }
+            pending_trigger = Some(PendingTrigger::new(goal.clone()));
+            transport
+                .send_message(OutgoingMessage {
+                    channel_id,
+                    text: format!("Start '{goal}' on the default team? Reply yes/no."),
+                })
+                .await
+                .map_err(|e| {
+                    DaemonError::Internal(format!("send_message to channel {channel_id}: {e}"))
+                })?;
             continue;
         }
 

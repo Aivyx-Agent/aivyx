@@ -9793,6 +9793,8 @@ async fn run_async(
                 .token
                 .expect("discord.token validated non-None before run_async")
                 .value;
+            let team_run_channel = dc.team_run_channel;
+            let team_trigger_rate_limit = dc.team_trigger_rate_limit;
 
             let shutdown = CancellationToken::new();
             let shutdown_for_signal = shutdown.clone();
@@ -9836,6 +9838,8 @@ async fn run_async(
                     sp.clone(),
                     Some(active_role_name.clone()),
                     shutdown.clone(),
+                    team_run_channel,
+                    team_trigger_rate_limit,
                 )
                 .await
                 {
