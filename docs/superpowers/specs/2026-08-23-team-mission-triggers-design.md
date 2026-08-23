@@ -5,13 +5,61 @@
 `main` at `bcc8d686`. Piece B (Channel-triggered monitoring/control)
 shipped 2026-08-23 — plan at
 `docs/superpowers/plans/2026-08-23-channel-team-mission-control.md`, merged
-to `main` at `253cbe4c`. Piece C (channel-triggered new mission starts) is
-not yet planned — it gets its own plan written against the real code once
-it starts, not assumed from this design doc alone (both A and B needed
-real, compiler-verified corrections to several of this doc's own
-assumptions — e.g. Piece A's `run_scheduler` call site, Piece B's
-mistaken "channels run in-process with the daemon" claim — expect the
-same for C).
+to `main` at `253cbe4c`. Piece C (Channel-triggered new mission starts)
+shipped 2026-08-23 — plan at
+`docs/superpowers/plans/2026-08-23-channel-team-mission-triggers.md`,
+merged to `main` at `5e9e24da`. All three pieces of this initiative are
+now shipped; there is no further work planned against this design doc.
+
+Piece C's own real-code re-verification found this doc's "checked
+directly against the channel's own CapabilitySet ... the same mechanism
+that already scopes which tools a given channel connection can reach
+today" claim (§Piece C) was **wrong** on two counts: no per-channel
+`capability_scopes` config exists anywhere in the codebase, and — more
+consequentially — the anonymous one-shot IPC path every other `/team ...`
+command uses (`FrontendMessage::Query`, no `StartSession`) carries no
+session/frontend identity to the daemon at all, so genuine server-side
+per-channel authorization was structurally impossible on that path. This
+was surfaced to the user as an explicit architecture decision (not
+silently resolved): build real, identity-declaring server-side
+enforcement (a new one-shot call that does its own `StartSession`
+handshake first, purely to prove `frontend_type` to the daemon) versus a
+weaker client-side-only check. User chose the real enforcement — the
+shipped `team.run.channel` capability is checked by the daemon itself,
+independent of anything the connecting channel-adapter process claims
+about itself.
+
+**A genuine Critical security-bypass finding hit mid-execution, not just
+at final review, and was reverted.** One task's implementer went outside
+its own brief's file scope and wired the new `TeamCommand::Run` variant
+into the existing chat-command dispatcher using the *pre-existing*,
+anonymous `team_run_goal` call (the same unauthenticated path the CLI's
+`aivyx team run` uses) — a live, exploitable, complete bypass of the
+entire `team.run.channel` mechanism, reachable from all three channels
+with zero operator opt-in. Caught by task review, reverted via `git
+checkout` to the exact pre-task blob hash, independently re-verified
+closed. The final whole-branch review then independently re-derived the
+whole authorization chain from first principles on the merged state (not
+trusting the revert alone) and confirmed no live bypass remained,
+including checking one additional candidate bypass the plan itself never
+named (the pre-existing Trusted-tier `team.run` LLM tool — confirmed
+unreachable from any SemiTrusted channel).
+
+**The final review's remaining Important findings needed two fix
+rounds, not one — the same "fix closes the finding's letter, not its
+defect" pattern this repo's lineage has hit before.** A test meant to
+lock in a critical message-ordering invariant (new confirm-first logic
+must be checked *before* the pre-existing generic command dispatcher, or
+`/team run` becomes permanently unreachable dead code — a bug the plan's
+own brief had introduced and each channel's implementer had to
+independently catch and fix during Tasks 11-13) initially only exercised
+the extracted decision function's own internals, not the real call-site
+order it was meant to protect. The re-review proved this by mutation —
+reverting the call-site order in a throwaway worktree left all 1270
+tests green. A second fix wave extracted one level further (the full
+per-channel precedence chain into one testable function) and the
+re-review independently re-derived the same mutation-proof itself before
+approving.
 
 Piece B's own real-code re-verification found this doc's "a channel
 adapter's own message-handling code already runs inside the trusted
@@ -46,11 +94,12 @@ pack file's own declared lead scopes into the real daemon floor rather
 than intersecting against it). Fixed by removing `pack_config` from the
 *agent-facing* `schedule.create` tool only — the operator-authored
 `aivyx.toml` `[schedule.team_mission] pack_config` path this doc also
-specified is unaffected and shipped as designed. **If Piece C's own
-design (channel-triggered new mission starts) ever considers giving a
-channel a way to name a specific vertical pack, this same class of gap
-applies there too — intersect, don't union, and don't trust a
-model-reachable file path to declare its own authority.** The deeper
+specified is unaffected and shipped as designed. **Piece C closed off
+this exact risk class structurally rather than inheriting it**: its own
+`start_from_goal_for_channel_trigger` sibling method has no `config`
+parameter path that any real call site can reach with `Some` — every
+`/team run <goal>` mission is always the default team, by construction,
+not by a runtime check that could be forgotten or bypassed. The deeper
 root cause (`bind_lead_scopes`'s union-vs-intersection design) was
 deliberately left unfixed in Piece A (logged to the ecosystem backlog,
 not this branch) since the concrete exploit path was closed without it.
