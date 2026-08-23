@@ -32,6 +32,8 @@ use crate::daemon_client::DaemonSession;
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::daemon_server::DaemonError;
 use crate::gate_command;
+use crate::team_command;
+use crate::team_dispatch;
 
 // ---------------------------------------------------------------------------
 // DiscordDaemonChannel — identity stub for the daemon's ChannelFactory
@@ -237,6 +239,19 @@ async fn run_discord_daemon_channel_task(
                 }
                 Err(e) => format!("✗ Gate resolve failed: {e}"),
             };
+            transport
+                .send_message(OutgoingMessage { channel_id, text: reply })
+                .await
+                .map_err(|e| {
+                    DaemonError::Internal(format!(
+                        "send_message to channel {channel_id}: {e}"
+                    ))
+                })?;
+            continue;
+        }
+
+        if let Some(team_cmd) = team_command::parse(msg.text.trim()) {
+            let reply = team_dispatch::dispatch(&socket_path, team_cmd).await;
             transport
                 .send_message(OutgoingMessage { channel_id, text: reply })
                 .await
