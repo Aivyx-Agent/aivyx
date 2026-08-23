@@ -1069,4 +1069,43 @@ mod tests {
             .await;
         assert!(matches!(outcome, ToolOutcome::Failed(_)));
     }
+
+    #[tokio::test]
+    async fn schedule_update_still_allows_enabled_and_cron_edits_on_a_team_mission_schedule() {
+        // Regression guard for the I2 fix above: the new prompt/role guard
+        // must key ONLY on the prompt/role input keys, not on
+        // team_mission being set at all -- Studio's own Pause/Resume
+        // button (aivyx-web's UpdateSchedule sender) only ever sends
+        // `enabled`, never `prompt`, and must keep working on a
+        // team-mission schedule.
+        let create_tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        create_tool.set_schedule_store(store.clone()).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+        let created = create_tool
+            .execute(
+                json!({"cron": "0 0 2 * * * *", "goal": "run the overnight close"}),
+                &ctx,
+            )
+            .await;
+        let ToolOutcome::Completed { output, .. } = created else {
+            panic!("setup failed")
+        };
+        let schedule_id = output["schedule_id"].as_str().unwrap().to_string();
+
+        let update_tool = ScheduleUpdateTool::new();
+        update_tool.set_schedule_store(store.clone()).unwrap();
+        let outcome = update_tool
+            .execute(
+                json!({"schedule_id": schedule_id, "enabled": false, "cron": "0 0 3 * * * *"}),
+                &ctx,
+            )
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected success, got {outcome:?}");
+        };
+        assert_eq!(output["enabled"], false);
+        assert_eq!(output["cron"], "0 0 3 * * * *");
+    }
 }
