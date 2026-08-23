@@ -243,13 +243,15 @@ enum TelegramChatOutcome {
 /// pending trigger was just restored) a fresh `/team run` is checked —
 /// so a `/team run <new goal>` sent while an old confirm is still
 /// pending overwrites it, matching pre-extraction behavior.
+#[allow(clippy::too_many_arguments)]
 async fn handle_telegram_team_run_message(
     text: &str,
     socket_path: &Path,
-    pending_trigger: &mut Option<PendingTrigger>,
+    pending_trigger: &mut Option<PendingTrigger<i64>>,
     trigger_history: &mut Vec<Instant>,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    sender_id: i64,
 ) -> TelegramChatOutcome {
     // Piece C — a pending confirm-first prompt takes priority over
     // everything else (including a stray gate_command/team_command
@@ -263,6 +265,24 @@ async fn handle_telegram_team_run_message(
     if let Some(pending) = pending_trigger.take() {
         let now = Instant::now();
         match parse_confirm_reply(text) {
+            Some(ConfirmReply::Yes) | Some(ConfirmReply::No)
+                if pending.sender_id != sender_id =>
+            {
+                // Sender Allowlist final-review fix (2026-08-24) — a
+                // different sender than the one who staged this trigger
+                // replied yes/no. Only the staging sender may confirm or
+                // cancel their own request (a bare "yes"/"no" never
+                // parses as a /team command, so it never reaches the
+                // sender-allowlist check in handle_telegram_incoming_command
+                // at all). Put the trigger back (unless it just expired)
+                // and fall through to normal handling, exactly like an
+                // unparseable reply — deliberately no denial reply, since
+                // revealing that a pending trigger exists to an
+                // uninvolved sender would leak information.
+                if !pending.is_expired(now) {
+                    *pending_trigger = Some(pending);
+                }
+            }
             Some(ConfirmReply::Yes) if pending.is_expired(now) => {
                 return TelegramChatOutcome::Reply(
                     "✗ that request expired, ask again.".to_string(),
@@ -315,7 +335,7 @@ async fn handle_telegram_team_run_message(
                  try again later."
             ));
         }
-        *pending_trigger = Some(PendingTrigger::new(goal.clone()));
+        *pending_trigger = Some(PendingTrigger::new(goal.clone(), sender_id));
         return TelegramChatOutcome::Reply(format!(
             "Start '{goal}' on the default team? Reply yes/no."
         ));
@@ -366,7 +386,7 @@ enum TelegramIncomingOutcome {
 async fn handle_telegram_incoming_command(
     text: &str,
     socket_path: &Path,
-    pending_trigger: &mut Option<PendingTrigger>,
+    pending_trigger: &mut Option<PendingTrigger<i64>>,
     trigger_history: &mut Vec<Instant>,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
@@ -374,11 +394,22 @@ async fn handle_telegram_incoming_command(
     allowed_senders: &[i64],
 ) -> TelegramIncomingOutcome {
     // Team-Command Sender Allowlist (2026-08-23) — must run before
-    // BOTH handle_telegram_team_run_message (or an unauthorized /team
-    // run would still reach the confirm-first flow) and the generic
-    // team_command::parse dispatch below. Checked only when the text
-    // actually parses as a /team command at all -- ordinary chat text
-    // from an unauthorized sender is completely unaffected.
+    // BOTH handle_telegram_team_run_message (so an unauthorized /team
+    // run is denied before it can even stage a confirm-first prompt)
+    // and the generic team_command::parse dispatch below. Checked only
+    // when the text actually parses as a /team command at all --
+    // ordinary chat text from an unauthorized sender is completely
+    // unaffected.
+    //
+    // Note this check alone does NOT protect the later "yes"/"no"
+    // confirm-reply step -- a bare "yes" never parses as a /team
+    // command, so it never reaches this check at all. That step is
+    // separately protected by binding each PendingTrigger to the
+    // sender_id that staged it (final-review fix, 2026-08-24; see
+    // `handle_telegram_team_run_message`): only the sender who was
+    // asked "Start '<goal>' on the default team?" can answer it, so
+    // another allowlisted sender in the same chat can't hijack or
+    // cancel someone else's staged mission.
     if team_command::parse(text).is_some() && !sender_allowed(allowed_senders, &sender_id) {
         return TelegramIncomingOutcome::Reply(
             "✗ you are not authorized to issue /team commands.".to_string(),
@@ -392,6 +423,7 @@ async fn handle_telegram_incoming_command(
         trigger_history,
         team_run_channel,
         team_trigger_rate_limit,
+        sender_id,
     )
     .await
     {
@@ -428,7 +460,7 @@ async fn run_telegram_daemon_chat_task(
     )
     .await?;
 
-    let mut pending_trigger: Option<PendingTrigger> = None;
+    let mut pending_trigger: Option<PendingTrigger<i64>> = None;
     let mut trigger_history: Vec<Instant> = Vec::new();
 
     loop {
@@ -725,7 +757,7 @@ mod tests {
         // ran first, `/team run` would hit `team_dispatch::dispatch`'s
         // "should never be dispatched directly" stub instead of this
         // confirm prompt.
-        let mut pending: Option<PendingTrigger> = None;
+        let mut pending: Option<PendingTrigger<i64>> = None;
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_telegram_team_run_message(
@@ -735,6 +767,7 @@ mod tests {
             &mut history,
             true,
             None,
+            123,
         )
         .await;
 
@@ -756,7 +789,7 @@ mod tests {
 
     #[tokio::test]
     async fn team_run_denied_when_channel_not_opted_in() {
-        let mut pending: Option<PendingTrigger> = None;
+        let mut pending: Option<PendingTrigger<i64>> = None;
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_telegram_team_run_message(
@@ -766,6 +799,7 @@ mod tests {
             &mut history,
             false,
             None,
+            123,
         )
         .await;
 
@@ -780,7 +814,7 @@ mod tests {
 
     #[tokio::test]
     async fn ordinary_text_with_no_pending_trigger_is_not_handled() {
-        let mut pending: Option<PendingTrigger> = None;
+        let mut pending: Option<PendingTrigger<i64>> = None;
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_telegram_team_run_message(
@@ -790,6 +824,7 @@ mod tests {
             &mut history,
             true,
             None,
+            123,
         )
         .await;
 
@@ -801,12 +836,13 @@ mod tests {
     async fn pending_trigger_plus_yes_starts_the_mission_via_the_real_daemon_client_call() {
         let (sock, server) = fake_daemon_starting_mission("m-42").await;
 
-        let mut pending = Some(PendingTrigger::new("close the books"));
+        let mut pending = Some(PendingTrigger::new("close the books", 123));
         let mut history: Vec<Instant> = Vec::new();
 
-        let outcome =
-            handle_telegram_team_run_message("yes", &sock, &mut pending, &mut history, true, None)
-                .await;
+        let outcome = handle_telegram_team_run_message(
+            "yes", &sock, &mut pending, &mut history, true, None, 123,
+        )
+        .await;
 
         match outcome {
             TelegramChatOutcome::Reply(text) => {
@@ -823,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn pending_trigger_plus_no_cancels() {
-        let mut pending = Some(PendingTrigger::new("close the books"));
+        let mut pending = Some(PendingTrigger::new("close the books", 123));
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_telegram_team_run_message(
@@ -833,6 +869,7 @@ mod tests {
             &mut history,
             true,
             None,
+            123,
         )
         .await;
 
@@ -1025,5 +1062,88 @@ mod tests {
         )
         .await;
         assert_eq!(outcome, TelegramIncomingOutcome::ForwardToChatTurn);
+    }
+
+    // --- Final-review Finding 1 (2026-08-24) — the confirm-reply
+    // sender-binding fix. Before this fix, `PendingTrigger` carried no
+    // sender identity, so ANY allowlisted sender in the same chat could
+    // resolve (start or cancel) a trigger staged by someone else --
+    // because a bare "yes"/"no" never parses as a /team command, the
+    // main sender-allowlist check above never even sees it. These tests
+    // go through `handle_telegram_incoming_command`, the real entry
+    // point, so they exercise the exact call path a live message takes.
+
+    #[tokio::test]
+    async fn wrong_sender_yes_does_not_resolve_someone_elses_pending_trigger() {
+        // Sender 111 staged the trigger; sender 222 is ALSO allowlisted
+        // (so the main allowlist check would never deny them) but did
+        // NOT stage this particular trigger.
+        let mut pending_trigger = Some(PendingTrigger::new("close the books", 111i64));
+        let mut trigger_history = Vec::new();
+
+        let outcome = handle_telegram_incoming_command(
+            "yes",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,
+            None,
+            222i64, // sender B -- allowlisted, but not the staging sender
+            &[111i64, 222i64],
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            TelegramIncomingOutcome::ForwardToChatTurn,
+            "a wrong-sender 'yes' must fall through like ordinary chat text, \
+             not resolve the trigger and not produce a special denial reply"
+        );
+        assert!(
+            pending_trigger.is_some(),
+            "sender A's pending trigger must survive an unrelated sender's 'yes'"
+        );
+        assert_eq!(
+            pending_trigger.as_ref().unwrap().sender_id,
+            111i64,
+            "the original staging sender's trigger must be untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn correct_sender_yes_resolves_their_own_pending_trigger() {
+        let (sock, server) = fake_daemon_starting_mission("m-77").await;
+
+        let mut pending_trigger = Some(PendingTrigger::new("close the books", 111i64));
+        let mut trigger_history = Vec::new();
+
+        let outcome = handle_telegram_incoming_command(
+            "yes",
+            &sock,
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,
+            None,
+            111i64, // sender A -- the one who staged it
+            &[111i64, 222i64],
+        )
+        .await;
+
+        match outcome {
+            TelegramIncomingOutcome::Reply(text) => {
+                assert!(text.contains("Started mission"), "got: {text}");
+                assert!(text.contains("m-77"));
+            }
+            TelegramIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a Reply, got ForwardToChatTurn")
+            }
+        }
+        assert!(
+            pending_trigger.is_none(),
+            "the pending trigger is consumed once the staging sender confirms"
+        );
+
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
     }
 }

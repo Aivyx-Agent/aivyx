@@ -117,10 +117,16 @@ in that channel's config (`[telegram]`/`[discord]`/`[slack]` in
 optional `team_trigger_rate_limit` caps how many confirmed starts one
 chat can trigger per rolling hour. Every `/team run` is confirm-first:
 the bot asks "Start '<goal>' on the default team? Reply yes/no." and
-only starts the mission on a bare "yes" within 5 minutes. See
-`docs/DAEMON_TEAMS.md` §6 (Chat surface) for the full command set and
-`docs/INSTALL.md`'s Telegram/Discord/Slack sections for the config
-knobs.
+only starts the mission on a bare "yes" within 5 minutes, and only a
+"yes"/"no" from the same sender who typed `/team run` in the first
+place is honored — a different sender's reply is silently ignored (see
+below). On top of `team_run_channel`, the sender must also be on that
+channel's `team_command_allowed_senders` list (a separate,
+deny-by-default gate covering `/team run` and every other `/team`
+command — see `docs/INSTALL.md`'s `/team` section, including its
+upgrade note). See `docs/DAEMON_TEAMS.md` §6 (Chat surface) for the
+full command set and `docs/INSTALL.md`'s Telegram/Discord/Slack
+sections for the config knobs.
 
 ## Editing, disabling, adding
 

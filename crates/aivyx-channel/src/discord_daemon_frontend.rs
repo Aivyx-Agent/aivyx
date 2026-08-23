@@ -230,13 +230,15 @@ enum DiscordChatOutcome {
 /// `telegram_daemon_frontend::handle_telegram_team_run_message` exactly
 /// (same control flow, same fall-through-overwrite semantics) — see that
 /// function's own doc comment for the detailed rationale.
+#[allow(clippy::too_many_arguments)]
 async fn handle_discord_team_run_message(
     text: &str,
     socket_path: &Path,
-    pending_trigger: &mut Option<PendingTrigger>,
+    pending_trigger: &mut Option<PendingTrigger<u64>>,
     trigger_history: &mut Vec<Instant>,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
+    sender_id: u64,
 ) -> DiscordChatOutcome {
     // Piece C — a pending confirm-first prompt takes priority over
     // everything else (including a stray gate_command/team_command
@@ -250,6 +252,24 @@ async fn handle_discord_team_run_message(
     if let Some(pending) = pending_trigger.take() {
         let now = Instant::now();
         match parse_confirm_reply(text) {
+            Some(ConfirmReply::Yes) | Some(ConfirmReply::No)
+                if pending.sender_id != sender_id =>
+            {
+                // Sender Allowlist final-review fix (2026-08-24) — a
+                // different sender than the one who staged this trigger
+                // replied yes/no. Only the staging sender may confirm or
+                // cancel their own request (a bare "yes"/"no" never
+                // parses as a /team command, so it never reaches the
+                // sender-allowlist check in handle_discord_incoming_command
+                // at all). Put the trigger back (unless it just expired)
+                // and fall through to normal handling, exactly like an
+                // unparseable reply — deliberately no denial reply, since
+                // revealing that a pending trigger exists to an
+                // uninvolved sender would leak information.
+                if !pending.is_expired(now) {
+                    *pending_trigger = Some(pending);
+                }
+            }
             Some(ConfirmReply::Yes) if pending.is_expired(now) => {
                 return DiscordChatOutcome::Reply(
                     "✗ that request expired, ask again.".to_string(),
@@ -302,7 +322,7 @@ async fn handle_discord_team_run_message(
                  try again later."
             ));
         }
-        *pending_trigger = Some(PendingTrigger::new(goal.clone()));
+        *pending_trigger = Some(PendingTrigger::new(goal.clone(), sender_id));
         return DiscordChatOutcome::Reply(format!(
             "Start '{goal}' on the default team? Reply yes/no."
         ));
@@ -338,7 +358,7 @@ enum DiscordIncomingOutcome {
 async fn handle_discord_incoming_command(
     text: &str,
     socket_path: &Path,
-    pending_trigger: &mut Option<PendingTrigger>,
+    pending_trigger: &mut Option<PendingTrigger<u64>>,
     trigger_history: &mut Vec<Instant>,
     team_run_channel: bool,
     team_trigger_rate_limit: Option<u32>,
@@ -346,11 +366,22 @@ async fn handle_discord_incoming_command(
     allowed_senders: &[u64],
 ) -> DiscordIncomingOutcome {
     // Team-Command Sender Allowlist (2026-08-23) — must run before
-    // BOTH handle_discord_team_run_message (or an unauthorized /team
-    // run would still reach the confirm-first flow) and the generic
-    // team_command::parse dispatch below. Checked only when the text
-    // actually parses as a /team command at all -- ordinary chat text
-    // from an unauthorized sender is completely unaffected.
+    // BOTH handle_discord_team_run_message (so an unauthorized /team
+    // run is denied before it can even stage a confirm-first prompt)
+    // and the generic team_command::parse dispatch below. Checked only
+    // when the text actually parses as a /team command at all --
+    // ordinary chat text from an unauthorized sender is completely
+    // unaffected.
+    //
+    // Note this check alone does NOT protect the later "yes"/"no"
+    // confirm-reply step -- a bare "yes" never parses as a /team
+    // command, so it never reaches this check at all. That step is
+    // separately protected by binding each PendingTrigger to the
+    // sender_id that staged it (final-review fix, 2026-08-24; see
+    // `handle_discord_team_run_message`): only the sender who was
+    // asked "Start '<goal>' on the default team?" can answer it, so
+    // another allowlisted sender in the same chat can't hijack or
+    // cancel someone else's staged mission.
     if team_command::parse(text).is_some() && !sender_allowed(allowed_senders, &sender_id) {
         return DiscordIncomingOutcome::Reply(
             "✗ you are not authorized to issue /team commands.".to_string(),
@@ -364,6 +395,7 @@ async fn handle_discord_incoming_command(
         trigger_history,
         team_run_channel,
         team_trigger_rate_limit,
+        sender_id,
     )
     .await
     {
@@ -402,7 +434,7 @@ async fn run_discord_daemon_channel_task(
     )
     .await?;
 
-    let mut pending_trigger: Option<PendingTrigger> = None;
+    let mut pending_trigger: Option<PendingTrigger<u64>> = None;
     let mut trigger_history: Vec<Instant> = Vec::new();
 
     loop {
@@ -704,7 +736,7 @@ mod tests {
         // ran first, `/team run` would hit `team_dispatch::dispatch`'s
         // "should never be dispatched directly" stub instead of this
         // confirm prompt.
-        let mut pending: Option<PendingTrigger> = None;
+        let mut pending: Option<PendingTrigger<u64>> = None;
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_discord_team_run_message(
@@ -714,6 +746,7 @@ mod tests {
             &mut history,
             true,
             None,
+            123,
         )
         .await;
 
@@ -735,7 +768,7 @@ mod tests {
 
     #[tokio::test]
     async fn team_run_denied_when_channel_not_opted_in() {
-        let mut pending: Option<PendingTrigger> = None;
+        let mut pending: Option<PendingTrigger<u64>> = None;
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_discord_team_run_message(
@@ -745,6 +778,7 @@ mod tests {
             &mut history,
             false,
             None,
+            123,
         )
         .await;
 
@@ -759,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn ordinary_text_with_no_pending_trigger_is_not_handled() {
-        let mut pending: Option<PendingTrigger> = None;
+        let mut pending: Option<PendingTrigger<u64>> = None;
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_discord_team_run_message(
@@ -769,6 +803,7 @@ mod tests {
             &mut history,
             true,
             None,
+            123,
         )
         .await;
 
@@ -780,12 +815,13 @@ mod tests {
     async fn pending_trigger_plus_yes_starts_the_mission_via_the_real_daemon_client_call() {
         let (sock, server) = fake_daemon_starting_mission("m-42").await;
 
-        let mut pending = Some(PendingTrigger::new("close the books"));
+        let mut pending = Some(PendingTrigger::new("close the books", 123));
         let mut history: Vec<Instant> = Vec::new();
 
-        let outcome =
-            handle_discord_team_run_message("yes", &sock, &mut pending, &mut history, true, None)
-                .await;
+        let outcome = handle_discord_team_run_message(
+            "yes", &sock, &mut pending, &mut history, true, None, 123,
+        )
+        .await;
 
         match outcome {
             DiscordChatOutcome::Reply(text) => {
@@ -802,7 +838,7 @@ mod tests {
 
     #[tokio::test]
     async fn pending_trigger_plus_no_cancels() {
-        let mut pending = Some(PendingTrigger::new("close the books"));
+        let mut pending = Some(PendingTrigger::new("close the books", 123));
         let mut history: Vec<Instant> = Vec::new();
 
         let outcome = handle_discord_team_run_message(
@@ -812,6 +848,7 @@ mod tests {
             &mut history,
             true,
             None,
+            123,
         )
         .await;
 
@@ -976,5 +1013,79 @@ mod tests {
         )
         .await;
         assert_eq!(outcome, DiscordIncomingOutcome::ForwardToChatTurn);
+    }
+
+    // --- Final-review Finding 1 (2026-08-24) — the confirm-reply
+    // sender-binding fix. See the identical Telegram tests for the full
+    // rationale: before this fix, ANY allowlisted sender in the same
+    // channel could resolve a trigger staged by someone else, because a
+    // bare "yes"/"no" never parses as a /team command and so never
+    // reaches the sender-allowlist check above.
+
+    #[tokio::test]
+    async fn wrong_sender_yes_does_not_resolve_someone_elses_pending_trigger() {
+        let mut pending_trigger = Some(PendingTrigger::new("close the books", 111u64));
+        let mut trigger_history = Vec::new();
+
+        let outcome = handle_discord_incoming_command(
+            "yes",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,
+            None,
+            222u64, // sender B -- allowlisted, but not the staging sender
+            &[111u64, 222u64],
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            DiscordIncomingOutcome::ForwardToChatTurn,
+            "a wrong-sender 'yes' must fall through like ordinary chat text, \
+             not resolve the trigger and not produce a special denial reply"
+        );
+        assert!(
+            pending_trigger.is_some(),
+            "sender A's pending trigger must survive an unrelated sender's 'yes'"
+        );
+        assert_eq!(pending_trigger.as_ref().unwrap().sender_id, 111u64);
+    }
+
+    #[tokio::test]
+    async fn correct_sender_yes_resolves_their_own_pending_trigger() {
+        let (sock, server) = fake_daemon_starting_mission("m-77").await;
+
+        let mut pending_trigger = Some(PendingTrigger::new("close the books", 111u64));
+        let mut trigger_history = Vec::new();
+
+        let outcome = handle_discord_incoming_command(
+            "yes",
+            &sock,
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,
+            None,
+            111u64, // sender A -- the one who staged it
+            &[111u64, 222u64],
+        )
+        .await;
+
+        match outcome {
+            DiscordIncomingOutcome::Reply(text) => {
+                assert!(text.contains("Started mission"), "got: {text}");
+                assert!(text.contains("m-77"));
+            }
+            DiscordIncomingOutcome::ForwardToChatTurn => {
+                panic!("expected a Reply, got ForwardToChatTurn")
+            }
+        }
+        assert!(
+            pending_trigger.is_none(),
+            "the pending trigger is consumed once the staging sender confirms"
+        );
+
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
     }
 }

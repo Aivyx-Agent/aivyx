@@ -21,17 +21,32 @@ pub const PENDING_TRIGGER_TTL: Duration = Duration::from_secs(300);
 
 /// An outstanding "start '<goal>' on the default team? Reply
 /// yes/no." prompt for one chat, awaiting resolution.
+///
+/// Generic over `T`, the per-channel sender-id type (`i64` for
+/// Telegram, `u64` for Discord, `String` for Slack) — see
+/// `sender_id` below, added by the confirm-reply sender-binding fix
+/// (final-review Finding 1, 2026-08-24): a bare "yes"/"no" reply
+/// never parses as a `/team` command, so it's invisible to the
+/// sender-allowlist check in `handle_*_incoming_command`, which only
+/// fires when `team_command::parse` recognizes the text. Without this
+/// field, ANY sender in the same chat — not just an allowlisted one —
+/// could resolve another sender's pending trigger. Binding the
+/// trigger to the sender who staged it is strictly tighter than
+/// re-checking the allowlist: only that sender may confirm or cancel
+/// their own request.
 #[derive(Debug, Clone)]
-pub struct PendingTrigger {
+pub struct PendingTrigger<T> {
     pub goal: String,
     pub created_at: Instant,
+    pub sender_id: T,
 }
 
-impl PendingTrigger {
-    pub fn new(goal: impl Into<String>) -> Self {
+impl<T> PendingTrigger<T> {
+    pub fn new(goal: impl Into<String>, sender_id: T) -> Self {
         PendingTrigger {
             goal: goal.into(),
             created_at: Instant::now(),
+            sender_id,
         }
     }
 
@@ -86,20 +101,20 @@ mod tests {
 
     #[test]
     fn pending_trigger_is_not_expired_immediately() {
-        let p = PendingTrigger::new("close the books");
+        let p = PendingTrigger::<i64>::new("close the books", 123);
         assert!(!p.is_expired(Instant::now()));
     }
 
     #[test]
     fn pending_trigger_expires_after_ttl() {
-        let mut p = PendingTrigger::new("close the books");
+        let mut p = PendingTrigger::<i64>::new("close the books", 123);
         p.created_at = Instant::now() - PENDING_TRIGGER_TTL - Duration::from_secs(1);
         assert!(p.is_expired(Instant::now()));
     }
 
     #[test]
     fn pending_trigger_not_yet_expired_just_under_ttl() {
-        let mut p = PendingTrigger::new("close the books");
+        let mut p = PendingTrigger::<i64>::new("close the books", 123);
         p.created_at = Instant::now() - PENDING_TRIGGER_TTL + Duration::from_secs(1);
         assert!(!p.is_expired(Instant::now()));
     }

@@ -204,6 +204,16 @@ future option that doesn't change this contract.
   surface above (a mission paused at a human gate can't be paused/aborted,
   resolve its gate instead); replies are chat-appropriate text, not the
   CLI's fixed-width tables.
+  - **Sender allowlist (2026-08-23).** The entire `/team ...` surface above
+    — not just `/team run` below — is gated by a per-channel
+    `team_command_allowed_senders` list (`aivyx.toml`, `[telegram]`/
+    `[discord]`/`[slack]`); an unset/empty list denies every `/team`
+    command from every sender (deny-by-default). A bare "yes"/"no" reply
+    to a `/team run` confirm prompt is separately bound to the sender who
+    staged that trigger (see below), not just gated by this list, since
+    "yes"/"no" never parses as a `/team` command and so never reaches this
+    check at all. See `docs/INSTALL.md`'s `/team` section for the
+    operator-facing config and the upgrade-breaking-change note.
   - **`/team run <goal>`** (Piece C) starts a *new* mission instead of
     controlling an existing one, so it does **not** go through
     `team_dispatch.rs` or the CLI's anonymous `Query` IPC path — that path

@@ -645,6 +645,7 @@ Persona + mission-gate behavior.
    # application_id = 12345...  # Reserved for slash commands; not used in v1.
    # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
    # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
+   # team_command_allowed_senders = [111111111111111111]  # REQUIRED to use any /team command: Discord user ids ("snowflakes"), deny-by-default
    ```
 
 5. **Talk to the bot** — open a DM, type a message, watch the
@@ -663,16 +664,45 @@ set for Nonagon team-mission control — `/team status [<id>]`,
 `/team abort <id>` — routed the same way, across all three
 channels (Telegram, Discord, Slack).
 
+**`team_command_allowed_senders` — required to use ANY `/team`
+command (2026-08-23).** This is a separate, deny-by-default gate from
+`team_run_channel` below, and it covers the *whole* `/team` surface —
+not just `/team run`, but `/team status`/`approve`/`reject`/`pause`/
+`resume`/`abort` too. Each channel's config block takes a
+`team_command_allowed_senders` list of the sender ids permitted to
+issue `/team` commands from that channel; an empty or unset list (the
+default) denies every `/team` command from every sender, regardless
+of `team_run_channel`. **This is a breaking change on upgrade**: if
+you were already relying on `/team status` or the other control
+commands, they will start being denied until you populate this list.
+The id type is platform-specific — Telegram and Discord use the
+sender's numeric user id, Slack uses the sender's string user id
+(`U012ABCDEF`):
+
+```toml
+[telegram]
+token = "your_bot_token_here"
+# chat_filter = 123456789     # optional: restrict to a single chat_id
+# team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
+# team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
+# team_command_allowed_senders = [123456789]  # REQUIRED to use any /team command: Telegram user ids, deny-by-default
+```
+
+(See the Discord and Slack TOML examples below for their own
+`team_command_allowed_senders` lines.)
+
 **`/team run <goal>`** (Piece C) is the one `/team` command that
-*starts* a mission rather than controlling an existing one, so it's
-off by default: the operator must opt a channel in with
-`team_run_channel = true` in that channel's `[telegram]`/`[discord]`/
-`[slack]` config block (see the TOML examples below). Once opted in,
-the bot confirms before acting — it replies "Start '<goal>' on the
-default team? Reply yes/no." and only starts the mission on a bare
-"yes" within 5 minutes; "no" (or a stale "yes") cancels instead. An
-optional `team_trigger_rate_limit` caps how many confirmed starts one
-chat can trigger per rolling hour. See `docs/DAEMON_TEAMS.md` §6 and
+*starts* a mission rather than controlling an existing one, so it has
+its own, additional off-by-default gate on top of the allowlist
+above: the operator must opt a channel in with `team_run_channel =
+true` in that channel's `[telegram]`/`[discord]`/`[slack]` config
+block (see the TOML examples above/below). Once opted in *and* the
+sender is on `team_command_allowed_senders`, the bot confirms before
+acting — it replies "Start '<goal>' on the default team? Reply
+yes/no." and only starts the mission on a bare "yes" within 5
+minutes; "no" (or a stale "yes") cancels instead. An optional
+`team_trigger_rate_limit` caps how many confirmed starts one chat can
+trigger per rolling hour. See `docs/DAEMON_TEAMS.md` §6 and
 `docs/ROUTINES.md` for the full behavior and how it compares to the
 CLI and scheduled ways to start a team mission.
 
@@ -721,6 +751,7 @@ collide.
    # team_id = "T0123456789"  # optional: constrain to one workspace
    # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
    # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
+   # team_command_allowed_senders = ["U012ABCDEF"]  # REQUIRED to use any /team command: Slack user ids, deny-by-default
    ```
 
 8. **Talk to the bot** — open a DM with the bot or mention
