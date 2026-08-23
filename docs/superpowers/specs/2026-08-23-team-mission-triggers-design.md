@@ -1,6 +1,32 @@
 # Team-Mission Triggers — Scheduling + Channel Integration Design
 
-**Status:** Design approved, not yet planned or implemented.
+**Status:** Piece A (Scheduled team missions) shipped 2026-08-23 — plan at
+`docs/superpowers/plans/2026-08-23-scheduled-team-missions.md`, merged to
+`main` at `bcc8d686`. Pieces B and C (channel-adapter monitoring/control
+and channel-triggered new mission starts) are not yet planned — each gets
+its own plan written against the real code once it starts, not assumed
+from this design doc alone (Piece A's own execution needed real,
+compiler-verified corrections to several of this doc's own assumptions —
+e.g. `run_scheduler`'s real call site — expect the same for B/C).
+
+Piece A's final whole-branch review found a real Critical security gap
+this design doc did not anticipate: the `pack_config` parameter this doc
+specified for `schedule.create` (§Piece A) turned out to be a
+model-reachable path to grant a scheduled mission's lead capability
+scopes the operator's own `aivyx.toml` never enabled (`TeamConfig::load`
+only validates that scopes *parse*, and `bind_lead_scopes` unions a
+pack file's own declared lead scopes into the real daemon floor rather
+than intersecting against it). Fixed by removing `pack_config` from the
+*agent-facing* `schedule.create` tool only — the operator-authored
+`aivyx.toml` `[schedule.team_mission] pack_config` path this doc also
+specified is unaffected and shipped as designed. **If Piece C's own
+design (channel-triggered new mission starts) ever considers giving a
+channel a way to name a specific vertical pack, this same class of gap
+applies there too — intersect, don't union, and don't trust a
+model-reachable file path to declare its own authority.** The deeper
+root cause (`bind_lead_scopes`'s union-vs-intersection design) was
+deliberately left unfixed in Piece A (logged to the ecosystem backlog,
+not this branch) since the concrete exploit path was closed without it.
 
 ## Motivation
 
