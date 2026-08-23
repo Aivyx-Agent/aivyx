@@ -101,6 +101,19 @@ pub fn parse(text: &str) -> Option<TeamCommand> {
     }
 }
 
+/// Team-Command Sender Allowlist (2026-08-23) — pure, deny-by-default
+/// sender authorization for the whole `/team ...` command surface.
+/// Shared across all three channels since the semantics are identical
+/// regardless of each platform's own native sender-id type (Telegram
+/// `i64`, Discord `u64`, Slack `String`) — including the deny-on-empty
+/// behavior, which `slice::contains` already gives for free on an empty
+/// slice, so an operator who never configures an allowlist denies every
+/// sender rather than allowing everyone (the gap this whole feature
+/// exists to close).
+pub fn sender_allowed<T: PartialEq>(allowed_senders: &[T], sender_id: &T) -> bool {
+    allowed_senders.contains(sender_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +276,33 @@ mod tests {
     #[test]
     fn parse_run_with_no_goal_is_usage() {
         assert_eq!(parse("/team run"), Some(TeamCommand::Usage));
+    }
+
+    #[test]
+    fn sender_allowed_denies_when_list_is_empty() {
+        let allowed: Vec<i64> = vec![];
+        assert!(!sender_allowed(&allowed, &123));
+    }
+
+    #[test]
+    fn sender_allowed_denies_a_sender_not_in_the_list() {
+        let allowed = vec![123i64, 456];
+        assert!(!sender_allowed(&allowed, &999));
+    }
+
+    #[test]
+    fn sender_allowed_allows_a_sender_in_the_list() {
+        let allowed = vec![123i64, 456];
+        assert!(sender_allowed(&allowed, &123));
+        assert!(sender_allowed(&allowed, &456));
+    }
+
+    #[test]
+    fn sender_allowed_works_for_string_sender_ids_too() {
+        // Slack's own sender-id type — confirms the generic bound covers
+        // every platform's real id type, not just integers.
+        let allowed = vec!["U012ABCDEF".to_string(), "U098ZYXWVU".to_string()];
+        assert!(sender_allowed(&allowed, &"U012ABCDEF".to_string()));
+        assert!(!sender_allowed(&allowed, &"U999NOTALLOWED".to_string()));
     }
 }
