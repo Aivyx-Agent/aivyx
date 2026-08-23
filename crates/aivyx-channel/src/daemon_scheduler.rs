@@ -232,15 +232,18 @@ async fn fire_team_mission_schedule(
     sched: &ScheduleRecord,
     tm: &crate::schedule::ScheduledTeamMission,
     team_missions: &crate::team_mission_driver::TeamMissionService,
+    report_ctx: Option<&ReportContext>,
 ) {
     let config = match &tm.pack_config {
         Some(path) => match aivyx_team::TeamConfig::load(path) {
             Ok(c) => Some(c),
             Err(e) => {
-                eprintln!(
-                    "aivyx scheduler: schedule {:?}'s pack_config {path:?} failed to load: {e}",
+                let msg = format!(
+                    "schedule {:?}'s pack_config {path:?} failed to load: {e}",
                     sched.schedule_id
                 );
+                eprintln!("aivyx scheduler: {msg}");
+                notify_team_mission_failure(sched, &msg, report_ctx).await;
                 return;
             }
         },
@@ -257,10 +260,46 @@ async fn fire_team_mission_schedule(
             );
         }
         Err(e) => {
-            eprintln!(
-                "aivyx scheduler: schedule {:?} failed to start a team mission: {e}",
+            let msg = format!(
+                "schedule {:?} failed to start a team mission: {e}",
                 sched.schedule_id
             );
+            eprintln!("aivyx scheduler: {msg}");
+            notify_team_mission_failure(sched, &msg, report_ctx).await;
+        }
+    }
+}
+
+/// Chapter Muster — a scheduled team mission failed to start at all (bad
+/// `pack_config` path, or the goal failed to decompose into a plan).
+/// Unlike a mission that starts and later fails/gets rejected/halts
+/// (which already notifies via `notify_mission_result`'s own
+/// `AwaitingApproval`/terminal-phase path), a mission that never starts
+/// has no `TeamMissionRecord` for that mechanism to key off of -- so this
+/// is a separate, narrower notify path, mirroring `run_digest_report`'s
+/// own dispatch pattern exactly (same `resolve_notify_targets` +
+/// `ctx.notify` shape). `notify_when` is not consulted: a start failure
+/// is always worth surfacing, unconditionally, since it's the one
+/// outcome an operator has no other way to learn about (there's no
+/// mission at all to look up in Mission Control).
+async fn notify_team_mission_failure(
+    sched: &ScheduleRecord,
+    message: &str,
+    report_ctx: Option<&ReportContext>,
+) {
+    let Some(ctx) = report_ctx else { return };
+    let Some(notify) = &ctx.notify else { return };
+    let targets = crate::trigger::resolve_notify_targets(
+        &sched.notify_targets,
+        ctx.default_notify_target.as_deref(),
+    );
+    if targets.is_empty() {
+        return;
+    }
+    let subject = format!("cron: {}", sched.schedule_id);
+    for target in &targets {
+        if let Err(e) = notify.dispatch(target, message, Some(&subject)).await {
+            eprintln!("aivyx scheduler: team-mission-failure notify to {target:?} failed: {e}");
         }
     }
 }
@@ -275,7 +314,7 @@ async fn fire_schedule(
 ) {
     if let Some(tm) = &sched.team_mission {
         match team_missions {
-            Some(svc) => fire_team_mission_schedule(sched, tm, svc).await,
+            Some(svc) => fire_team_mission_schedule(sched, tm, svc, report_ctx).await,
             None => eprintln!(
                 "aivyx scheduler: schedule {:?} targets a team mission but no \
                  TeamMissionService is wired — skipping",
@@ -568,10 +607,95 @@ mod tests {
             aivyx_core::GatePolicy::Interactive,
         );
         let tm = sched.team_mission.as_ref().expect("set");
-        fire_team_mission_schedule(&sched, tm, &svc).await;
+        fire_team_mission_schedule(&sched, tm, &svc, None).await;
         let missions = svc.list();
         assert_eq!(missions.len(), 1);
         assert_eq!(missions[0].triggered_by.as_deref(), Some("cfg-nightly-boh-close"));
+    }
+
+    /// Build the smallest valid `ReportContext` for a test -- deviation
+    /// from the brief's illustrative `WeeklyDigestBuilder::new_for_test()`
+    /// (no such constructor exists; the real one is
+    /// `WeeklyDigestBuilder::new(memory: Arc<dyn Memory>)`, confirmed
+    /// against `digest.rs`, which its own tests satisfy with
+    /// `aivyx_memory::InMemoryMemory`).
+    fn test_report_ctx(
+        dispatcher: crate::notify_dispatcher::NotifyDispatcher,
+    ) -> ReportContext {
+        let mem: std::sync::Arc<dyn aivyx_memory::Memory> =
+            std::sync::Arc::new(aivyx_memory::InMemoryMemory::new());
+        ReportContext {
+            digest: std::sync::Arc::new(crate::digest::WeeklyDigestBuilder::new(mem)),
+            notify: Some(std::sync::Arc::new(dispatcher)),
+            default_notify_target: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fire_team_mission_schedule_notifies_on_a_bad_pack_config_path() {
+        let backend = crate::team_mission_driver::tests::RecordingNotifyBackend::new();
+        let mut dispatcher = crate::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register("ops-channel", backend.clone());
+        let mut sched = ScheduleRecord::new_team_mission(
+            "cfg-bad-pack".to_string(),
+            "0 0 2 * * * *".to_string(),
+            "run the overnight close".to_string(),
+            Some("/nonexistent/path/does-not-exist.toml".to_string()),
+        )
+        .expect("valid");
+        sched.notify_targets = vec!["ops-channel".to_string()];
+        let svc = crate::team_mission_driver::TeamMissionService::new(
+            crate::team_mission_driver::SharedMissionState::new(
+                crate::team_mission_driver::tests::team_domain().await,
+            ),
+            crate::team_mission_driver::tests::deps(crate::team_mission_driver::tests::TOOL_PLAN_JSON),
+            aivyx_team::default_nonagon(),
+            aivyx_core::GatePolicy::Interactive,
+        );
+        let tm = sched.team_mission.as_ref().expect("set");
+        let ctx = test_report_ctx(dispatcher);
+        fire_team_mission_schedule(&sched, tm, &svc, Some(&ctx)).await;
+        assert_eq!(svc.list().len(), 0, "a bad pack_config never registers a mission");
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "the load failure notifies the schedule's own target");
+        assert!(calls[0].0.contains("pack_config"), "message names what failed");
+    }
+
+    #[tokio::test]
+    async fn fire_team_mission_schedule_loads_a_real_pack_config_successfully() {
+        // The success half of Some(pack_config) -- previously entirely untested.
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-schedule-pack-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let pack_path = dir.join("pack.toml");
+        let config = aivyx_team::default_nonagon();
+        std::fs::write(&pack_path, config.to_toml().expect("serialize")).expect("write pack file");
+
+        let sched = ScheduleRecord::new_team_mission(
+            "cfg-real-pack".to_string(),
+            "0 0 2 * * * *".to_string(),
+            "run the overnight close".to_string(),
+            Some(pack_path.to_string_lossy().to_string()),
+        )
+        .expect("valid");
+        let svc = crate::team_mission_driver::TeamMissionService::new(
+            crate::team_mission_driver::SharedMissionState::new(
+                crate::team_mission_driver::tests::team_domain().await,
+            ),
+            crate::team_mission_driver::tests::deps(crate::team_mission_driver::tests::TOOL_PLAN_JSON),
+            aivyx_team::default_nonagon(),
+            aivyx_core::GatePolicy::Interactive,
+        );
+        let tm = sched.team_mission.as_ref().expect("set");
+        fire_team_mission_schedule(&sched, tm, &svc, None).await;
+        let missions = svc.list();
+        assert_eq!(missions.len(), 1, "a valid pack_config path loads and starts a mission");
     }
 
     #[test]

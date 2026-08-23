@@ -187,6 +187,10 @@ parallel-ready — adding wide parallelism is a *flip*, not a redesign.
 >
 > One engine, a catering-shaped team; every specialist least-privileged;
 > the whole run on the audit chain.
+>
+> To actually run this unattended every night rather than by hand, see
+> `docs/ROUTINES.md`'s "Scheduling a team mission" section --
+> `[schedule.team_mission]` in `aivyx.toml`.
 
 A second example: delegating a bounded coding task to `aivyx-coder`
 running out-of-process, bridged in as an MCP server (see

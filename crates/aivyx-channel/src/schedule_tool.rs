@@ -108,11 +108,7 @@ impl ScheduleCreateTool {
                     },
                     "goal": {
                         "type": "string",
-                        "description": "Instead of `prompt`, delegate this goal to a durable team mission (the Nonagon) when the schedule fires, rather than a single-agent turn. Mutually exclusive with `prompt` -- set exactly one."
-                    },
-                    "pack_config": {
-                        "type": "string",
-                        "description": "Only meaningful with `goal`: a path to a vertical-pack team config TOML file. Omit to use the daemon's default team."
+                        "description": "Instead of `prompt`, delegate this goal to a durable team mission (the Nonagon, the daemon's default team) when the schedule fires, rather than a single-agent turn. Mutually exclusive with `prompt` -- set exactly one. Always runs on the daemon's default team -- picking a specific vertical pack is an operator-only setting (`aivyx.toml`'s own `[schedule.team_mission] pack_config`), not available here, since a pack file can grant its own lead capability scopes and that authority decision belongs to the operator, not the model."
                     }
                 },
                 "required": ["cron"]
@@ -146,11 +142,12 @@ impl Tool for ScheduleCreateTool {
     fn description(&self) -> &str {
         "Create a new cron-triggered schedule. When the schedule fires, \
          the daemon submits the prompt as a turn under the specified role. \
-         Alternatively, set `goal` (and optionally `pack_config`) instead \
-         of `prompt` to delegate to a durable team mission (the Nonagon) \
-         instead of a single-agent turn -- the two are mutually exclusive. \
-         The cron expression uses 7 fields: sec min hour dom month dow year. \
-         Returns the schedule_id for future reference."
+         Alternatively, set `goal` instead of `prompt` to delegate to a \
+         durable team mission (the Nonagon, always the daemon's default \
+         team) when the schedule fires, instead of a single-agent turn -- \
+         the two are mutually exclusive. The cron expression uses 7 \
+         fields: sec min hour dom month dow year. Returns the \
+         schedule_id for future reference."
     }
 
     fn input_schema(&self) -> &Value {
@@ -191,10 +188,6 @@ impl Tool for ScheduleCreateTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let pack_config = input
-            .get("pack_config")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
         let role = input
             .get("role")
             .and_then(|v| v.as_str())
@@ -269,7 +262,7 @@ impl Tool for ScheduleCreateTool {
 
         let schedule_id = format!("agt-{}", uuid::Uuid::new_v4().as_simple());
         let mut record = if !goal.is_empty() {
-            match ScheduleRecord::new_team_mission(schedule_id.clone(), cron, goal, pack_config) {
+            match ScheduleRecord::new_team_mission(schedule_id.clone(), cron, goal, None) {
                 Ok(r) => r.with_provenance(ScheduleProvenance::Agent),
                 Err(e) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
@@ -727,6 +720,20 @@ impl Tool for ScheduleUpdateTool {
             record.cron_expr = cron.to_string();
         }
 
+        if (input.get("prompt").is_some() || input.get("role").is_some())
+            && record.team_mission.is_some()
+        {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "schedule.update: {schedule_id} targets a team mission -- \
+                     `prompt`/`role` don't apply and editing them would silently \
+                     do nothing (the schedule always dispatches its own `goal`); \
+                     delete and recreate it with schedule.create to change the goal"
+                ),
+            });
+        }
+
         if let Some(prompt) = input.get("prompt").and_then(|v| v.as_str()) {
             if prompt.is_empty() {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -954,6 +961,16 @@ mod tests {
     }
 
     #[test]
+    fn schedule_create_schema_has_no_pack_config() {
+        let tool = ScheduleCreateTool::new();
+        let schema = tool.input_schema();
+        assert!(
+            schema["properties"].get("pack_config").is_none(),
+            "pack_config must not be agent-reachable -- see the final review's Critical finding"
+        );
+    }
+
+    #[test]
     fn schedule_create_scope() {
         let tool = ScheduleCreateTool::new();
         assert_eq!(
@@ -1022,5 +1039,34 @@ mod tests {
         assert!(schema["properties"]["cron"].is_object());
         assert!(schema["properties"]["prompt"].is_object());
         assert!(schema["properties"]["role"].is_object());
+    }
+
+    #[tokio::test]
+    async fn schedule_update_rejects_a_prompt_edit_on_a_team_mission_schedule() {
+        let create_tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        create_tool.set_schedule_store(store.clone()).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+        let created = create_tool
+            .execute(
+                json!({"cron": "0 0 2 * * * *", "goal": "run the overnight close"}),
+                &ctx,
+            )
+            .await;
+        let ToolOutcome::Completed { output, .. } = created else {
+            panic!("setup failed")
+        };
+        let schedule_id = output["schedule_id"].as_str().unwrap().to_string();
+
+        let update_tool = ScheduleUpdateTool::new();
+        update_tool.set_schedule_store(store.clone()).unwrap();
+        let outcome = update_tool
+            .execute(
+                json!({"schedule_id": schedule_id, "prompt": "do something else"}),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
     }
 }

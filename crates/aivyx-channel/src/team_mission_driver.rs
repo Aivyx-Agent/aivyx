@@ -2157,11 +2157,16 @@ pub(crate) mod tests {
     /// assert whether a specific registered target was notified. A local,
     /// smaller equivalent of `notify_dispatcher.rs`'s own private `MockBackend`
     /// (not reused directly -- it's private to that file's own test module).
-    struct RecordingNotifyBackend {
-        calls: std::sync::Mutex<Vec<(String, Option<String>)>>,
+    // `pub(crate)` (struct, field, and `new()`) -- Fix I1's own new tests in
+    // `daemon_scheduler.rs`'s test module reach this the same way they
+    // already reach `team_domain`/`deps`/`TOOL_PLAN_JSON` from this same
+    // `pub(crate) mod tests`; this type used to be module-private since it
+    // had no cross-module callers before that fix wave.
+    pub(crate) struct RecordingNotifyBackend {
+        pub(crate) calls: std::sync::Mutex<Vec<(String, Option<String>)>>,
     }
     impl RecordingNotifyBackend {
-        fn new() -> std::sync::Arc<Self> {
+        pub(crate) fn new() -> std::sync::Arc<Self> {
             std::sync::Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()) })
         }
     }

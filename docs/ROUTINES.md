@@ -63,6 +63,36 @@ wrap_mission = true          # run as a mission (visible in Missions / the TUI f
 notify_when = "on_completed_non_empty"   # always | on_failed | on_completed_non_empty
 ```
 
+### Scheduling a team mission instead of a single-agent turn
+
+A schedule can target a **team mission** (the Nonagon) instead of a
+single-agent turn — mutually exclusive with `role`/`prompt`:
+
+```toml
+[[schedule]]
+name = "nightly-boh-close"
+cron = "0 0 2 * * * *"        # 02:00:00 every day
+[schedule.team_mission]
+goal = "Run end-of-day BOH close."
+# pack_config = "crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml"  # optional -- absolute, or relative to the daemon's own working directory. Omit for the daemon's default team.
+```
+
+The mission runs exactly like a manually-run `aivyx team run` — if it
+hits a human gate, it parks in `AwaitingApproval` (visible in Mission
+Control / `aivyx team status`) rather than firing headless; a mission
+started this way is tagged with the schedule that started it. `enabled`/
+`notify_target`/`notify_targets` all work the same as a normal schedule.
+`notify_when`'s condition (`on_failed`/`on_completed_non_empty`) is
+**not yet meaningful** for a team-mission schedule -- every notify-worthy
+phase (a gate parking, or a terminal outcome) notifies regardless of the
+condition set here; only a genuine start failure (a bad `pack_config`
+path, or the goal failing to decompose) is unconditional today.
+
+Can also be created conversationally by asking the agent to schedule a
+team mission — the agent's own `schedule.create` tool accepts `goal`
+(never `pack_config`, which is operator-only, set via `aivyx.toml`
+directly) as an alternative to `prompt`.
+
 - **`cron`** — 6 fields, seconds first (`cron` crate syntax). `0 0 7 * * *` is
   7am daily; `0 0 */6 * * *` is every six hours; `0 0 8 * * 1` is Monday 8am.
 - **`role`** — which role the routine runs as (its tools/scopes).

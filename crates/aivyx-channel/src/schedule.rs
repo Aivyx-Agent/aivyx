@@ -344,6 +344,11 @@ pub async fn operator_update_schedule(
         validate_cron(&c)?;
         record.cron_expr = c;
     }
+    if prompt.is_some() && record.team_mission.is_some() {
+        return Err(format!(
+            "schedule {schedule_id:?} targets a team mission -- prompt doesn't apply"
+        ));
+    }
     if let Some(p) = prompt {
         record.prompt = p;
     }
@@ -623,5 +628,49 @@ mod tests {
         record.enabled = false;
         // next_fire_time is a pure computation — the scheduler checks `enabled`
         assert!(record.next_fire_time().is_some());
+    }
+
+    /// A `KeyDomain::Schedules` handle backed by a real (temp-dir) redb
+    /// store, mirroring `schedule_tool.rs`'s own `schedule_domain()`
+    /// fixture — this file had no live-storage test before this one.
+    async fn schedule_domain() -> DomainHandle {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-schedule-operator-update-test-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let storage: std::sync::Arc<dyn aivyx_storage::Storage> = aivyx_storage::RedbStorage::open(
+            aivyx_storage::StorageConfig::new(dir.join("store.redb")),
+            aivyx_crypto::MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .expect("open storage");
+        storage.domain(KeyDomain::Schedules)
+    }
+
+    #[tokio::test]
+    async fn operator_update_schedule_rejects_a_prompt_edit_on_a_team_mission_schedule() {
+        let store = schedule_domain().await;
+        let record = ScheduleRecord::new_team_mission(
+            "cfg-x".to_string(),
+            "0 0 2 * * * *".to_string(),
+            "run the overnight close".to_string(),
+            None,
+        )
+        .unwrap();
+        create_schedule(&store, &record).await.unwrap();
+        let err = operator_update_schedule(
+            &store,
+            "cfg-x",
+            None,
+            None,
+            Some("new prompt".to_string()),
+        )
+        .await;
+        assert!(err.is_err());
     }
 }
