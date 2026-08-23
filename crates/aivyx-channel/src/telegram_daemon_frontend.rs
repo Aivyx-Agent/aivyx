@@ -320,6 +320,74 @@ async fn handle_telegram_team_run_message(
     TelegramChatOutcome::NotHandled
 }
 
+/// Outcome of [`handle_telegram_incoming_command`] — whether the loop
+/// should reply immediately (native command matched) or forward the
+/// message on to the normal chat-turn path.
+#[derive(Debug, PartialEq, Eq)]
+enum TelegramIncomingOutcome {
+    /// Reply with this text; do not forward to the LLM turn path.
+    Reply(String),
+    /// Nothing matched any native command — forward to the normal
+    /// chat-turn path (after the caller's own `gate_command::parse`
+    /// check, which never collides with anything handled here).
+    ForwardToChatTurn,
+}
+
+/// Owns the full `/team run` vs. generic `/team ...` precedence chain for
+/// one inbound Telegram message, in the order it must run:
+/// [`handle_telegram_team_run_message`] (pending-confirm resolution and
+/// fresh `/team run` recognition) FIRST, then `team_command::parse` +
+/// `team_dispatch::dispatch`.
+///
+/// Extracted one level further than `handle_telegram_team_run_message`
+/// itself specifically so this ORDERING — not just each step's own
+/// internal correctness — is what a test exercises. A prior fix wave
+/// extracted `handle_telegram_team_run_message` and added tests against
+/// it directly, which genuinely tests its own logic but does NOT prove
+/// the call-site order in the real loop: a re-review confirmed (by
+/// physically reordering the loop's calls in a throwaway worktree) that
+/// those tests kept passing even after reintroducing the original bug,
+/// because they never exercise a function that contains both this call
+/// and the generic dispatch it must precede. This function is that
+/// missing piece — see `team_run_is_recognized_before_the_generic_team_command_dispatch`
+/// below, which fails if the two calls inside this function are swapped.
+///
+/// `gate_command::parse` is deliberately NOT folded in here: it matches
+/// bare `/approve`/`/reject`, which can never collide with `/team run`'s
+/// `/team`-prefixed syntax or with `team_command::parse`'s own domain, so
+/// its position relative to this function is not part of the invariant
+/// under test. It stays inline in the loop, checked after this function
+/// returns `ForwardToChatTurn`.
+async fn handle_telegram_incoming_command(
+    text: &str,
+    socket_path: &Path,
+    pending_trigger: &mut Option<PendingTrigger>,
+    trigger_history: &mut Vec<Instant>,
+    team_run_channel: bool,
+    team_trigger_rate_limit: Option<u32>,
+) -> TelegramIncomingOutcome {
+    match handle_telegram_team_run_message(
+        text,
+        socket_path,
+        pending_trigger,
+        trigger_history,
+        team_run_channel,
+        team_trigger_rate_limit,
+    )
+    .await
+    {
+        TelegramChatOutcome::Reply(reply) => return TelegramIncomingOutcome::Reply(reply),
+        TelegramChatOutcome::NotHandled => {}
+    }
+
+    if let Some(team_cmd) = team_command::parse(text) {
+        let reply = team_dispatch::dispatch(socket_path, team_cmd).await;
+        return TelegramIncomingOutcome::Reply(reply);
+    }
+
+    TelegramIncomingOutcome::ForwardToChatTurn
+}
+
 /// Per-chat inner task: connect a `DaemonSession`, submit turns,
 /// accumulate streamed events, send one Telegram message per turn.
 #[allow(clippy::too_many_arguments)]
@@ -358,13 +426,13 @@ async fn run_telegram_daemon_chat_task(
             continue;
         }
 
-        // Piece C — pending confirm-first resolution and fresh `/team run`
-        // recognition both live in `handle_telegram_team_run_message`,
-        // extracted specifically so this ordering (both MUST run before
-        // Piece B's own generic `team_command::parse` dispatch below, or
-        // `/team run` becomes permanently unreachable dead code) is
-        // directly testable. See that function's own doc comment.
-        match handle_telegram_team_run_message(
+        // Piece C — the full `/team run` vs. generic `/team ...` precedence
+        // chain lives in `handle_telegram_incoming_command`, extracted
+        // specifically so this ordering (both MUST run in the right order,
+        // or `/team run` becomes permanently unreachable dead code) is
+        // itself directly testable, not just each piece's own internal
+        // correctness. See that function's own doc comment.
+        match handle_telegram_incoming_command(
             msg.text.trim(),
             &socket_path,
             &mut pending_trigger,
@@ -374,7 +442,7 @@ async fn run_telegram_daemon_chat_task(
         )
         .await
         {
-            TelegramChatOutcome::Reply(text) => {
+            TelegramIncomingOutcome::Reply(text) => {
                 transport
                     .send_message(OutgoingMessage { chat_id, text })
                     .await
@@ -383,7 +451,7 @@ async fn run_telegram_daemon_chat_task(
                     })?;
                 continue;
             }
-            TelegramChatOutcome::NotHandled => {}
+            TelegramIncomingOutcome::ForwardToChatTurn => {}
         }
 
         if let Some(gate_cmd) = gate_command::parse(msg.text.trim()) {
@@ -406,16 +474,10 @@ async fn run_telegram_daemon_chat_task(
             continue;
         }
 
-        if let Some(team_cmd) = team_command::parse(msg.text.trim()) {
-            let reply = team_dispatch::dispatch(&socket_path, team_cmd).await;
-            transport
-                .send_message(OutgoingMessage { chat_id, text: reply })
-                .await
-                .map_err(|e| DaemonError::Internal(format!(
-                    "send_message to chat {chat_id}: {e}"
-                )))?;
-            continue;
-        }
+        // Note: the generic `/team ...` dispatch is now folded into
+        // `handle_telegram_incoming_command` above (it must run after
+        // `/team run` recognition within that single function for the
+        // ordering invariant to be testable) — nothing else to do here.
 
         // Phase 45 — forward image data through IPC when present.
         let (events, _outcome) = if let Some(ref img) = msg.image {
@@ -759,5 +821,59 @@ mod tests {
             TelegramChatOutcome::NotHandled => panic!("expected a Reply, got NotHandled"),
         }
         assert!(pending.is_none(), "a 'no' reply clears the pending trigger");
+    }
+
+    // --- Re-review fix — the genuine ordering-lock test. The 15 tests
+    // above (and their Discord/Slack siblings) only ever call
+    // `handle_telegram_team_run_message` directly, so they lock in that
+    // function's own internal correctness but never the real loop's
+    // call-site order relative to `team_command::parse`. Proven
+    // empirically: in a throwaway worktree, moving
+    // `handle_telegram_team_run_message`'s call site in
+    // `run_telegram_daemon_chat_task` to AFTER the generic
+    // `team_command::parse` dispatch (reintroducing the original bug)
+    // left all 1270 tests passing. This test calls
+    // `handle_telegram_incoming_command` — the function that now owns
+    // BOTH steps in one place — so a regression in their relative order
+    // fails here directly. See the mutation-proof in the final-review
+    // fix report for this exact test failing/passing before/after a
+    // real reorder of this function's own body.
+
+    #[tokio::test]
+    async fn team_run_is_recognized_before_the_generic_team_command_dispatch() {
+        // This is the test that actually locks in the ordering bug this
+        // whole thing exists to guard against. If /team run's own
+        // recognition ever moves to AFTER the generic team_command::parse
+        // dispatch again, this test must fail, not just the tests on the
+        // extracted piece in isolation.
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_telegram_incoming_command(
+            "/team run close the books",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,  // team_run_channel
+            None,  // team_trigger_rate_limit
+        )
+        .await;
+        match outcome {
+            TelegramIncomingOutcome::Reply(text) => {
+                assert!(
+                    text.contains("Reply yes/no"),
+                    "expected the confirm prompt, got: {text}"
+                );
+                assert!(
+                    !text.contains("should never be dispatched directly"),
+                    "got the generic-dispatch stub reply instead of the confirm prompt \
+                     -- this means /team run is being swallowed by team_command::parse's \
+                     dispatch again, the exact bug this test exists to catch: {text}"
+                );
+            }
+            TelegramIncomingOutcome::ForwardToChatTurn => {
+                panic!("/team run was not recognized at all")
+            }
+        }
+        assert!(pending_trigger.is_some(), "a pending trigger should now be set");
     }
 }

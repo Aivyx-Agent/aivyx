@@ -307,6 +307,59 @@ async fn handle_discord_team_run_message(
     DiscordChatOutcome::NotHandled
 }
 
+/// Outcome of [`handle_discord_incoming_command`] — mirrors
+/// `telegram_daemon_frontend::TelegramIncomingOutcome` exactly.
+#[derive(Debug, PartialEq, Eq)]
+enum DiscordIncomingOutcome {
+    /// Reply with this text; do not forward to the LLM turn path.
+    Reply(String),
+    /// Nothing matched any native command — forward to the normal
+    /// chat-turn path (after the caller's own `gate_command::parse`
+    /// check, which never collides with anything handled here).
+    ForwardToChatTurn,
+}
+
+/// Owns the full `/team run` vs. generic `/team ...` precedence chain for
+/// one inbound Discord message. Mirrors
+/// `telegram_daemon_frontend::handle_telegram_incoming_command` exactly —
+/// see that function's own doc comment for the detailed rationale (the
+/// re-review that found the prior fix wave's tests, on
+/// `handle_discord_team_run_message` alone, didn't prove the real loop's
+/// call-site order).
+///
+/// `gate_command::parse` is deliberately NOT folded in here — see the
+/// Telegram sibling's doc comment for why it's safe to leave inline in
+/// the loop.
+async fn handle_discord_incoming_command(
+    text: &str,
+    socket_path: &Path,
+    pending_trigger: &mut Option<PendingTrigger>,
+    trigger_history: &mut Vec<Instant>,
+    team_run_channel: bool,
+    team_trigger_rate_limit: Option<u32>,
+) -> DiscordIncomingOutcome {
+    match handle_discord_team_run_message(
+        text,
+        socket_path,
+        pending_trigger,
+        trigger_history,
+        team_run_channel,
+        team_trigger_rate_limit,
+    )
+    .await
+    {
+        DiscordChatOutcome::Reply(reply) => return DiscordIncomingOutcome::Reply(reply),
+        DiscordChatOutcome::NotHandled => {}
+    }
+
+    if let Some(team_cmd) = team_command::parse(text) {
+        let reply = team_dispatch::dispatch(socket_path, team_cmd).await;
+        return DiscordIncomingOutcome::Reply(reply);
+    }
+
+    DiscordIncomingOutcome::ForwardToChatTurn
+}
+
 /// Per-channel inner task: connect a `DaemonSession`, submit
 /// turns, accumulate streamed events, send one Discord message
 /// per turn. Mirrors `run_telegram_daemon_chat_task` from Phase
@@ -347,13 +400,13 @@ async fn run_discord_daemon_channel_task(
             continue;
         }
 
-        // Piece C — pending confirm-first resolution and fresh `/team run`
-        // recognition both live in `handle_discord_team_run_message`,
-        // extracted specifically so this ordering (both MUST run before
-        // Piece B's own generic `team_command::parse` dispatch below, or
-        // `/team run` becomes permanently unreachable dead code) is
-        // directly testable. See that function's own doc comment.
-        match handle_discord_team_run_message(
+        // Piece C — the full `/team run` vs. generic `/team ...` precedence
+        // chain lives in `handle_discord_incoming_command`, extracted
+        // specifically so this ordering (both MUST run in the right order,
+        // or `/team run` becomes permanently unreachable dead code) is
+        // itself directly testable, not just each piece's own internal
+        // correctness. See that function's own doc comment.
+        match handle_discord_incoming_command(
             msg.text.trim(),
             &socket_path,
             &mut pending_trigger,
@@ -363,7 +416,7 @@ async fn run_discord_daemon_channel_task(
         )
         .await
         {
-            DiscordChatOutcome::Reply(text) => {
+            DiscordIncomingOutcome::Reply(text) => {
                 transport
                     .send_message(OutgoingMessage { channel_id, text })
                     .await
@@ -374,7 +427,7 @@ async fn run_discord_daemon_channel_task(
                     })?;
                 continue;
             }
-            DiscordChatOutcome::NotHandled => {}
+            DiscordIncomingOutcome::ForwardToChatTurn => {}
         }
 
         if let Some(gate_cmd) = gate_command::parse(msg.text.trim()) {
@@ -399,18 +452,10 @@ async fn run_discord_daemon_channel_task(
             continue;
         }
 
-        if let Some(team_cmd) = team_command::parse(msg.text.trim()) {
-            let reply = team_dispatch::dispatch(&socket_path, team_cmd).await;
-            transport
-                .send_message(OutgoingMessage { channel_id, text: reply })
-                .await
-                .map_err(|e| {
-                    DaemonError::Internal(format!(
-                        "send_message to channel {channel_id}: {e}"
-                    ))
-                })?;
-            continue;
-        }
+        // Note: the generic `/team ...` dispatch is now folded into
+        // `handle_discord_incoming_command` above (it must run after
+        // `/team run` recognition within that single function for the
+        // ordering invariant to be testable) — nothing else to do here.
 
         let (events, _outcome) = session.submit_input(msg.text).await?;
         let buf = render_events_for_discord(&events);
@@ -755,5 +800,48 @@ mod tests {
             DiscordChatOutcome::NotHandled => panic!("expected a Reply, got NotHandled"),
         }
         assert!(pending.is_none(), "a 'no' reply clears the pending trigger");
+    }
+
+    // --- Re-review fix — the genuine ordering-lock test. See
+    // `telegram_daemon_frontend`'s identical test for the full rationale:
+    // the 15 tests above only ever call `handle_discord_team_run_message`
+    // directly, so they lock in that function's own internal correctness
+    // but never the real loop's call-site order relative to
+    // `team_command::parse`. This test calls
+    // `handle_discord_incoming_command` — the function that now owns BOTH
+    // steps in one place — so a regression in their relative order fails
+    // here directly.
+
+    #[tokio::test]
+    async fn team_run_is_recognized_before_the_generic_team_command_dispatch() {
+        let mut pending_trigger = None;
+        let mut trigger_history = Vec::new();
+        let outcome = handle_discord_incoming_command(
+            "/team run close the books",
+            std::path::Path::new("/nonexistent/unused.sock"),
+            &mut pending_trigger,
+            &mut trigger_history,
+            true,  // team_run_channel
+            None,  // team_trigger_rate_limit
+        )
+        .await;
+        match outcome {
+            DiscordIncomingOutcome::Reply(text) => {
+                assert!(
+                    text.contains("Reply yes/no"),
+                    "expected the confirm prompt, got: {text}"
+                );
+                assert!(
+                    !text.contains("should never be dispatched directly"),
+                    "got the generic-dispatch stub reply instead of the confirm prompt \
+                     -- this means /team run is being swallowed by team_command::parse's \
+                     dispatch again, the exact bug this test exists to catch: {text}"
+                );
+            }
+            DiscordIncomingOutcome::ForwardToChatTurn => {
+                panic!("/team run was not recognized at all")
+            }
+        }
+        assert!(pending_trigger.is_some(), "a pending trigger should now be set");
     }
 }
