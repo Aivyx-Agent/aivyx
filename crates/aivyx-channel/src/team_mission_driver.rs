@@ -535,6 +535,32 @@ pub async fn register_mission_for_schedule(
     Ok(id)
 }
 
+/// Chapter (Piece C) — like [`register_mission`], but tags the
+/// resulting record with the channel that started it. A separate
+/// function rather than generalizing `register_mission_for_schedule`'s
+/// own `schedule_id` parameter, for the same reason that function gave
+/// for not touching `register_mission` itself: avoid disturbing an
+/// already-shipped, tested call site.
+pub async fn register_mission_for_channel_trigger(
+    shared: &SharedMissionState,
+    plan: MissionPlan,
+    id: impl Into<String>,
+    config: Option<TeamConfig>,
+    trigger_tag: &str,
+) -> Result<String, MissionDriverError> {
+    let id = id.into();
+    plan.validate()?;
+    let goal = plan.goal.clone();
+    shared
+        .put(
+            TeamMissionRecord::new(&id, goal, plan)
+                .with_config(config)
+                .with_triggered_by(trigger_tag),
+        )
+        .await?;
+    Ok(id)
+}
+
 /// Assemble the team and drive an **already-registered** mission from its
 /// checkpoint to the next pause / terminal state. The mission runs on the team
 /// it was registered with (`record.config`); `default_config` is the fallback
@@ -1150,6 +1176,42 @@ impl TeamMissionService {
             uuid::Uuid::new_v4().to_string(),
             config,
             schedule_id,
+        )
+        .await?;
+        self.spawn_drive(id.clone());
+        Ok(id)
+    }
+
+    /// Chapter (Piece C) — like [`start_from_goal`], but the resulting
+    /// mission is tagged with the channel that started it
+    /// (`triggered_by`). `config` is always `None` from every real
+    /// call site in this codebase (see the Piece C plan's own Global
+    /// Constraints) — the parameter is kept for shape-parity with
+    /// `start_from_goal_for_schedule` and to avoid a signature that
+    /// silently forecloses a future, deliberately-designed pack-
+    /// selection feature, not because any caller passes `Some`.
+    pub async fn start_from_goal_for_channel_trigger(
+        &self,
+        goal: &str,
+        config: Option<TeamConfig>,
+        trigger_tag: &str,
+    ) -> Result<String, MissionDriverError> {
+        let cancel = aivyx_core::CancellationToken::new();
+        let plan = aivyx_team::decompose_goal(
+            self.deps.provider.as_ref(),
+            &self.deps.model,
+            goal,
+            config.as_ref().unwrap_or(&self.config),
+            &cancel,
+            true,
+        )
+        .await?;
+        let id = register_mission_for_channel_trigger(
+            &self.state,
+            plan,
+            uuid::Uuid::new_v4().to_string(),
+            config,
+            trigger_tag,
         )
         .await?;
         self.spawn_drive(id.clone());
@@ -3892,6 +3954,23 @@ pub(crate) mod tests {
             .expect("starts");
         let record = svc.list().into_iter().find(|r| r.id == id).expect("registered");
         assert_eq!(record.triggered_by.as_deref(), Some("cfg-nightly-boh-close"));
+    }
+
+    #[tokio::test]
+    async fn register_mission_for_channel_trigger_tags_triggered_by() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("g", vec![Step::delegate("a", "researcher", "p")]);
+        let id = register_mission_for_channel_trigger(
+            &shared,
+            plan,
+            "m-channel-1",
+            None,
+            "channel:telegram",
+        )
+        .await
+        .expect("register");
+        let record = shared.snapshot(&id).expect("present");
+        assert_eq!(record.triggered_by.as_deref(), Some("channel:telegram"));
     }
 
     #[tokio::test]
