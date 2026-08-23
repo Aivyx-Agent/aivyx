@@ -1624,7 +1624,7 @@ pub struct DiscordConfig {
     /// Piece C — max `/team run` confirmations per rolling hour from
     /// this channel. `None` = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
-    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// Team-Command Sender Allowlist (2026-08-23) — the Discord user
     /// ids allowed to issue any `/team ...` command from this channel.
     /// Empty: no sender is authorized (deny by default).
     pub team_command_allowed_senders: Vec<u64>,
@@ -1677,7 +1677,7 @@ pub struct SlackConfig {
     /// Piece C — max `/team run` confirmations per rolling hour from
     /// this channel. `None` = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
-    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// Team-Command Sender Allowlist (2026-08-23) — the Slack user
     /// ids allowed to issue any `/team ...` command from this channel.
     /// Empty: no sender is authorized (deny by default).
     pub team_command_allowed_senders: Vec<String>,
@@ -4634,7 +4634,7 @@ struct RawDiscord {
     /// unlimited.
     #[serde(default)]
     team_trigger_rate_limit: Option<u32>,
-    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// Team-Command Sender Allowlist (2026-08-23) — the Discord user
     /// ids allowed to issue any `/team ...` command (status/approve/
     /// reject/pause/resume/abort/run) from this channel. Empty/absent:
     /// no sender is authorized — deny by default, closing a real gap
@@ -4665,7 +4665,7 @@ struct RawSlack {
     /// unlimited.
     #[serde(default)]
     team_trigger_rate_limit: Option<u32>,
-    /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
+    /// Team-Command Sender Allowlist (2026-08-23) — the Slack user
     /// ids allowed to issue any `/team ...` command (status/approve/
     /// reject/pause/resume/abort/run) from this channel. Empty/absent:
     /// no sender is authorized — deny by default, closing a real gap
