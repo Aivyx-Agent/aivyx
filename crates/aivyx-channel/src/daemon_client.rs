@@ -1346,6 +1346,84 @@ pub async fn resume_team_mission(
     }
 }
 
+/// Piece C (2026-08-23) — start a new team mission from a channel's
+/// `/team run <goal>` command. Unlike the other one-shot
+/// `team_mission_*` functions above (which use the anonymous `Query`
+/// path via `send_query`), this function does its own `StartSession`
+/// handshake first, declaring `frontend_type` — the daemon's
+/// authorization check needs to know which real channel is asking,
+/// which the anonymous `Query` path cannot provide (see the Piece C
+/// plan's Global Constraints for the full rationale).
+pub async fn run_team_mission_channel(
+    socket_path: &Path,
+    frontend_type: FrontendType,
+    goal: String,
+) -> Result<String, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(4096);
+
+    read_more(&mut reader, &mut buf).await?;
+    match decode_frame::<DaemonEnvelope>(&buf) {
+        Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => buf.drain(..consumed),
+        Ok((other, _)) => {
+            return Err(DaemonError::Protocol(format!(
+                "expected DaemonReady, got {other:?}"
+            )))
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let start = FrontendMessage::StartSession {
+        role: None,
+        frontend_type: Some(frontend_type),
+    };
+    let frame = encode_frame(&start)?;
+    writer.write_all(&frame).await?;
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::SessionStarted { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Ok((other, _)) => {
+                return Err(DaemonError::Protocol(format!(
+                    "expected SessionStarted, got {other:?}"
+                )))
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    let req = FrontendMessage::RunTeamMissionChannel { goal };
+    let frame = encode_frame(&req)?;
+    writer.write_all(&frame).await?;
+
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::TeamMissionChannelStarted { mission_id }, _)) => {
+                return Ok(mission_id)
+            }
+            Ok((DaemonEnvelope::Error { code, message }, _)) => {
+                return Err(DaemonError::Protocol(format!("{code}: {message}")))
+            }
+            Ok((other, consumed)) => {
+                buf.drain(..consumed);
+                return Err(DaemonError::Protocol(format!(
+                    "expected TeamMissionChannelStarted, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// Phase 74 — operator-initiated memory topic eviction over IPC.
 /// Returns the number of entries deleted on success.
 pub async fn evict_memory_topic(
@@ -2251,5 +2329,95 @@ mod tests {
         assert!(log.exists(), "daemon.log was created: {}", log.display());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn run_team_mission_channel_does_the_start_session_handshake_then_sends_the_request() {
+        let sock = std::env::temp_dir()
+            .join(format!("aivyx-runteam-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&sock).expect("bind fake daemon");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let ready = encode_frame(&DaemonEnvelope::DaemonReady {
+                version: "0.1".into(),
+            })
+            .expect("encode ready");
+            stream.write_all(&ready).await.expect("write ready");
+
+            // Read the client's StartSession, then reply SessionStarted.
+            let mut tmp = [0u8; 2048];
+            let _ = stream.read(&mut tmp).await;
+            let started = encode_frame(&DaemonEnvelope::SessionStarted {
+                session_id: "sess-1".into(),
+            })
+            .expect("encode started");
+            stream.write_all(&started).await.expect("write started");
+
+            // Read the client's RunTeamMissionChannel, then reply success.
+            let _ = stream.read(&mut tmp).await;
+            let resp = encode_frame(&DaemonEnvelope::TeamMissionChannelStarted {
+                mission_id: "m-1".into(),
+            })
+            .expect("encode resp");
+            stream.write_all(&resp).await.expect("write resp");
+            let _ = stream.read(&mut tmp).await;
+        });
+
+        let mission_id = run_team_mission_channel(
+            &sock,
+            FrontendType::Telegram,
+            "close the books".to_string(),
+        )
+        .await
+        .expect("run_team_mission_channel must succeed");
+        assert_eq!(mission_id, "m-1");
+
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn run_team_mission_channel_surfaces_a_capability_denial_error() {
+        let sock = std::env::temp_dir()
+            .join(format!("aivyx-runteam-denied-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&sock).expect("bind fake daemon");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let ready = encode_frame(&DaemonEnvelope::DaemonReady {
+                version: "0.1".into(),
+            })
+            .expect("encode ready");
+            stream.write_all(&ready).await.expect("write ready");
+            let mut tmp = [0u8; 2048];
+            let _ = stream.read(&mut tmp).await;
+            let started = encode_frame(&DaemonEnvelope::SessionStarted {
+                session_id: "sess-1".into(),
+            })
+            .expect("encode started");
+            stream.write_all(&started).await.expect("write started");
+            let _ = stream.read(&mut tmp).await;
+            let err = encode_frame(&DaemonEnvelope::Error {
+                code: "team_run_channel_denied".into(),
+                message: "this channel is not authorized".into(),
+            })
+            .expect("encode err");
+            stream.write_all(&err).await.expect("write err");
+            let _ = stream.read(&mut tmp).await;
+        });
+
+        let result = run_team_mission_channel(
+            &sock,
+            FrontendType::Discord,
+            "close the books".to_string(),
+        )
+        .await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("team_run_channel_denied"));
+
+        let _ = server.await;
+        let _ = std::fs::remove_file(&sock);
     }
 }
