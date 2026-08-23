@@ -441,6 +441,21 @@ pub enum AuditEvent {
         /// `"operator"` or `"agent"`.
         actor: String,
     },
+
+    /// Piece C (2026-08-23) — a channel's native `/team run <goal>`
+    /// command successfully started a new team mission. Distinct from
+    /// `Trigger` (that variant is specifically for *refused* headless
+    /// trigger runs) and from `TeamMission` (that variant is a gate
+    /// event on an already-running mission) — this is the one-time
+    /// "a channel started a brand-new mission" audit record.
+    TeamMissionChannelTriggered {
+        /// The originating channel platform (`"telegram"` /
+        /// `"discord"` / `"slack"`), lower-case, matching
+        /// `daemon_server.rs`'s own platform-tag convention.
+        platform: String,
+        goal: String,
+        mission_id: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
@@ -2748,5 +2763,19 @@ mod tests {
             "every failure must increment the counter even though the \
              custom handler swallowed the AuditError"
         );
+    }
+
+    // ---- Piece C (2026-08-23) — TeamMissionChannelTriggered variant ----
+
+    #[test]
+    fn team_mission_channel_triggered_round_trips() {
+        let event = AuditEvent::TeamMissionChannelTriggered {
+            platform: "telegram".to_string(),
+            goal: "close the books".to_string(),
+            mission_id: "m-1".to_string(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event, back);
     }
 }
