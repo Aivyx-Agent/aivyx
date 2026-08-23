@@ -2,12 +2,39 @@
 
 **Status:** Piece A (Scheduled team missions) shipped 2026-08-23 — plan at
 `docs/superpowers/plans/2026-08-23-scheduled-team-missions.md`, merged to
-`main` at `bcc8d686`. Pieces B and C (channel-adapter monitoring/control
-and channel-triggered new mission starts) are not yet planned — each gets
-its own plan written against the real code once it starts, not assumed
-from this design doc alone (Piece A's own execution needed real,
-compiler-verified corrections to several of this doc's own assumptions —
-e.g. `run_scheduler`'s real call site — expect the same for B/C).
+`main` at `bcc8d686`. Piece B (Channel-triggered monitoring/control)
+shipped 2026-08-23 — plan at
+`docs/superpowers/plans/2026-08-23-channel-team-mission-control.md`, merged
+to `main` at `253cbe4c`. Piece C (channel-triggered new mission starts) is
+not yet planned — it gets its own plan written against the real code once
+it starts, not assumed from this design doc alone (both A and B needed
+real, compiler-verified corrections to several of this doc's own
+assumptions — e.g. Piece A's `run_scheduler` call site, Piece B's
+mistaken "channels run in-process with the daemon" claim — expect the
+same for C).
+
+Piece B's own real-code re-verification found this doc's "a channel
+adapter's own message-handling code already runs inside the trusted
+daemon process" claim (§Piece B) was **wrong**: every channel adapter's
+daemon-mode driver is a separate OS process, talking to the daemon over
+Unix-socket IPC. The shipped implementation calls the daemon through the
+existing, already-tested one-shot `daemon_client` free functions instead
+of any in-process call — no new IPC/protocol code was needed since those
+functions already existed for the CLI/TUI.
+
+Piece B's final whole-branch review also surfaced a real, but explicitly
+**deferred**, gap: neither the Discord nor Slack daemon-frontend has any
+sender-allowlist on the new `/team ...` commands (Telegram has an
+optional single-chat filter) — any member of an invited channel can
+`/team abort` a running mission or `/team approve` a gate meant for a
+specific operator. This mirrors the pre-existing `/approve`/`/reject`
+trust model (already accepted in `THREAT_MODEL.md`), so it is not a
+regression Piece B introduced, but Piece B widens the blast radius from
+single-agent mission gates to full autonomous multi-agent mission control
+including abort. **User chose to scope this as its own future follow-on
+plan (a per-channel operator allowlist for `/team` commands) rather than
+fold it into Piece B or Piece C** — logged to the ecosystem backlog, not
+yet planned.
 
 Piece A's final whole-branch review found a real Critical security gap
 this design doc did not anticipate: the `pack_config` parameter this doc
