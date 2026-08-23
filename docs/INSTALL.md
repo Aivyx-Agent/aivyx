@@ -655,6 +655,11 @@ Persona + mission-gate behavior.
 landed at Phase 111 (Adapter Production Wiring) alongside
 the Discord daemon-frontend. In-process and daemon-mode
 both resolve gates through the bot reply on Phase 111+.
+The daemon-frontends also recognize a `/team ...` command
+set for Nonagon team-mission control — `/team status [<id>]`,
+`/team approve|reject <id> <step>`, `/team pause|resume <id>`,
+`/team abort <id>` — routed the same way, across all three
+channels (Telegram, Discord, Slack).
 
 ## Running Aivyx on Slack (Phase 108)
 

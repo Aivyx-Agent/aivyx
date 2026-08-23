@@ -160,7 +160,7 @@ future option that doesn't change this contract.
 
 ---
 
-## 6. CLI + TUI surface
+## 6. CLI + TUI + Chat surface
 
 - **CLI** (`aivyx team`, extends `team.rs`):
   - `aivyx team run "<goal>" [--config <pack.toml>]` → **daemon-first**
@@ -195,6 +195,14 @@ future option that doesn't change this contract.
   - The `AwaitingApproval` phase renders an approve/reject affordance; a key
     binding sends `ResolveTeamGate`. The TUI stays free of `aivyx-team` types
     (the driver maps snapshots → rows, same seam as J.7).
+- **Chat** (Telegram/Discord/Slack daemon-frontends): a `/team ...`
+  command set recognized before the normal chat-turn path (`team_command.rs`
+  parses, `team_dispatch.rs` dispatches over the same daemon IPC the CLI
+  uses) — `/team status [<id>]`, `/team approve|reject <id> <step>`,
+  `/team pause|resume <id>`, `/team abort <id>`. Same semantics as the CLI
+  surface above (a mission paused at a human gate can't be paused/aborted,
+  resolve its gate instead); replies are chat-appropriate text, not the
+  CLI's fixed-width tables.
 
 ---
 

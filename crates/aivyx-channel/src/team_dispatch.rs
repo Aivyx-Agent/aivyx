@@ -69,6 +69,7 @@ pub async fn dispatch(socket_path: &Path, cmd: TeamCommand) -> String {
                 Err(e) => format!("✗ Abort failed: {e}"),
             }
         }
+        TeamCommand::Usage => "✗ Usage: /team status [<id>] | /team approve|reject <id> <step> | /team pause|resume <id> | /team abort <id>".to_string(),
     }
 }
 
@@ -331,9 +332,7 @@ mod tests {
             },
         )
         .await;
-        assert!(reply.starts_with('✓'));
-        assert!(reply.contains("approved"));
-        assert!(reply.contains("executing"));
+        assert_eq!(reply, "✓ Gate approved. Mission now executing.");
 
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
@@ -357,9 +356,7 @@ mod tests {
             },
         )
         .await;
-        assert!(reply.starts_with('✓'));
-        assert!(reply.contains("rejected"));
-        assert!(!reply.contains("rejectd"));
+        assert_eq!(reply, "✓ Gate rejected. Mission now rejected.");
 
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
@@ -429,5 +426,13 @@ mod tests {
 
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn dispatch_usage_renders_usage_hint_without_any_daemon_call() {
+        // No fake daemon needed — Usage never reaches daemon_client.
+        let reply = dispatch(std::path::Path::new("/nonexistent/unused.sock"), TeamCommand::Usage).await;
+        assert!(reply.starts_with('✗'));
+        assert!(reply.contains("Usage"));
     }
 }
