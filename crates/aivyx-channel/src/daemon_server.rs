@@ -1479,6 +1479,35 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         Arc::new(std::sync::Mutex::new(recovery_notice));
     let mut handles = Vec::new();
 
+    // Piece C (2026-08-23) — build the daemon's own per-channel-type
+    // `/team run` authorization once at startup, re-reading the same
+    // `aivyx.toml` this process itself loaded (`config_toml_path`) —
+    // deliberately not trusting anything the connecting channel-adapter
+    // process claims about its own authorization. `None` (env-only
+    // launch, no config file) or a failed re-read both fail closed to
+    // all-`false` (`ChannelTriggerAuthz::default()`), never fail-open.
+    let channel_trigger_authz = config_toml_path
+        .as_deref()
+        .and_then(|p| load_settings_config(p).ok())
+        .map(|cfg| ChannelTriggerAuthz {
+            telegram: cfg
+                .telegram
+                .as_ref()
+                .map(|t| t.team_run_channel)
+                .unwrap_or(false),
+            discord: cfg
+                .discord
+                .as_ref()
+                .map(|d| d.team_run_channel)
+                .unwrap_or(false),
+            slack: cfg
+                .slack
+                .as_ref()
+                .map(|s| s.team_run_channel)
+                .unwrap_or(false),
+        })
+        .unwrap_or_default();
+
     loop {
         let (stream, _addr) = tokio::select! {
             result = listener.accept() => {
@@ -1539,6 +1568,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             loop_config: loop_config.clone(),
             team_missions: team_missions.clone(),
             gate_policy,
+            channel_trigger_authz,
             config_toml_path: config_toml_path.clone(),
             team_config_write_path: team_config_write_path.clone(),
             seed_draft_llm: seed_draft_llm.clone(),
@@ -1564,6 +1594,101 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     }
 
     Ok(())
+}
+
+/// Piece C (2026-08-23) — the daemon's own, independently-loaded
+/// per-channel-type authorization for `/team run <goal>`. Built once
+/// at daemon startup from the same `aivyx.toml` every process reads
+/// (see the construction site below) — deliberately *not* trusting
+/// anything the connecting channel-adapter process claims about its
+/// own authorization, since that process is a separate, potentially
+/// stale or misconfigured copy of the same config.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChannelTriggerAuthz {
+    pub telegram: bool,
+    pub discord: bool,
+    pub slack: bool,
+}
+
+/// Pure: does `authz` grant `platform` the right to start a new team
+/// mission via `/team run`? `None` (no `StartSession` yet) or any
+/// platform this feature doesn't recognize (Local/Rest/Voice/Email/
+/// Matrix) is always denied — fail-closed, never fail-open on an
+/// unrecognized or absent identity.
+pub fn channel_trigger_authorized(
+    authz: &ChannelTriggerAuthz,
+    platform: Option<aivyx_core::ChannelPlatform>,
+) -> bool {
+    match platform {
+        Some(aivyx_core::ChannelPlatform::Telegram) => authz.telegram,
+        Some(aivyx_core::ChannelPlatform::Discord) => authz.discord,
+        Some(aivyx_core::ChannelPlatform::Slack) => authz.slack,
+        _ => false,
+    }
+}
+
+/// Pure: the `triggered_by` tag a channel-started mission's record
+/// carries, and the `platform` field the audit event logs.
+pub fn channel_trigger_tag(platform: Option<aivyx_core::ChannelPlatform>) -> String {
+    match platform {
+        Some(aivyx_core::ChannelPlatform::Telegram) => "channel:telegram".to_string(),
+        Some(aivyx_core::ChannelPlatform::Discord) => "channel:discord".to_string(),
+        Some(aivyx_core::ChannelPlatform::Slack) => "channel:slack".to_string(),
+        _ => "channel:unknown".to_string(),
+    }
+}
+
+/// Piece C — the real authorization + start decision for
+/// `FrontendMessage::RunTeamMissionChannel`, extracted from the raw
+/// wire-protocol read/write glue in `handle_connection` specifically
+/// so it's directly testable without a live `UnixStream`/
+/// `ConnectionContext` (no precedent for that exists anywhere in this
+/// file — see this task's own "Testability note"). Checks
+/// authorization *before* service-presence, deliberately: whether a
+/// team-mission service even exists is irrelevant to an unauthorized
+/// caller, and checking the cheaper, more restrictive gate first keeps
+/// both branches independently testable with no service fixture
+/// needed for the deny path.
+async fn handle_run_team_mission_channel(
+    svc: Option<&crate::team_mission_driver::TeamMissionService>,
+    authz: &ChannelTriggerAuthz,
+    platform: Option<aivyx_core::ChannelPlatform>,
+    audit_log: Option<&PersistentAuditLog>,
+    goal: String,
+) -> DaemonMessage {
+    if !channel_trigger_authorized(authz, platform) {
+        return DaemonMessage::Error {
+            code: "team_run_channel_denied".into(),
+            message: "this channel is not authorized to start team missions (operator \
+                      opt-in required via team_run_channel in aivyx.toml)"
+                .into(),
+        };
+    }
+    let Some(svc) = svc else {
+        return DaemonMessage::Error {
+            code: "no_team_missions".into(),
+            message: "daemon has no team-mission service configured".into(),
+        };
+    };
+    let tag = channel_trigger_tag(platform);
+    match svc.start_from_goal_for_channel_trigger(&goal, None, &tag).await {
+        Ok(mission_id) => {
+            if let Some(log) = audit_log {
+                if let Err(e) = log.append(aivyx_audit::AuditEvent::TeamMissionChannelTriggered {
+                    platform: tag.clone(),
+                    goal: goal.clone(),
+                    mission_id: mission_id.clone(),
+                }) {
+                    eprintln!("aivyx daemon: failed to audit channel team trigger: {e}");
+                }
+            }
+            DaemonMessage::TeamMissionChannelStarted { mission_id }
+        }
+        Err(e) => DaemonMessage::Error {
+            code: "team_run_channel_failed".into(),
+            message: e.to_string(),
+        },
+    }
 }
 
 /// Per-connection state the daemon hands to `handle_connection`.
@@ -1705,6 +1830,8 @@ struct ConnectionContext {
     /// `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate` handlers.
     team_missions: Option<crate::team_mission_driver::TeamMissionService>,
     gate_policy: GatePolicy,
+    /// Piece C — per-channel-type authorization for `/team run`.
+    channel_trigger_authz: ChannelTriggerAuthz,
     /// Chapter U — path to the loaded `aivyx.toml` for the Settings IPC
     /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
     /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
@@ -1766,6 +1893,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_config,
         team_missions,
         gate_policy,
+        channel_trigger_authz,
         config_toml_path,
         team_config_write_path,
         seed_draft_llm,
@@ -2448,6 +2576,19 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     let _ = writer.write_all(&frame).await;
                                 }
                             }
+                        }
+                        FrontendMessage::RunTeamMissionChannel { goal } => {
+                            let platform = channel.as_ref().map(|c| c.platform());
+                            let resp = handle_run_team_mission_channel(
+                                team_missions.as_ref(),
+                                &channel_trigger_authz,
+                                platform,
+                                audit_log.as_deref(),
+                                goal,
+                            )
+                            .await;
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
                         }
                         FrontendMessage::Shutdown => {
                             send_shutting_down(&mut writer, "operator requested via daemon stop")
@@ -3375,6 +3516,7 @@ async fn run_single_connection_daemon(
         loop_config: None,
         team_missions: None,
         gate_policy: GatePolicy::default(),
+        channel_trigger_authz: ChannelTriggerAuthz::default(),
         config_toml_path: None,
         team_config_write_path: None,
         seed_draft_llm: None,
@@ -6358,6 +6500,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
         aivyx_audit::AuditEvent::DocumentMutated { .. } => "DocumentMutated",
         aivyx_audit::AuditEvent::ScheduleMutated { .. } => "ScheduleMutated",
+        aivyx_audit::AuditEvent::TeamMissionChannelTriggered { .. } => "TeamMissionChannelTriggered",
     }
     .to_string();
 
@@ -6983,6 +7126,107 @@ mod tests {
         // interactive run; a headless run never parks.
         assert!(escalation_parks(GatePolicy::Interactive));
         assert!(!escalation_parks(GatePolicy::RejectAndAbort));
+    }
+
+    // ---- Piece C (2026-08-23) — ChannelTriggerAuthz / handle_run_team_mission_channel ----
+
+    #[test]
+    fn channel_trigger_authorized_checks_the_right_platform_flag() {
+        let authz = ChannelTriggerAuthz {
+            telegram: true,
+            discord: false,
+            slack: false,
+        };
+        assert!(channel_trigger_authorized(
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Telegram)
+        ));
+        assert!(!channel_trigger_authorized(
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Discord)
+        ));
+        assert!(!channel_trigger_authorized(
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Slack)
+        ));
+    }
+
+    #[test]
+    fn channel_trigger_authorized_denies_unknown_or_absent_platform() {
+        let authz = ChannelTriggerAuthz {
+            telegram: true,
+            discord: true,
+            slack: true,
+        };
+        // No StartSession yet, or a platform this feature was never
+        // designed for (Local/Rest/Voice/...) — always denied, never
+        // fail-open.
+        assert!(!channel_trigger_authorized(&authz, None));
+        assert!(!channel_trigger_authorized(
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Local)
+        ));
+    }
+
+    #[test]
+    fn channel_trigger_tag_names_the_platform() {
+        assert_eq!(
+            channel_trigger_tag(Some(aivyx_core::ChannelPlatform::Telegram)),
+            "channel:telegram"
+        );
+        assert_eq!(
+            channel_trigger_tag(Some(aivyx_core::ChannelPlatform::Discord)),
+            "channel:discord"
+        );
+        assert_eq!(
+            channel_trigger_tag(Some(aivyx_core::ChannelPlatform::Slack)),
+            "channel:slack"
+        );
+        assert_eq!(channel_trigger_tag(None), "channel:unknown");
+    }
+
+    #[tokio::test]
+    async fn handle_run_team_mission_channel_denies_before_ever_checking_the_service() {
+        // Deliberately checks authorization BEFORE service-presence: an
+        // unauthorized channel gets denied even if the daemon has no
+        // TeamMissionService at all — `svc: None` here proves the
+        // authorization branch never touches `svc`, so this test needs no
+        // TeamMissionService fixture (there is no existing lightweight one
+        // in this file to build from).
+        let authz = ChannelTriggerAuthz::default(); // all false
+        let resp = handle_run_team_mission_channel(
+            None,
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Telegram),
+            None,
+            "close the books".to_string(),
+        )
+        .await;
+        match resp {
+            DaemonMessage::Error { code, .. } => assert_eq!(code, "team_run_channel_denied"),
+            other => panic!("expected Error(team_run_channel_denied), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_run_team_mission_channel_reports_no_service_when_authorized_but_absent() {
+        let authz = ChannelTriggerAuthz {
+            telegram: true,
+            discord: false,
+            slack: false,
+        };
+        let resp = handle_run_team_mission_channel(
+            None,
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Telegram),
+            None,
+            "close the books".to_string(),
+        )
+        .await;
+        match resp {
+            DaemonMessage::Error { code, .. } => assert_eq!(code, "no_team_missions"),
+            other => panic!("expected Error(no_team_missions), got {other:?}"),
+        }
     }
 
     fn test_dir(name: &str) -> PathBuf {
