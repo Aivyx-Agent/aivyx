@@ -1340,14 +1340,17 @@ fn scope_base(s: &str) -> &str {
     s.split(':').next().unwrap_or(s)
 }
 
-/// Piece D (2026-08-24) — separates a pack's own declared capability_scopes
-/// for the LEAD role into what's allowed through (`kept`: narrow
-/// orchestration markers — team bus + qualified MCP grants, mirroring the
-/// specialist branch's own already-correct filter below) and what must be
-/// clamped (`dropped`: any domain scope — fs.*/shell.*/net.*/etc. — a pack
-/// tried to add beyond the real daemon floor). Pure and side-effect-free
-/// specifically so the "what got clamped" computation is directly testable
-/// without needing to capture the warning log's own text.
+/// Piece D (2026-08-24) — separates a role's own declared capability_scopes
+/// down to the narrow orchestration markers (team bus + qualified MCP
+/// grants) it's allowed to keep (`kept`) versus everything else (`dropped`).
+/// Shared by both branches of `bind_lead_scopes`: the LEAD branch uses
+/// `dropped` to warn when a pack's own declared lead scopes exceed the real
+/// daemon floor (any domain scope — fs.*/shell.*/net.*/etc. — a pack tried
+/// to add beyond it); the specialist branch only needs `kept` (a specialist's
+/// domain scopes are already floor-filtered separately, so there's nothing
+/// to warn about there). Pure and side-effect-free specifically so the
+/// "what got clamped" computation is directly testable without needing to
+/// capture the warning log's own text.
 ///
 /// This closes a real defense-in-depth gap: `TeamConfig::load` only
 /// validates that a pack's own declared scopes *parse*, never that
@@ -1355,7 +1358,7 @@ fn scope_base(s: &str) -> &str {
 /// installing an unaudited third-party vertical pack could otherwise have
 /// its own declared lead scopes silently escalate beyond what the
 /// operator's own `aivyx.toml`/trust-tier config actually grants.
-fn filter_lead_pack_scopes(pack_declared: &[String]) -> (Vec<String>, Vec<String>) {
+fn filter_orchestration_markers(pack_declared: &[String]) -> (Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
     for s in pack_declared {
@@ -1394,10 +1397,10 @@ fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
             // narrow orchestration scopes (team.delegate / team.message /
             // qualified MCP) a pack's own capability_scopes declared for it
             // — never an arbitrary domain scope beyond the real floor. See
-            // `filter_lead_pack_scopes`'s own doc comment for the full
+            // `filter_orchestration_markers`'s own doc comment for the full
             // defense-in-depth rationale.
             let mut caps: Vec<String> = lead_scopes.to_vec();
-            let (kept, dropped) = filter_lead_pack_scopes(&m.capability_scopes);
+            let (kept, dropped) = filter_orchestration_markers(&m.capability_scopes);
             if !dropped.is_empty() {
                 eprintln!(
                     "aivyx team: pack's own declared lead scopes exceed the daemon \
@@ -1429,15 +1432,8 @@ fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
             // through the filter above; pushing the bare form here would
             // grant every server unqualified (D4 Rule 2), which is broader
             // than the operator's configured set.
-            for s in &m.capability_scopes {
-                let b = scope_base(s);
-                if b == "team.message"
-                    || b == "team.delegate"
-                    || (b.starts_with("mcp.") && s.contains(':'))
-                {
-                    caps.push(s.clone());
-                }
-            }
+            let (kept, _dropped) = filter_orchestration_markers(&m.capability_scopes);
+            caps.extend(kept);
             caps.sort();
             caps.dedup();
             m.capability_scopes = caps;
@@ -2327,7 +2323,7 @@ pub(crate) mod tests {
     // ---- Chapter Keystone — mission-level artifact grounding ----------------
 
     #[test]
-    fn filter_lead_pack_scopes_keeps_only_orchestration_markers() {
+    fn filter_orchestration_markers_keeps_only_orchestration_markers() {
         let declared: Vec<String> = [
             "team.delegate",
             "team.message",
@@ -2341,7 +2337,7 @@ pub(crate) mod tests {
         .map(|s| s.to_string())
         .collect();
 
-        let (kept, dropped) = filter_lead_pack_scopes(&declared);
+        let (kept, dropped) = filter_orchestration_markers(&declared);
 
         assert!(kept.contains(&"team.delegate".to_string()));
         assert!(kept.contains(&"team.message".to_string()));
@@ -2356,19 +2352,19 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn filter_lead_pack_scopes_drops_nothing_when_pack_declares_only_markers() {
+    fn filter_orchestration_markers_drops_nothing_when_pack_declares_only_markers() {
         let declared: Vec<String> = ["team.delegate", "team.message"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let (kept, dropped) = filter_lead_pack_scopes(&declared);
+        let (kept, dropped) = filter_orchestration_markers(&declared);
         assert_eq!(kept.len(), 2);
         assert!(dropped.is_empty(), "nothing to clamp when the pack only declares markers");
     }
 
     #[test]
-    fn filter_lead_pack_scopes_handles_empty_input() {
-        let (kept, dropped) = filter_lead_pack_scopes(&[]);
+    fn filter_orchestration_markers_handles_empty_input() {
+        let (kept, dropped) = filter_orchestration_markers(&[]);
         assert!(kept.is_empty());
         assert!(dropped.is_empty());
     }
