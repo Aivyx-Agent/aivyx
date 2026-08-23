@@ -1803,7 +1803,7 @@ impl Tool for TeamRunTool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1915,7 +1915,7 @@ mod tests {
         }
     }
 
-    async fn team_domain() -> DomainHandle {
+    pub(crate) async fn team_domain() -> DomainHandle {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -1932,7 +1932,7 @@ mod tests {
         storage.domain(KeyDomain::TeamMissions)
     }
 
-    fn deps(line: &str) -> TeamRunDeps {
+    pub(crate) fn deps(line: &str) -> TeamRunDeps {
         TeamRunDeps {
             provider: Arc::new(FakeProvider { line: line.into(), usage: LlmUsage::default() }),
             model: "test-model".into(),
@@ -3599,7 +3599,7 @@ mod tests {
     // ---- team.run tool (L.7) ------------------------------------------
 
     /// A one-step plan the fake provider returns for a `team.run` decomposition.
-    const TOOL_PLAN_JSON: &str =
+    pub(crate) const TOOL_PLAN_JSON: &str =
         r#"{"goal":"g","steps":[{"id":"a","specialist":"writer","prompt":"draft"}]}"#;
 
     fn tool_ctx_parts() -> (MissionLeadChannel, CancellationToken) {

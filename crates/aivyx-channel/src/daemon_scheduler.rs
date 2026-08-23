@@ -105,13 +105,21 @@ pub async fn run_scheduler(
     store: DomainHandle,
     shutdown: CancellationToken,
     report_ctx: Option<ReportContext>,
+    team_missions: Option<crate::team_mission_driver::TeamMissionService>,
 ) {
     loop {
         if shutdown.is_cancelled() {
             return;
         }
 
-        let sleep_dur = match tick(&dispatch, &store, report_ctx.as_ref()).await {
+        let sleep_dur = match tick(
+            &dispatch,
+            &store,
+            report_ctx.as_ref(),
+            team_missions.as_ref(),
+        )
+        .await
+        {
             Ok(dur) => dur,
             Err(e) => {
                 eprintln!("aivyx scheduler: tick error: {e}");
@@ -132,6 +140,7 @@ async fn tick(
     dispatch: &TriggerDispatch,
     store: &DomainHandle,
     report_ctx: Option<&ReportContext>,
+    team_missions: Option<&crate::team_mission_driver::TeamMissionService>,
 ) -> Result<Duration, String> {
     let schedules = schedule::list_schedules(store)
         .await
@@ -153,7 +162,7 @@ async fn tick(
 
         if next_fire <= now {
             if !already_fired_in_window(sched, next_fire) {
-                fire_schedule(dispatch, store, sched, report_ctx).await;
+                fire_schedule(dispatch, store, sched, report_ctx, team_missions).await;
             }
             // Recompute next fire after this one.
             if let Some(after_now) = sched.next_fire_time_after(now) {
@@ -211,13 +220,72 @@ fn update_earliest(
     }
 }
 
+/// Chapter Muster — the deterministic team-mission half of `fire_schedule`,
+/// extracted into its own function so it's testable without constructing a
+/// `TriggerDispatch` (which nothing in this codebase does today — see this
+/// function's own test for why). Loads `sched.team_mission`'s pack config
+/// (if any) fresh at fire time, then starts the mission via
+/// `TeamMissionService::start_from_goal_for_schedule`, tagging it with
+/// `sched.schedule_id`. Errors are logged, never propagated — matches
+/// `fire_schedule`'s own existing fire-and-forget error handling.
+async fn fire_team_mission_schedule(
+    sched: &ScheduleRecord,
+    tm: &crate::schedule::ScheduledTeamMission,
+    team_missions: &crate::team_mission_driver::TeamMissionService,
+) {
+    let config = match &tm.pack_config {
+        Some(path) => match aivyx_team::TeamConfig::load(path) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!(
+                    "aivyx scheduler: schedule {:?}'s pack_config {path:?} failed to load: {e}",
+                    sched.schedule_id
+                );
+                return;
+            }
+        },
+        None => None,
+    };
+    match team_missions
+        .start_from_goal_for_schedule(&tm.goal, config, &sched.schedule_id)
+        .await
+    {
+        Ok(mission_id) => {
+            eprintln!(
+                "aivyx scheduler: schedule {:?} started team mission {mission_id}",
+                sched.schedule_id
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "aivyx scheduler: schedule {:?} failed to start a team mission: {e}",
+                sched.schedule_id
+            );
+        }
+    }
+}
+
 /// Fire a single scheduled turn through the shared trigger dispatch.
 async fn fire_schedule(
     dispatch: &TriggerDispatch,
     store: &DomainHandle,
     sched: &ScheduleRecord,
     report_ctx: Option<&ReportContext>,
+    team_missions: Option<&crate::team_mission_driver::TeamMissionService>,
 ) {
+    if let Some(tm) = &sched.team_mission {
+        match team_missions {
+            Some(svc) => fire_team_mission_schedule(sched, tm, svc).await,
+            None => eprintln!(
+                "aivyx scheduler: schedule {:?} targets a team mission but no \
+                 TeamMissionService is wired — skipping",
+                sched.schedule_id
+            ),
+        }
+        update_last_fired(store, sched).await;
+        return;
+    }
+
     // Chapter Ledger — a `report_kind = "digest"` routine runs a deterministic
     // daemon-assembled digest instead of an LLM turn, so it cannot confabulate
     // (#6). Falls through to the normal LLM path if no builder is wired.
@@ -480,6 +548,30 @@ mod tests {
         }];
         let records = config_to_records(&configs).unwrap();
         assert!(records[0].wrap_mission);
+    }
+
+    #[tokio::test]
+    async fn fire_team_mission_schedule_starts_a_tagged_mission() {
+        let sched = ScheduleRecord::new_team_mission(
+            "cfg-nightly-boh-close".to_string(),
+            "0 0 2 * * * *".to_string(),
+            "run the overnight close".to_string(),
+            None,
+        )
+        .expect("valid");
+        let svc = crate::team_mission_driver::TeamMissionService::new(
+            crate::team_mission_driver::SharedMissionState::new(
+                crate::team_mission_driver::tests::team_domain().await,
+            ),
+            crate::team_mission_driver::tests::deps(crate::team_mission_driver::tests::TOOL_PLAN_JSON),
+            aivyx_team::default_nonagon(),
+            aivyx_core::GatePolicy::Interactive,
+        );
+        let tm = sched.team_mission.as_ref().expect("set");
+        fire_team_mission_schedule(&sched, tm, &svc).await;
+        let missions = svc.list();
+        assert_eq!(missions.len(), 1);
+        assert_eq!(missions[0].triggered_by.as_deref(), Some("cfg-nightly-boh-close"));
     }
 
     #[test]

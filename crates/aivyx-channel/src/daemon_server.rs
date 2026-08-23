@@ -761,12 +761,18 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 default_notify_target: default_notify_target.clone(),
             }
         });
+        // Chapter Muster — the same live TeamMissionService the daemon's IPC
+        // handlers and loop-delegation path already share, so a team-mission
+        // schedule fires through `TeamMissionService::start_from_goal_for_schedule`
+        // instead of an LLM tool-call in the loop.
+        let sched_team_missions = team_missions.clone();
         tokio::spawn(async move {
             crate::daemon_scheduler::run_scheduler(
                 sched_dispatch,
                 store,
                 sched_shutdown,
                 report_ctx,
+                sched_team_missions,
             )
             .await;
         })
