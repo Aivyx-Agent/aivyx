@@ -23,6 +23,8 @@ use crate::daemon_client::DaemonSession;
 use crate::daemon_ipc::{FrontendType, StreamEventPayload};
 use crate::daemon_server::DaemonError;
 use crate::gate_command;
+use crate::team_command;
+use crate::team_dispatch;
 
 const LONG_POLL_TIMEOUT_SECS: u32 = 25;
 
@@ -243,6 +245,17 @@ async fn run_telegram_daemon_chat_task(
                 }
                 Err(e) => format!("✗ Gate resolve failed: {e}"),
             };
+            transport
+                .send_message(OutgoingMessage { chat_id, text: reply })
+                .await
+                .map_err(|e| DaemonError::Internal(format!(
+                    "send_message to chat {chat_id}: {e}"
+                )))?;
+            continue;
+        }
+
+        if let Some(team_cmd) = team_command::parse(msg.text.trim()) {
+            let reply = team_dispatch::dispatch(&socket_path, team_cmd).await;
             transport
                 .send_message(OutgoingMessage { chat_id, text: reply })
                 .await
