@@ -181,6 +181,7 @@ pub mod discord_daemon_frontend;
 pub mod gate_command;
 pub mod team_command;
 pub mod team_dispatch;
+pub mod team_trigger_state;
 pub mod skill_auto_proposer;
 pub mod skill_edit;
 pub mod skill_tool;
