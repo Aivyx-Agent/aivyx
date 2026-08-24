@@ -2685,11 +2685,12 @@ pub(crate) mod tests {
         // A pack's lead role redundantly re-declares a scope the floor
         // already grants -- this must NOT be treated as "exceeding the
         // floor" even though it isn't a team.message/team.delegate/mcp
-        // orchestration marker. The real authorization outcome (the lead's
-        // final capability_scopes) is unaffected by whether this redundant
-        // declaration is present, since the base match already grants it
-        // either way; this test is about the warning's own truthfulness
-        // specifically.
+        // orchestration marker. The declaration itself is NOT redundant to
+        // the grant (it's what establishes "net.fetch" as one of the
+        // lead's own bases, which the floor's matching entry then flows
+        // through) -- what this test proves is that the WARNING correctly
+        // recognizes an already-floor-covered declaration as harmless
+        // rather than flagging it as "exceeding the floor."
         let floor: Vec<String> = ["memory.read", "net.fetch"]
             .iter()
             .map(|s| s.to_string())
@@ -2712,9 +2713,10 @@ pub(crate) mod tests {
             .unwrap()
             .capability_scopes
             .clone();
-        // The real outcome is unaffected either way -- net.fetch is present
-        // because it's in the floor, not because the redundant declaration
-        // survived any special-cased path.
+        // net.fetch is present because the lead's own declaration of it
+        // established the base, which the floor's matching net.fetch
+        // entry then flows through -- not because it survived as a raw,
+        // unfiltered string via any special-cased path.
         assert!(lead_caps.contains(&"net.fetch".to_string()));
     }
 
