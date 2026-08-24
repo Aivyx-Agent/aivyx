@@ -456,6 +456,18 @@ pub enum AuditEvent {
         goal: String,
         mission_id: String,
     },
+
+    /// Piece C follow-up (2026-08-24) — a channel's native `/team run
+    /// <goal>` command was refused (the channel isn't opted into
+    /// `team_run_channel`). Sibling of `TeamMissionChannelTriggered` —
+    /// same shape minus `mission_id` (nothing was created), plus
+    /// `reason` for the refusal.
+    TeamMissionChannelDenied {
+        /// Same convention as `TeamMissionChannelTriggered::platform`.
+        platform: String,
+        goal: String,
+        reason: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
@@ -2773,6 +2785,18 @@ mod tests {
             platform: "telegram".to_string(),
             goal: "close the books".to_string(),
             mission_id: "m-1".to_string(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn team_mission_channel_denied_round_trips() {
+        let event = AuditEvent::TeamMissionChannelDenied {
+            platform: "telegram".to_string(),
+            goal: "close the books".to_string(),
+            reason: "channel not authorized via team_run_channel in aivyx.toml".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serialize");
         let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");

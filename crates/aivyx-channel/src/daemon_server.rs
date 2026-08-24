@@ -1717,16 +1717,24 @@ async fn handle_run_team_mission_channel(
     goal: String,
 ) -> DaemonMessage {
     if !channel_trigger_authorized(authz, platform) {
-        // Finding I3(b) — a denied `/team run` otherwise leaves zero
-        // forensic trace (only successful starts are audited via
-        // `TeamMissionChannelTriggered`). No new `AuditEvent` variant
-        // here (out of scope for this fix); a startup-log-style
-        // eprintln is the narrowest fix.
+        // Finding I3(b), closed 2026-08-24 — a denied `/team run` used to
+        // leave zero forensic trace beyond this eprintln. Now also
+        // appended to the persistent audit chain, mirroring the success
+        // branch's own TeamMissionChannelTriggered pattern below.
         eprintln!(
             "aivyx daemon: /team run denied for channel {} (not authorized via \
              team_run_channel in aivyx.toml)",
             channel_trigger_audit_platform(platform)
         );
+        if let Some(log) = audit_log {
+            if let Err(e) = log.append(aivyx_audit::AuditEvent::TeamMissionChannelDenied {
+                platform: channel_trigger_audit_platform(platform),
+                goal: goal.clone(),
+                reason: "channel not authorized via team_run_channel in aivyx.toml".into(),
+            }) {
+                eprintln!("aivyx daemon: failed to audit denied channel team trigger: {e}");
+            }
+        }
         return DaemonMessage::Error {
             code: "team_run_channel_denied".into(),
             message: "this channel is not authorized to start team missions (operator \
@@ -6591,6 +6599,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::DocumentMutated { .. } => "DocumentMutated",
         aivyx_audit::AuditEvent::ScheduleMutated { .. } => "ScheduleMutated",
         aivyx_audit::AuditEvent::TeamMissionChannelTriggered { .. } => "TeamMissionChannelTriggered",
+        aivyx_audit::AuditEvent::TeamMissionChannelDenied { .. } => "TeamMissionChannelDenied",
     }
     .to_string();
 
@@ -7330,6 +7339,53 @@ mod tests {
         match resp {
             DaemonMessage::Error { code, .. } => assert_eq!(code, "team_run_channel_denied"),
             other => panic!("expected Error(team_run_channel_denied), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_run_team_mission_channel_denial_is_audited() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{RedbStorage, StorageConfig};
+
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-team-run-denial-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .expect("open storage");
+        let log = PersistentAuditLog::open(storage, [9u8; 32])
+            .await
+            .expect("open chain");
+
+        let authz = ChannelTriggerAuthz::default(); // all false
+        let resp = handle_run_team_mission_channel(
+            None,
+            &authz,
+            Some(aivyx_core::ChannelPlatform::Telegram),
+            Some(&log),
+            "close the books".to_string(),
+        )
+        .await;
+        match resp {
+            DaemonMessage::Error { code, .. } => assert_eq!(code, "team_run_channel_denied"),
+            other => panic!("expected Error(team_run_channel_denied), got {other:?}"),
+        }
+
+        let entries = log.entries().expect("read chain");
+        assert_eq!(entries.len(), 1, "the denial must append exactly one entry");
+        match &entries[0].event {
+            aivyx_audit::AuditEvent::TeamMissionChannelDenied { platform, goal, reason } => {
+                assert_eq!(platform, "telegram");
+                assert_eq!(goal, "close the books");
+                assert!(
+                    reason.contains("team_run_channel"),
+                    "reason should name the config key an operator needs to set: {reason}"
+                );
+            }
+            other => panic!("expected TeamMissionChannelDenied, got {other:?}"),
         }
     }
 
