@@ -491,6 +491,16 @@ pub struct DaemonConfig {
     /// path. Read-only config (the access level itself) is still load-time —
     /// a write here only updates the file; it takes effect on the next start.
     pub config_toml_path: Option<PathBuf>,
+    /// Piece C follow-up — the same value the daemon's own primary
+    /// config load resolved its active role from (`LoadOptions::role_override`
+    /// at the binary's own startup call). Threaded through so the
+    /// re-reads below (`channel_trigger_authz`, Chapter U's
+    /// `settings_applied`) resolve against the SAME role, instead of
+    /// hardcoding `None` and risking `ConfigError::UnknownRole` for any
+    /// operator running a non-default `--role`. `None` is correct for an
+    /// env-only launch or a genuinely-default-role deployment — this
+    /// field is not itself a resolution mechanism, only a carried value.
+    pub role_override: Option<String>,
     /// Chapter Roster (RO.2) — the resolved team-config write target: the
     /// operator's `[team] config_path` (or the conventional `team.toml` beside
     /// `aivyx.toml`), pre-resolved by the binary. `None` ⇒ env-only launch (no
@@ -628,6 +638,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         workspace_journaling_interval,
         pricing,
         config_toml_path,
+        role_override,
         team_config_write_path,
         seed_draft_llm,
         document_roots,
@@ -1502,7 +1513,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // running a custom role gets a diagnosable signal rather than an
     // inert, unexplained `team_run_channel = true` doing nothing.
     let channel_trigger_authz = match config_toml_path.as_deref() {
-        Some(p) => match load_settings_config(p) {
+        Some(p) => match load_settings_config(p, role_override.as_deref()) {
             Ok(cfg) => ChannelTriggerAuthz {
                 telegram: cfg
                     .telegram
@@ -1604,6 +1615,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             gate_policy,
             channel_trigger_authz,
             config_toml_path: config_toml_path.clone(),
+            role_override: role_override.clone(),
             team_config_write_path: team_config_write_path.clone(),
             seed_draft_llm: seed_draft_llm.clone(),
             document_roots: document_roots.clone(),
@@ -1899,6 +1911,10 @@ struct ConnectionContext {
     /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
     /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<PathBuf>,
+    /// Piece C follow-up — see `DaemonConfig::role_override`'s own doc
+    /// comment; threaded here so `handle_query`'s Settings handlers can
+    /// resolve against the daemon's own real active role too.
+    role_override: Option<String>,
     /// Chapter Roster (RO.2) — the resolved team-config write target for the
     /// `SetTeamRoster` handler. `None` ⇒ env-only launch; the handler refuses.
     team_config_write_path: Option<PathBuf>,
@@ -1958,6 +1974,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         gate_policy,
         channel_trigger_authz,
         config_toml_path,
+        role_override,
         team_config_write_path,
         seed_draft_llm,
         document_roots,
@@ -2717,6 +2734,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 loop_config.as_ref(),
                                 team_missions.as_ref(),
                                 config_toml_path.as_deref(),
+                                role_override.as_deref(),
                                 team_config_write_path.as_deref(),
                                 &document_roots,
                                 seed_draft_llm.as_ref(),
@@ -3581,6 +3599,7 @@ async fn run_single_connection_daemon(
         gate_policy: GatePolicy::default(),
         channel_trigger_authz: ChannelTriggerAuthz::default(),
         config_toml_path: None,
+        role_override: None,
         team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
@@ -3675,6 +3694,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         gate_policy: GatePolicy::default(),
         pricing: Default::default(),
         config_toml_path: None,
+        role_override: None,
         team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
@@ -3884,6 +3904,9 @@ async fn handle_query(
     // Chapter U — the loaded `aivyx.toml` path for the Settings write
     // handlers. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<&Path>,
+    // Piece C follow-up — see `DaemonConfig::role_override`'s own doc
+    // comment.
+    role_override: Option<&str>,
     // Chapter Roster (RO.2) — the resolved team-config write target for the
     // `SetTeamRoster` handler. `None` ⇒ env-only launch; the handler refuses.
     team_config_write_path: Option<&Path>,
@@ -4527,7 +4550,9 @@ async fn handle_query(
             // by a restart). Fall back to the running snapshot when there is no
             // config file or the re-read fails.
             let summary = if from_disk {
-                match config_toml_path.and_then(|p| load_settings_config(p).ok()) {
+                match config_toml_path
+                    .and_then(|p| load_settings_config(p, role_override).ok())
+                {
                     Some(cfg) => profile_summary_from_profile(&cfg.profile),
                     None => profile_summary_from_profile(profile),
                 }
@@ -5262,7 +5287,7 @@ async fn handle_query(
                 Some(p) => p,
                 None => return no_config_file_error(),
             };
-            match load_settings_config(path) {
+            match load_settings_config(path, role_override) {
                 Ok(cfg) => QueryResponsePayload::GetSettings {
                     settings: settings_snapshot(&cfg, embedding_provider.is_some()),
                 },
@@ -5312,7 +5337,7 @@ async fn handle_query(
                         None => format!("access level = {}", lvl.as_str()),
                     };
                     audit_config_change(audit_log, "access", &summary);
-                    settings_applied(path, embedding_provider.is_some())
+                    settings_applied(path, embedding_provider.is_some(), role_override)
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5359,7 +5384,7 @@ async fn handle_query(
                         opt_frac(alert_at),
                     );
                     audit_config_change(audit_log, "budget", &summary);
-                    settings_applied(path, embedding_provider.is_some())
+                    settings_applied(path, embedding_provider.is_some(), role_override)
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5376,7 +5401,7 @@ async fn handle_query(
                         "agent",
                         &format!("cycle_detection = {enabled}"),
                     );
-                    settings_applied(path, embedding_provider.is_some())
+                    settings_applied(path, embedding_provider.is_some(), role_override)
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5422,7 +5447,7 @@ async fn handle_query(
                         "autonomy",
                         &format!("level = {}", lvl.as_str()),
                     );
-                    settings_applied(path, embedding_provider.is_some())
+                    settings_applied(path, embedding_provider.is_some(), role_override)
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5450,7 +5475,7 @@ async fn handle_query(
             match aivyx_config::write_profile_section(path, &write) {
                 Ok(()) => {
                     audit_config_change(audit_log, "profile", &profile_change_summary(&write));
-                    profile_applied(path)
+                    profile_applied(path, role_override)
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5460,7 +5485,7 @@ async fn handle_query(
                 Some(p) => p,
                 None => return no_config_file_error(),
             };
-            match load_settings_config(path) {
+            match load_settings_config(path, role_override) {
                 Ok(cfg) => QueryResponsePayload::GetVoiceSettings {
                     settings: voice_snapshot(&cfg),
                 },
@@ -5501,7 +5526,7 @@ async fn handle_query(
             match aivyx_config::write_voice_section(path, &write) {
                 Ok(()) => {
                     audit_config_change(audit_log, "voice", &voice_change_summary(&write));
-                    voice_applied(path)
+                    voice_applied(path, role_override)
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5666,14 +5691,17 @@ fn no_config_file_error() -> QueryResponsePayload {
 
 /// Chapter U — load the on-disk config for the Settings snapshot. Inspection
 /// posture (no required secrets), same as `aivyx access show`.
-fn load_settings_config(toml_path: &Path) -> Result<aivyx_config::AivyxConfig, String> {
+fn load_settings_config(
+    toml_path: &Path,
+    role_override: Option<&str>,
+) -> Result<aivyx_config::AivyxConfig, String> {
     let opts = aivyx_config::LoadOptions {
         toml_path: Some(toml_path.to_path_buf()),
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
         require_slack_tokens: false,
-        role_override: None,
+        role_override: role_override.map(str::to_string),
     };
     aivyx_config::AivyxConfig::load_from_env_and_toml(&opts)
         .map_err(|e| format!("failed to load {}: {e}", toml_path.display()))
@@ -5682,8 +5710,12 @@ fn load_settings_config(toml_path: &Path) -> Result<aivyx_config::AivyxConfig, S
 /// Chapter U — re-read the config from disk and return a `SettingsApplied`
 /// response. `restart_required` is always `true`: config is load-time, so a
 /// write updates the file but never the running daemon.
-fn settings_applied(toml_path: &Path, embeddings_available: bool) -> QueryResponsePayload {
-    match load_settings_config(toml_path) {
+fn settings_applied(
+    toml_path: &Path,
+    embeddings_available: bool,
+    role_override: Option<&str>,
+) -> QueryResponsePayload {
+    match load_settings_config(toml_path, role_override) {
         Ok(cfg) => QueryResponsePayload::SettingsApplied {
             settings: settings_snapshot(&cfg, embeddings_available),
             restart_required: true,
@@ -5730,8 +5762,8 @@ fn team_roster_summary(roster: &aivyx_team::TeamConfig) -> String {
 /// response. `restart_required` is always `true`: Profile shapes the system
 /// prompt at load time, so a write updates `aivyx.toml` but not the running
 /// daemon.
-fn profile_applied(toml_path: &Path) -> QueryResponsePayload {
-    match load_settings_config(toml_path) {
+fn profile_applied(toml_path: &Path, role_override: Option<&str>) -> QueryResponsePayload {
+    match load_settings_config(toml_path, role_override) {
         Ok(cfg) => QueryResponsePayload::ProfileApplied {
             profile: profile_summary_from_profile(&cfg.profile),
             restart_required: true,
@@ -5835,8 +5867,8 @@ fn path_status(p: Option<&Path>, want_dir: bool) -> String {
 /// Chapter Voice — re-read the config + return a `VoiceApplied` response.
 /// `restart_required` is always `true`: `[voice]` is read when the voice channel
 /// starts, so a write never affects a running voice process.
-fn voice_applied(toml_path: &Path) -> QueryResponsePayload {
-    match load_settings_config(toml_path) {
+fn voice_applied(toml_path: &Path, role_override: Option<&str>) -> QueryResponsePayload {
+    match load_settings_config(toml_path, role_override) {
         Ok(cfg) => QueryResponsePayload::VoiceApplied {
             settings: voice_snapshot(&cfg),
             restart_required: true,
@@ -7334,6 +7366,40 @@ mod tests {
     }
 
     #[test]
+    fn load_settings_config_resolves_a_non_default_role_when_overridden() {
+        let dir = test_dir("role-override-threading");
+        let toml_path = dir.join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+[[role]]
+name = "custom"
+system_prompt = "You are a custom role."
+"#,
+        )
+        .unwrap();
+
+        // Without the override, active-role resolution defaults to
+        // "default", which this config doesn't declare -- UnknownRole.
+        let without_override = load_settings_config(&toml_path, None);
+        assert!(
+            without_override.is_err(),
+            "a config with only a non-default-named role must fail to \
+             load without an override naming it"
+        );
+
+        // With the override, the real bug this task fixes: the daemon's
+        // own re-read must resolve against the SAME role the primary
+        // load used, not silently fall back to the "default" name.
+        let with_override = load_settings_config(&toml_path, Some("custom"));
+        assert!(
+            with_override.is_ok(),
+            "load_settings_config must accept a role_override and use it: {:?}",
+            with_override.err()
+        );
+    }
+
+    #[test]
     fn daemon_state_round_trips_through_json() {
         let state = DaemonState {
             pid: 12345,
@@ -8038,7 +8104,7 @@ mod tests {
              [budget]\nper_run_usd = 5.0\non_exceeded = \"deny\"\nalert_at = 0.8\n\
              [ollama]\nnum_ctx = 16384\n",
         );
-        let cfg = load_settings_config(&path).expect("load");
+        let cfg = load_settings_config(&path, None).expect("load");
         let snap = settings_snapshot(&cfg, true);
         assert_eq!(snap.access_level, "home");
         assert_eq!(snap.provider, "ollama");
@@ -8070,7 +8136,7 @@ mod tests {
                 kokoro_dir.display(),
             ),
         );
-        let cfg = load_settings_config(&path).expect("load");
+        let cfg = load_settings_config(&path, None).expect("load");
         let snap = voice_snapshot(&cfg);
         assert_eq!(snap.asr_engine.as_deref(), Some("whisper-rs"));
         assert_eq!(snap.asr_beam_size, Some(5));

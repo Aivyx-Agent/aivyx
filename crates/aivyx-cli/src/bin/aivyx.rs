@@ -1338,6 +1338,7 @@ fn run() -> Result<(), String> {
             cli_mcp_servers,
             cli_mcp_sse_servers,
             cli_web_ui_port,
+            load_opts.role_override.clone(),
         )
         .await
     })
@@ -5425,6 +5426,13 @@ async fn run_async(
     cli_mcp_servers: Vec<CliMcpServer>,
     cli_mcp_sse_servers: Vec<CliMcpSse>,
     cli_web_ui_port: Option<u16>,
+    // Piece C follow-up — see `DaemonConfig::role_override`'s own doc
+    // comment. `run()`'s own `role_override` local is moved into
+    // `load_opts` (and, from `print_role`, an early-return branch) before
+    // `run_async` is ever called, so it isn't in scope here; this carries
+    // the same value (`load_opts.role_override`, which outlives that move)
+    // through instead.
+    role_override: Option<String>,
 ) -> Result<(), String> {
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
@@ -9256,6 +9264,12 @@ async fn run_async(
                 let p = PathBuf::from(DEFAULT_TOML_PATH);
                 p.exists().then_some(p)
             },
+            // Piece C follow-up — see `DaemonConfig::role_override`'s own doc
+            // comment. Threaded in from `run()`'s own `load_opts.role_override`
+            // (the same value the primary config load resolved its active
+            // role from), since `run_async` is a separate function from `run()`
+            // and doesn't otherwise have that value in scope.
+            role_override: role_override.clone(),
             // Chapter Roster (RO.2) — the resolved team-config write target for
             // the `SetTeamRoster` handler: the operator's `[team] config_path`
             // (relative → joined to the `aivyx.toml` dir) or the conventional
