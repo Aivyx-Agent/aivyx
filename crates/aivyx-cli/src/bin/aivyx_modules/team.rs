@@ -72,6 +72,21 @@ fn load_team(config: Option<&str>) -> Result<TeamConfig, String> {
     }
 }
 
+/// Load a team config, then clamp the lead's (and every specialist's)
+/// pack-declared `capability_scopes` to `lead_scopes` — the CLI-run
+/// equivalent of the daemon path's own `bind_lead_scopes` call
+/// (`aivyx-channel`'s `team_mission_driver.rs`, used by
+/// `TeamMissionService`'s `assemble_runtime`). Closes the CLI team-run
+/// capability-floor gap: without this clamp, a vertical pack's own file
+/// could grant its lead role — and therefore, via delegation, its
+/// specialists — any `capability_scopes` it declares, regardless of the
+/// operator's own real, already-configured authority.
+fn load_and_clamp_team(config: Option<&str>, lead_scopes: &[String]) -> Result<TeamConfig, String> {
+    let mut config = load_team(config)?;
+    aivyx_channel::team_mission_driver::bind_lead_scopes(&mut config, lead_scopes);
+    Ok(config)
+}
+
 /// Resolve the daemon's startup team (Chapter Roster RO.1). Resolution order:
 ///
 /// 1. `[team] config_path` set → load that file (a relative path is resolved
@@ -186,6 +201,7 @@ pub async fn run_mission(
     max_tokens: u32,
     audit: Arc<dyn AuditHook>,
     checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
+    lead_scopes: &[String],
     kv_cache_handles: Option<(
         Arc<aivyx_llm::KvSlotPool>,
         Arc<aivyx_kvcache::LlamaServerSlotStore>,
@@ -195,7 +211,7 @@ pub async fn run_mission(
     mission: &str,
     config: Option<&str>,
 ) -> Result<(), String> {
-    let config = load_team(config)?;
+    let config = load_and_clamp_team(config, lead_scopes)?;
     let team_name = config.name.clone();
     let lead = config
         .lead_member()
@@ -493,5 +509,52 @@ mod tests {
         assert!(out.contains("1 specialist)"), "singular, not '1 specialists'");
         assert!(out.contains("(no description)"));
         assert!(out.contains("scopes: (none)"));
+    }
+
+    #[test]
+    fn load_and_clamp_team_strips_a_lead_scope_the_floor_does_not_grant() {
+        use aivyx_team::config::{DialogueConfig, TeamConfig, TeamMember};
+
+        let dir = scratch("clamp");
+        let path = dir.join("pack.toml");
+        let m = |name: &str, scopes: Vec<&str>| TeamMember {
+            name: name.into(),
+            role: "R".into(),
+            soul: "s".into(),
+            tool_allowlist: vec![],
+            capability_scopes: scopes.into_iter().map(String::from).collect(),
+            trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
+        };
+        let cfg = TeamConfig {
+            name: "unaudited-pack".into(),
+            description: String::new(),
+            lead: "boss".into(),
+            // The lead declares a domain scope well beyond team
+            // orchestration — exactly the shape an unaudited third-party
+            // pack might ship, and exactly what this fix must strip.
+            members: vec![m("boss", vec!["shell.exec:cwd:/etc/**", "team.delegate"])],
+            dialogue: DialogueConfig::default(),
+        };
+        std::fs::write(&path, cfg.to_toml().unwrap()).unwrap();
+
+        // The floor grants only team orchestration markers — no shell.exec
+        // at all. This is the operator's own real authority; the pack's
+        // file must not be able to exceed it.
+        let floor = vec!["team.message".to_string(), "team.delegate".to_string()];
+        let clamped = load_and_clamp_team(Some(path.to_str().unwrap()), &floor).unwrap();
+        let lead = clamped.lead_member().unwrap();
+
+        assert!(
+            !lead.capability_scopes.iter().any(|s| s.starts_with("shell.exec")),
+            "lead scopes should not include the out-of-floor domain scope: {:?}",
+            lead.capability_scopes
+        );
+        assert!(
+            lead.capability_scopes.contains(&"team.delegate".to_string()),
+            "the legitimate orchestration marker must still flow through: {:?}",
+            lead.capability_scopes
+        );
     }
 }

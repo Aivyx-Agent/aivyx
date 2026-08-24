@@ -1399,7 +1399,7 @@ fn scopes_exceeding_floor(dropped: &[String], floor: &[String]) -> Vec<String> {
 /// roster scopes + `workspace` when it carries workspace tools). Each specialist
 /// therefore stays ⊆ the lead ⊆ the daemon's real authority, attenuated per role.
 /// Empty `lead_scopes` ⇒ a no-op (pre-Ensemble behavior; tests unaffected).
-fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
+pub fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
     if lead_scopes.is_empty() {
         return;
     }

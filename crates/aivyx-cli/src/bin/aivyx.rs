@@ -8016,12 +8016,15 @@ async fn run_async(
     // `tool_list` and returns here rather than falling through to the
     // session/daemon wiring.
     if let CliMode::Team(TeamSubcommand::Run { mission, config }) = &mode {
+        let cli_lead_scopes: Vec<String> =
+            backcompat_floor.iter().map(|s| s.as_str().to_string()).collect();
         return team::run_mission(
             Arc::clone(&provider),
             &model,
             DEFAULT_MAX_TOKENS,
             Arc::clone(&audit),
             checkpointer.clone(),
+            &cli_lead_scopes,
             // Task 6 — `aivyx team run` runs inside this SAME `run_async`
             // invocation, after the provider-selection block above already
             // built `kv_cache_handles` (the same one the daemon path below
