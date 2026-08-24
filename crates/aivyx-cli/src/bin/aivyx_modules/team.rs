@@ -50,6 +50,12 @@ pub fn render_roster(config: &TeamConfig) -> String {
             trust_label(m.trust_ceiling),
         ));
     }
+    out.push_str(
+        "\nNote: scopes above are each member's own declared ask. Actual \
+         grants are computed when the team runs (`aivyx team run` /\n\
+         `aivyx team start`) against your own configured authority, and \
+         may be narrower.\n",
+    );
     out
 }
 
@@ -509,6 +515,16 @@ mod tests {
         assert!(out.contains("1 specialist)"), "singular, not '1 specialists'");
         assert!(out.contains("(no description)"));
         assert!(out.contains("scopes: (none)"));
+    }
+
+    #[test]
+    fn roster_shows_a_declared_not_guaranteed_caveat() {
+        let out = render_roster(&default_nonagon());
+        assert!(
+            out.contains("declared") && out.contains("aivyx team run"),
+            "roster output should caveat that scopes are declared, not \
+             guaranteed, and point at where the real grant happens: {out}"
+        );
     }
 
     #[test]
