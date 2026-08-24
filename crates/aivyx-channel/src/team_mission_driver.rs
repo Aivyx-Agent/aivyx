@@ -1343,12 +1343,11 @@ fn scope_base(s: &str) -> &str {
 /// Piece D (2026-08-24) — separates a role's own declared capability_scopes
 /// down to the narrow orchestration markers (team bus + qualified MCP
 /// grants) it's allowed to keep (`kept`) versus everything else (`dropped`).
-/// Shared by both branches of `bind_lead_scopes`: the LEAD branch uses
-/// `dropped` to warn when a pack's own declared lead scopes exceed the real
-/// daemon floor (any domain scope — fs.*/shell.*/net.*/etc. — a pack tried
-/// to add beyond it); the specialist branch only needs `kept` (a specialist's
-/// domain scopes are already floor-filtered separately, so there's nothing
-/// to warn about there). Pure and side-effect-free specifically so the
+/// Used by `bind_lead_scopes` for every member — lead and specialist
+/// alike: `kept` flows into the member's final `capability_scopes`,
+/// `dropped` (via `scopes_exceeding_floor`) drives the clamp warning when
+/// a member's own declared scopes genuinely exceed the floor. Pure and
+/// side-effect-free specifically so the
 /// "what got clamped" computation is directly testable without needing to
 /// capture the warning log's own text.
 ///
@@ -1382,7 +1381,11 @@ fn filter_orchestration_markers(pack_declared: &[String]) -> (Vec<String>, Vec<S
 /// floor — pure and side-effect-free so the decision is directly testable
 /// without capturing the warning's own `eprintln!` output.
 fn scopes_exceeding_floor(dropped: &[String], floor: &[String]) -> Vec<String> {
-    dropped.iter().filter(|s| !floor.contains(s)).cloned().collect()
+    dropped
+        .iter()
+        .filter(|s| !floor.iter().any(|f| scope_base(f) == scope_base(s)))
+        .cloned()
+        .collect()
 }
 
 /// Chapter Ensemble — bind the daemon's REAL authority into a team config so
@@ -2683,8 +2686,10 @@ pub(crate) mod tests {
         // already grants -- this must NOT be treated as "exceeding the
         // floor" even though it isn't a team.message/team.delegate/mcp
         // orchestration marker. The real authorization outcome (the lead's
-        // final capability_scopes) is unaffected either way; this test is
-        // about the warning's own truthfulness specifically.
+        // final capability_scopes) is unaffected by whether this redundant
+        // declaration is present, since the base match already grants it
+        // either way; this test is about the warning's own truthfulness
+        // specifically.
         let floor: Vec<String> = ["memory.read", "net.fetch"]
             .iter()
             .map(|s| s.to_string())
@@ -2745,6 +2750,25 @@ pub(crate) mod tests {
         let dropped: Vec<String> = ["net.fetch"].iter().map(|s| s.to_string()).collect();
 
         assert!(scopes_exceeding_floor(&dropped, &floor).is_empty());
+    }
+
+    #[test]
+    fn scopes_exceeding_floor_matches_by_base_not_exact_string() {
+        // A member's own declared scope is commonly bare ("fs.write")
+        // while the floor supplies a qualified form ("fs.write:/root/**")
+        // -- the real grant is computed by base match
+        // (bind_lead_scopes' own bases.contains(scope_base(s))), so the
+        // warning must use the same semantic or it flags every ordinary,
+        // correctly-granted bare declaration as "exceeding the floor"
+        // (a false positive that fires on nearly every real team
+        // assembly, since most roster scopes are declared bare).
+        let floor: Vec<String> = vec!["fs.write:/root/**".to_string()];
+        let dropped: Vec<String> = vec!["fs.write".to_string()];
+        assert!(
+            scopes_exceeding_floor(&dropped, &floor).is_empty(),
+            "a bare declared scope whose base the floor grants (however \
+             qualified) must not be reported as exceeding it"
+        );
     }
 
     fn artifact_plan() -> MissionPlan {

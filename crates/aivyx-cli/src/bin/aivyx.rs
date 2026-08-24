@@ -11202,6 +11202,83 @@ mod tests {
         );
     }
 
+    /// End-to-end proof for the Critical finding this whole initiative
+    /// closes: a vertical toolkit's own domain scopes, once picked up by
+    /// compute_backcompat_floor's generic sweep (aivyx-cli), actually flow
+    /// through the real bind_lead_scopes (aivyx-channel) so a pack's
+    /// specialists keep their domain scopes instead of collapsing to
+    /// team.message only. Neither crate's own unit tests exercise both
+    /// functions together across the crate boundary; this does.
+    #[test]
+    fn compute_backcompat_floor_flows_a_configured_verticals_domain_scopes_through_bind_lead_scopes() {
+        let canonical_root = PathBuf::from("/tmp/proj");
+        let tool_scope_bases: Vec<Scope> = vec![
+            Scope::parse("kitchen.read").unwrap(),
+            Scope::parse("kitchen.write").unwrap(),
+            Scope::parse("kitchen.order.send").unwrap(),
+            Scope::parse("kitchen.haccp.log").unwrap(),
+        ];
+        let floor = compute_backcompat_floor(
+            Scope::parse("fs.read:/tmp/proj/**").unwrap(),
+            Scope::parse("fs.write:/tmp/proj/**").unwrap(),
+            Scope::parse("fs.metadata:/tmp/proj/**").unwrap(),
+            &canonical_root,
+            None,
+            None,
+            vec![],
+            &tool_scope_bases,
+            false,
+        );
+        let lead_scopes: Vec<String> = floor.iter().map(|s| s.as_str().to_string()).collect();
+
+        use aivyx_team::config::{DialogueConfig, TeamConfig, TeamMember};
+        let member = |name: &str, scopes: &[&str]| TeamMember {
+            name: name.into(),
+            role: "R".into(),
+            soul: "s".into(),
+            tool_allowlist: vec![],
+            capability_scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            trust_ceiling: aivyx_capability::TrustTier::Trusted,
+            model: None,
+            base_url: None,
+        };
+        let mut config = TeamConfig {
+            name: "kitchen-boh".into(),
+            description: String::new(),
+            lead: "aria".into(),
+            members: vec![
+                member(
+                    "aria",
+                    &[
+                        "kitchen.read",
+                        "kitchen.write",
+                        "kitchen.order.send",
+                        "kitchen.haccp.log",
+                        "team.delegate",
+                        "team.message",
+                    ],
+                ),
+                member("stocktake", &["kitchen.read", "kitchen.write", "team.message"]),
+            ],
+            dialogue: DialogueConfig::default(),
+        };
+
+        aivyx_channel::team_mission_driver::bind_lead_scopes(&mut config, &lead_scopes);
+
+        let stocktake = config.members.iter().find(|m| m.name == "stocktake").unwrap();
+        assert!(
+            stocktake.capability_scopes.contains(&"kitchen.read".to_string()),
+            "the real, computed floor must carry kitchen.read through to a \
+             specialist declaring it: {:?}",
+            stocktake.capability_scopes
+        );
+        assert!(
+            stocktake.capability_scopes.contains(&"kitchen.write".to_string()),
+            "and kitchen.write: {:?}",
+            stocktake.capability_scopes
+        );
+    }
+
     /// A child with a narrower declared scope and an empty
     /// parent runs the **intersection** of the child's
     /// declaration with the parent's substituted floor. The
