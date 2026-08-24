@@ -5281,9 +5281,7 @@ fn compute_backcompat_floor(
     shell_exec_scope: Option<Scope>,
     fs_delete_scope: Option<Scope>,
     workspace_scopes: Vec<Scope>,
-    ollama_configured: bool,
-    mcp_server_names: &[String],
-    config_tool_processes: &[aivyx_config::ToolProcessConfig],
+    tool_scope_bases: &[Scope],
     loop_armed: bool,
 ) -> Vec<Scope> {
     let mut backcompat_floor: Vec<Scope> = vec![
@@ -5344,30 +5342,45 @@ fn compute_backcompat_floor(
     for s in workspace_scopes {
         backcompat_floor.push(s);
     }
-    // Phase 36 — grant ollama model management scopes when the provider is
-    // Ollama, so the default role (empty capability_scopes) can use them.
-    if ollama_configured {
-        backcompat_floor.push(Scope::parse("ollama.list").unwrap());
-        backcompat_floor.push(Scope::parse("ollama.show").unwrap());
-        backcompat_floor.push(Scope::parse("ollama.pull").unwrap());
-    }
-    // Grant the default role the scope to call every configured MCP
-    // server's tools. `mcp.call:<server>:*` grants exactly that server's
-    // tools (least-privilege per server).
-    for name in mcp_server_names {
-        if let Some(s) = Scope::parse(&format!("mcp.call:{name}:*")) {
-            backcompat_floor.push(s);
-        }
-    }
-    // Chapter Deckhand — when the `aivyx-apps` desktop tool process is
-    // configured, grant the default role the `app.*` scopes its tools
-    // require. The ceiling intersection keeps these Trusted-only and
-    // `app.input` stays confirm-first.
-    if config_tool_processes.iter().any(|tp| tp.name == "applications") {
-        for base in ["app.read", "app.control", "app.input"] {
-            if let Some(s) = Scope::parse(base) {
-                backcompat_floor.push(s);
+    // Generic sweep: every distinct domain scope some actually-registered
+    // tool (built-in, MCP-discovered, or tool-process-proxied — kitchen,
+    // applications, any future vertical toolkit) requires, minus the bases
+    // already granted precisely above (path-qualified, so a bare grant
+    // here would be a real over-broadening, not a harmless duplicate —
+    // D4 Rule 2: an unqualified held scope grants any qualified need), and
+    // with mcp.call resolved to a per-server wildcard rather than its bare
+    // (D4-Rule-2-violating) base. This subsumes what used to be three
+    // hand-written special cases (Ollama, MCP, `applications`) — any
+    // future tool-process's own domain scopes are picked up automatically,
+    // closing the class of bug this file's own history already hit five
+    // times (Chapter Lattice, Phase 110, Phase 67, Chapter Chime, Vitrine)
+    // before this fix generalized it.
+    const EXPLICIT_BASES: &[&str] = &[
+        "fs.read", "fs.write", "fs.metadata", "fs.delete", "shell.exec",
+        "net.fetch", "net.post", "workspace",
+    ];
+    let mut derived: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for scope in tool_scope_bases {
+        let base = scope.base();
+        if base == "mcp.call" {
+            // Qualified per-tool grant like "mcp.call:<server>:<tool>" —
+            // extract the server segment and grant the whole server.
+            // Never grant "mcp.call" bare, which would unlock every
+            // configured server (D4 Rule 2).
+            let parts: Vec<&str> = scope.as_str().splitn(3, ':').collect();
+            if parts.len() == 3 && !parts[1].is_empty() {
+                derived.insert(format!("mcp.call:{}:*", parts[1]));
             }
+            continue;
+        }
+        if EXPLICIT_BASES.contains(&base) {
+            continue;
+        }
+        derived.insert(base.to_string());
+    }
+    for s in derived {
+        if let Some(scope) = Scope::parse(&s) {
+            backcompat_floor.push(scope);
         }
     }
     // Phase 173 — when the autonomous loop is armed, grant the default
@@ -7995,6 +8008,8 @@ async fn run_async(
     // (closing the CLI capability-floor gap; mirrors what the daemon path
     // already does via `bind_lead_scopes`). All of this function's inputs
     // are already computed above this point.
+    let tool_scope_bases: Vec<Scope> =
+        tool_list.iter().map(|t| t.required_scope(&serde_json::json!({}))).collect();
     let backcompat_floor: Vec<Scope> = compute_backcompat_floor(
         fs_read_scope,
         fs_write_scope,
@@ -8003,9 +8018,7 @@ async fn run_async(
         shell_exec_scope,
         fs_delete_scope,
         workspace_scopes,
-        ollama_base_url_for_tools.is_some(),
-        &mcp_bridges.iter().map(|b| b.server_name().to_string()).collect::<Vec<String>>(),
-        &config_tool_processes,
+        &tool_scope_bases,
         loop_state.is_some(),
     );
 
@@ -11042,14 +11055,30 @@ mod tests {
     }
 
     /// Pins `compute_backcompat_floor`'s exact output — every conditional
-    /// grant fires (Ollama configured, one MCP bridge, `applications`
-    /// tool process, loop armed) so this doubles as the regression proof
-    /// that extracting the block out of `run_async` (previously inline,
-    /// with no direct unit coverage — only indirect e2e) didn't silently
-    /// change interactive-path behavior.
+    /// grant fires, sourced generically from `tool_scope_bases` (an Ollama
+    /// tool, two tools on the same MCP server, three `applications` tools,
+    /// and — new — a `fs.read`-shaped entry proving the exclusion list
+    /// keeps a built-in tool's own qualified scope from also being granted
+    /// bare) instead of three hand-written special cases.
     #[test]
     fn compute_backcompat_floor_covers_every_conditional_grant() {
         let canonical_root = PathBuf::from("/tmp/proj");
+        let tool_scope_bases: Vec<Scope> = vec![
+            Scope::parse("ollama.list").unwrap(),
+            Scope::parse("ollama.show").unwrap(),
+            Scope::parse("ollama.pull").unwrap(),
+            // Two tools on the same MCP server — must collapse to ONE
+            // mcp.call:websearch:* grant, never the bare "mcp.call" base.
+            Scope::parse("mcp.call:websearch:search").unwrap(),
+            Scope::parse("mcp.call:websearch:fetch").unwrap(),
+            Scope::parse("app.read").unwrap(),
+            Scope::parse("app.control").unwrap(),
+            Scope::parse("app.input").unwrap(),
+            // A built-in fs tool's own required_scope is qualified, exactly
+            // like the one already passed via fs_read_scope below — proves
+            // the exclusion list keeps this from ALSO being granted bare.
+            Scope::parse("fs.read:/tmp/proj/**").unwrap(),
+        ];
         let floor = compute_backcompat_floor(
             Scope::parse("fs.read:/tmp/proj/**").unwrap(),
             Scope::parse("fs.write:/tmp/proj/**").unwrap(),
@@ -11061,18 +11090,7 @@ mod tests {
                 Scope::parse("workspace:/tmp/proj/ws/**").unwrap(),
                 Scope::parse("workspace:/tmp/proj/ws").unwrap(),
             ],
-            true, // ollama_configured
-            &["websearch".to_string()],
-            &[aivyx_config::ToolProcessConfig {
-                name: "applications".to_string(),
-                command: "aivyx-apps".to_string(),
-                args: vec![],
-                env: vec![],
-                scope_overrides: std::collections::HashMap::new(),
-                enabled: true,
-                sandbox: None,
-                disable_sandbox: false,
-            }],
+            &tool_scope_bases,
             true, // loop_armed
         );
 
@@ -11107,25 +11125,39 @@ mod tests {
                 "fs.delete:/tmp/proj",
                 "workspace:/tmp/proj/ws/**",
                 "workspace:/tmp/proj/ws",
-                "ollama.list",
-                "ollama.show",
-                "ollama.pull",
-                "mcp.call:websearch:*",
-                "app.read",
+                // The generic sweep's output is a sorted set (BTreeSet),
+                // deliberately alphabetical rather than tool_list's own
+                // iteration order.
                 "app.control",
                 "app.input",
+                "app.read",
+                "mcp.call:websearch:*",
+                "ollama.list",
+                "ollama.pull",
+                "ollama.show",
                 "loop.next",
                 "loop.complete",
                 "loop.note",
                 "team.run",
             ]
         );
+        // Explicit, redundant-on-purpose per the plan's own global
+        // constraint: the bare, unqualified forms must never appear,
+        // even though the exact-Vec assertion above already implies it.
+        assert!(
+            !scope_strings.contains(&"fs.read"),
+            "fs.read must never appear bare — only the qualified forms above"
+        );
+        assert!(
+            !scope_strings.contains(&"mcp.call"),
+            "mcp.call must never appear bare — only mcp.call:<server>:* above"
+        );
     }
 
-    /// The floor with every conditional grant OFF (no Ollama, no MCP
-    /// bridges, no `applications` process, loop not armed) produces just
-    /// the always-on base + fs/workspace grants — pins that each gate is
-    /// genuinely conditional, not accidentally always-true.
+    /// The floor with an empty `tool_scope_bases` and the loop not armed
+    /// produces just the always-on base + fs/workspace grants — pins that
+    /// the generic sweep and the loop gate are genuinely conditional, not
+    /// accidentally always-true.
     #[test]
     fn compute_backcompat_floor_omits_grants_when_conditions_are_false() {
         let canonical_root = PathBuf::from("/tmp/proj");
@@ -11137,8 +11169,6 @@ mod tests {
             None,
             None,
             vec![],
-            false,
-            &[],
             &[],
             false,
         );
