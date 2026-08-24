@@ -1,5 +1,39 @@
 # `bind_lead_scopes` Floor-Clamp Design
 
+**Status:** Shipped 2026-08-24 — plan at
+`docs/superpowers/plans/2026-08-24-bind-lead-scopes-floor-clamp.md`,
+merged to `main` at `61836cd1`. The fix is correct and complete for the
+path it covers (`TeamMissionService`/`assemble_runtime` — the daemon,
+scheduler, and Studio-driven mission path), independently verified by
+the final review tracing the real call chain from `bind_lead_scopes`
+through `aivyx-team`'s `assembly.rs`/`factory.rs`/`pool.rs` into where
+`capability_scopes` actually becomes enforced authority. Two review
+rounds also closed a verbatim-duplication finding (the lead and
+specialist branches now share one `filter_orchestration_markers`
+function) and a floor-unaware false-positive in the new clamp warning
+(a redundant, harmless re-declaration of an already-floor-granted scope
+was wrongly reported as "exceeding the floor").
+
+**A significant discovery, not fixed here**: this design doc's own
+"call sites that reach `bind_lead_scopes`" inventory (below) is
+**factually wrong** about one entry. The CLI's own `aivyx team run
+--config <pack.toml>` path (`crates/aivyx-cli/src/bin/aivyx_modules/
+team.rs`'s `run_mission`) does **not** go through `bind_lead_scopes` at
+all — it reads a pack's `lead.declared_capabilities()` directly with no
+floor concept in scope whatsoever, meaning a pack's lead role is granted
+*exactly and unconditionally* whatever it declares. This is the same
+threat class this whole fix targets (an operator running an unaudited
+third-party pack) but structurally worse than the bug just fixed, since
+there is no floor to even attempt clamping against on that path today.
+Not a regression from this branch — pre-existing, and out of this plan's
+own single-file scope — but this design doc's own original research
+carried the same wrong assumption forward from Piece A's design without
+re-verifying it. Logged as the new highest-priority item in
+`aivyx-ecosystem/ROADMAP.md`'s `aivyx` backlog; needs its own
+design/plan once picked up (the CLI path may not even have a "floor"
+concept to clamp against yet — that's an open design question, not a
+one-line fix).
+
 ## Motivation
 
 Piece A of the Team-Mission Triggers initiative (shipped 2026-08-23,

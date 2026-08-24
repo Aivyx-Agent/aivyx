@@ -112,6 +112,14 @@ root cause (`bind_lead_scopes`'s union-vs-intersection design) was
 deliberately left unfixed in Piece A (logged to the ecosystem backlog,
 not this branch) since the concrete exploit path was closed without it.
 
+**That root cause shipped 2026-08-24** — see
+`docs/superpowers/specs/2026-08-24-bind-lead-scopes-floor-clamp-design.md`,
+merged `61836cd1`. Its own final review found a related, more severe,
+**still-unfixed** gap: the CLI's `aivyx team run --config <pack.toml>`
+path never went through `bind_lead_scopes` at all, so it has no floor
+check whatsoever today — worse than the bug just fixed. Logged as its
+own new backlog item.
+
 ## Motivation
 
 Found during an end-user-deployment audit (2026-08-23, prompted by "how would
