@@ -225,26 +225,29 @@ actually gets. No `default_nonagon` change: this member is
 opt-in, added to a custom `TeamConfig` the same way the kitchen BOH
 roster is — never part of the free-core default roster.
 
-**The team's lead must hold a matching `mcp.call` scope too** — this
-is not optional, and omitting it fails silently rather than with an
-error. NT-02 attenuation (`crates/aivyx-team/src/attenuation.rs`'s
-`attenuate_for_member`) floors every specialist's grant to a subset
-of what the *lead itself* declares (`aivyx team run`'s own
-`lead_caps = lead.declared_capabilities()`,
-`crates/aivyx-cli/src/bin/aivyx_modules/team.rs`) — a lead can't
-delegate authority it doesn't hold. Confirmed live: with the lead's
-`capability_scopes` missing an `mcp.call` entry, `remote-coder`'s
-tools still *appear* in its registry (`tool_allowlist`'s `"mcp.call"`
-marker doesn't consult the lead), but every call to `code`/
-`code_reply` is capability-denied — the specialist's own model sees
-no error, just tools it can't successfully invoke, and falls back to
-describing a shell command instead. Add `mcp.call:aivyx-coder:*` (or
-the broader bare `mcp.call`, to admit every configured MCP server) to
-the **lead's** `capability_scopes` as well — see
-`crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`'s Aria for
-the same pattern already in production: the lead's scopes are a
-superset of everything it delegates, not just `team.delegate`/
-`team.message`.
+**The mcp.call grant must be genuinely available for delegation to
+succeed** — omitting it fails silently rather than with an error. NT-02
+attenuation (`crates/aivyx-team/src/attenuation.rs`'s
+`attenuate_for_member`) floors every specialist's grant to a subset of
+the **operator's real, un-narrowed authority** — not the lead's own
+declared `capability_scopes` (a prior version of this doc described the
+ceiling as the lead's own field; that's no longer how it works, since a
+purely-orchestration lead that declares no domain scopes for itself must
+still be able to delegate what the operator's floor allows). Confirmed
+live: with the operator's own configured `[[mcp_server]]` entry for
+`aivyx-coder` missing or misnamed, `remote-coder`'s tools still *appear*
+in its registry (`tool_allowlist`'s `"mcp.call"` marker doesn't consult
+the ceiling), but every call to `code`/`code_reply` is capability-denied
+— the specialist's own model sees no error, just tools it can't
+successfully invoke, and falls back to describing a shell command
+instead. Since `compute_backcompat_floor`'s generic sweep derives
+`mcp.call:<server>:*` grants automatically from every configured MCP
+server (`crates/aivyx-cli/src/bin/aivyx.rs`), simply configuring the
+`[[mcp_server]]` entry for `aivyx-coder` is sufficient — no manual
+`capability_scopes` edit on the **lead** is needed. The specialist's own
+`capability_scopes` (shown above) is the separate, still-required
+declaration: that's the specialist opting in to the marker, unrelated to
+what the lead itself holds.
 
 ## 10. What's reused vs. new
 
