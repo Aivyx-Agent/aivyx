@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use aivyx_audit::{AutoNotifyOutcomeSummary, PersistentAuditLog};
-use aivyx_capability::{Scope, TrustTier};
+use aivyx_capability::{CapabilitySet, Scope, TrustTier};
 use aivyx_core::{
     AivyxError, AuditHook, AuditTag, CancellationToken, ChannelContext, ChannelError,
     ChannelPlatform, GatePolicy, SessionId, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome,
@@ -1466,11 +1466,15 @@ fn assemble_runtime(
     // Chapter Ensemble — bind the daemon's real authority so specialists can
     // actually use their tools (write files, fetch, run commands). See the fn.
     bind_lead_scopes(&mut config, &deps.lead_scopes);
-    let lead = config
-        .lead_member()
-        .ok_or_else(|| TeamError::Config("team has no lead".into()))?
-        .clone();
-    let lead_caps = lead.declared_capabilities()?;
+    // The specialist ceiling is the operator's own real authority
+    // (deps.lead_scopes) -- not any member's own narrowed
+    // capability_scopes. (TeamAssembly::build's own config.validate()
+    // already errors on a missing lead, so no separate check is needed
+    // here -- the old `lead`/`lead_caps` locals existed only to feed
+    // this value, and had no other consumer in this function.)
+    let ceiling = CapabilitySet::from_scopes(
+        deps.lead_scopes.iter().filter_map(|s| Scope::parse(s)),
+    );
 
     let (audit, meter): (Arc<dyn AuditHook>, Option<crate::mission_meter::MissionMeter>) =
         if deps.mission_budget.is_unbounded() {
@@ -1502,7 +1506,7 @@ fn assemble_runtime(
         deps.max_tokens,
         audit,
         deps.base_tools.clone(),
-        lead_caps,
+        ceiling,
         member_backends,
         deps.checkpointer.clone(),
         deps.kv_cache_handles.clone(),

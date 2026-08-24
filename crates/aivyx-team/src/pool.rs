@@ -97,15 +97,15 @@ impl ChannelContext for SpecialistChannel {
 pub struct SpecialistPool {
     factory: SpecialistFactory,
     config: TeamConfig,
-    lead_caps: CapabilitySet,
+    ceiling: CapabilitySet,
 }
 
 impl SpecialistPool {
-    pub fn new(factory: SpecialistFactory, config: TeamConfig, lead_caps: CapabilitySet) -> Self {
+    pub fn new(factory: SpecialistFactory, config: TeamConfig, ceiling: CapabilitySet) -> Self {
         SpecialistPool {
             factory,
             config,
-            lead_caps,
+            ceiling,
         }
     }
 
@@ -255,7 +255,7 @@ impl SpecialistPool {
         lead_channel: &dyn ChannelContext,
     ) -> Result<String, TeamError> {
         let member = self.resolve(specialist)?;
-        let agent = self.factory.build(member, &self.lead_caps)?;
+        let agent = self.factory.build(member, &self.ceiling)?;
         let channel = self.specialist_channel(member, lead_channel);
         let msg = Message::text(channel.session_id(), task);
 

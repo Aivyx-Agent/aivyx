@@ -142,13 +142,15 @@ impl SpecialistFactory {
     }
 
     /// Build an attenuated specialist agent from `member`, with its
-    /// capabilities capped at `lead_caps` (NT-02). Sync — no turn runs.
+    /// capabilities capped at `ceiling` (NT-02) — the operator's real,
+    /// un-narrowed authority, not any particular member's own declared
+    /// scopes. Sync — no turn runs.
     pub fn build(
         &self,
         member: &TeamMember,
-        lead_caps: &CapabilitySet,
+        ceiling: &CapabilitySet,
     ) -> Result<ConcreteAgent, TeamError> {
-        let caps = attenuate_for_member(lead_caps, &member.parsed_scopes()?);
+        let caps = attenuate_for_member(ceiling, &member.parsed_scopes()?);
         let registry = Arc::new(ToolRegistry::new(self.member_tools(member)));
 
         // Captured by the planner factory (invoked once per turn, in J.2.2).
@@ -413,6 +415,94 @@ mod tests {
         assert!(
             !caps.grants(&Scope::parse("fs.write").unwrap()),
             "not declared by the specialist"
+        );
+    }
+
+    #[test]
+    fn build_attenuates_against_the_full_ceiling_not_a_narrow_lead_declaration() {
+        use crate::testutil::FakeProvider;
+        // Mirrors a real orchestration-only lead (default_nonagon's own
+        // coordinator declares only [memory.read, memory.write,
+        // team.delegate] -- "you never execute domain work directly").
+        // The specialist declares a domain scope the LEAD itself never
+        // asked for, but the operator's real ceiling grants it -- this
+        // must still flow through. Before this fix, SpecialistFactory
+        // was fed the lead's own narrow declaration as the ceiling,
+        // collapsing this to nothing.
+        let ceiling = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+            Scope::parse("team.delegate").unwrap(),
+            Scope::parse("fs.write:/root/**").unwrap(),
+        ]);
+        let factory = SpecialistFactory::new(
+            FakeProvider::always("x"),
+            "m",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![],
+        );
+        let m = member("writer", &["fs.write:/root/**"], &["a"]);
+
+        let agent = factory.build(&m, &ceiling).unwrap();
+
+        assert!(
+            agent.capabilities().grants(&Scope::parse("fs.write:/root/**").unwrap()),
+            "a specialist's effective capabilities must be bounded by the \
+             real operator ceiling, not a narrower value a caller might \
+             mistakenly pass"
+        );
+    }
+
+    #[test]
+    fn effective_specialist_caps_come_from_the_real_floor_not_the_orchestration_only_leads_own_narrowed_declaration() {
+        use crate::testutil::FakeProvider;
+        // What the operator's real, un-narrowed floor grants.
+        let raw_floor = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+            Scope::parse("team.delegate").unwrap(),
+            Scope::parse("fs.write:/root/**").unwrap(),
+        ]);
+        // What bind_lead_scopes' own (already-shipped, correct)
+        // specialist-branch logic produces for an orchestration-only
+        // lead shaped like default_nonagon's coordinator -- which
+        // declares only [memory.read, memory.write, team.delegate] for
+        // itself, so the lead's OWN capability_scopes field ends up
+        // narrower than the raw floor.
+        let lead_narrowed = CapabilitySet::from_scopes([
+            Scope::parse("memory.read").unwrap(),
+            Scope::parse("memory.write").unwrap(),
+            Scope::parse("team.delegate").unwrap(),
+        ]);
+        let factory = SpecialistFactory::new(
+            FakeProvider::always("x"),
+            "m",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![],
+        );
+        let writer = member("writer", &["fs.write:/root/**"], &["a"]);
+
+        // Correct: the ceiling is the raw floor -- the specialist's
+        // declared fs.write base is covered.
+        let agent_correct = factory.build(&writer, &raw_floor).unwrap();
+        assert!(
+            agent_correct.capabilities().grants(&Scope::parse("fs.write:/root/**").unwrap()),
+            "against the real floor, the specialist must retain fs.write"
+        );
+
+        // The bug this task fixes: if a caller mistakenly passes the
+        // lead's own narrowed field as the ceiling instead, the
+        // specialist's effective capabilities collapse -- reproducing
+        // the exact regression the final review found.
+        let agent_buggy = factory.build(&writer, &lead_narrowed).unwrap();
+        assert!(
+            !agent_buggy.capabilities().grants(&Scope::parse("fs.write:/root/**").unwrap()),
+            "this assertion documents the bug's own shape: an \
+             orchestration-only lead's own narrowed field does NOT cover \
+             fs.write, so a caller passing it as the ceiling (the pre-fix \
+             behavior at both real call sites) collapses the specialist"
         );
     }
 

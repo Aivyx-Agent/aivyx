@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aivyx_capability::TrustTier;
+use aivyx_capability::{CapabilitySet, Scope, TrustTier};
 use aivyx_core::{
     Agent, AgentId, AuditHook, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
     ConcreteAgent, LlmPlanner, LlmPlannerConfig, Message, SessionId, StreamEvent, Tool,
@@ -228,6 +228,16 @@ pub async fn run_mission(
     // team.message, so the lead's orchestration/dialogue tools are callable.
     let lead_caps = lead.declared_capabilities().map_err(|e| e.to_string())?;
 
+    // The specialist ceiling is the operator's own real authority (the
+    // raw floor this function was called with) -- not the lead's own
+    // narrowed capability_scopes. Reusing the lead's own field here
+    // would silently re-narrow every specialist down to whatever the
+    // lead itself declared for its own direct use, defeating
+    // bind_lead_scopes' own already-correct per-specialist floor
+    // computation one hop downstream.
+    let ceiling =
+        CapabilitySet::from_scopes(lead_scopes.iter().filter_map(|s| Scope::parse(s)));
+
     let assembly = TeamAssembly::build(
         config,
         Arc::clone(&provider),
@@ -240,7 +250,7 @@ pub async fn run_mission(
         // (A vertical's *domain* tools — e.g. the kitchen toolkit's RPCs —
         // join this set once that toolkit crate is wired in.)
         base_tools,
-        lead_caps.clone(),
+        ceiling,
         // Chapter Ensemble — the CLI lead-driven `team run` uses one shared
         // backend for all roles; per-role overrides are a daemon-mission path.
         std::collections::HashMap::new(),

@@ -36,7 +36,7 @@ pub struct TeamAssembly {
     bus: Arc<MessageBus>,
     pool: Arc<SpecialistPool>,
     runtime: Arc<TeamRuntime>,
-    lead_caps: CapabilitySet,
+    ceiling: CapabilitySet,
     /// The lead's own message tools, kept typed so a multi-turn driver can
     /// reset the per-turn send budget at turn boundaries.
     lead_send: Arc<SendMessageTool>,
@@ -44,10 +44,18 @@ pub struct TeamAssembly {
 
 impl TeamAssembly {
     /// Validate `config` and wire the team against the daemon's shared deps.
-    /// `lead_caps` is the authority the team runs under — every specialist is
-    /// attenuated to a subset of it (NT-02), and the lead agent itself is
-    /// mounted with it, so it must grant `team.delegate` + `team.message` for
-    /// the orchestration/dialogue tools to be callable.
+    /// `ceiling` is the operator's real, un-narrowed authority — every
+    /// specialist is attenuated to a subset of it (NT-02). This is
+    /// deliberately NOT the lead's own (possibly narrower)
+    /// `capability_scopes` field: a purely-orchestration lead that
+    /// declares no domain scopes for itself must still be able to grant
+    /// its specialists whatever the operator's real floor allows, or
+    /// every specialist collapses to near-nothing (the "missions report
+    /// done but do nothing" failure `bind_lead_scopes` exists to
+    /// prevent). The lead's own `ConcreteAgent`, built separately by
+    /// this function's caller, uses the lead's own narrower field — it
+    /// must still grant `team.delegate` + `team.message` for the
+    /// orchestration/dialogue tools to be callable.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         config: TeamConfig,
@@ -56,7 +64,7 @@ impl TeamAssembly {
         max_tokens: u32,
         audit: Arc<dyn AuditHook>,
         base_tools: Vec<Arc<dyn Tool>>,
-        lead_caps: CapabilitySet,
+        ceiling: CapabilitySet,
         member_backends: std::collections::HashMap<
             String,
             crate::factory::SpecialistBackend,
@@ -77,7 +85,7 @@ impl TeamAssembly {
             .with_member_backends(member_backends)
             .with_checkpointer(checkpointer)
             .with_kv_cache(kv_cache_handles);
-        let pool = Arc::new(SpecialistPool::new(factory, config.clone(), lead_caps.clone()));
+        let pool = Arc::new(SpecialistPool::new(factory, config.clone(), ceiling.clone()));
         let runtime = Arc::new(TeamRuntime::new(Arc::clone(&pool)));
 
         // is_lead = true: the lead may always send, even with peer dialogue off.
@@ -93,7 +101,7 @@ impl TeamAssembly {
             bus,
             pool,
             runtime,
-            lead_caps,
+            ceiling,
             lead_send,
         })
     }
@@ -107,8 +115,8 @@ impl TeamAssembly {
     pub fn bus(&self) -> Arc<MessageBus> {
         Arc::clone(&self.bus)
     }
-    pub fn lead_caps(&self) -> &CapabilitySet {
-        &self.lead_caps
+    pub fn ceiling(&self) -> &CapabilitySet {
+        &self.ceiling
     }
     pub fn config(&self) -> &TeamConfig {
         &self.config
