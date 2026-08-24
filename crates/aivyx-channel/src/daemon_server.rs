@@ -1498,20 +1498,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // launch, no config file) or a failed re-read both fail closed to
     // all-`false` (`ChannelTriggerAuthz::default()`), never fail-open.
     //
-    // Known gap (review finding I2): this re-read calls
-    // `load_settings_config` with `role_override: None` hardcoded,
-    // because `run_daemon`/`DaemonConfig` has no field carrying the
-    // real `--role` the process was actually started with (adding
-    // one would touch every `DaemonConfig` construction site,
-    // including the round-trip test fixtures — out of scope for this
-    // fix). If the primary config load *was* started with a non-
-    // default `--role` against a config with no role literally named
-    // "default", this re-read's role resolution can diverge from the
-    // primary load's and fail with `ConfigError::UnknownRole`. That
-    // still fails closed (never grants), but previously did so
-    // silently via `.ok()` — logged below instead so an operator
-    // running a custom role gets a diagnosable signal rather than an
-    // inert, unexplained `team_run_channel = true` doing nothing.
+    // Formerly a known gap (review finding I2): this re-read used to call
+    // `load_settings_config` with `role_override: None` hardcoded, so a
+    // daemon started with a non-default `--role` against a config with no
+    // role literally named "default" could see this re-read's role
+    // resolution diverge from the primary load's and fail with
+    // `ConfigError::UnknownRole` — closed by threading `DaemonConfig`'s
+    // own `role_override` field through (see its doc comment). Any
+    // failure logged below now genuinely indicates something else (a
+    // missing/malformed file, bad permissions, or a role renamed between
+    // the primary load and this re-read), not a stale-override blind
+    // spot.
     let channel_trigger_authz = match config_toml_path.as_deref() {
         Some(p) => match load_settings_config(p, role_override.as_deref()) {
             Ok(cfg) => ChannelTriggerAuthz {
@@ -1534,9 +1531,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             Err(e) => {
                 eprintln!(
                     "aivyx daemon: WARNING — failed to re-read {} for /team run channel \
-                     authorization: {e} (if this daemon was started with a non-default \
-                     --role, this re-read does not carry that override and may be the \
-                     cause); falling back to all-channels-denied (fail closed)",
+                     authorization: {e}; falling back to all-channels-denied (fail closed)",
                     p.display()
                 );
                 ChannelTriggerAuthz::default()
