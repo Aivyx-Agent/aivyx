@@ -115,6 +115,8 @@ impl Tool for RoleUpdateTool {
         &self.schema
     }
 
+    // role.update is never auto-granted -- self-escalation scopes stay
+    // out of the default floor (P8 no-self-escalation).
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("role.update").expect("known base")
     }

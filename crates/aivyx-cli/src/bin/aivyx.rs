@@ -5253,6 +5253,20 @@ async fn checkpointer_for(
 // `AivyxConfig` **is** the consolidated shape, so passing it whole
 // lets every downstream consumer pull its exact field without the
 // binary playing field-forwarder.
+/// The tool-derived slice of `compute_backcompat_floor`'s input: every
+/// registered tool's own `required_scope()`, filtered down to only the
+/// tools that have explicitly opted in via
+/// `Tool::auto_grantable_in_backcompat_floor()`. Extracted as its own
+/// function so the filter itself is directly unit-testable without
+/// needing a real, fully-wired `tool_list`.
+fn tool_scope_bases_for_floor(tool_list: &[Arc<dyn Tool>]) -> Vec<Scope> {
+    tool_list
+        .iter()
+        .filter(|t| t.auto_grantable_in_backcompat_floor())
+        .map(|t| t.required_scope(&serde_json::json!({})))
+        .collect()
+}
+
 /// The **backcompat floor** (Phase 13 Task 2, Q6): the capabilities the
 /// binary used to grant unconditionally before Phase 13 introduced
 /// per-role envelopes. Used as the fallback for any role (or inherited
@@ -8008,8 +8022,7 @@ async fn run_async(
     // (closing the CLI capability-floor gap; mirrors what the daemon path
     // already does via `bind_lead_scopes`). All of this function's inputs
     // are already computed above this point.
-    let tool_scope_bases: Vec<Scope> =
-        tool_list.iter().map(|t| t.required_scope(&serde_json::json!({}))).collect();
+    let tool_scope_bases: Vec<Scope> = tool_scope_bases_for_floor(&tool_list);
     let backcompat_floor: Vec<Scope> = compute_backcompat_floor(
         fs_read_scope,
         fs_write_scope,
@@ -11202,13 +11215,81 @@ mod tests {
         );
     }
 
-    /// End-to-end proof for the Critical finding this whole initiative
-    /// closes: a vertical toolkit's own domain scopes, once picked up by
-    /// compute_backcompat_floor's generic sweep (aivyx-cli), actually flow
-    /// through the real bind_lead_scopes (aivyx-channel) so a pack's
-    /// specialists keep their domain scopes instead of collapsing to
-    /// team.message only. Neither crate's own unit tests exercise both
-    /// functions together across the crate boundary; this does.
+    /// A minimal fake `Tool` for testing `tool_scope_bases_for_floor`'s
+    /// own filtering, without needing a real spawned tool process or MCP
+    /// connection.
+    struct FakeFloorTool {
+        scope: &'static str,
+        auto_grantable: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl aivyx_core::Tool for FakeFloorTool {
+        fn id(&self) -> aivyx_core::ToolId {
+            aivyx_core::ToolId::new()
+        }
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn description(&self) -> &str {
+            "fake"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+            SCHEMA.get_or_init(|| serde_json::json!({}))
+        }
+        fn required_scope(&self, _input: &serde_json::Value) -> Scope {
+            Scope::parse(self.scope).unwrap()
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _context: &aivyx_core::ToolContext<'_>,
+        ) -> aivyx_core::ToolOutcome {
+            unreachable!("not exercised by this test")
+        }
+        fn auto_grantable_in_backcompat_floor(&self) -> bool {
+            self.auto_grantable
+        }
+    }
+
+    #[test]
+    fn tool_scope_bases_for_floor_excludes_tools_that_do_not_opt_in() {
+        let tool_list: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(FakeFloorTool { scope: "kitchen.read", auto_grantable: true }),
+            Arc::new(FakeFloorTool { scope: "git.write", auto_grantable: false }),
+        ];
+        let bases = tool_scope_bases_for_floor(&tool_list);
+        let strings: Vec<&str> = bases.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            strings,
+            vec!["kitchen.read"],
+            "a tool that does not opt in must never contribute to the floor, \
+             even though its scope base isn't in EXPLICIT_BASES either"
+        );
+    }
+
+    #[test]
+    fn tool_scope_bases_for_floor_includes_every_opted_in_tool() {
+        let tool_list: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(FakeFloorTool { scope: "kitchen.read", auto_grantable: true }),
+            Arc::new(FakeFloorTool { scope: "ollama.list", auto_grantable: true }),
+        ];
+        let bases = tool_scope_bases_for_floor(&tool_list);
+        let strings: Vec<&str> = bases.iter().map(|s| s.as_str()).collect();
+        assert_eq!(strings, vec!["kitchen.read", "ollama.list"]);
+    }
+
+    /// Proof that compute_backcompat_floor's own generic sweep, GIVEN a
+    /// set of tool-derived scope bases, correctly flows a vertical
+    /// toolkit's domain scopes through the real bind_lead_scopes so a
+    /// pack's specialists keep them instead of collapsing to
+    /// team.message only. This test calls compute_backcompat_floor
+    /// directly with hand-picked bases, so it does NOT exercise the
+    /// call-site's own auto_grantable_in_backcompat_floor filter
+    /// (tool_scope_bases_for_floor_excludes_tools_that_do_not_opt_in
+    /// covers that, separately, with a fake Tool). Together the two
+    /// tests cover the full real pipeline: filter -> sweep -> bind.
     #[test]
     fn compute_backcompat_floor_flows_a_configured_verticals_domain_scopes_through_bind_lead_scopes() {
         let canonical_root = PathBuf::from("/tmp/proj");

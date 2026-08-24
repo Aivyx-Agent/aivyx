@@ -225,6 +225,10 @@ impl Tool for SkillTeachTool {
     fn input_schema(&self) -> &Value {
         &self.schema
     }
+    // skills.write is never auto-granted -- the write half of the
+    // skills surface (SkillTeachTool/SkillUpdateTool/SkillForgetTool, all
+    // three) stays auto-proposer / role-declared, unlike skills.list/
+    // skills.invoke (both in the floor's fixed baseline).
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("skills.write").expect("known base")
     }

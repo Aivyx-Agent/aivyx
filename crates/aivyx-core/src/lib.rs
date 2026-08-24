@@ -947,6 +947,29 @@ pub trait Tool: Send + Sync {
     fn mutates_fs_root(&self) -> bool {
         false
     }
+
+    /// Whether this tool's required scope may be auto-granted to the
+    /// default, floor-only role via the operator's backcompat floor.
+    /// Default `false`: a tool must explicitly opt in. Most tools should
+    /// NOT override this — third-party/OAuth integrations (Gmail, Drive,
+    /// Notion, Obsidian, N8N, Contacts, Calendar, ...) and every
+    /// domain-specific toolkit tool stay withheld unless a maintainer has
+    /// explicitly reviewed the base and opted it in here.
+    ///
+    /// Withheld deliberately, with no override anywhere in this codebase
+    /// as of this writing: `git.write` (commit rights are role-config-
+    /// driven, never auto-granted — an operator declares `git.write:<repo>`
+    /// in a custom role), `git.read` (same: an operator declares
+    /// `git.read:**` or a per-repo grant explicitly), `role.update`
+    /// (self-escalation surface — P8 no-self-escalation), `reflection.apply`
+    /// (the propose half is safe to auto-grant since it only ever lands as
+    /// Pending behind operator approval; apply is self-modification and
+    /// stays role-declared), `skills.write` (the identity-modifying
+    /// persona-chain writer — the write half stays auto-proposer /
+    /// role-declared, unlike the read half).
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        false
+    }
 }
 
 /// Context passed to `Tool::execute`. Gives tools access to the channel

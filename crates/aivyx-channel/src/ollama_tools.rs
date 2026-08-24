@@ -96,6 +96,12 @@ impl Tool for OllamaListTool {
         Scope::parse("ollama.list").expect("known base")
     }
 
+    // Registered only when the operator's own [provider] kind = "ollama"
+    // -- that configuration choice is the opt-in.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let url = format!("{}/api/tags", self.base_url);
         match self.client.get(&url).send().await {
@@ -210,6 +216,12 @@ impl Tool for OllamaShowTool {
 
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("ollama.show").expect("known base")
+    }
+
+    // Registered only when the operator's own [provider] kind = "ollama"
+    // -- that configuration choice is the opt-in.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
     }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
@@ -343,6 +355,12 @@ impl Tool for OllamaPullTool {
 
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("ollama.pull").expect("known base")
+    }
+
+    // Registered only when the operator's own [provider] kind = "ollama"
+    // -- that configuration choice is the opt-in.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
     }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {

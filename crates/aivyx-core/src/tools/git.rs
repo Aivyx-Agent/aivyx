@@ -238,6 +238,9 @@ impl Tool for GitStatusTool {
         &self.schema
     }
 
+    // git.read is never auto-granted via the backcompat floor's generic
+    // sweep either, for the same reason as git.write -- an operator
+    // declares `git.read:**` or a per-repo grant explicitly.
     fn required_scope(&self, input: &Value) -> Scope {
         match resolve_repo(input, &self.repos) {
             Some(abs) => Scope::parse(&format!("git.read:{}", abs.display()))
@@ -496,6 +499,10 @@ impl Tool for GitCommitTool {
         &self.schema
     }
 
+    // git.write is never auto-granted via the backcompat floor's generic
+    // sweep (Tool::auto_grantable_in_backcompat_floor's default `false`,
+    // not overridden here) -- an operator who wants the agent to commit
+    // declares `git.write:<repo>` in a role's own `capability_scopes`.
     fn required_scope(&self, input: &Value) -> Scope {
         match resolve_repo(input, &self.repos) {
             Some(abs) => Scope::parse(&format!("git.write:{}", abs.display()))

@@ -770,6 +770,10 @@ impl Tool for ReflectionApplyTool {
         &self.schema
     }
 
+    // reflection.apply is never auto-granted, unlike reflection.propose
+    // (which IS in the floor's fixed baseline) -- a proposal only ever
+    // lands as Pending behind operator approval, but apply is
+    // self-modification and stays role-declared.
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("reflection.apply").expect("known base")
     }

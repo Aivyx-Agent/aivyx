@@ -145,6 +145,13 @@ impl Tool for McpPromptProxy {
             .unwrap_or_else(|| Scope::parse("mcp.call").expect("mcp.call must be a known base"))
     }
 
+    // Every MCP-server-sourced tool is here because the operator
+    // explicitly configured a `[[mcp_server]]` entry -- that
+    // configuration act IS the opt-in.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         match self.kind {
             PromptTool::List => {

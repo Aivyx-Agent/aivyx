@@ -121,6 +121,18 @@ impl Tool for ToolProxy {
         true
     }
 
+    // Every tool-process-sourced tool (kitchen, `applications`, any
+    // future vertical toolkit) is here because the operator explicitly
+    // configured a `[[tool_process]]` entry -- that configuration act
+    // IS the opt-in. `scope_overrides` (the daemon's own
+    // narrower-than-declared override mechanism) is already folded into
+    // `required_scope()` by construction, so the floor grant reflects
+    // whatever the operator actually authorized, not the toolkit's own
+    // raw declaration.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, context: &ToolContext<'_>) -> ToolOutcome {
         // The turn loop has already enforced the capability check
         // and the role allowlist before we get here. Our job is to
