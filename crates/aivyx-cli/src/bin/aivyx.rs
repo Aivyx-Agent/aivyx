@@ -5253,6 +5253,137 @@ async fn checkpointer_for(
 // `AivyxConfig` **is** the consolidated shape, so passing it whole
 // lets every downstream consumer pull its exact field without the
 // binary playing field-forwarder.
+/// The **backcompat floor** (Phase 13 Task 2, Q6): the capabilities the
+/// binary used to grant unconditionally before Phase 13 introduced
+/// per-role envelopes. Used as the fallback for any role (or inherited
+/// level) whose declared `capability_scopes` is empty — and, as of the
+/// CLI `team run --config` capability-floor fix, as the operator's own
+/// real authority that a vertical pack's declared lead-role scopes get
+/// clamped against (`bind_lead_scopes`), mirroring what the daemon path
+/// already does.
+///
+/// The fs.* scopes are rooted at the canonicalized sandbox path so
+/// `FsReadTool::required_scope` lines up exactly with the held
+/// capability — that's a per-process anchor, not a per-role decision, so
+/// it stays inside the floor. The three `memory.*` scopes remain
+/// unqualified (D4 Rule 2 — unqualified held grants any qualified
+/// needed). `shell.exec` is appended only when the caller passes a
+/// `shell_exec_scope` (absent on the SemiTrusted branch, where the tool
+/// itself is absent from the dispatch registry). `net.fetch` is granted
+/// unqualified; the turn loop's ceiling intersection narrows it for
+/// SemiTrusted via `CEILING_SEMITRUSTED`.
+#[allow(clippy::too_many_arguments)]
+fn compute_backcompat_floor(
+    fs_read_scope: Scope,
+    fs_write_scope: Scope,
+    fs_metadata_scope: Scope,
+    canonical_root: &std::path::Path,
+    shell_exec_scope: Option<Scope>,
+    fs_delete_scope: Option<Scope>,
+    workspace_scopes: Vec<Scope>,
+    ollama_configured: bool,
+    mcp_server_names: &[String],
+    config_tool_processes: &[aivyx_config::ToolProcessConfig],
+    loop_armed: bool,
+) -> Vec<Scope> {
+    let mut backcompat_floor: Vec<Scope> = vec![
+        Scope::parse("memory.read").unwrap(),
+        Scope::parse("memory.write").unwrap(),
+        Scope::parse("memory.forget").unwrap(),
+        Scope::parse("memory.gc").unwrap(),
+        // Chapter Lattice — the default agent may query its own typed
+        // knowledge graph (a read of derived memory, like memory.read).
+        Scope::parse("graph.read").unwrap(),
+        // Phase 110 skills substrate — enumerate + render the agent's own
+        // operator-approved skill set (read-only, same self-knowledge class
+        // as graph.read). skills.propose stays out — the write half remains
+        // auto-proposer / role-declared.
+        Scope::parse("skills.list").unwrap(),
+        Scope::parse("skills.invoke").unwrap(),
+        // Phase 67 schedule tools — READ half: enumerate the agent's own
+        // routines (self-knowledge, the skills.list class).
+        Scope::parse("schedule.list").unwrap(),
+        // Chapter Chime — the WRITE half. The tools themselves enforce the
+        // Reins growth gradient, own-schedules-only authority, a 15-minute
+        // fire floor, and a 10-schedule cap, so granting the scopes is
+        // governance-safe at every level.
+        Scope::parse("schedule.create").unwrap(),
+        Scope::parse("schedule.update").unwrap(),
+        Scope::parse("schedule.delete").unwrap(),
+        // Reflection / persona proposals — both governance-safe to grant:
+        // a proposal only ever lands as Pending behind the operator's
+        // approval gate, so this is the propose half, not self-modification.
+        Scope::parse("reflection.propose").unwrap(),
+        Scope::parse("persona.propose").unwrap(),
+        fs_read_scope,
+        fs_write_scope,
+        fs_metadata_scope,
+        Scope::parse("net.fetch").unwrap(),
+        Scope::parse("net.post").unwrap(),
+    ];
+    // Chapter N — the `<root>/**` scopes above grant the root's
+    // DESCENDANTS only; the glob does not match the bare root path. Also
+    // grant the root directory itself so the agent can inspect/operate on
+    // its own root.
+    let root_str = canonical_root.display().to_string();
+    backcompat_floor.push(Scope::parse(&format!("fs.read:{root_str}")).unwrap());
+    backcompat_floor.push(Scope::parse(&format!("fs.write:{root_str}")).unwrap());
+    backcompat_floor.push(Scope::parse(&format!("fs.metadata:{root_str}")).unwrap());
+    if let Some(s) = shell_exec_scope {
+        backcompat_floor.push(s);
+        // Bare-root shell cwd (the run-from-the-root case).
+        backcompat_floor
+            .push(Scope::parse(&format!("shell.exec:cwd:{root_str}")).unwrap());
+    }
+    if let Some(s) = fs_delete_scope {
+        backcompat_floor.push(s);
+        backcompat_floor.push(Scope::parse(&format!("fs.delete:{root_str}")).unwrap());
+    }
+    // Chapter O — grant the agent its workspace (`workspace:<wsroot>/**` +
+    // bare root). Always-on for the default role, independent of fs_root.
+    for s in workspace_scopes {
+        backcompat_floor.push(s);
+    }
+    // Phase 36 — grant ollama model management scopes when the provider is
+    // Ollama, so the default role (empty capability_scopes) can use them.
+    if ollama_configured {
+        backcompat_floor.push(Scope::parse("ollama.list").unwrap());
+        backcompat_floor.push(Scope::parse("ollama.show").unwrap());
+        backcompat_floor.push(Scope::parse("ollama.pull").unwrap());
+    }
+    // Grant the default role the scope to call every configured MCP
+    // server's tools. `mcp.call:<server>:*` grants exactly that server's
+    // tools (least-privilege per server).
+    for name in mcp_server_names {
+        if let Some(s) = Scope::parse(&format!("mcp.call:{name}:*")) {
+            backcompat_floor.push(s);
+        }
+    }
+    // Chapter Deckhand — when the `aivyx-apps` desktop tool process is
+    // configured, grant the default role the `app.*` scopes its tools
+    // require. The ceiling intersection keeps these Trusted-only and
+    // `app.input` stays confirm-first.
+    if config_tool_processes.iter().any(|tp| tp.name == "applications") {
+        for base in ["app.read", "app.control", "app.input"] {
+            if let Some(s) = Scope::parse(base) {
+                backcompat_floor.push(s);
+            }
+        }
+    }
+    // Phase 173 — when the autonomous loop is armed, grant the default
+    // role the `loop.*` scopes its iterations require, plus `team.run`
+    // (Chapter Circuit CI.0) so the loop can delegate a large story to a
+    // durable Nonagon team mission. `git.write` is intentionally NOT
+    // granted here (Forge made committing operator opt-in per-repo).
+    if loop_armed {
+        backcompat_floor.push(Scope::parse("loop.next").unwrap());
+        backcompat_floor.push(Scope::parse("loop.complete").unwrap());
+        backcompat_floor.push(Scope::parse("loop.note").unwrap());
+        backcompat_floor.push(Scope::parse("team.run").unwrap());
+    }
+    backcompat_floor
+}
+
 #[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
 async fn run_async(
     config: AivyxConfig,
@@ -7857,6 +7988,27 @@ async fn run_async(
         tool_list.push(Arc::new(ToolsListTool::new(infos)) as Arc<dyn Tool>);
     }
 
+    // The operator's own real capability floor — moved here (earlier than
+    // the role envelope that used to be its only consumer) because `aivyx
+    // team run --config <pack.toml>` needs it before assembling the pack's
+    // team, to clamp the pack's own declared lead-role scopes against it
+    // (closing the CLI capability-floor gap; mirrors what the daemon path
+    // already does via `bind_lead_scopes`). All of this function's inputs
+    // are already computed above this point.
+    let backcompat_floor: Vec<Scope> = compute_backcompat_floor(
+        fs_read_scope,
+        fs_write_scope,
+        fs_metadata_scope,
+        &canonical_root,
+        shell_exec_scope,
+        fs_delete_scope,
+        workspace_scopes,
+        ollama_base_url_for_tools.is_some(),
+        &mcp_bridges.iter().map(|b| b.server_name().to_string()).collect::<Vec<String>>(),
+        &config_tool_processes,
+        loop_state.is_some(),
+    );
+
     // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider,
     // the persistent HMAC audit hook, AND the daemon's full `tool_list` — so
     // assemble the team and run the lead in-process with specialists that get
@@ -7991,193 +8143,6 @@ async fn run_async(
         ollama_prompt_strategy,
         Some(&*prompt_fs_root),
     );
-
-    // ---- Capabilities -------------------------------------------------
-    // Phase 13 Task 2 — capability assembly is now role-driven.
-    // The hard-coded vector below is the **backcompat floor**
-    // (Q6): it represents the capabilities the binary used to
-    // grant unconditionally before Phase 13 introduced per-role
-    // envelopes, and it is now used **only** for roles whose
-    // declared `capability_scopes` list is empty. A role that
-    // declares any non-empty `capability_scopes` set in TOML
-    // bypasses this floor entirely and runs with exactly its
-    // declared envelope, walked through its inheritance chain
-    // by `assemble_role_envelope` per PRODUCT.md P7's
-    // attenuation rule.
-    //
-    // The fs.* scopes are still rooted at the canonicalized
-    // sandbox path so `FsReadTool::required_scope` lines up
-    // exactly with the held capability — that's a per-process
-    // anchor, not a per-role decision, so it stays inside the
-    // floor. The three `memory.*` scopes remain unqualified
-    // (D4 Rule 2 — unqualified held grants any qualified
-    // needed). `shell.exec` is appended only on the Local
-    // branch because the tool itself is absent from the
-    // SemiTrusted dispatch registry. `net.fetch` is granted
-    // unqualified for both tiers; the turn loop's ceiling
-    // intersection narrows it for SemiTrusted via
-    // `CEILING_SEMITRUSTED`.
-    let mut backcompat_floor: Vec<Scope> = vec![
-        Scope::parse("memory.read").unwrap(),
-        Scope::parse("memory.write").unwrap(),
-        Scope::parse("memory.forget").unwrap(),
-        Scope::parse("memory.gc").unwrap(),
-        // Chapter Lattice — the default agent may query its own typed
-        // knowledge graph (a read of derived memory, like memory.read).
-        Scope::parse("graph.read").unwrap(),
-        // Phase 110 skills substrate — enumerate + render the agent's own
-        // operator-approved skill set (read-only, same self-knowledge class
-        // as graph.read). Never granted before, so the registered
-        // skills.list / skills.invoke tools were dead on arrival for the
-        // floor-only role (the mcp/app/loop grant signature): the agent
-        // couldn't read its skill procedures, no SkillInvocation audit
-        // entries could exist, and Whetstone's effectiveness ledger
-        // structurally never accumulated. skills.propose stays out — the
-        // write half remains auto-proposer / role-declared.
-        Scope::parse("skills.list").unwrap(),
-        Scope::parse("skills.invoke").unwrap(),
-        // Phase 67 schedule tools — READ half: enumerate the
-        // agent's own routines (self-knowledge, the skills.list class).
-        // Fifth registered-but-unauthorized floor gap found (soak review
-        // 2026-07-04): schedule.list was never callable by the default
-        // role, so the agent couldn't see its own routines and Candor's
-        // "I've scheduled" rule could only ever fire unfulfilled.
-        Scope::parse("schedule.list").unwrap(),
-        // Chapter Chime (2026-07-06) — the WRITE half's parked
-        // [autonomy] gating decision is resolved: the tools themselves
-        // enforce the Reins growth gradient (below policy_auto a
-        // creation lands DISABLED pending Studio approval — the
-        // governed-proposal posture), own-schedules-only authority, a
-        // 15-minute fire floor, and a 10-schedule cap. Granting the
-        // scopes is therefore governance-safe at every level, exactly
-        // like reflection.propose below.
-        Scope::parse("schedule.create").unwrap(),
-        Scope::parse("schedule.update").unwrap(),
-        Scope::parse("schedule.delete").unwrap(),
-        // Reflection proposals — SIXTH registered-but-unauthorized floor
-        // gap (Vitrine investigation 2026-07-05): the reflection
-        // scheduler's system prompt instructs the model to call
-        // `reflection.propose`, and a persona-delta-bearing call
-        // escalates to require `persona.propose`
-        // (ReflectionProposeTool::required_scope) — but the floor
-        // granted neither, so every organic reflection proposal on a
-        // clean install died with ScopeDenied. Both are governance-safe
-        // to grant: a proposal only ever lands as Pending behind the
-        // operator's approval gate, so this is the propose half, not
-        // self-modification.
-        Scope::parse("reflection.propose").unwrap(),
-        Scope::parse("persona.propose").unwrap(),
-        fs_read_scope,
-        fs_write_scope,
-        fs_metadata_scope,
-        Scope::parse("net.fetch").unwrap(),
-        Scope::parse("net.post").unwrap(),
-    ];
-    // Chapter N — the `<root>/**` scopes above grant the root's
-    // DESCENDANTS only; the glob does not match the bare root path.
-    // Also grant the root directory itself so the agent can inspect /
-    // operate on its own root (e.g. list `$HOME` when access level =
-    // home, or `ls .` in a workspace). Without these, a `fs.metadata`
-    // or `shell.exec` whose cwd/path IS the root is denied even though
-    // everything under it is allowed.
-    let root_str = canonical_root.display().to_string();
-    backcompat_floor.push(Scope::parse(&format!("fs.read:{root_str}")).unwrap());
-    backcompat_floor.push(Scope::parse(&format!("fs.write:{root_str}")).unwrap());
-    backcompat_floor.push(Scope::parse(&format!("fs.metadata:{root_str}")).unwrap());
-    if let Some(s) = shell_exec_scope {
-        backcompat_floor.push(s);
-        // Bare-root shell cwd (the run-from-the-root case).
-        backcompat_floor
-            .push(Scope::parse(&format!("shell.exec:cwd:{root_str}")).unwrap());
-    }
-    if let Some(s) = fs_delete_scope {
-        backcompat_floor.push(s);
-        backcompat_floor.push(Scope::parse(&format!("fs.delete:{root_str}")).unwrap());
-    }
-    // Chapter O — grant the agent its workspace (`workspace:<wsroot>/**` +
-    // bare root). Always-on for the default role, independent of fs_root.
-    for s in workspace_scopes {
-        backcompat_floor.push(s);
-    }
-    // Phase 36 — grant ollama model management scopes in the
-    // backcompat floor when provider is Ollama, so the default
-    // role (empty capability_scopes) can use the tools.
-    if ollama_base_url_for_tools.is_some() {
-        backcompat_floor.push(Scope::parse("ollama.list").unwrap());
-        backcompat_floor.push(Scope::parse("ollama.show").unwrap());
-        backcompat_floor.push(Scope::parse("ollama.pull").unwrap());
-    }
-    // Grant the default role (empty `capability_scopes`) the scope to call
-    // the tools of every configured MCP server. Each call's required scope is
-    // `mcp.call:<server>:<tool>`; `mcp.call:<server>:*` grants exactly that
-    // server's tools (least-privilege per server). Without this, a configured
-    // `[[mcp_server]]` — including the bundled web-search the wizard's "Enable
-    // web search?" adds — registers tools the default agent holds no scope to
-    // invoke, so it silently refuses them ("web_search isn't authorized").
-    // Roles that declare their own `capability_scopes` bypass the floor and
-    // must name `mcp.call:<server>` grants explicitly.
-    for bridge in &mcp_bridges {
-        if let Some(s) = Scope::parse(&format!("mcp.call:{}:*", bridge.server_name())) {
-            backcompat_floor.push(s);
-        }
-    }
-    // Chapter Deckhand — when the `aivyx-apps` desktop tool process is
-    // configured (via `[applications] enabled = true`, which synthesizes a
-    // tool process named "applications"), grant the default role the `app.*`
-    // scopes its tools require. Without this the tools register but the
-    // floor-only agent holds no scope to call them (the same dead-on-arrival
-    // signature as the ollama/mcp floor grants). The ceiling intersection
-    // keeps these Trusted-only and `app.input` stays confirm-first.
-    if config_tool_processes.iter().any(|tp| tp.name == "applications") {
-        for base in ["app.read", "app.control", "app.input"] {
-            if let Some(s) = Scope::parse(base) {
-                backcompat_floor.push(s);
-            }
-        }
-    }
-    // Phase 173 — when the autonomous loop is armed, grant the default role
-    // (empty `capability_scopes`) the `loop.*` scopes its iterations require.
-    // The loop driver fires the loop-iter prompt whose very first step is
-    // `loop.next`; without these scopes the floor-only agent is denied on
-    // step 1 of EVERY iteration ("loop.next ... not currently granted") and
-    // the driver burns its full iteration cap re-failing at the same wall —
-    // the backlog mechanism is dead on arrival. Gated on `loop_state.is_some()`
-    // (the same "armed" signal that spawns the driver), mirroring the
-    // ollama/mcp floor grants above. Self-escalation scopes the flailing model
-    // also reaches for (e.g. `role.update`) are deliberately NOT granted —
-    // P8 no-self-escalation.
-    if loop_state.is_some() {
-        backcompat_floor.push(Scope::parse("loop.next").unwrap());
-        backcompat_floor.push(Scope::parse("loop.complete").unwrap());
-        backcompat_floor.push(Scope::parse("loop.note").unwrap());
-        // Chapter Circuit (CI.0) — the iteration prompt explicitly offers the
-        // agent `team.run` to delegate a large story to a durable Nonagon team
-        // mission; `team.run` was designed for exactly this (the loop iteration)
-        // but, like `loop.*`, was never added to the floor — so the delegation
-        // branch was dead for the default role. Grant it when the loop is armed,
-        // the same gate.
-        //
-        // CI.3 governance decision: keep this gated on loop-armed only — do NOT
-        // additionally posture-gate it on `[autonomy]` level. Posture-gating
-        // would re-create the prompt↔scope mismatch CI.0/CI.2 just closed (the
-        // prompt offers a tool the role can't call). The accepted limitation: a
-        // delegated team mission runs in the background, bounded per-call by
-        // `max_tokens` but with NO aggregate budget cap, and its spend is not
-        // counted against the loop's run-window caps. Brakes: the mission
-        // inherits the daemon's Interactive gate posture (destructive steps
-        // pause for human approval) and the loop delegates ≤1 mission per story
-        // ("delegate sparingly"). A per-mission budget is a tracked follow-up
-        // (see docs/COST_GOVERNANCE.md "bound team missions").
-        //
-        // NOTE — `git.write` is intentionally NOT granted here. Forge made
-        // committing operator-opt-in per-repo (declare `git.write:<repo>` in a
-        // role's `capability_scopes`; see the git.read floor note above): it is
-        // a Trusted/destructive operation, not a zero-config default. The
-        // iteration prompt's unconditional "commit the change with `git`" step
-        // is therefore a prompt/task-fit mismatch (it assumes a code backlog),
-        // addressed in CI.2 — not a missing floor grant.
-        backcompat_floor.push(Scope::parse("team.run").unwrap());
-    }
 
     // Walk the active role's inheritance chain, intersecting
     // declared scopes leaf-to-root. Empty levels substitute the
@@ -11070,6 +11035,137 @@ mod tests {
         assert_eq!(
             scope_strings,
             vec!["memory.read", "memory.write", "net.fetch"]
+        );
+    }
+
+    /// Pins `compute_backcompat_floor`'s exact output — every conditional
+    /// grant fires (Ollama configured, one MCP bridge, `applications`
+    /// tool process, loop armed) so this doubles as the regression proof
+    /// that extracting the block out of `run_async` (previously inline,
+    /// with no direct unit coverage — only indirect e2e) didn't silently
+    /// change interactive-path behavior.
+    #[test]
+    fn compute_backcompat_floor_covers_every_conditional_grant() {
+        let canonical_root = PathBuf::from("/tmp/proj");
+        let floor = compute_backcompat_floor(
+            Scope::parse("fs.read:/tmp/proj/**").unwrap(),
+            Scope::parse("fs.write:/tmp/proj/**").unwrap(),
+            Scope::parse("fs.metadata:/tmp/proj/**").unwrap(),
+            &canonical_root,
+            Some(Scope::parse("shell.exec:cwd:/tmp/proj/**").unwrap()),
+            Some(Scope::parse("fs.delete:/tmp/proj/**").unwrap()),
+            vec![
+                Scope::parse("workspace:/tmp/proj/ws/**").unwrap(),
+                Scope::parse("workspace:/tmp/proj/ws").unwrap(),
+            ],
+            true, // ollama_configured
+            &["websearch".to_string()],
+            &[aivyx_config::ToolProcessConfig {
+                name: "applications".to_string(),
+                command: "aivyx-apps".to_string(),
+                args: vec![],
+                env: vec![],
+                scope_overrides: std::collections::HashMap::new(),
+                enabled: true,
+                sandbox: None,
+                disable_sandbox: false,
+            }],
+            true, // loop_armed
+        );
+
+        let scope_strings: Vec<&str> = floor.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            scope_strings,
+            vec![
+                "memory.read",
+                "memory.write",
+                "memory.forget",
+                "memory.gc",
+                "graph.read",
+                "skills.list",
+                "skills.invoke",
+                "schedule.list",
+                "schedule.create",
+                "schedule.update",
+                "schedule.delete",
+                "reflection.propose",
+                "persona.propose",
+                "fs.read:/tmp/proj/**",
+                "fs.write:/tmp/proj/**",
+                "fs.metadata:/tmp/proj/**",
+                "net.fetch",
+                "net.post",
+                "fs.read:/tmp/proj",
+                "fs.write:/tmp/proj",
+                "fs.metadata:/tmp/proj",
+                "shell.exec:cwd:/tmp/proj/**",
+                "shell.exec:cwd:/tmp/proj",
+                "fs.delete:/tmp/proj/**",
+                "fs.delete:/tmp/proj",
+                "workspace:/tmp/proj/ws/**",
+                "workspace:/tmp/proj/ws",
+                "ollama.list",
+                "ollama.show",
+                "ollama.pull",
+                "mcp.call:websearch:*",
+                "app.read",
+                "app.control",
+                "app.input",
+                "loop.next",
+                "loop.complete",
+                "loop.note",
+                "team.run",
+            ]
+        );
+    }
+
+    /// The floor with every conditional grant OFF (no Ollama, no MCP
+    /// bridges, no `applications` process, loop not armed) produces just
+    /// the always-on base + fs/workspace grants — pins that each gate is
+    /// genuinely conditional, not accidentally always-true.
+    #[test]
+    fn compute_backcompat_floor_omits_grants_when_conditions_are_false() {
+        let canonical_root = PathBuf::from("/tmp/proj");
+        let floor = compute_backcompat_floor(
+            Scope::parse("fs.read:/tmp/proj/**").unwrap(),
+            Scope::parse("fs.write:/tmp/proj/**").unwrap(),
+            Scope::parse("fs.metadata:/tmp/proj/**").unwrap(),
+            &canonical_root,
+            None,
+            None,
+            vec![],
+            false,
+            &[],
+            &[],
+            false,
+        );
+
+        let scope_strings: Vec<&str> = floor.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            scope_strings,
+            vec![
+                "memory.read",
+                "memory.write",
+                "memory.forget",
+                "memory.gc",
+                "graph.read",
+                "skills.list",
+                "skills.invoke",
+                "schedule.list",
+                "schedule.create",
+                "schedule.update",
+                "schedule.delete",
+                "reflection.propose",
+                "persona.propose",
+                "fs.read:/tmp/proj/**",
+                "fs.write:/tmp/proj/**",
+                "fs.metadata:/tmp/proj/**",
+                "net.fetch",
+                "net.post",
+                "fs.read:/tmp/proj",
+                "fs.write:/tmp/proj",
+                "fs.metadata:/tmp/proj",
+            ]
         );
     }
 
