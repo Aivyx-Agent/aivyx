@@ -367,9 +367,12 @@ pub fn my_mission() -> MissionPlan { /* Step::delegate(...).after([...]); a DAG 
 Two rules the engine enforces, so design for them:
 
 - **NT-02 least privilege** — every specialist's authority is *attenuated* to
-  a subset of the lead's. Give each member only the scopes its job needs.
-  Kitchen's `haccp` member holds *only* `kitchen.haccp.log` — it physically
-  cannot send a PO or read inventory, and a test proves it
+  a subset of the operator's own real, configured authority (not the lead's
+  own declared scopes specifically — a purely-orchestration lead can still
+  delegate whatever the operator's real floor allows, even if it never
+  declares those scopes for itself). Give each member only the scopes its
+  job needs. Kitchen's `haccp` member holds *only* `kitchen.haccp.log` — it
+  physically cannot send a PO or read inventory, and a test proves it
   (`nt02_haccp_cannot_exceed_aria_and_cannot_order`).
 - **Ship the same roster as a committed TOML asset** and round-trip-test it
   against the constructor (`toml_asset_round_trips_with_the_constructor`), so
@@ -511,7 +514,7 @@ aivyx-<domain>-toolkit/             # the TOOLKIT crate — the real domain tool
 
 | Must provide | Where | Rule |
 |---|---|---|
-| A **`TeamConfig`** — a lead + ≤8 least-privileged specialists | pack `src/lib.rs` + `assets/<domain>.toml` | each member's scopes ⊆ the lead's (**NT-02**); ≤9 agents total |
+| A **`TeamConfig`** — a lead + ≤8 least-privileged specialists | pack `src/lib.rs` + `assets/<domain>.toml` | each member's scopes ⊆ the operator's own real, configured authority (**NT-02**); ≤9 agents total |
 | At least one **`MissionPlan`** (a DAG) | pack `src/lib.rs` | validates: acyclic, every step targets a real member, no dead steps |
 | The **domain tools** as `Tool` impls | toolkit `src/tools/*.rs` | each has a **pure `required_scope(input)`**; side-effects gated by a base; money/outbound = **confirm-first**; append-only logs never updated/deleted |
 | **Scope bases** the tools need | one engine touch — `KNOWN_BASES` in `aivyx-capability` | additive; the only edit a pack makes to the core. Group bases (`<domain>.read/write/...`) keep the surface small |

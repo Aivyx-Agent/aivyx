@@ -223,9 +223,11 @@ pub async fn run_mission(
         .lead_member()
         .ok_or("team has no lead")?
         .clone();
-    // The team runs under the lead's declared authority; every specialist is
-    // attenuated to a subset of it (NT-02). It grants team.delegate +
-    // team.message, so the lead's orchestration/dialogue tools are callable.
+    // The lead's own operational capabilities -- what its own ConcreteAgent
+    // is mounted with below. It grants team.delegate + team.message, so
+    // the lead's orchestration/dialogue tools are callable. NOT what
+    // specialists are attenuated against (NT-02) -- that's `ceiling`,
+    // built just below from the operator's own real, un-narrowed authority.
     let lead_caps = lead.declared_capabilities().map_err(|e| e.to_string())?;
 
     // The specialist ceiling is the operator's own real authority (the
@@ -246,9 +248,11 @@ pub async fn run_mission(
         Arc::clone(&audit),
         // The daemon's full tool set. Each specialist gets exactly the subset
         // its `tool_allowlist` names (least privilege), capability-attenuated
-        // against the lead (NT-02). The lead itself stays orchestration-only.
-        // (A vertical's *domain* tools — e.g. the kitchen toolkit's RPCs —
-        // join this set once that toolkit crate is wired in.)
+        // against `ceiling` -- the operator's own real authority (NT-02),
+        // not the lead's own declared scopes. The lead itself stays
+        // orchestration-only. (A vertical's *domain* tools — e.g. the
+        // kitchen toolkit's RPCs — join this set once that toolkit crate
+        // is wired in.)
         base_tools,
         ceiling,
         // Chapter Ensemble — the CLI lead-driven `team run` uses one shared
