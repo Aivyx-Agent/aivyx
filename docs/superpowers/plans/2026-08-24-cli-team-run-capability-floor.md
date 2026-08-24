@@ -244,7 +244,7 @@ function name to find the insertion point):
 - [ ] **Step 3: Run the new tests to verify they fail**
 
 ```bash
-cargo test -p aivyx-cli --lib compute_backcompat_floor -- --test-threads=1
+cargo test -p aivyx-cli --bin aivyx compute_backcompat_floor -- --test-threads=1
 ```
 
 Expected: FAIL — `compute_backcompat_floor` is not yet defined (compile
@@ -451,7 +451,7 @@ block) and this comment.
 - [ ] **Step 6: Run the new tests to verify they pass**
 
 ```bash
-cargo test -p aivyx-cli --lib compute_backcompat_floor -- --test-threads=1
+cargo test -p aivyx-cli --bin aivyx compute_backcompat_floor -- --test-threads=1
 ```
 
 Expected: PASS (2/2 — `compute_backcompat_floor_covers_every_conditional_grant`,
@@ -460,7 +460,7 @@ Expected: PASS (2/2 — `compute_backcompat_floor_covers_every_conditional_grant
 - [ ] **Step 7: Re-run the existing role-envelope tests unchanged, and the full crate suite**
 
 ```bash
-cargo test -p aivyx-cli --lib -- --test-threads=1
+cargo test -p aivyx-cli --bin aivyx -- --test-threads=1
 ```
 
 Expected: PASS, including (unmodified)
@@ -633,7 +633,7 @@ and add this immediately after its closing brace):
 - [ ] **Step 5: Run the test to verify it fails**
 
 ```bash
-cargo test -p aivyx-cli --lib load_and_clamp_team -- --test-threads=1
+cargo test -p aivyx-cli --bin aivyx load_and_clamp_team -- --test-threads=1
 ```
 
 Expected: FAIL — `load_and_clamp_team` is not yet defined (compile error
@@ -732,7 +732,7 @@ as the new parameter in `run_mission`'s signature (immediately after
 - [ ] **Step 8: Run the mutation-proof test to verify it passes**
 
 ```bash
-cargo test -p aivyx-cli --lib load_and_clamp_team -- --test-threads=1
+cargo test -p aivyx-cli --bin aivyx load_and_clamp_team -- --test-threads=1
 ```
 
 Expected: PASS.
@@ -752,7 +752,7 @@ assertion that happens to pass against working code.
 - [ ] **Step 10: Run the full `aivyx-cli` and `aivyx-channel` suites**
 
 ```bash
-cargo test -p aivyx-cli --lib -- --test-threads=1
+cargo test -p aivyx-cli --bin aivyx -- --test-threads=1
 cargo test -p aivyx-channel --lib -- --test-threads=1
 ```
 
