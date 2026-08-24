@@ -1394,64 +1394,57 @@ fn scopes_exceeding_floor(dropped: &[String], floor: &[String]) -> Vec<String> {
 /// `net.fetch:<url>`), and the coordinator lead held only `[memory, team.delegate]`
 /// — so every specialist was attenuated to near-nothing and couldn't write files,
 /// fetch the web, or run commands (the root cause of "missions report done but do
-/// nothing"). This grants the LEAD the daemon's full floor (so it can grant), and
-/// each specialist the lead's floor scopes whose BASE its role declares (from its
-/// roster scopes + `workspace` when it carries workspace tools). Each specialist
-/// therefore stays ⊆ the lead ⊆ the daemon's real authority, attenuated per role.
+/// nothing"). Every member — lead included — is attenuated to floor ∩ its own
+/// declared scope bases, plus narrow orchestration markers (team bus, qualified
+/// MCP). A lead therefore holds exactly what it declared for itself, not the
+/// daemon's full floor; it can still delegate broad authority to specialists
+/// because specialists are filtered against the real floor parameter directly,
+/// never against the lead's own post-processed field.
 /// Empty `lead_scopes` ⇒ a no-op (pre-Ensemble behavior; tests unaffected).
 pub fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
     if lead_scopes.is_empty() {
         return;
     }
-    let lead_name = config.lead.clone();
     for m in &mut config.members {
-        if m.name == lead_name {
-            // The lead holds the full daemon authority (to grant), plus only
-            // narrow orchestration scopes (team.delegate / team.message /
-            // qualified MCP) a pack's own capability_scopes declared for it
-            // — never an arbitrary domain scope beyond the real floor. See
-            // `filter_orchestration_markers`'s own doc comment for the full
-            // defense-in-depth rationale.
-            let mut caps: Vec<String> = lead_scopes.to_vec();
-            let (kept, dropped) = filter_orchestration_markers(&m.capability_scopes);
-            let really_exceeds_floor = scopes_exceeding_floor(&dropped, lead_scopes);
-            if !really_exceeds_floor.is_empty() {
-                eprintln!(
-                    "aivyx team: pack's own declared lead scopes exceed the daemon \
-                     floor, clamped: {}",
-                    really_exceeds_floor.join(", ")
-                );
-            }
-            caps.extend(kept);
-            caps.sort();
-            caps.dedup();
-            m.capability_scopes = caps;
-        } else {
-            // The scope bases this specialist's role covers.
-            let mut bases: std::collections::HashSet<&str> =
-                m.capability_scopes.iter().map(|s| scope_base(s)).collect();
-            if m.tool_allowlist.iter().any(|t| t.starts_with("workspace.")) {
-                bases.insert("workspace");
-            }
-            // Grant the lead's floor scopes for those bases…
-            let mut caps: Vec<String> = lead_scopes
-                .iter()
-                .filter(|s| bases.contains(scope_base(s)))
-                .cloned()
-                .collect();
-            // …and keep the non-floor scopes the roster declared: the team bus,
-            // plus any QUALIFIED MCP grants a custom roster pinned. The bare
-            // "mcp.call" roster entry is a marker only — declaring the base
-            // makes the floor's qualified `mcp.call:<server>:*` grants flow
-            // through the filter above; pushing the bare form here would
-            // grant every server unqualified (D4 Rule 2), which is broader
-            // than the operator's configured set.
-            let (kept, _dropped) = filter_orchestration_markers(&m.capability_scopes);
-            caps.extend(kept);
-            caps.sort();
-            caps.dedup();
-            m.capability_scopes = caps;
+        // The scope bases this member's own role declares (every member —
+        // lead included — is attenuated to floor ∩ its own declared
+        // bases, never the unconditional full floor: a conservative
+        // member's deliberately narrow declaration stays narrow, and a
+        // member that needs broad authority to delegate onward — the
+        // usual lead shape — still gets it, because it declares the
+        // matching bases itself).
+        let mut bases: std::collections::HashSet<&str> =
+            m.capability_scopes.iter().map(|s| scope_base(s)).collect();
+        if m.tool_allowlist.iter().any(|t| t.starts_with("workspace.")) {
+            bases.insert("workspace");
         }
+        // Grant the floor's scopes for those bases…
+        let mut caps: Vec<String> = lead_scopes
+            .iter()
+            .filter(|s| bases.contains(scope_base(s)))
+            .cloned()
+            .collect();
+        // …and keep the non-floor scopes the roster declared: the team
+        // bus, plus any QUALIFIED MCP grants a custom roster pinned. The
+        // bare "mcp.call" roster entry is a marker only — declaring the
+        // base makes the floor's qualified `mcp.call:<server>:*` grants
+        // flow through the filter above; pushing the bare form here would
+        // grant every server unqualified (D4 Rule 2), which is broader
+        // than the operator's configured set.
+        let (kept, dropped) = filter_orchestration_markers(&m.capability_scopes);
+        let really_exceeds_floor = scopes_exceeding_floor(&dropped, lead_scopes);
+        if !really_exceeds_floor.is_empty() {
+            eprintln!(
+                "aivyx team: {}'s own declared scopes exceed the daemon floor, \
+                 clamped: {}",
+                m.name,
+                really_exceeds_floor.join(", ")
+            );
+        }
+        caps.extend(kept);
+        caps.sort();
+        caps.dedup();
+        m.capability_scopes = caps;
     }
 }
 
@@ -2409,11 +2402,24 @@ pub(crate) mod tests {
                 .capability_scopes
                 .clone()
         };
-        // Lead holds the FULL floor (so it can grant) + its own orchestration.
+        // Lead holds exactly its own declared scopes (memory.read/write +
+        // team.delegate, per default_nonagon's own coordinator role),
+        // intersected with the floor, plus team.message — NOT the full
+        // floor. default_nonagon's coordinator never declared fs/net/shell
+        // for itself (its own soul: "You never execute domain work
+        // directly"), so those stay absent even though the floor grants
+        // them to roles that DO declare matching bases (see `writer`/
+        // `researcher` below, which keep this test's own original intent).
         let lead = caps("coordinator");
-        assert!(lead.contains(&"net.fetch".to_string()));
-        assert!(lead.contains(&"fs.write:/root/**".to_string()));
-        assert!(lead.iter().any(|s| s == "team.delegate"));
+        assert_eq!(
+            lead,
+            vec![
+                "memory.read".to_string(),
+                "memory.write".to_string(),
+                "team.delegate".to_string(),
+                "team.message".to_string(),
+            ]
+        );
         // Writer (fs.read/write + workspace tools) gets the qualified write
         // grants + workspace, but NOT net.fetch or shell.
         let w = caps("writer");
@@ -2481,7 +2487,134 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn bind_lead_scopes_narrows_a_conservative_leads_declared_scopes_not_the_full_floor() {
+        // A floor far broader than what this lead actually declared for
+        // itself — before the fix, the lead branch grants the WHOLE floor
+        // unconditionally regardless of what it declared.
+        let floor: Vec<String> = [
+            "memory.read",
+            "fs.write:/root/**",
+            "shell.exec:cwd:/root/**",
+            "net.fetch",
+            "team.delegate",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut config = default_nonagon();
+        let lead_name = config.lead.clone();
+        for m in &mut config.members {
+            if m.name == lead_name {
+                // Override the lead's own declared scopes to a
+                // deliberately conservative set — simulating a pack whose
+                // lead never intended to touch fs/shell/net directly.
+                m.capability_scopes =
+                    vec!["team.delegate".to_string(), "team.message".to_string()];
+            }
+        }
+        bind_lead_scopes(&mut config, &floor);
+        let lead = config.members.iter().find(|m| m.name == lead_name).unwrap();
+        assert_eq!(
+            lead.capability_scopes,
+            vec!["team.delegate".to_string(), "team.message".to_string()],
+            "a conservative lead must stay conservative, not widen to the \
+             full floor: {:?}",
+            lead.capability_scopes
+        );
+    }
+
+    #[test]
+    fn bind_lead_scopes_lets_a_configured_verticals_domain_scopes_flow_through() {
+        // Shaped like the real shipped kitchen-boh.toml pack (aria + 4
+        // specialists; crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml).
+        // This floor is what a generalized compute_backcompat_floor now
+        // produces once the kitchen tool-process is configured — it
+        // includes the vertical's own domain scope bases, not just the
+        // interactive-session ones.
+        let floor: Vec<String> = [
+            "memory.read",
+            "memory.write",
+            "team.delegate",
+            "kitchen.read",
+            "kitchen.write",
+            "kitchen.order.send",
+            "kitchen.haccp.log",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut config = TeamConfig {
+            name: "kitchen-boh".into(),
+            description: "Back-of-House Nonagon".into(),
+            lead: "aria".into(),
+            members: vec![
+                member(
+                    "aria",
+                    "BOH Manager",
+                    &[
+                        "kitchen.read",
+                        "kitchen.write",
+                        "kitchen.order.send",
+                        "kitchen.haccp.log",
+                        "team.delegate",
+                        "team.message",
+                    ],
+                ),
+                member(
+                    "stocktake",
+                    "Stocktake",
+                    &["kitchen.read", "kitchen.write", "team.message"],
+                ),
+                member("inventory", "Inventory Analyst", &["kitchen.read", "team.message"]),
+                member(
+                    "purchasing",
+                    "Purchasing",
+                    &["kitchen.read", "kitchen.write", "kitchen.order.send", "team.message"],
+                ),
+                member("haccp", "Food-Safety / Compliance", &["kitchen.haccp.log", "team.message"]),
+            ],
+            dialogue: Default::default(),
+        };
+        bind_lead_scopes(&mut config, &floor);
+        let caps = |name: &str| -> Vec<String> {
+            config.members.iter().find(|m| m.name == name).unwrap().capability_scopes.clone()
+        };
+
+        // Every specialist retains its own domain scopes — the direct
+        // mutation-proof for the Critical finding: against the current,
+        // unfixed bind_lead_scopes, every one of these would collapse to
+        // [team.message] only, because the floor before this fix never
+        // contains any kitchen.* base.
+        assert!(caps("stocktake").contains(&"kitchen.read".to_string()));
+        assert!(caps("stocktake").contains(&"kitchen.write".to_string()));
+        assert!(caps("inventory").contains(&"kitchen.read".to_string()));
+        assert!(caps("purchasing").contains(&"kitchen.order.send".to_string()));
+        assert!(caps("haccp").contains(&"kitchen.haccp.log".to_string()));
+        // The lead keeps exactly its own declared domain + orchestration
+        // scopes (not the full floor, and not stripped either).
+        let aria = caps("aria");
+        for s in [
+            "kitchen.read",
+            "kitchen.write",
+            "kitchen.order.send",
+            "kitchen.haccp.log",
+            "team.delegate",
+            "team.message",
+        ] {
+            assert!(aria.contains(&s.to_string()), "aria should hold {s}: {aria:?}");
+        }
+    }
+
+    #[test]
     fn bind_lead_scopes_clamps_pack_declared_domain_scopes_for_the_lead() {
+        // A pack's lead role claims capability_scopes for a domain the
+        // daemon floor never granted at all (fs.write, shell.exec —
+        // entirely absent from the floor below). That claim must never
+        // survive. Separately — per this task's own fix — bases the lead
+        // never declared for itself (fs.read, net.fetch) are no longer
+        // granted just because the floor happens to carry them: the lead
+        // is attenuated to floor ∩ its own declared bases, exactly like a
+        // specialist, not the unconditional full floor.
         let floor: Vec<String> = [
             "memory.read",
             "memory.write",
@@ -2513,12 +2646,24 @@ pub(crate) mod tests {
             .capability_scopes
             .clone();
 
-        // The floor's own scopes still flow through unconditionally.
-        assert!(lead_caps.contains(&"net.fetch".to_string()));
-        assert!(lead_caps.contains(&"fs.read:/root/**".to_string()));
+        // The lead's own declared base (memory) still flows through from
+        // the floor.
+        assert!(lead_caps.contains(&"memory.read".to_string()));
+        assert!(lead_caps.contains(&"memory.write".to_string()));
+        // Bases the lead never declared for itself are NOT granted just
+        // because the floor happens to carry them — the floor no longer
+        // flows to the lead unconditionally.
+        assert!(
+            !lead_caps.contains(&"fs.read:/root/**".to_string()),
+            "the lead never declared fs.read for itself, so the floor's fs.read must not flow through"
+        );
+        assert!(
+            !lead_caps.contains(&"net.fetch".to_string()),
+            "the lead never declared net.fetch for itself, so the floor's net.fetch must not flow through"
+        );
         // The pack's own out-of-floor domain declarations do NOT survive —
-        // this is the actual fix: previously these would have been unioned
-        // in via the pack's own claim, regardless of the real floor.
+        // there's no floor entry for fs.write/shell.exec to intersect with
+        // in the first place.
         assert!(
             !lead_caps.contains(&"fs.write:/root/**".to_string()),
             "a pack-declared domain scope beyond the floor must be clamped"
