@@ -4300,6 +4300,7 @@ pub(crate) mod tests {
             channel: ch,
             audit,
             cancellation: token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

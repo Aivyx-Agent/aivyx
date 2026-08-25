@@ -509,6 +509,7 @@ mod tests {
             channel: ch,
             audit,
             cancellation: &ch.token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

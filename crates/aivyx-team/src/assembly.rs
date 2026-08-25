@@ -303,6 +303,7 @@ mod tests {
             channel: &ch,
             audit: &audit,
             cancellation: &tok,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
 
         // Budget of 1: first send ok, second over budget.

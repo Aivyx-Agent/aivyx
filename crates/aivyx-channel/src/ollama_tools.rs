@@ -496,6 +496,7 @@ mod tests {
             channel,
             audit: &AUDIT,
             cancellation: &TOKEN,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

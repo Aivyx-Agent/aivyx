@@ -192,6 +192,7 @@ mod tests {
             channel: &lead_ch,
             audit: &audit,
             cancellation: &token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
         let outcome = tool
             .execute(json!({ "specialist": "inventory", "task": "check stock" }), &ctx)
@@ -218,6 +219,7 @@ mod tests {
             channel: &lead_ch,
             audit: &audit,
             cancellation: &token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
         // Missing `task`.
         let outcome = tool.execute(json!({ "specialist": "inventory" }), &ctx).await;

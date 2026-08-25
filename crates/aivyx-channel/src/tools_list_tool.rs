@@ -253,6 +253,7 @@ mod tests {
             channel: &ch,
             audit: &audit,
             cancellation: &ch.token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
         match tool().execute(input, &ctx).await {
             ToolOutcome::Completed { output, .. } => output,
