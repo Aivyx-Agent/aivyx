@@ -301,6 +301,7 @@ mod tests {
             channel: &channel,
             audit: &audit,
             cancellation: &cancellation,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
 
         let out = tool
@@ -343,6 +344,7 @@ mod tests {
             channel: &channel,
             audit: &audit,
             cancellation: &cancellation,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
         let out = tool
             .execute(json!({"path": "existing.xlsx", "rows": [["x"]]}), &ctx)

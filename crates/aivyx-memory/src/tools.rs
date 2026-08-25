@@ -1446,6 +1446,7 @@ mod tests {
             channel,
             audit,
             cancellation: &channel.token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

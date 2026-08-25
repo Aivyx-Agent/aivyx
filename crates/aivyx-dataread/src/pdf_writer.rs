@@ -413,6 +413,7 @@ mod tests {
             channel: &channel,
             audit: &audit,
             cancellation: &cancellation,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         };
 
         let out = tool

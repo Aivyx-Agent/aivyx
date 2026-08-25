@@ -67,6 +67,7 @@ fn run_execute(tool: &dyn Tool, input: Value) -> ToolOutcome {
         channel: &channel,
         audit: &audit,
         cancellation: &channel.token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
