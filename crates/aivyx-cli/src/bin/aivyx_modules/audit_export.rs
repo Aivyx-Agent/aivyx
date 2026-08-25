@@ -232,6 +232,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::DocumentMutated { .. } => "DocumentMutated",
         AuditEvent::ScheduleMutated { .. } => "ScheduleMutated",
         AuditEvent::TeamMissionChannelTriggered { .. } => "TeamMissionChannelTriggered",
+        AuditEvent::TeamMissionChannelDenied { .. } => "TeamMissionChannelDenied",
     }
 }
 
