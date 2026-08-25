@@ -262,6 +262,7 @@ where
                         channel: &channel,
                         audit: &audit,
                         cancellation: &cancellation,
+                        message_origin: aivyx_core::MessageOrigin::Operator,
                     };
                     let outcome = tool.execute(input, &ctx).await;
                     let reply = outcome_to_wire(call_id_for_task.clone(), outcome);

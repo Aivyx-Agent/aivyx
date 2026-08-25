@@ -158,7 +158,7 @@ impl Tool for ScheduleCreateTool {
         Scope::parse("schedule.create").expect("known base")
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -175,6 +175,17 @@ impl Tool for ScheduleCreateTool {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "schedule.create requires a non-empty `cron` field".to_string(),
+            });
+        }
+
+        if ctx.message_origin == aivyx_core::MessageOrigin::System {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.create: cannot be called from within a triggered or \
+                         scheduled run — creating new schedules is an operator/interactive-\
+                         only action, to prevent unattended runs from recursively \
+                         propagating more automation"
+                    .to_string(),
             });
         }
 
@@ -381,13 +392,16 @@ impl Tool for ScheduleListTool {
         Scope::parse("schedule.list").expect("known base")
     }
 
-    async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "schedule.list: no schedule store configured".to_string(),
             });
         };
+
+        // schedule.list is read-only and idempotent, no origin guard needed.
+        let _ = ctx;
 
         match schedule::list_schedules(store).await {
             Ok(schedules) => {
@@ -489,7 +503,7 @@ impl Tool for ScheduleDeleteTool {
         Scope::parse("schedule.delete").expect("known base")
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -507,6 +521,17 @@ impl Tool for ScheduleDeleteTool {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "schedule.delete requires a non-empty `schedule_id` field".to_string(),
+            });
+        }
+
+        if ctx.message_origin == aivyx_core::MessageOrigin::System {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.delete: cannot be called from within a triggered or \
+                         scheduled run — deleting schedules is an operator/interactive-\
+                         only action, to prevent unattended runs from recursively \
+                         propagating more automation"
+                    .to_string(),
             });
         }
 
@@ -656,7 +681,7 @@ impl Tool for ScheduleUpdateTool {
         Scope::parse("schedule.update").expect("known base")
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -674,6 +699,17 @@ impl Tool for ScheduleUpdateTool {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "schedule.update requires a non-empty `schedule_id` field".to_string(),
+            });
+        }
+
+        if ctx.message_origin == aivyx_core::MessageOrigin::System {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.update: cannot be called from within a triggered or \
+                         scheduled run — updating schedules is an operator/interactive-\
+                         only action, to prevent unattended runs from recursively \
+                         propagating more automation"
+                    .to_string(),
             });
         }
 
@@ -871,6 +907,7 @@ mod tests {
     fn make_ctx<'a>(
         ch: &'a NoopChannel,
         audit: &'a dyn aivyx_core::AuditHook,
+        message_origin: aivyx_core::MessageOrigin,
     ) -> ToolContext<'a> {
         ToolContext {
             agent_id: AgentId::new(),
@@ -879,6 +916,7 @@ mod tests {
             channel: ch,
             audit,
             cancellation: &ch.token,
+            message_origin,
         }
     }
 
@@ -907,7 +945,7 @@ mod tests {
         let store = schedule_domain().await;
         tool.set_schedule_store(store.clone()).unwrap();
         let (ch, audit) = ctx_parts();
-        let ctx = make_ctx(&ch, &audit);
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
         let outcome = tool
             .execute(
                 json!({
@@ -935,7 +973,7 @@ mod tests {
         let store = schedule_domain().await;
         tool.set_schedule_store(store).unwrap();
         let (ch, audit) = ctx_parts();
-        let ctx = make_ctx(&ch, &audit);
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
         let outcome = tool
             .execute(
                 json!({
@@ -955,7 +993,7 @@ mod tests {
         let store = schedule_domain().await;
         tool.set_schedule_store(store).unwrap();
         let (ch, audit) = ctx_parts();
-        let ctx = make_ctx(&ch, &audit);
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
         let outcome = tool.execute(json!({"cron": "0 0 2 * * * *"}), &ctx).await;
         assert!(matches!(outcome, ToolOutcome::Failed(_)));
     }
@@ -1047,7 +1085,7 @@ mod tests {
         let store = schedule_domain().await;
         create_tool.set_schedule_store(store.clone()).unwrap();
         let (ch, audit) = ctx_parts();
-        let ctx = make_ctx(&ch, &audit);
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
         let created = create_tool
             .execute(
                 json!({"cron": "0 0 2 * * * *", "goal": "run the overnight close"}),
@@ -1082,7 +1120,7 @@ mod tests {
         let store = schedule_domain().await;
         create_tool.set_schedule_store(store.clone()).unwrap();
         let (ch, audit) = ctx_parts();
-        let ctx = make_ctx(&ch, &audit);
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
         let created = create_tool
             .execute(
                 json!({"cron": "0 0 2 * * * *", "goal": "run the overnight close"}),
@@ -1107,5 +1145,103 @@ mod tests {
         };
         assert_eq!(output["enabled"], false);
         assert_eq!(output["cron"], "0 0 3 * * * *");
+    }
+
+    #[tokio::test]
+    async fn schedule_create_refuses_when_message_origin_is_system() {
+        let tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        tool.set_schedule_store(store).unwrap();
+        tool.set_growth(GrowthAdoption::BroadAuto).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::System);
+        let outcome = tool
+            .execute(
+                json!({"cron": "0 0 9 * * * *", "prompt": "check something"}),
+                &ctx,
+            )
+            .await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(
+            detail.contains("triggered") || detail.contains("scheduled"),
+            "error should explain the refusal reason: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn schedule_create_still_succeeds_under_operator_origin() {
+        // Companion to the refusal test above -- proves the guard doesn't
+        // over-block ordinary interactive self-scheduling.
+        let tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        tool.set_schedule_store(store).unwrap();
+        tool.set_growth(GrowthAdoption::BroadAuto).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
+        let outcome = tool
+            .execute(
+                json!({"cron": "0 0 9 * * * *", "prompt": "check something"}),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn schedule_update_refuses_when_message_origin_is_system() {
+        let create_tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        create_tool.set_schedule_store(store.clone()).unwrap();
+        create_tool.set_growth(GrowthAdoption::BroadAuto).unwrap();
+        let (ch, audit) = ctx_parts();
+        let create_ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
+        let created = create_tool
+            .execute(
+                json!({"cron": "0 0 2 * * * *", "prompt": "do a thing"}),
+                &create_ctx,
+            )
+            .await;
+        let ToolOutcome::Completed { output, .. } = created else {
+            panic!("setup failed")
+        };
+        let schedule_id = output["schedule_id"].as_str().unwrap().to_string();
+
+        let update_tool = ScheduleUpdateTool::new();
+        update_tool.set_schedule_store(store).unwrap();
+        let sys_ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::System);
+        let outcome = update_tool
+            .execute(json!({"schedule_id": schedule_id, "enabled": true}), &sys_ctx)
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn schedule_delete_refuses_when_message_origin_is_system() {
+        let create_tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        create_tool.set_schedule_store(store.clone()).unwrap();
+        create_tool.set_growth(GrowthAdoption::BroadAuto).unwrap();
+        let (ch, audit) = ctx_parts();
+        let create_ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
+        let created = create_tool
+            .execute(
+                json!({"cron": "0 0 2 * * * *", "prompt": "do a thing"}),
+                &create_ctx,
+            )
+            .await;
+        let ToolOutcome::Completed { output, .. } = created else {
+            panic!("setup failed")
+        };
+        let schedule_id = output["schedule_id"].as_str().unwrap().to_string();
+
+        let delete_tool = ScheduleDeleteTool::new();
+        delete_tool.set_schedule_store(store).unwrap();
+        let sys_ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::System);
+        let outcome = delete_tool
+            .execute(json!({"schedule_id": schedule_id}), &sys_ctx)
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
     }
 }
