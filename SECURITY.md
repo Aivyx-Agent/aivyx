@@ -37,9 +37,10 @@ rediscovered:
 - A linked git worktree or submodule runs `git.rs` fully unconfined,
   since Landlock can't reach the real gitdir from the worktree root
   alone (§6, property 7).
-- Prompt injection beyond capability gating has no content-level
-  scanner (§5.3) — the defense is capability gating alone, not
-  pattern-matching.
+- Beyond Bulwark's untrusted-content fencing, there is no smarter
+  pattern-matching or ML-based prompt-injection scanner (§5.3) —
+  capability gating is the backstop for anything that gets past that
+  fencing.
 - Root-compromise of the operator's own machine, LLM-provider-side
   risk, side channels, and channel-platform compromise are all
   explicitly out of scope (§5.1, §5.4, §5.5, §5.7, §5.8, §5.9).
