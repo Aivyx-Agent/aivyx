@@ -262,6 +262,13 @@ where
                         channel: &channel,
                         audit: &audit,
                         cancellation: &cancellation,
+                        // Known, deliberate simplification: this bridge hosts
+                        // out-of-process vertical tools over a wire protocol
+                        // that carries no origin field today, so every call
+                        // through here is hardcoded Operator regardless of
+                        // its real trigger. A tool exposed only through this
+                        // bridge cannot participate in origin-based guards
+                        // like schedule.*'s (see schedule_tool.rs).
                         message_origin: aivyx_core::MessageOrigin::Operator,
                     };
                     let outcome = tool.execute(input, &ctx).await;

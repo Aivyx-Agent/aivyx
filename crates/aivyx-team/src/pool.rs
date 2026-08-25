@@ -100,13 +100,23 @@ pub struct SpecialistPool {
     ceiling: CapabilitySet,
     /// `System` when this mission's own provenance is a trigger this
     /// codebase treats as unattended (a schedule, or any of the other
-    /// `TriggerSource` shapes) -- every specialist AND the lead (just
-    /// another named pool member) gets a `System`-origin `Message` for
-    /// every turn, so the schedule.* write-tool guard (aivyx-channel's
+    /// `TriggerSource` shapes) -- every specialist run through
+    /// [`SpecialistPool::run`] gets a `System`-origin `Message` for every
+    /// turn, so the schedule.* write-tool guard (aivyx-channel's
     /// schedule_tool.rs) refuses them. `Operator` for an interactively-
     /// started mission or a channel-triggered one (a real person sent
     /// the command, authenticated via the channel's own sender
     /// allowlist) -- deliberately excluded from `System` classification.
+    ///
+    /// Note this field's reach: in the current architecture, the daemon
+    /// mission-driving path (`assemble_runtime`/`TeamRuntime`) has no
+    /// lead-agent turn of its own at all -- only specialists run through
+    /// `SpecialistPool::run` ([`SpecialistPool::resolve`] explicitly
+    /// errors if asked to resolve the lead's own name/role, "is the lead,
+    /// not a delegable specialist"), so this field's practical effect
+    /// today is scoped to specialist turns. The CLI's own separate
+    /// lead-agent construction path (`aivyx team run`) builds its lead
+    /// with `Operator` origin directly, outside this mechanism entirely.
     message_origin: aivyx_core::MessageOrigin,
 }
 

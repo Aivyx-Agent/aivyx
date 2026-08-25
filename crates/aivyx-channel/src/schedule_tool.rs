@@ -1214,7 +1214,13 @@ mod tests {
         let outcome = update_tool
             .execute(json!({"schedule_id": schedule_id, "enabled": true}), &sys_ctx)
             .await;
-        assert!(matches!(outcome, ToolOutcome::Failed(_)));
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(
+            detail.contains("cannot be called from within a triggered or scheduled run"),
+            "error should explain the refusal reason: {detail}"
+        );
     }
 
     #[tokio::test]
@@ -1242,6 +1248,12 @@ mod tests {
         let outcome = delete_tool
             .execute(json!({"schedule_id": schedule_id}), &sys_ctx)
             .await;
-        assert!(matches!(outcome, ToolOutcome::Failed(_)));
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(
+            detail.contains("cannot be called from within a triggered or scheduled run"),
+            "error should explain the refusal reason: {detail}"
+        );
     }
 }

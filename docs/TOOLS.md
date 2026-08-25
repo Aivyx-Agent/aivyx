@@ -158,7 +158,7 @@ base, Trusted-tier only. See the Lattice addendum in
 | `mission.create` / `.gate` / `.list` / `.status` | `mission.create`, `mission.gate`, `mission.list`, `mission.status` | Trusted | Nonagon mission lifecycle |
 | `team.run` / `team.delegate` / `team.message` | `team.run`, `team.delegate`, `team.message` | Trusted | multi-agent team execution |
 | *(channel-trigger)* | `team.run.channel` | (bespoke) | channel-triggered team mission — daemon-side per-channel config, not trust-tier gated |
-| `schedule.create` / `.list` / `.delete` / `.update` | `schedule.create`, `schedule.list`, `schedule.delete`, `schedule.update` | Trusted | cron-style scheduled runs |
+| `schedule.create` / `.list` / `.delete` / `.update` | `schedule.create`, `schedule.list`, `schedule.delete`, `schedule.update` | Trusted | cron-style scheduled runs; `.create`/`.update`/`.delete` refuse from within any triggered/scheduled run (cron, webhook, file-watch, reflection, loop, or a scheduled/loop-delegated team mission) — operator/interactive-only, so an unattended run can't recursively create more automation |
 | `webhook.create` / `.list` / `.delete` | `webhook.create`, `webhook.list`, `webhook.delete` | Trusted | inbound webhook triggers |
 | *(file-watch)* | `file_watch.create`, `file_watch.list`, `file_watch.delete` | Trusted | filesystem-change triggers |
 | `loop.next` / `.complete` / `.note` | `loop.next`, `loop.complete`, `loop.note` | Trusted | the autonomous (Ralph) loop |
