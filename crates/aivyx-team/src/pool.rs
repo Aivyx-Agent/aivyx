@@ -98,14 +98,30 @@ pub struct SpecialistPool {
     factory: SpecialistFactory,
     config: TeamConfig,
     ceiling: CapabilitySet,
+    /// `System` when this mission's own provenance is a trigger this
+    /// codebase treats as unattended (a schedule, or any of the other
+    /// `TriggerSource` shapes) -- every specialist AND the lead (just
+    /// another named pool member) gets a `System`-origin `Message` for
+    /// every turn, so the schedule.* write-tool guard (aivyx-channel's
+    /// schedule_tool.rs) refuses them. `Operator` for an interactively-
+    /// started mission or a channel-triggered one (a real person sent
+    /// the command, authenticated via the channel's own sender
+    /// allowlist) -- deliberately excluded from `System` classification.
+    message_origin: aivyx_core::MessageOrigin,
 }
 
 impl SpecialistPool {
-    pub fn new(factory: SpecialistFactory, config: TeamConfig, ceiling: CapabilitySet) -> Self {
+    pub fn new(
+        factory: SpecialistFactory,
+        config: TeamConfig,
+        ceiling: CapabilitySet,
+        message_origin: aivyx_core::MessageOrigin,
+    ) -> Self {
         SpecialistPool {
             factory,
             config,
             ceiling,
+            message_origin,
         }
     }
 
@@ -257,7 +273,10 @@ impl SpecialistPool {
         let member = self.resolve(specialist)?;
         let agent = self.factory.build(member, &self.ceiling)?;
         let channel = self.specialist_channel(member, lead_channel);
-        let msg = Message::text(channel.session_id(), task);
+        let mut msg = Message::text(channel.session_id(), task);
+        if self.message_origin == aivyx_core::MessageOrigin::System {
+            msg = msg.system_originated();
+        }
 
         match agent.turn(msg, &channel).await {
             TurnOutcome::Completed { final_message, .. } => Ok(final_message),
@@ -341,6 +360,34 @@ mod tests {
                 script: Mutex::new(VecDeque::from(vec![step])),
             })
         }
+
+        /// Scripts a tool call on the first step, then a plain final
+        /// message on the second (after the tool result is fed back).
+        fn calls_tool(tool_name: &str, input: serde_json::Value) -> Arc<Self> {
+            let call_step = FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![aivyx_llm::ToolCallEnd {
+                        call_id: "call-1".to_string(),
+                        tool_name: tool_name.to_string(),
+                        input,
+                        name_resolution: aivyx_llm::NameResolution::default(),
+                    }],
+                    text_so_far: String::new(),
+                    usage: aivyx_llm::LlmUsage::default(),
+                },
+            };
+            let final_step = FakeStep {
+                events: vec![LlmStreamEvent::TextChunk("done".to_string())],
+                terminal: LlmStepEnd::FinalMessage {
+                    text: "done".to_string(),
+                    usage: aivyx_llm::LlmUsage::default(),
+                },
+            };
+            Arc::new(FakeProvider {
+                script: Mutex::new(VecDeque::from(vec![call_step, final_step])),
+            })
+        }
     }
     #[async_trait]
     impl LlmProvider for FakeProvider {
@@ -416,6 +463,52 @@ mod tests {
         }
     }
 
+    // --- a tool that records the MessageOrigin it observed ---------------
+
+    struct OriginCapturingTool {
+        id: aivyx_core::ToolId,
+        schema: serde_json::Value,
+        observed: Arc<Mutex<Option<aivyx_core::MessageOrigin>>>,
+    }
+    impl OriginCapturingTool {
+        fn new(observed: Arc<Mutex<Option<aivyx_core::MessageOrigin>>>) -> Self {
+            OriginCapturingTool {
+                id: aivyx_core::ToolId::new(),
+                schema: serde_json::json!({}),
+                observed,
+            }
+        }
+    }
+    #[async_trait]
+    impl aivyx_core::Tool for OriginCapturingTool {
+        fn id(&self) -> aivyx_core::ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "origin.capture"
+        }
+        fn description(&self) -> &str {
+            "test-only: records ctx.message_origin"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &serde_json::Value) -> Scope {
+            Scope::parse("fs.read").unwrap()
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            ctx: &aivyx_core::ToolContext<'_>,
+        ) -> aivyx_core::ToolOutcome {
+            *self.observed.lock().unwrap() = Some(ctx.message_origin);
+            aivyx_core::ToolOutcome::Completed {
+                output: serde_json::json!({"ok": true}),
+                verified: aivyx_core::Verification::NotApplicable,
+            }
+        }
+    }
+
     // --- fixtures --------------------------------------------------------
 
     fn member(name: &str, scopes: &[&str], tier: TrustTier) -> TeamMember {
@@ -431,7 +524,13 @@ mod tests {
         }
     }
 
-    fn pool(provider: Arc<dyn LlmProvider>, members: Vec<TeamMember>, lead: &str) -> SpecialistPool {
+    fn pool(
+        provider: Arc<dyn LlmProvider>,
+        members: Vec<TeamMember>,
+        lead: &str,
+        base_tools: Vec<Arc<dyn aivyx_core::Tool>>,
+        message_origin: aivyx_core::MessageOrigin,
+    ) -> SpecialistPool {
         let config = TeamConfig {
             name: "t".into(),
             description: String::new(),
@@ -439,9 +538,9 @@ mod tests {
             members,
             dialogue: DialogueConfig::default(),
         };
-        let factory = SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), vec![]);
+        let factory = SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), base_tools);
         let lead_caps = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
-        SpecialistPool::new(factory, config, lead_caps)
+        SpecialistPool::new(factory, config, lead_caps, message_origin)
     }
 
     // --- tests -----------------------------------------------------------
@@ -456,6 +555,8 @@ mod tests {
                 member("spec", &["fs.read"], TrustTier::Kernel),
             ],
             "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
         let m = p.resolve("spec").unwrap();
@@ -473,6 +574,8 @@ mod tests {
                 member("spec", &["fs.read"], TrustTier::Trusted),
             ],
             "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
         // Lead on a less-trusted channel → specialist floored below its ceiling.
         let lead_ch = FakeLeadChannel::at(TrustTier::SemiTrusted);
@@ -491,6 +594,8 @@ mod tests {
                 member("researcher", &["fs.read"], TrustTier::Trusted),
             ],
             "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
         assert_eq!(p.resolve("researcher").unwrap().name, "researcher");
         assert_eq!(p.resolve("Researcher").unwrap().name, "researcher");
@@ -509,7 +614,13 @@ mod tests {
         ops.role = "Operations".into();
         let mut lead = member("coordinator", &[], TrustTier::Trusted);
         lead.role = "Lead".into();
-        let p = pool(FakeProvider::says("x"), vec![lead, ops], "coordinator");
+        let p = pool(
+            FakeProvider::says("x"),
+            vec![lead, ops],
+            "coordinator",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
+        );
 
         // By role label (what the planner emits):
         assert_eq!(p.resolve("Operations").unwrap().name, "ops");
@@ -533,6 +644,8 @@ mod tests {
             FakeProvider::says("x"),
             vec![member("lead", &[], TrustTier::Trusted)],
             "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
         assert!(matches!(p.resolve("lead"), Err(TeamError::Config(m)) if m.contains("is the lead")));
         assert!(matches!(p.resolve("ghost"), Err(TeamError::Config(m)) if m.contains("no specialist")));
@@ -547,6 +660,8 @@ mod tests {
                 member("inventory", &["fs.read"], TrustTier::Trusted),
             ],
             "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
         let out = p.run("inventory", "check stock", &lead_ch).await.unwrap();
@@ -559,6 +674,8 @@ mod tests {
             FakeProvider::says("x"),
             vec![member("lead", &[], TrustTier::Trusted)],
             "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
         assert!(p.run("lead", "task", &lead_ch).await.is_err());
@@ -573,6 +690,8 @@ mod tests {
             FakeProvider::says("x"),
             crate::roster::default_nonagon().members,
             "coordinator",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
         );
 
         // "Operations" is no longer a role (ops→verifier); a run/inspect word
@@ -593,5 +712,62 @@ mod tests {
         // The lead guard is untouched — naming the lead is still an error, not
         // a fallback.
         assert!(p.resolve("coordinator").is_err());
+    }
+
+    /// Like `member()`, but with `tool_allowlist` set so the returned member
+    /// actually gets `origin.capture` mounted on its `ToolRegistry` --
+    /// `filter_tools` (aivyx-team/src/factory.rs) gives an EMPTY allowlist NO
+    /// tools by design, so the plain `member()` fixture alone would leave the
+    /// specialist unable to call the tool this test needs to observe.
+    fn member_with_tool(name: &str, tool_name: &str, tier: TrustTier) -> TeamMember {
+        let mut m = member(name, &["fs.read"], tier);
+        m.tool_allowlist = vec![tool_name.to_string()];
+        m
+    }
+
+    #[tokio::test]
+    async fn specialist_message_is_system_originated_when_pool_is_triggered() {
+        let observed = Arc::new(Mutex::new(None));
+        let tool: Arc<dyn aivyx_core::Tool> =
+            Arc::new(OriginCapturingTool::new(Arc::clone(&observed)));
+        let p = pool(
+            FakeProvider::calls_tool("origin.capture", serde_json::json!({})),
+            vec![
+                member("lead", &[], TrustTier::Trusted),
+                member_with_tool("worker", "origin.capture", TrustTier::Trusted),
+            ],
+            "lead",
+            vec![tool],
+            aivyx_core::MessageOrigin::System,
+        );
+        let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
+        p.run("worker", "capture your origin", &lead_ch)
+            .await
+            .expect("specialist turn completes");
+        assert_eq!(*observed.lock().unwrap(), Some(aivyx_core::MessageOrigin::System));
+    }
+
+    #[tokio::test]
+    async fn specialist_message_is_operator_originated_when_pool_is_interactive() {
+        // Companion to the test above -- proves the pool doesn't
+        // over-tag every specialist turn as System.
+        let observed = Arc::new(Mutex::new(None));
+        let tool: Arc<dyn aivyx_core::Tool> =
+            Arc::new(OriginCapturingTool::new(Arc::clone(&observed)));
+        let p = pool(
+            FakeProvider::calls_tool("origin.capture", serde_json::json!({})),
+            vec![
+                member("lead", &[], TrustTier::Trusted),
+                member_with_tool("worker", "origin.capture", TrustTier::Trusted),
+            ],
+            "lead",
+            vec![tool],
+            aivyx_core::MessageOrigin::Operator,
+        );
+        let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
+        p.run("worker", "capture your origin", &lead_ch)
+            .await
+            .expect("specialist turn completes");
+        assert_eq!(*observed.lock().unwrap(), Some(aivyx_core::MessageOrigin::Operator));
     }
 }

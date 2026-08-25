@@ -225,5 +225,8 @@ pub fn team_pool(
         SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), vec![]);
     let lead_caps =
         CapabilitySet::from_scopes(lead_scopes.iter().map(|s| Scope::parse(s).unwrap()));
-    SpecialistPool::new(factory, config, lead_caps)
+    // None of this fixture's callers test trigger-origin propagation (that's
+    // covered directly against `pool.rs`'s own `pool()` fixture) -- Operator
+    // preserves every existing test's tested behavior.
+    SpecialistPool::new(factory, config, lead_caps, aivyx_core::MessageOrigin::Operator)
 }

@@ -260,6 +260,10 @@ pub async fn run_mission(
         std::collections::HashMap::new(),
         checkpointer.clone(),
         kv_cache_handles.clone(),
+        // Interactively started via the CLI -- a real operator, not an
+        // unattended trigger, so the recursive-scheduling guard doesn't
+        // apply here.
+        aivyx_core::MessageOrigin::Operator,
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 

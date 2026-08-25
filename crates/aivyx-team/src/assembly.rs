@@ -75,6 +75,7 @@ impl TeamAssembly {
             Arc<aivyx_kvcache::LlamaServerSlotStore>,
             String,
         )>,
+        message_origin: aivyx_core::MessageOrigin,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
@@ -85,7 +86,12 @@ impl TeamAssembly {
             .with_member_backends(member_backends)
             .with_checkpointer(checkpointer)
             .with_kv_cache(kv_cache_handles);
-        let pool = Arc::new(SpecialistPool::new(factory, config.clone(), ceiling.clone()));
+        let pool = Arc::new(SpecialistPool::new(
+            factory,
+            config.clone(),
+            ceiling.clone(),
+            message_origin,
+        ));
         let runtime = Arc::new(TeamRuntime::new(Arc::clone(&pool)));
 
         // is_lead = true: the lead may always send, even with peer dialogue off.
@@ -202,6 +208,7 @@ mod tests {
             std::collections::HashMap::new(),
             None,
             None,
+            aivyx_core::MessageOrigin::Operator,
         )
         .expect("valid team")
     }
@@ -221,6 +228,7 @@ mod tests {
             std::collections::HashMap::new(),
             None,
             None,
+            aivyx_core::MessageOrigin::Operator,
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
     }
@@ -286,6 +294,7 @@ mod tests {
             std::collections::HashMap::new(),
             None,
             None,
+            aivyx_core::MessageOrigin::Operator,
         )
         .unwrap();
 

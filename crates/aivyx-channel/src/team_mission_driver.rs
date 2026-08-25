@@ -469,6 +469,23 @@ impl SharedMissionState {
     }
 }
 
+/// Classify a mission's `triggered_by` provenance for the recursive-
+/// scheduling guard. `None` (interactively started, e.g. `team.run`) and
+/// a channel tag (`"channel:<platform>"` — a real person sent the
+/// command, authenticated via that channel's own sender allowlist) both
+/// map to `Operator`. Anything else (today: a schedule id, either
+/// `cfg-...` for a config-defined schedule or `agt-...` for an agent-
+/// created one) maps to `System` -- an unattended trigger fired this
+/// mission, so its specialists and lead must not be able to recursively
+/// create more schedules.
+fn classify_trigger_origin(triggered_by: Option<&str>) -> aivyx_core::MessageOrigin {
+    match triggered_by {
+        None => aivyx_core::MessageOrigin::Operator,
+        Some(tag) if tag.starts_with("channel:") => aivyx_core::MessageOrigin::Operator,
+        Some(_) => aivyx_core::MessageOrigin::System,
+    }
+}
+
 /// Start a daemon-run team mission from an already-built plan: register it,
 /// assemble the team over the real tool list, and drive it to its first pause
 /// or terminal state. Returns the mission id.
@@ -600,7 +617,11 @@ pub async fn drive_registered(
             .as_ref()
             .map(|r| (r.spend_tokens, r.spend_usd))
             .unwrap_or((0, 0.0));
-        let (runtime, meter) = assemble_runtime(deps, config, seed_tokens, seed_usd)?;
+        let message_origin = classify_trigger_origin(
+            record_snapshot.as_ref().and_then(|r| r.triggered_by.as_deref()),
+        );
+        let (runtime, meter) =
+            assemble_runtime(deps, config, message_origin, seed_tokens, seed_usd)?;
         let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
         let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
         // Only a completed mission is artifact-graded; anything else is terminal.
@@ -1454,6 +1475,7 @@ pub fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
 fn assemble_runtime(
     deps: &TeamRunDeps,
     mut config: TeamConfig,
+    message_origin: aivyx_core::MessageOrigin,
     // Chapter Mission Control (Fix A) — the mission's cumulative spend so
     // far, read from the persisted record right before this call. Seeded
     // into the fresh `MeteringAuditHook` below so a `[budget]` cap tracks
@@ -1510,6 +1532,7 @@ fn assemble_runtime(
         member_backends,
         deps.checkpointer.clone(),
         deps.kv_cache_handles.clone(),
+        message_origin,
     )?;
     Ok((assembly.runtime(), meter))
 }
@@ -2004,6 +2027,30 @@ pub(crate) mod tests {
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
     use aivyx_team::{default_nonagon, MissionPlan, Step, TeamMember};
     use crate::schedule::ScheduleRecord;
+
+    #[test]
+    fn classify_trigger_origin_maps_schedule_ids_to_system() {
+        assert_eq!(
+            classify_trigger_origin(Some("cfg-nightly-close")),
+            aivyx_core::MessageOrigin::System
+        );
+        assert_eq!(
+            classify_trigger_origin(Some("agt-abc123")),
+            aivyx_core::MessageOrigin::System
+        );
+    }
+
+    #[test]
+    fn classify_trigger_origin_maps_channel_tags_and_none_to_operator() {
+        assert_eq!(
+            classify_trigger_origin(Some("channel:telegram")),
+            aivyx_core::MessageOrigin::Operator
+        );
+        assert_eq!(
+            classify_trigger_origin(None),
+            aivyx_core::MessageOrigin::Operator
+        );
+    }
 
     // --- a fake provider: every sub-turn completes with one fixed line -------
 
