@@ -169,6 +169,7 @@ async fn proxy_completes_round_trip_against_python_tool() {
         channel: &channel,
         audit: &audit,
         cancellation: &token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     let input = serde_json::json!({"text": "hello phase 49"});
@@ -231,6 +232,7 @@ async fn proxy_returns_failed_when_already_cancelled() {
         channel: &channel,
         audit: &audit,
         cancellation: &token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
     let outcome = proxy
         .execute(serde_json::json!({"text": "x"}), &ctx)
@@ -314,6 +316,7 @@ async fn proxy_relays_tool_events_to_channel() {
         channel: &channel,
         audit: &audit,
         cancellation: &token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     let outcome = proxy.execute(serde_json::json!({"x": 1}), &ctx).await;
@@ -421,6 +424,7 @@ async fn proxy_sends_cancel_invocation_when_token_fires() {
         channel: &channel,
         audit: &audit,
         cancellation: &token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     let outcome = proxy.execute(serde_json::json!({}), &ctx).await;
@@ -513,6 +517,7 @@ async fn sandbox_wrapper_passes_through_stdio_end_to_end() {
         channel: &channel,
         audit: &audit,
         cancellation: &token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     let outcome = proxy

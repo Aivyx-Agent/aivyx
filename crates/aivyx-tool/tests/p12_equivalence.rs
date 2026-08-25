@@ -135,6 +135,7 @@ async fn fs_read_in_process_and_subprocess_produce_equivalent_outcomes() {
         channel: &channel_in,
         audit: &audit_in,
         cancellation: &token_in,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
     let in_process_outcome = in_process_tool.execute(input.clone(), &ctx_in).await;
 
@@ -175,6 +176,7 @@ async fn fs_read_in_process_and_subprocess_produce_equivalent_outcomes() {
         channel: &channel_out,
         audit: &audit_out,
         cancellation: &token_out,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
     let subprocess_outcome = proxy.execute(input, &ctx_out).await;
 
