@@ -578,6 +578,34 @@ pub async fn register_mission_for_channel_trigger(
     Ok(id)
 }
 
+/// Chapter (final review, Finding 1) — like [`register_mission`], but tags
+/// the resulting record with the literal `"loop"` marker, so a mission
+/// delegated by the autonomous loop's headless backlog auto-delegation
+/// (`run_goal_blocking`) is recognized as unattended by
+/// `classify_trigger_origin` (`Some(_) => System`) the same way the
+/// schedule- and channel-triggered paths already are. A separate function
+/// rather than a new parameter on `register_mission` itself, for the same
+/// reason `register_mission_for_schedule` gave for not touching that
+/// function: avoid disturbing its own already-shipped, tested call sites.
+pub async fn register_mission_for_loop(
+    shared: &SharedMissionState,
+    plan: MissionPlan,
+    id: impl Into<String>,
+    config: Option<TeamConfig>,
+) -> Result<String, MissionDriverError> {
+    let id = id.into();
+    plan.validate()?;
+    let goal = plan.goal.clone();
+    shared
+        .put(
+            TeamMissionRecord::new(&id, goal, plan)
+                .with_config(config)
+                .with_triggered_by("loop"),
+        )
+        .await?;
+    Ok(id)
+}
+
 /// Assemble the team and drive an **already-registered** mission from its
 /// checkpoint to the next pause / terminal state. The mission runs on the team
 /// it was registered with (`record.config`); `default_config` is the fallback
@@ -1264,7 +1292,7 @@ impl TeamMissionService {
             !policy.is_headless(),
         )
         .await?;
-        let id = register_mission(
+        let id = register_mission_for_loop(
             &self.state,
             plan,
             uuid::Uuid::new_v4().to_string(),
@@ -4414,6 +4442,21 @@ pub(crate) mod tests {
         .expect("register");
         let record = shared.snapshot(&id).expect("present");
         assert_eq!(record.triggered_by.as_deref(), Some("channel:telegram"));
+    }
+
+    #[tokio::test]
+    async fn register_mission_for_loop_tags_triggered_by_and_classifies_as_system() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("g", vec![Step::delegate("a", "researcher", "p")]);
+        let id = register_mission_for_loop(&shared, plan, "m-loop-1", None)
+            .await
+            .expect("register");
+        let record = shared.snapshot(&id).expect("present");
+        assert_eq!(record.triggered_by.as_deref(), Some("loop"));
+        assert_eq!(
+            classify_trigger_origin(record.triggered_by.as_deref()),
+            aivyx_core::MessageOrigin::System
+        );
     }
 
     #[tokio::test]
