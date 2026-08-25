@@ -1,0 +1,74 @@
+# Security Policy
+
+Aivyx is a single-operator personal agent (see `docs/THREAT_MODEL.md`
+for the full account) — not a multi-tenant service. Its load-bearing
+security properties are **capability-based scopes + trust tiers**
+(bounding what a tool call can reach), an **HMAC-chained,
+offline-verifiable audit log** (every action, allowed or denied, is
+recorded; tampering trips `AuditError::ChainBroken`), and **encryption
+at rest** (Argon2id → HKDF-SHA256 → ChaCha20-Poly1305). Four named
+guard chapters extend this: **Ward** (blocks reads of SSH/cloud
+credentials, `.env`, the agent's own passphrase), **Rampart** (network
+egress guard against SSRF, cloud-metadata, and private-network reach,
+including DNS-rebinding), **Bulwark** (prompt-injection resistance —
+fetched/parsed/tool content is fenced as untrusted data at every
+ingress), and **Portcullis** (blocks writes to `authorized_keys`,
+shell rc files, and systemd/cron/autostart paths). `shell.exec` and
+`git.rs`'s tools additionally run every spawned child process under
+Landlock + seccomp-bpf confinement by default, via the same
+`aivyx-confine` primitive `aivyx-coder` uses.
+
+## Known, accepted risk surface — not new findings
+
+`docs/THREAT_MODEL.md` section 5 ("Threats we explicitly do not
+defend against") is the authoritative, maintained list. Read it before
+reporting — if your finding is already listed there, it's known and
+accepted, not a new report. Highlights most likely to be independently
+rediscovered:
+
+- First-party, in-process tools (the substrate/infra tools,
+  `mission.*`/`reflection.*`, MCP proxies) run in the daemon's own
+  address space rather than a confined child process (§5.6).
+- Third-party tool processes and MCP servers run with the operator's
+  full OS authority unless the operator explicitly configures a
+  wrapper (bubblewrap/firejail/Docker/sandbox-exec) — an automatic
+  bundled preset applies to `[[tool_process]]` by default since Phase
+  180, but MCP servers stay opt-in-only (§5.2, §5.6).
+- A linked git worktree or submodule runs `git.rs` fully unconfined,
+  since Landlock can't reach the real gitdir from the worktree root
+  alone (§6, property 7).
+- Prompt injection beyond capability gating has no content-level
+  scanner (§5.3) — the defense is capability gating alone, not
+  pattern-matching.
+- Root-compromise of the operator's own machine, LLM-provider-side
+  risk, side channels, and channel-platform compromise are all
+  explicitly out of scope (§5.1, §5.4, §5.5, §5.7, §5.8, §5.9).
+
+## In scope
+
+Capability/permission-gate bypass, audit-chain tampering that goes
+undetected, cryptographic or encryption implementation flaws, bypasses
+of the Ward/Rampart/Bulwark/Portcullis guard chapters, credential or
+secret exposure beyond what's already documented as accepted, and a
+confinement bypass on paths that ARE confined by default (`shell.exec`/
+`git.rs` outside the worktree/submodule carve-out above).
+
+## Out of scope
+
+The known, listed gaps above (until fixed — tracked separately, not
+new findings); "the model said something wrong" model-quality issues;
+anything that requires the reporter to already have physical or root
+access to the operator's own machine. This is not a bug bounty
+program.
+
+## Reporting a vulnerability
+
+Email **jccorbett67@gmail.com** with details. This repo is currently
+private, so GitHub Security Advisories' private vulnerability
+reporting isn't available yet (GitHub only offers it on public
+repositories) — it will be added as a second channel if this repo
+goes public. We aim to resolve or provide a remediation plan for a
+confirmed vulnerability within 90 days of the report, or coordinate a
+later disclosure date directly with the reporter if a fix genuinely
+needs longer. Credit is offered in release notes at the reporter's
+preference.
