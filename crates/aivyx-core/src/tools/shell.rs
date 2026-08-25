@@ -700,7 +700,7 @@ impl Tool for ShellExecTool {
 mod tests {
     use super::*;
     use crate::{
-        AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
+        AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin,
         NullAuditHook, SessionId, StreamEvent, TurnId, TurnOutcome,
     };
     use std::path::PathBuf;
@@ -789,6 +789,7 @@ mod tests {
             channel,
             audit,
             cancellation: &channel.token,
+            message_origin: MessageOrigin::Operator,
         }
     }
 

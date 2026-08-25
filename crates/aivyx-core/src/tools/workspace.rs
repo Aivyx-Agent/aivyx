@@ -621,6 +621,7 @@ fn current_date_and_unix() -> (String, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MessageOrigin;
 
     fn tmp(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir()
@@ -686,6 +687,7 @@ mod tests {
             channel: &channel,
             audit: &audit,
             cancellation: &channel.token,
+            message_origin: MessageOrigin::Operator,
         };
         tokio::runtime::Builder::new_current_thread()
             .enable_all().build().unwrap()

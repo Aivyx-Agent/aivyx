@@ -916,8 +916,8 @@ fn _unused_capability_set_ref(_cs: &CapabilitySet) {}
 mod git_tests {
     use super::*;
     use crate::{
-        AgentId, ChannelContext, ChannelError, ChannelPlatform, NullAuditHook, SessionId,
-        StreamEvent, TurnId, TurnOutcome,
+        AgentId, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin, NullAuditHook,
+        SessionId, StreamEvent, TurnId, TurnOutcome,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -971,6 +971,7 @@ mod git_tests {
             channel,
             audit,
             cancellation: &channel.token,
+            message_origin: MessageOrigin::Operator,
         }
     }
 

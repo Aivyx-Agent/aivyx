@@ -1364,7 +1364,7 @@ mod web_extract_tests {
 mod tests {
     use super::*;
     use crate::{
-        AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform,
+        AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin,
         NullAuditHook, SessionId, TurnId, TurnOutcome,
     };
     use aivyx_capability::CapabilitySet;
@@ -1436,6 +1436,7 @@ mod tests {
             channel,
             audit,
             cancellation: &channel.token,
+            message_origin: MessageOrigin::Operator,
         }
     }
 

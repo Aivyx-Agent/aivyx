@@ -285,7 +285,7 @@ fn invoke_input_schema() -> Value {
 #[cfg(test)]
 mod skills_tests {
     use super::*;
-    use crate::{AgentId, CancellationToken, NullAuditHook, SessionId, TurnId};
+    use crate::{AgentId, CancellationToken, MessageOrigin, NullAuditHook, SessionId, TurnId};
 
     fn json_skill(name: &str, trigger: &str, procedure: &str) -> String {
         json!({
@@ -352,6 +352,7 @@ mod skills_tests {
             channel: &channel,
             audit: &audit,
             cancellation: &channel.token,
+            message_origin: MessageOrigin::Operator,
         };
         tool.execute(input, &ctx).await
     }

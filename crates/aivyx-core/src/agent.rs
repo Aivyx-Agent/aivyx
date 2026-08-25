@@ -39,8 +39,8 @@ use aivyx_capability::{CapabilitySet, Scope};
 
 use crate::{
     Agent, AgentId, AivyxError, AuditHook, AuditTag, CancellationToken, ChannelContext, Message,
-    StreamEvent, ToolContext, ToolId, ToolOutcome, ToolOutcomeSummary, TurnId, TurnOutcome,
-    TurnOutcomeSummary, VerificationSummary,
+    MessageOrigin, StreamEvent, ToolContext, ToolId, ToolOutcome, ToolOutcomeSummary, TurnId,
+    TurnOutcome, TurnOutcomeSummary, VerificationSummary,
 };
 use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
 
@@ -526,6 +526,7 @@ impl Agent for ConcreteAgent {
                         channel,
                         cancellation: &cancellation,
                         effective: &effective,
+                        message_origin: message.origin,
                     };
                     let req = crate::planner::ToolCallRequest {
                         tool_id,
@@ -604,6 +605,7 @@ impl Agent for ConcreteAgent {
                         channel,
                         cancellation: &cancellation,
                         effective: &effective,
+                        message_origin: message.origin,
                     };
                     let futures: Vec<_> = batch
                         .into_iter()
@@ -1002,6 +1004,7 @@ struct TurnCallEnv<'a> {
     channel: &'a dyn ChannelContext,
     cancellation: &'a CancellationToken,
     effective: &'a CapabilitySet,
+    message_origin: MessageOrigin,
 }
 
 impl ConcreteAgent {
@@ -1027,6 +1030,7 @@ impl ConcreteAgent {
             channel,
             cancellation,
             effective,
+            message_origin,
         } = *env;
         let crate::planner::ToolCallRequest {
             tool_id,
@@ -1257,6 +1261,7 @@ impl ConcreteAgent {
             channel,
             audit: self.audit.as_ref(),
             cancellation,
+            message_origin,
         };
 
         let input_bytes = serde_json::to_vec(&input).unwrap_or_default();
@@ -1750,6 +1755,51 @@ mod tests {
             }
             ToolOutcome::Completed {
                 output: json!({"streamed": self.chunks.len()}),
+                verified: Verification::NotApplicable,
+            }
+        }
+    }
+
+    /// Captures the `message_origin` a turn's tool call actually observed,
+    /// via a shared `Mutex` — the write happens inside `execute()`, so the
+    /// test can assert on it after `.turn()` returns.
+    struct OriginCapturingTool {
+        id: ToolId,
+        schema: Value,
+        observed: Arc<Mutex<Option<MessageOrigin>>>,
+    }
+
+    impl OriginCapturingTool {
+        fn new(observed: Arc<Mutex<Option<MessageOrigin>>>) -> Self {
+            OriginCapturingTool {
+                id: ToolId::new(),
+                schema: json!({}),
+                observed,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for OriginCapturingTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "origin.capture"
+        }
+        fn description(&self) -> &str {
+            "test-only: records ctx.message_origin"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &Value) -> Scope {
+            Scope::parse("memory.read").unwrap()
+        }
+        async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+            *self.observed.lock().unwrap() = Some(ctx.message_origin);
+            ToolOutcome::Completed {
+                output: json!({"ok": true}),
                 verified: Verification::NotApplicable,
             }
         }
@@ -5363,5 +5413,53 @@ mod tests {
             .filter(|e| matches!(e, AuditTag::ToolCall { .. }))
             .count();
         assert_eq!(tool_call_count, 2, "both escalations are audited");
+    }
+
+    #[tokio::test]
+    async fn tool_context_reflects_system_originated_message() {
+        let observed = Arc::new(Mutex::new(None));
+        let tool = Arc::new(OriginCapturingTool::new(Arc::clone(&observed)));
+        let tool_id = tool.id();
+        let audit = RecordingAudit::new();
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit,
+            vec![NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            }],
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let msg = Message::text(channel.session, "fire").system_originated();
+        agent.turn(msg, &channel).await;
+        assert_eq!(*observed.lock().unwrap(), Some(MessageOrigin::System));
+    }
+
+    #[tokio::test]
+    async fn tool_context_reflects_operator_originated_message() {
+        // Companion to the test above — proves the plumbing carries BOTH
+        // values correctly, not just that it's non-empty.
+        let observed = Arc::new(Mutex::new(None));
+        let tool = Arc::new(OriginCapturingTool::new(Arc::clone(&observed)));
+        let tool_id = tool.id();
+        let audit = RecordingAudit::new();
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            audit,
+            vec![NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            }],
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let msg = Message::text(channel.session, "hi"); // no .system_originated()
+        agent.turn(msg, &channel).await;
+        assert_eq!(*observed.lock().unwrap(), Some(MessageOrigin::Operator));
     }
 }

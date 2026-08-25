@@ -1638,6 +1638,7 @@ mod tests {
     use std::io::Write;
 
     use aivyx_capability::{CapabilitySet, TrustTier};
+    use crate::MessageOrigin;
 
     /// RAII temp directory — creates `$TMPDIR/aivyx-fs-test-<uuid>/root`
     /// on construction, removes the whole tree on drop. Rolled here to
@@ -1749,6 +1750,7 @@ mod tests {
             channel: &channel,
             audit: &audit,
             cancellation: &channel.token,
+            message_origin: MessageOrigin::Operator,
         };
 
         tokio::runtime::Builder::new_current_thread()

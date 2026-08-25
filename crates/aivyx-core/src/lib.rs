@@ -982,6 +982,13 @@ pub struct ToolContext<'a> {
     pub channel: &'a dyn ChannelContext,
     pub audit: &'a dyn AuditHook,
     pub cancellation: &'a CancellationToken,
+    /// The origin of the message that started this turn — `Operator` for
+    /// an interactive turn, `System` for one fired by `TriggerDispatch::
+    /// fire()` (cron, webhook, file-watch, reflection, or loop) or by a
+    /// trigger-originated team-mission specialist/lead turn. Tools that
+    /// must never act unattended (e.g. the schedule.* write tools) check
+    /// this before proceeding.
+    pub message_origin: MessageOrigin,
 }
 
 // ---------------------------------------------------------------------------
