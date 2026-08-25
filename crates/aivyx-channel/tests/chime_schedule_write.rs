@@ -98,6 +98,7 @@ macro_rules! ctx {
             channel: &$c,
             audit: &$a,
             cancellation: &$t,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     };
 }

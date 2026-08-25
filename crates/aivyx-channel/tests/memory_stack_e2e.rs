@@ -243,6 +243,7 @@ mod ctx_support {
                 channel: self,
                 audit: &self.audit as &dyn AuditHook,
                 cancellation: &self.token,
+                message_origin: aivyx_core::MessageOrigin::Operator,
             }
         }
     }
