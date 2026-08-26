@@ -470,14 +470,21 @@ impl SharedMissionState {
 }
 
 /// Classify a mission's `triggered_by` provenance for the recursive-
-/// scheduling guard. `None` (interactively started, e.g. `team.run`) and
-/// a channel tag (`"channel:<platform>"` — a real person sent the
-/// command, authenticated via that channel's own sender allowlist) both
-/// map to `Operator`. Anything else (today: a schedule id, either
-/// `cfg-...` for a config-defined schedule or `agt-...` for an agent-
-/// created one) maps to `System` -- an unattended trigger fired this
-/// mission, so its specialists and lead must not be able to recursively
-/// create more schedules.
+/// scheduling guard. `None` means genuinely no trigger tag was ever set —
+/// the plain, untagged [`register_mission`] path, used by [`TeamRunTool`]
+/// only for `Operator`-origin calls now that the Finding-2 fix routes
+/// `System`-origin `team.run` calls through the tagged
+/// `"agent:team.run"` path instead (see
+/// [`register_mission_for_agent_call`]). A channel tag
+/// (`"channel:<platform>"` — a real person sent the command,
+/// authenticated via that channel's own sender allowlist) also maps to
+/// `Operator`. Anything else (today: a schedule id, either `cfg-...` for
+/// a config-defined schedule or `agt-...` for an agent-created one; the
+/// literal `"loop"` marker for autonomous-loop delegation; or the literal
+/// `"agent:team.run"` marker for a `team.run` agent-tool call made from a
+/// `System`-origin turn) maps to `System` -- an unattended trigger fired
+/// this mission, so its specialists and lead must not be able to
+/// recursively create more schedules.
 fn classify_trigger_origin(triggered_by: Option<&str>) -> aivyx_core::MessageOrigin {
     match triggered_by {
         None => aivyx_core::MessageOrigin::Operator,
@@ -601,6 +608,39 @@ pub async fn register_mission_for_loop(
             TeamMissionRecord::new(&id, goal, plan)
                 .with_config(config)
                 .with_triggered_by("loop"),
+        )
+        .await?;
+    Ok(id)
+}
+
+/// Finding-2 fix (final review) — like [`register_mission`], but tags the
+/// resulting record with the literal `"agent:team.run"` marker, so a
+/// `team.run` agent-tool call made from a `System`-origin turn
+/// (cron/webhook/file-watch/reflection/loop, or a scheduled/loop-delegated
+/// mission's own specialist) is recognized as unattended by
+/// `classify_trigger_origin` (`Some(_) => System`) the same way the
+/// schedule-, channel-, and loop-triggered paths already are, instead of
+/// silently registering untagged (`triggered_by: None`) and being
+/// misclassified as `Operator` — which would let a `System`-origin turn
+/// recursively grant itself `schedule.create` access via `team.run`. A
+/// separate function rather than a new parameter on `register_mission`
+/// itself, for the same reason `register_mission_for_schedule` gave for
+/// not touching that function: avoid disturbing its own already-shipped,
+/// tested call sites.
+pub async fn register_mission_for_agent_call(
+    shared: &SharedMissionState,
+    plan: MissionPlan,
+    id: impl Into<String>,
+    config: Option<TeamConfig>,
+) -> Result<String, MissionDriverError> {
+    let id = id.into();
+    plan.validate()?;
+    let goal = plan.goal.clone();
+    shared
+        .put(
+            TeamMissionRecord::new(&id, goal, plan)
+                .with_config(config)
+                .with_triggered_by("agent:team.run"),
         )
         .await?;
     Ok(id)
@@ -1196,6 +1236,41 @@ impl TeamMissionService {
         )
         .await?;
         self.start(plan, config).await
+    }
+
+    /// Finding-2 fix (final review) — like [`start_from_goal`], but the
+    /// resulting mission is tagged with the literal `"agent:team.run"`
+    /// marker (`triggered_by`), so a `team.run` call made from a
+    /// `System`-origin turn is classified as `System` by
+    /// `classify_trigger_origin` instead of falling through to the plain,
+    /// untagged path and being misclassified as `Operator`. Used by
+    /// [`TeamRunTool::execute`] exactly when `ctx.message_origin` is
+    /// `MessageOrigin::System`; `Operator`-origin calls keep using
+    /// [`start_from_goal`](Self::start_from_goal) unchanged.
+    pub async fn start_from_goal_for_agent_call(
+        &self,
+        goal: &str,
+        config: Option<TeamConfig>,
+    ) -> Result<String, MissionDriverError> {
+        let cancel = aivyx_core::CancellationToken::new();
+        let plan = aivyx_team::decompose_goal(
+            self.deps.provider.as_ref(),
+            &self.deps.model,
+            goal,
+            config.as_ref().unwrap_or(&self.config),
+            &cancel,
+            true,
+        )
+        .await?;
+        let id = register_mission_for_agent_call(
+            &self.state,
+            plan,
+            uuid::Uuid::new_v4().to_string(),
+            config,
+        )
+        .await?;
+        self.spawn_drive(id.clone());
+        Ok(id)
     }
 
     /// Chapter Muster — like [`start_from_goal`], but the resulting
@@ -2001,7 +2076,7 @@ impl Tool for TeamRunTool {
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("team.run").expect("known base")
     }
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let Some(service) = self.service.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -2021,7 +2096,21 @@ impl Tool for TeamRunTool {
         };
         // Default team for now (the Nonagon); per-call pack selection is a
         // later increment, like the TUI new-mission prompt.
-        match service.start_from_goal(goal, None).await {
+        //
+        // Recursive-scheduling-guard Finding 2: route a `System`-origin
+        // turn's `team.run` call through the tagged registration path so
+        // the resulting mission is classified `System` (not `Operator`)
+        // by `classify_trigger_origin` — otherwise a cron/webhook/loop-
+        // fired turn (or a scheduled/loop mission's own specialist) could
+        // bypass the schedule.create guard by delegating to a fresh team
+        // mission instead of calling schedule.create directly.
+        let result = match ctx.message_origin {
+            aivyx_core::MessageOrigin::System => {
+                service.start_from_goal_for_agent_call(goal, None).await
+            }
+            aivyx_core::MessageOrigin::Operator => service.start_from_goal(goal, None).await,
+        };
+        match result {
             Ok(mission_id) => ToolOutcome::Completed {
                 output: json!({
                     "mission_id": mission_id,
@@ -4368,6 +4457,15 @@ pub(crate) mod tests {
         token: &'a CancellationToken,
         audit: &'a NullAuditHook,
     ) -> ToolContext<'a> {
+        tool_ctx_with_origin(ch, token, audit, aivyx_core::MessageOrigin::Operator)
+    }
+
+    fn tool_ctx_with_origin<'a>(
+        ch: &'a MissionLeadChannel,
+        token: &'a CancellationToken,
+        audit: &'a NullAuditHook,
+        message_origin: aivyx_core::MessageOrigin,
+    ) -> ToolContext<'a> {
         ToolContext {
             agent_id: aivyx_core::AgentId::new(),
             session_id: ch.session,
@@ -4375,7 +4473,7 @@ pub(crate) mod tests {
             channel: ch,
             audit,
             cancellation: token,
-            message_origin: aivyx_core::MessageOrigin::Operator,
+            message_origin,
         }
     }
 
@@ -4456,6 +4554,91 @@ pub(crate) mod tests {
         assert_eq!(
             classify_trigger_origin(record.triggered_by.as_deref()),
             aivyx_core::MessageOrigin::System
+        );
+    }
+
+    #[tokio::test]
+    async fn register_mission_for_agent_call_tags_triggered_by_and_classifies_as_system() {
+        let shared = SharedMissionState::new(team_domain().await);
+        let plan = MissionPlan::new("g", vec![Step::delegate("a", "researcher", "p")]);
+        let id = register_mission_for_agent_call(&shared, plan, "m-agent-call-1", None)
+            .await
+            .expect("register");
+        let record = shared.snapshot(&id).expect("present");
+        assert_eq!(record.triggered_by.as_deref(), Some("agent:team.run"));
+        assert_eq!(
+            classify_trigger_origin(record.triggered_by.as_deref()),
+            aivyx_core::MessageOrigin::System
+        );
+    }
+
+    /// Recursive-scheduling-guard Finding 2 — a `team.run` call made from a
+    /// `System`-origin turn (cron/webhook/file-watch/reflection/loop, or a
+    /// scheduled/loop mission's own specialist) must register its mission
+    /// tagged `"agent:team.run"`, not untagged, so `classify_trigger_origin`
+    /// maps it to `System` and its specialists are refused `schedule.create`
+    /// the same as a directly-scheduled mission.
+    #[tokio::test]
+    async fn team_run_tool_from_system_origin_tags_the_mission_as_system() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps(TOOL_PLAN_JSON),
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let tool = TeamRunTool::new();
+        assert!(tool.set_service(svc.clone()));
+
+        let (ch, token) = tool_ctx_parts();
+        let audit = NullAuditHook;
+        let ctx = tool_ctx_with_origin(&ch, &token, &audit, aivyx_core::MessageOrigin::System);
+        let out = tool.execute(json!({ "goal": "do the big thing" }), &ctx).await;
+        let mission_id = match out {
+            ToolOutcome::Completed { output, .. } => {
+                output["mission_id"].as_str().expect("mission id").to_string()
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        let record = svc.list().into_iter().find(|r| r.id == mission_id).expect("registered");
+        assert_eq!(record.triggered_by.as_deref(), Some("agent:team.run"));
+        assert_eq!(
+            classify_trigger_origin(record.triggered_by.as_deref()),
+            aivyx_core::MessageOrigin::System,
+            "a System-origin team.run call must not be able to bootstrap an \
+             Operator-classified mission and recursively gain schedule.create"
+        );
+    }
+
+    /// Companion to the above: an `Operator`-origin `team.run` call (the
+    /// existing, interactive case) must keep registering untagged
+    /// (`triggered_by: None`), preserving its already-tested behavior
+    /// exactly.
+    #[tokio::test]
+    async fn team_run_tool_from_operator_origin_stays_untagged() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps(TOOL_PLAN_JSON),
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let tool = TeamRunTool::new();
+        assert!(tool.set_service(svc.clone()));
+
+        let (ch, token) = tool_ctx_parts();
+        let audit = NullAuditHook;
+        let ctx = tool_ctx_with_origin(&ch, &token, &audit, aivyx_core::MessageOrigin::Operator);
+        let out = tool.execute(json!({ "goal": "do the big thing" }), &ctx).await;
+        let mission_id = match out {
+            ToolOutcome::Completed { output, .. } => {
+                output["mission_id"].as_str().expect("mission id").to_string()
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        let record = svc.list().into_iter().find(|r| r.id == mission_id).expect("registered");
+        assert_eq!(record.triggered_by, None);
+        assert_eq!(
+            classify_trigger_origin(record.triggered_by.as_deref()),
+            aivyx_core::MessageOrigin::Operator
         );
     }
 
