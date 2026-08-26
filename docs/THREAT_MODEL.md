@@ -368,13 +368,23 @@ teeth.
 
 ### 5.3 Prompt injection beyond capability gating
 
-Aivyx has no content-level scanner for prompt-injection payloads in
-fetched web pages, in MCP tool descriptions, or in
-operator-provided context files. Hermes Agent ships Tirith and
-context-file scanning; Aivyx does not. The defense available today
-is **only** capability gating: an LLM that has been jail-broken
-into trying to exfiltrate data still cannot emit a passing tool
-call for a scope its role does not hold.
+**Updated post-Phase-180** (this section's own "last reviewed" line at
+the top of the document still reads "Phase 180 exit" and was not bumped
+for this edit — a real staleness this correction closes, not a new
+phase). Chapter Bulwark added real prompt-injection resistance since
+Phase 180: fetched, parsed, and tool-process content is fenced as
+untrusted data at every ingress (web fetches, file reads, MCP tool
+output, operator-provided context files), so the model sees that
+content marked as data, not as instructions it should follow. This is
+a structural mitigation, not a pattern-matching scanner — Aivyx still
+has no content-level scanner for prompt-injection *payloads* the way
+Hermes Agent's Tirith does; Bulwark's fencing works by changing how
+untrusted content is presented to the model, not by detecting and
+blocking malicious patterns within it.
+
+Beyond Bulwark's fencing, the remaining defense is capability gating:
+an LLM that has been jail-broken into trying to exfiltrate data still
+cannot emit a passing tool call for a scope its role does not hold.
 
 This is intentional within a known limitation: capability gating
 is a stronger boundary than pattern-matching scanners, but it does
