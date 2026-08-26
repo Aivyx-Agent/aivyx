@@ -140,8 +140,8 @@ sections for the config knobs.
   `last_fired_at`, so a restart does not re-fire it.
 - `schedule.create`/`.update`/`.delete` are operator/interactive-only: they
   refuse when called from within a scheduled or triggered run (cron, webhook,
-  file-watch, reflection, the autonomous loop, or a scheduled/loop-delegated
-  team mission), so an unattended run can't recursively create more
+  file-watch, reflection, the autonomous loop, or any team mission started
+  from within such a run), so an unattended run can't recursively create more
   automation. Editing `aivyx.toml`'s `[[schedule]]` blocks directly is
   unaffected.
 
