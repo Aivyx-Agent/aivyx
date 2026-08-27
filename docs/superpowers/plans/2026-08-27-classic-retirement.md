@@ -412,6 +412,8 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 2: Web — Audit screen
 
+**Shipped shape differs from the steps below — corrected here for the record.** Task 2's own review (2 fix rounds) found the Step 5 code below has two real defects: (1) it computes the mount-time `from_seq` guess from `AuditState.total_len`'s stale `Default` value, so on any chain over `AUDIT_PAGE_SIZE` entries the first-ever visit requests the *oldest* page, not the newest, with no self-correction; (2) `AuditState.from_seq` is declared but never read or written — there is no prev/next pagination mechanism at all, contradicting the design doc's "on mount and on prev/next." The shipped version (commits `4e7e6d08`, `201b4420`, `84672f02`) adds real "← Older"/"Newer →" buttons and a per-mount `(pending_guess: bool, pending_correction: Option<u64>)` state pair — not a single global one-shot latch, which a first fix attempt tried and a second review round found only protected the very first mount of the whole session, not later revisits after the chain grows. Read those 3 commits directly for the real, correct shape rather than treating the code below as authoritative.
+
 **Files:**
 - Modify: `crates/aivyx-web/src/main.rs` (`View` enum + its `ALL`/`slug`/`label` methods, `Sidebar`'s `groups`, the title match, the body-render match, the existing dashboard `ListAuditEntries` handler, new `AuditState`/`AuditPanel`)
 
