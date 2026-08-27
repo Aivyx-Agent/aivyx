@@ -77,6 +77,33 @@ pub struct SkillAuthoringStat {
 /// How many raw memory entries to sample into the synthesis context.
 const AUTHOR_MAX_ENTRIES: usize = 12;
 
+/// VITRINE.md §6 P3 — turn an internal snake_case/kebab-case wiki topic
+/// key ("overall_condition") into an operator-facing skill display name
+/// ("Overall Condition") instead of leaking the raw slug verbatim. Only
+/// the skill's `name` uses this; `domain` (the internal topic lookup
+/// key other code matches against) keeps the raw topic unchanged. Falls
+/// back to the raw topic if humanizing it would produce an empty string
+/// (e.g. a topic that's entirely punctuation — shouldn't happen given
+/// upstream topic-key validation, but never silently rename to "").
+fn humanize_topic(topic: &str) -> String {
+    let words: Vec<String> = topic
+        .split(['_', '-'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        })
+        .collect();
+    if words.is_empty() {
+        topic.to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
 /// 2026-07-04 dogfood (#5) — normalized word set for the topic↔graph
 /// join. Wiki topics are slugs ("triathlon-basic") while graph subjects
 /// are LLM-extracted phrases ("triathlon beginner advice", sometimes
@@ -270,7 +297,7 @@ pub async fn propose_specialized_skills(
         }
 
         let skill = LearnedSkill {
-            name: page.topic.clone(),
+            name: humanize_topic(&page.topic),
             trigger,
             procedure,
             version: 1,
@@ -523,6 +550,25 @@ mod tests {
         assert!(edges_about(&triples, "--").is_empty());
     }
 
+    #[test]
+    fn humanize_topic_turns_internal_slugs_into_display_names() {
+        // VITRINE.md §6 P3 — the exact reproduction from the walkthrough:
+        // proposal id `skill-author:overall_condition`, skill name
+        // `overall_condition` verbatim — internal snake_case leaking into
+        // an operator-facing name.
+        assert_eq!(humanize_topic("overall_condition"), "Overall Condition");
+        assert_eq!(humanize_topic("triathlon-basic"), "Triathlon Basic");
+        assert_eq!(humanize_topic("deploy"), "Deploy");
+        // Mixed separators and repeated/leading/trailing ones collapse
+        // rather than producing empty words or stray spaces.
+        assert_eq!(humanize_topic("a_b-c"), "A B C");
+        assert_eq!(humanize_topic("__leading"), "Leading");
+        assert_eq!(humanize_topic("trailing__"), "Trailing");
+        // A topic with no alphanumeric content at all has nothing to
+        // humanize — fall back to it verbatim rather than "".
+        assert_eq!(humanize_topic("--"), "--");
+    }
+
     #[tokio::test]
     async fn near_dup_topic_families_are_not_authored_twice() {
         // Soak 2026-07-04: "triathlon" was proposed, then the next tick
@@ -596,7 +642,9 @@ mod tests {
         match &p.proposed_op.op {
             PersonaDeltaOp::AppendList { value } => {
                 let s = LearnedSkill::from_json_value(value).unwrap();
-                assert_eq!(s.name, "deploy");
+                // VITRINE.md §6 P3 fix: name is humanized ("Deploy"), domain
+                // (the internal topic lookup key) stays the raw slug.
+                assert_eq!(s.name, "Deploy");
                 assert_eq!(s.domain.as_deref(), Some("deploy"));
                 assert_eq!(s.provenance.author, SkillAuthor::Agent);
                 assert_eq!(s.version, 1);
