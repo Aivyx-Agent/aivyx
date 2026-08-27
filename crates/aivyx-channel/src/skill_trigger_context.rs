@@ -235,10 +235,28 @@ impl ContextProvider for SkillTriggerContext {
             return None;
         }
         let skill = &skills[best_idx];
-        eprintln!(
-            "aivyx skills: injected procedure {:?} (trigger match {:.2})",
-            skill.name, best_score,
-        );
+        // VITRINE.md §6 P3 watch-item — a borderline multi-intent message
+        // can have its top-1 pick beat a genuinely-relevant runner-up by a
+        // hair (a live example: "quick summary" pulled daily-briefing at
+        // 0.60 over summarize-document at 0.56). Log the runner-up's own
+        // name + score alongside the winner so a diagnosis session doesn't
+        // have to guess which skill(s) were actually competing.
+        match scores
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(i, _)| i != best_idx)
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            Some((idx, score)) => eprintln!(
+                "aivyx skills: injected procedure {:?} (trigger match {:.2}, runner-up {:?} at {:.2})",
+                skill.name, best_score, skills[idx].name, score,
+            ),
+            None => eprintln!(
+                "aivyx skills: injected procedure {:?} (trigger match {:.2})",
+                skill.name, best_score,
+            ),
+        }
         // Record the injection as a turn-correlated SkillInvocation —
         // emitted during begin_turn, so it lands inside the turn's
         // audit-entry range right after TurnStarted, exactly where the
