@@ -282,14 +282,14 @@ Replace with:
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: String,
-    pub channel: crate::ChannelPlatform,
+    pub channel: WireChannelPlatform,
     pub trust_tier: crate::TrustTier,
     pub created_at_ms: u64,
     pub last_active_at_ms: u64,
 }
 ```
 
-(If `ChannelPlatform`/`TrustTier` are not already re-exported at `aivyx_ipc`'s crate root, use their real paths — `aivyx_core::ChannelPlatform` / `aivyx_capability::TrustTier` — matching whatever `aivyx-ipc/src/protocol.rs`'s existing imports already use elsewhere in the file; check the top of the file for the exact `use` statements in place before assuming `crate::`.)
+**Corrected during Task 1's own review** (round 1 found this as-written broke `aivyx-ipc`'s wasm32-clean contract — embedding `aivyx_core::ChannelPlatform` directly would have required adding `aivyx-core`, which pulls in `aivyx-storage`/`tokio(process)`, as a dependency): `channel`'s real type is a new wire-safe mirror enum, `WireChannelPlatform` — defined in `aivyx-ipc/src/protocol.rs` itself, mirroring every variant of `aivyx_core::ChannelPlatform` (`Local, Telegram, Discord, Slack, Matrix, Email, Rest, Voice`), same derive set. The real-to-wire conversion (`fn to_wire_channel_platform(p: aivyx_core::ChannelPlatform) -> aivyx_ipc::WireChannelPlatform`, an exhaustive `match` with no wildcard arm) lives in `aivyx-channel/src/daemon_server.rs` (the only crate that already depends on both sides), called at the `ListSessions` handler's `SessionSummary` construction site. `TrustTier` stays the real `aivyx_capability::TrustTier` — that crate has no wasm-incompatible deps and was already a dependency of `aivyx-ipc` before this task, so no mirror is needed for it. Shipped in commit `f63e7420`, approved on re-review. Any later task consuming `SessionSummary.channel` (Task 3) must use `WireChannelPlatform`, not `ChannelPlatform`.
 
 In `daemon_server.rs`'s test module, find and update the two other `DaemonState { sessions: vec![...], .. }` literals (~L7532, ~L7561 by the earlier line numbers — confirm the exact current line numbers via `grep -n 'sessions: vec!\["ses' crates/aivyx-channel/src/daemon_server.rs` before editing, since Steps 1-6 may have shifted them) to use `SessionRecord` the same way Step 1 did — reuse the exact same field values, wrapped in `SessionRecord { session_id: "ses-abc".into(), channel: aivyx_core::ChannelPlatform::Local, trust_tier: aivyx_capability::TrustTier::Trusted, created_at_ms: 0, last_active_at_ms: 0 }` (these two tests only assert `.sessions` presence/absence after crash-recovery detection, not field values, so `0` timestamps are fine).
 
@@ -690,7 +690,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `crates/aivyx-web/src/main.rs` (same set of touch points as Task 2, plus a new `SessionsState`/`SessionsPanel`)
 
 **Interfaces:**
-- Consumes: Task 1's enriched `SessionSummary { session_id, channel: ChannelPlatform, trust_tier: TrustTier, created_at_ms, last_active_at_ms }`.
+- Consumes: Task 1's enriched `SessionSummary { session_id, channel: WireChannelPlatform, trust_tier: TrustTier, created_at_ms, last_active_at_ms }` — note `channel` is `aivyx_ipc::WireChannelPlatform` (a wire-safe mirror enum), not `aivyx_core::ChannelPlatform` directly; this changed during Task 1's own review (see that task's corrected spec above) to keep `aivyx-ipc` wasm32-clean.
 - Produces: `View::Sessions` — Task 6 (retirement) needs this to exist before deleting `/classic`'s own sessions pane.
 
 - [ ] **Step 1: Add `View::Sessions` and its companion-match entries**
@@ -822,7 +822,7 @@ fn SessionsPanel() -> Element {
 
 - [ ] **Step 6: Static review**
 
-Same discipline as Task 2 Step 6 — re-read the full diff, confirm all 5 `View::Sessions` match-arm sites, the coroutine's parameter list/call site(s), and that `SessionSummary`'s field names (`channel`, `trust_tier`, `created_at_ms`, `last_active_at_ms`) exactly match Task 1's Step 7 wire-type definition (not the pre-Task-1 bare-`session_id` shape). Confirm `{entry.channel:?}`/`{entry.trust_tier:?}` compiles against `ChannelPlatform`/`TrustTier`'s `Debug` derive (both already derive `Debug`, confirmed in Task 1's research) — Dioxus `rsx!` string interpolation supports `{expr:?}` the same as `format!`.
+Same discipline as Task 2 Step 6 — re-read the full diff, confirm all 5 `View::Sessions` match-arm sites, the coroutine's parameter list/call site(s), and that `SessionSummary`'s field names (`channel`, `trust_tier`, `created_at_ms`, `last_active_at_ms`) exactly match Task 1's real, corrected wire-type definition (`channel: WireChannelPlatform`, not the pre-Task-1 bare-`session_id` shape and not the plain `aivyx_core::ChannelPlatform` Task 1's own first draft used before its review caught the wasm32-clean break). Confirm `{entry.channel:?}`/`{entry.trust_tier:?}` compiles against `WireChannelPlatform`/`TrustTier`'s `Debug` derive (both derive `Debug` — confirmed for `WireChannelPlatform` directly in Task 1's shipped code, `crates/aivyx-ipc/src/protocol.rs`) — Dioxus `rsx!` string interpolation supports `{expr:?}` the same as `format!`.
 
 - [ ] **Step 7: Commit**
 
