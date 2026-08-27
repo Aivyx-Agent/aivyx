@@ -1436,6 +1436,31 @@ pub struct NotifyTargetView {
     pub is_default: bool,
 }
 
+/// Wire-safe mirror of `aivyx_core::ChannelPlatform` (Chapter Postern).
+///
+/// `aivyx-ipc` is documented wasm32-clean (see this crate's package
+/// description) and must never depend on `aivyx-core`, which pulls in
+/// `aivyx-storage` (redb/filesystem) and `tokio`'s `process` feature —
+/// neither wasm32-compatible. Rather than embed the real enum, this
+/// crate keeps its own mirror, following the same precedent as
+/// `AuditEntrySummary::event_type` above (which mirrors `AuditEvent` as
+/// a `String` label for the same reason). `ChannelPlatform` is a small
+/// closed enum rather than an open-ended type, so a mirror *enum* is the
+/// right shape here — the daemon side (which does depend on
+/// `aivyx-core`) is responsible for converting into this type; see
+/// `aivyx_channel::daemon_server::to_wire_channel_platform`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WireChannelPlatform {
+    Local,
+    Telegram,
+    Discord,
+    Slack,
+    Matrix,
+    Email,
+    Rest,
+    Voice,
+}
+
 /// Minimal per-session metadata returned by
 /// Chapter Postern/`/classic` retirement — one session as shown on the
 /// Studio's Sessions screen: identity, channel, trust posture, and
@@ -1443,7 +1468,7 @@ pub struct NotifyTargetView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: String,
-    pub channel: aivyx_core::ChannelPlatform,
+    pub channel: WireChannelPlatform,
     pub trust_tier: aivyx_capability::TrustTier,
     pub created_at_ms: u64,
     pub last_active_at_ms: u64,
@@ -2990,14 +3015,14 @@ mod tests {
                     sessions: vec![
                         SessionSummary {
                             session_id: "s-1".into(),
-                            channel: aivyx_core::ChannelPlatform::Local,
+                            channel: WireChannelPlatform::Local,
                             trust_tier: aivyx_capability::TrustTier::Trusted,
                             created_at_ms: 0,
                             last_active_at_ms: 0,
                         },
                         SessionSummary {
                             session_id: "s-2".into(),
-                            channel: aivyx_core::ChannelPlatform::Telegram,
+                            channel: WireChannelPlatform::Telegram,
                             trust_tier: aivyx_capability::TrustTier::SemiTrusted,
                             created_at_ms: 0,
                             last_active_at_ms: 0,
@@ -3516,7 +3541,7 @@ mod tests {
             payload: QueryResponsePayload::ListSessions {
                 sessions: vec![SessionSummary {
                     session_id: "abc".into(),
-                    channel: aivyx_core::ChannelPlatform::Local,
+                    channel: WireChannelPlatform::Local,
                     trust_tier: aivyx_capability::TrustTier::Trusted,
                     created_at_ms: 0,
                     last_active_at_ms: 0,

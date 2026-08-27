@@ -27,7 +27,7 @@ use crate::daemon_ipc::{
     AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
     FrontendType, GalleryImage, GateSummary, MissionDetail, MissionSummary,
     NotificationHistoryEntry, PROTOCOL_VERSION, ProfileSummary, QueryPayload, QueryResponsePayload,
-    SessionSummary, StreamEventPayload, decode_frame, encode_frame,
+    SessionSummary, StreamEventPayload, WireChannelPlatform, decode_frame, encode_frame,
 };
 use crate::mission;
 
@@ -3810,6 +3810,31 @@ pub struct SessionRecord {
     pub last_active_at_ms: u64,
 }
 
+/// Maps the real `aivyx_core::ChannelPlatform` onto `aivyx-ipc`'s
+/// wasm32-clean mirror, `aivyx_ipc::WireChannelPlatform`.
+///
+/// This has to live here rather than as a `From` impl in either crate:
+/// `aivyx-ipc` must not depend on `aivyx-core` (see that crate's package
+/// description and `WireChannelPlatform`'s doc comment), so it cannot
+/// name `aivyx_core::ChannelPlatform`; and a `From<ForeignType> for
+/// ForeignType` impl living in this third crate would violate the
+/// orphan rule regardless. `aivyx-channel` already depends on both, so
+/// a plain function here is the correct home. Deliberately no `_`
+/// catch-all: a future new `ChannelPlatform` variant must fail to
+/// compile here instead of silently mismapping.
+pub fn to_wire_channel_platform(platform: aivyx_core::ChannelPlatform) -> WireChannelPlatform {
+    match platform {
+        aivyx_core::ChannelPlatform::Local => WireChannelPlatform::Local,
+        aivyx_core::ChannelPlatform::Telegram => WireChannelPlatform::Telegram,
+        aivyx_core::ChannelPlatform::Discord => WireChannelPlatform::Discord,
+        aivyx_core::ChannelPlatform::Slack => WireChannelPlatform::Slack,
+        aivyx_core::ChannelPlatform::Matrix => WireChannelPlatform::Matrix,
+        aivyx_core::ChannelPlatform::Email => WireChannelPlatform::Email,
+        aivyx_core::ChannelPlatform::Rest => WireChannelPlatform::Rest,
+        aivyx_core::ChannelPlatform::Voice => WireChannelPlatform::Voice,
+    }
+}
+
 /// Serializable snapshot of the daemon's active sessions and in-flight
 /// turns. Written to `daemon.state` on startup; cleared on clean
 /// shutdown. If a stale file is found on next startup, it means the
@@ -3980,7 +4005,7 @@ async fn handle_query(
                     .iter()
                     .map(|s| SessionSummary {
                         session_id: s.session_id.clone(),
-                        channel: s.channel,
+                        channel: to_wire_channel_platform(s.channel),
                         trust_tier: s.trust_tier,
                         created_at_ms: s.created_at_ms,
                         last_active_at_ms: s.last_active_at_ms,
