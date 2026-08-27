@@ -525,6 +525,44 @@ don't share UIDs. Aivyx does not enforce isolation between OS
 users of the same instance because — per `PRODUCT.md` P1 — there
 is no such thing as a multi-tenant Aivyx instance.
 
+### 5.10 `aivyx-desktop`'s unmaintained GTK3 dependency stack (Linux)
+
+`aivyx-desktop` (the native desktop shell, opt-in, not the daemon or
+any operator-facing security boundary described elsewhere in this
+document) links `tao` + `wry` + `tray-icon` for its window, embedded
+webview, and system tray on Linux. All three transitively pull the
+`gtk-rs` GTK3 bindings (`gtk`/`gdk`/`atk`/`glib` and their `-sys`
+crates), which carry 11 separate RustSec "unmaintained" advisories
+(the GTK3 gtk-rs generation stopped receiving updates after `0.18.x`)
+plus one real unsoundness bug, `RUSTSEC-2024-0429`: unsound
+`Iterator`/`DoubleEndedIterator` impls on `glib::VariantStrIter`.
+
+**Confirmed 2026-08-27, not just re-read from an older note:** the
+*latest* published versions of all three consuming crates as of this
+check (`tao 0.37.0`, `wry 0.56.1`, `tray-icon 0.24.2` — each newer
+than what `aivyx-desktop` currently pins) still resolve to `gtk 0.18.2`
+/ `glib 0.18.5` / `webkit2gtk 2.0.2` on Linux. The tauri-ecosystem
+crates have not shipped a GTK4 Linux backend, over two years after the
+advisory. A real fix within the current architecture would mean
+forking and maintaining patched builds of the whole mutually
+version-locked GTK3 binding stack — adopting a maintenance burden
+upstream itself hasn't taken on, not a scoped project. The only path
+that actually removes the dependency is dropping `aivyx-desktop`'s
+embedded-webview model on Linux (e.g. launching the Studio in the
+operator's default system browser instead), which is a genuine
+architectural change to that crate, not a dependency bump — not
+undertaken here.
+
+**Accepted, monitored, not fixed.** `aivyx-desktop` is an optional,
+separately-packaged shell (excluded from the CLI's `dist` build,
+`crates/aivyx-desktop/Cargo.toml`'s own `dist = false`) around the same
+local Studio the daemon already serves over the (auth-gated, see
+Gatehouse) Web UI — it adds native chrome, not a new trust boundary or
+attack surface beyond "an unmaintained GTK3 binding is loaded into an
+opt-in native process on the operator's own machine." Revisit if/when
+`tao`/`wry` ship a GTK4 Linux backend, or if the desktop shell's
+webview model changes for other reasons.
+
 ## 6. Property summary
 
 For operators asking "what should I be able to assume about a

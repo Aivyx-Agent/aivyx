@@ -44,6 +44,10 @@ rediscovered:
 - Root-compromise of the operator's own machine, LLM-provider-side
   risk, side channels, and channel-platform compromise are all
   explicitly out of scope (§5.1, §5.4, §5.5, §5.7, §5.8, §5.9).
+- `aivyx-desktop` (the opt-in native shell, Linux only) links an
+  unmaintained GTK3 dependency stack with no upstream fix available —
+  confirmed still true against the latest `tao`/`wry`/`tray-icon`
+  releases as of the date this was last checked (§5.10).
 
 ## In scope
 
