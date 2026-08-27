@@ -348,7 +348,12 @@ live in `./workspace` (mounted at `/work`).
   *and* `[daemon] web_ui_allowed_origins = ["https://your-host"]` (the daemon
   rejects off-host WebSocket origins otherwise), **plus** auth + TLS in front
   (a reverse proxy like Caddy/Traefik — Aivyx doesn't ship one). The daemon
-  prints a one-line warning when it binds a non-loopback host.
+  prints a one-line warning when it binds a non-loopback host. **Also check
+  the host's own firewall** (ufw/firewalld/iptables) if a client still can't
+  connect after that — a live baptism found a rig's UFW silently dropping the
+  Studio's port while every Aivyx-side check (bind, token, cookie, `/ws`
+  upgrade) was green, with zero feedback pointing at the real cause; see
+  `docs/GATEHOUSE.md`'s "Known gap" note.
 - **Passphrase posture.** The store passphrase comes from a Docker *secret*
   (bridged to `AIVYX_PASSPHRASE` by the entrypoint), not a plain `environment:`
   value — a deliberate step down from the desktop's interactive prompt, but it

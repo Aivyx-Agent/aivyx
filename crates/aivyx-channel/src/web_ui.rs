@@ -181,7 +181,11 @@ pub async fn run_web_ui_server(
             "aivyx web ui: WARNING — binding {host} (non-loopback). The Studio \
              is exposed beyond this host. Put TLS in front, and set \
              `[daemon] web_ui_allowed_origins` for the hostnames you serve. See \
-             docs/DOCKER.md."
+             docs/DOCKER.md. If a client can't connect even though this \
+             process is bound and healthy, check the host's own firewall \
+             (ufw/firewalld/iptables) — a green Aivyx-side check (bind, \
+             token, cookie, /ws upgrade) says nothing about whether the port \
+             is actually reachable from outside this host."
         );
         // Chapter Postern — off-host with no token is an unauthenticated
         // control plane. Escalate the warning; don't refuse (a reverse proxy
@@ -209,7 +213,7 @@ pub async fn run_web_ui_server(
     let socket_path = Arc::new(socket_path);
 
     loop {
-        let (stream, _remote) = tokio::select! {
+        let (stream, remote) = tokio::select! {
             result = listener.accept() => {
                 match result {
                     Ok(conn) => conn,
@@ -231,6 +235,7 @@ pub async fn run_web_ui_server(
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
                 stream,
+                remote,
                 &conn_socket_path,
                 port,
                 &conn_allowed_origins,
@@ -321,11 +326,57 @@ fn request_carries_token(request_head: &str, token: &str) -> bool {
     false
 }
 
+/// VITRINE.md §0 P2 — a stale saved credential (a browser's saved
+/// Basic-Auth password, an old `Authorization: Bearer` value) used to
+/// fail completely silently: no client-side "wrong token" indication
+/// (the native prompt just re-appears) and nothing in the daemon
+/// journal either — the operator needed a packet capture to diagnose.
+/// Logs one line per rejecting IP per cooldown window rather than
+/// once per request, since a browser that keeps re-submitting the same
+/// stale saved value can retry many times per second.
+const REJECTED_TOKEN_LOG_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The decision logic, split out from `log_rejected_token_once`'s
+/// `eprintln!` side effect so it's directly unit-testable: true (and
+/// records `now` against `ip`) the first time `ip` is seen, or once
+/// `REJECTED_TOKEN_LOG_COOLDOWN` has elapsed since it was last logged;
+/// false otherwise.
+fn should_log_rejected_token(
+    map: &Mutex<std::collections::HashMap<std::net::IpAddr, std::time::Instant>>,
+    ip: std::net::IpAddr,
+    now: std::time::Instant,
+) -> bool {
+    let mut guard = map.lock().expect("rejected-token log map poisoned");
+    let should_log = match guard.get(&ip) {
+        Some(last) => now.duration_since(*last) >= REJECTED_TOKEN_LOG_COOLDOWN,
+        None => true,
+    };
+    if should_log {
+        guard.insert(ip, now);
+    }
+    should_log
+}
+
+fn log_rejected_token_once(ip: std::net::IpAddr) {
+    static LAST_LOGGED: std::sync::OnceLock<Mutex<std::collections::HashMap<std::net::IpAddr, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    let map = LAST_LOGGED.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if should_log_rejected_token(map, ip, std::time::Instant::now()) {
+        eprintln!("aivyx web ui: rejected token from {ip}");
+    }
+}
+
 /// Handle a single TCP connection. Peek at the first bytes to
 /// determine the HTTP path, then either serve HTML or upgrade to
 /// WebSocket.
+// remote_addr (added for the VITRINE.md §0 rate-limited rejected-token
+// log line) pushed this past clippy's default 7-argument cap; every
+// parameter here is either connection-wide state or a genuinely
+// distinct per-connection value, not a natural struct boundary.
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: tokio::net::TcpStream,
+    remote_addr: std::net::SocketAddr,
     socket_path: &Path,
     port: u16,
     allowed_origins: &[String],
@@ -349,6 +400,7 @@ async fn handle_connection(
         // client can send `Authorization: Bearer <token>` directly.
         if let Some(token) = auth_token {
             if !request_carries_token(&request_head, token) {
+                log_rejected_token_once(remote_addr.ip());
                 return serve_bytes(
                     stream,
                     "401 Unauthorized",
@@ -391,6 +443,7 @@ async fn handle_connection(
         let mut set_cookie: Option<String> = None;
         if let Some(token) = auth_token {
             if !request_carries_token(&request_head, token) {
+                log_rejected_token_once(remote_addr.ip());
                 return serve_bytes_ext(
                     stream,
                     "401 Unauthorized",
@@ -1008,6 +1061,45 @@ mod tests {
     fn web_channel_platform_is_local() {
         let ch = WebDaemonChannel::new();
         assert_eq!(ch.platform(), ChannelPlatform::Local);
+    }
+
+    #[test]
+    fn rejected_token_logging_is_rate_limited_per_ip() {
+        // VITRINE.md §0 P2 — a browser silently re-submitting the same
+        // stale saved credential could hit this many times per second;
+        // the log line must collapse to one per cooldown window, not
+        // one per rejected request.
+        use std::collections::HashMap;
+        use std::net::{IpAddr, Ipv4Addr};
+        use std::time::{Duration, Instant};
+
+        let map: Mutex<HashMap<IpAddr, Instant>> = Mutex::new(HashMap::new());
+        let ip_a = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let ip_b = IpAddr::V4(Ipv4Addr::new(10, 80, 80, 148));
+        let t0 = Instant::now();
+
+        // First rejection from a given IP always logs.
+        assert!(should_log_rejected_token(&map, ip_a, t0));
+        // A repeat well within the cooldown window does not.
+        assert!(!should_log_rejected_token(
+            &map,
+            ip_a,
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(!should_log_rejected_token(
+            &map,
+            ip_a,
+            t0 + REJECTED_TOKEN_LOG_COOLDOWN - Duration::from_secs(1)
+        ));
+        // Once the cooldown has genuinely elapsed, it logs again.
+        assert!(should_log_rejected_token(
+            &map,
+            ip_a,
+            t0 + REJECTED_TOKEN_LOG_COOLDOWN
+        ));
+        // A different IP is tracked independently — not starved by ip_a's
+        // own cooldown.
+        assert!(should_log_rejected_token(&map, ip_b, t0));
     }
 
     #[test]
