@@ -2255,7 +2255,6 @@ mod tests {
         match decoded {
             AuditEvent::ToolCall {
                 auto_corrected_from,
-                extracted_from_text: _,
                 ..
             } => {
                 assert!(auto_corrected_from.is_none());

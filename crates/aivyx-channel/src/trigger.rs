@@ -202,6 +202,12 @@ impl TargetPolicy {
 /// Daemon restart resets the bucket — acceptable for v1 since
 /// the audit chain remains the canonical record of what
 /// actually dispatched.
+/// The bucket for a target is already at its configured `max` for the
+/// current window — `check_and_record` left the bucket unchanged.
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
+#[error("rate limit exceeded for this target's configured window")]
+pub struct RateLimitExceeded;
+
 #[derive(Debug, Default)]
 pub struct RateLimitRegistry {
     state: tokio::sync::Mutex<
@@ -226,7 +232,7 @@ impl RateLimitRegistry {
         max: u32,
         window_secs: u64,
         now_ms: u64,
-    ) -> Result<(), ()> {
+    ) -> Result<(), RateLimitExceeded> {
         let window_ms = window_secs.saturating_mul(1000);
         let cutoff = now_ms.saturating_sub(window_ms);
         let mut state = self.state.lock().await;
@@ -236,7 +242,7 @@ impl RateLimitRegistry {
             bucket.pop_front();
         }
         if (bucket.len() as u32) >= max {
-            return Err(());
+            return Err(RateLimitExceeded);
         }
         bucket.push_back(now_ms);
         Ok(())

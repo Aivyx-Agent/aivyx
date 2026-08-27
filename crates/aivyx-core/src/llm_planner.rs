@@ -2897,7 +2897,6 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 auto_corrected_from,
-                extracted_from_text: _,
                 ..
             } => {
                 assert_eq!(tool_id, fs_read_id);
@@ -3000,7 +2999,6 @@ mod tests {
             NextStep::ToolCall {
                 tool_id,
                 auto_corrected_from,
-                extracted_from_text: _,
                 ..
             } => {
                 assert_eq!(tool_id, fs_read_id);

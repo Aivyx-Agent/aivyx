@@ -84,8 +84,7 @@ impl Tool for ObsidianUpdateNote {
             });
         }
         let bytes = parsed.content.as_bytes();
-        let total_size: u64;
-        match parsed.mode {
+        let total_size: u64 = match parsed.mode {
             UpdateMode::Replace => {
                 if let Err(e) = tokio::fs::write(&resolved, bytes).await {
                     return ToolOutcome::Failed(AivyxError::Tool {
@@ -93,7 +92,7 @@ impl Tool for ObsidianUpdateNote {
                         detail: format!("obsidian.update_note: write failed: {e}"),
                     });
                 }
-                total_size = bytes.len() as u64;
+                bytes.len() as u64
             }
             UpdateMode::Append => {
                 use tokio::io::AsyncWriteExt;
@@ -116,12 +115,12 @@ impl Tool for ObsidianUpdateNote {
                         detail: format!("obsidian.update_note: append write failed: {e}"),
                     });
                 }
-                total_size = match tokio::fs::metadata(&resolved).await {
+                match tokio::fs::metadata(&resolved).await {
                     Ok(m) => m.len(),
                     Err(_) => bytes.len() as u64,
-                };
+                }
             }
-        }
+        };
         let output = json!({
             "path": parsed.path,
             "mode": parsed.mode.as_str(),
