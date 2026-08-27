@@ -44,6 +44,12 @@ pub async fn run_doctor() -> Result<(), String> {
     // installed is fine for interactive use, so it never fails the doctor.
     check_service();
 
+    // Chapter Gatehouse — VITRINE.md §13 operator UX note: a forgotten
+    // Studio auth token used to mean grepping aivyx.toml by hand to
+    // recover it. Informational only, same as check_service() above —
+    // never fails the doctor.
+    check_gatehouse(&cfg);
+
     println!();
     if all_ok {
         println!("✓ Looks good — your agent is ready. Run `aivyx` to start.");
@@ -74,6 +80,67 @@ fn check_service() {
             println!(
                 "  • not installed as a service — fine for interactive use.\n     \
                  → for a 'runs for days' agent: `aivyx daemon install`"
+            );
+        }
+    }
+}
+
+/// VITRINE.md §13 — "a future 'reveal/regenerate token' affordance (CLI
+/// `aivyx doctor` hint or Settings) would smooth this": an operator who
+/// forgot their Studio auth token had to read `aivyx.toml` directly to
+/// recover it (that's exactly what a rig recovery looked like). This is
+/// the "reveal" half — printing the token doctor already loaded to check
+/// the interlock, rather than sending the operator to grep the TOML file
+/// themselves. No new privilege: doctor already reads the full config,
+/// and the operator already has direct read access to `aivyx.toml` on
+/// their own disk. "Regenerate" (writing a fresh token) is a mutating
+/// action and stays out of scope for this read-only command — it's a
+/// `[daemon] web_ui_auth_token` edit in `aivyx.toml`, or a future
+/// Settings-screen affordance.
+/// The branch `check_gatehouse` prints, split out as pure/testable logic
+/// (no `AivyxConfig` needed) from the `println!` side effects.
+#[derive(Debug, PartialEq, Eq)]
+enum GatehouseStatus {
+    /// A token is set. `off_host` is `Some(host)` when bound beyond loopback.
+    TokenSet { off_host: Option<std::net::IpAddr> },
+    /// No token, and bound beyond loopback — the interlock-refusable case
+    /// (unless `web_ui_insecure_no_auth` was set to bypass it).
+    NoTokenOffHost { host: std::net::IpAddr },
+    /// No token, loopback-only — the default, fine posture.
+    NoTokenLoopback,
+}
+
+fn gatehouse_status(token: Option<&str>, host: Option<std::net::IpAddr>) -> GatehouseStatus {
+    let off_host = host.filter(|h| !h.is_loopback());
+    match (token, off_host) {
+        (Some(_), _) => GatehouseStatus::TokenSet { off_host },
+        (None, Some(h)) => GatehouseStatus::NoTokenOffHost { host: h },
+        (None, None) => GatehouseStatus::NoTokenLoopback,
+    }
+}
+
+fn check_gatehouse(cfg: &AivyxConfig) {
+    println!("\nWeb UI (Gatehouse):");
+    match gatehouse_status(cfg.web_ui_auth_token.as_deref(), cfg.web_ui_host) {
+        GatehouseStatus::TokenSet { off_host } => {
+            let host_note = off_host.map_or(String::new(), |h| format!(" (bound off-host at {h})"));
+            pass(&format!("auth token set{host_note}"));
+            println!("     token: {}", cfg.web_ui_auth_token.as_deref().unwrap_or(""));
+        }
+        GatehouseStatus::NoTokenOffHost { host } => {
+            println!(
+                "  ⚠ bound off-host ({host}) with no `[daemon] web_ui_auth_token` set\n     \
+                 → anyone who can reach this host can drive the agent; set a token \
+                 (e.g. `openssl rand -hex 32`) in aivyx.toml, or \
+                 `web_ui_insecure_no_auth = true` if a reverse proxy already \
+                 authenticates. See docs/GATEHOUSE.md."
+            );
+        }
+        GatehouseStatus::NoTokenLoopback => {
+            println!(
+                "  • no auth token set — fine for loopback-only use.\n     \
+                 → to expose the Studio off-host, set both `web_ui_host` and \
+                 `web_ui_auth_token` in aivyx.toml (see docs/GATEHOUSE.md)."
             );
         }
     }
@@ -475,6 +542,39 @@ mod tests {
     fn truncate_shortens_long_strings() {
         assert_eq!(truncate("hello", 60), "hello");
         assert_eq!(truncate(&"x".repeat(100), 10), format!("{}…", "x".repeat(10)));
+    }
+
+    #[test]
+    fn gatehouse_status_covers_all_six_combinations() {
+        // VITRINE.md §13 — the "reveal token" doctor hint's branch logic.
+        use std::net::{IpAddr, Ipv4Addr};
+        let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let lan = IpAddr::V4(Ipv4Addr::new(10, 80, 80, 148));
+
+        assert_eq!(
+            gatehouse_status(Some("tok"), None),
+            GatehouseStatus::TokenSet { off_host: None }
+        );
+        assert_eq!(
+            gatehouse_status(Some("tok"), Some(loopback)),
+            GatehouseStatus::TokenSet { off_host: None },
+            "an explicit loopback host is still loopback, not off-host"
+        );
+        assert_eq!(
+            gatehouse_status(Some("tok"), Some(lan)),
+            GatehouseStatus::TokenSet {
+                off_host: Some(lan)
+            }
+        );
+        assert_eq!(gatehouse_status(None, None), GatehouseStatus::NoTokenLoopback);
+        assert_eq!(
+            gatehouse_status(None, Some(loopback)),
+            GatehouseStatus::NoTokenLoopback
+        );
+        assert_eq!(
+            gatehouse_status(None, Some(lan)),
+            GatehouseStatus::NoTokenOffHost { host: lan }
+        );
     }
 
     #[test]
