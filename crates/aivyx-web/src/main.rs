@@ -471,13 +471,25 @@ struct AuditState {
     /// UI's own notion of "what window am I looking at" can never drift
     /// from what was actually asked for.
     from_seq: u64,
-    /// `false` until the first `audit-page` response arrives. Same
-    /// precedent as `Dashboard.loaded`: distinguishes "not loaded yet"
-    /// from "loaded and genuinely empty", and gates `App`'s one-shot
-    /// first-visit self-correction (`audit_self_corrected`) — the mount
-    /// query can't know the chain's true `total_len` before this first
-    /// response lands.
-    loaded: bool,
+    /// `true` from the moment a request is sent whose `from_seq` was
+    /// computed from a stale/unknown `total_len` — i.e. `AuditPanel`'s own
+    /// mount-time guess, which cannot know the chain's true length before
+    /// its first response arrives. Cleared back to `false` by the very next
+    /// "audit-page" response, whether or not that response turns out to
+    /// need a correction. A deliberate operator action ("Older"/"Newer")
+    /// clears it to `false` itself at the moment it fires, so a guess
+    /// response that happens to land late can never override a deliberate
+    /// pagination click. Set back to `true` by *every* fresh `AuditPanel`
+    /// mount — this is what makes the self-correction available once per
+    /// mount, for the life of the session, rather than once ever.
+    pending_guess: bool,
+    /// Set by the "audit-page" response handler when it finds that a
+    /// `pending_guess` request guessed wrong (now that the response reveals
+    /// the real `total_len`): holds the corrected `from_seq` that needs to
+    /// be (re-)requested. Consumed (set back to `None`) by `App`'s effect,
+    /// which is the only place in scope with access to the outbound `ws`
+    /// sender needed to actually fire that follow-up query.
+    pending_correction: Option<u64>,
 }
 
 /// Chapter Chime — Schedules screen UI state (the list itself lives in
@@ -754,27 +766,33 @@ fn App() -> Element {
     // newest — unlike the Command Center's own `mc-audit` tail below,
     // which self-corrects every poll tick, `AuditPanel`'s query is a
     // one-shot `use_future` with no ongoing poll (by design — this screen
-    // doesn't need the Command Center's continuous refresh). Once the
-    // first `audit-page` response reveals the real `total_len`, immediately
-    // re-request the true newest window. Gated by its own one-shot latch
-    // (not by comparing `from_seq` on every change) so it never fights the
-    // operator's own "Older"/"Newer" pagination after the initial load.
-    let mut audit_self_corrected = use_signal(|| false);
+    // doesn't need the Command Center's continuous refresh).
+    //
+    // The actual "was the guess wrong, and by how much" check lives in the
+    // "audit-page" response handler below (it alone knows, atomically, both
+    // the just-requested `from_seq` and the freshly-arrived `total_len`,
+    // and it only ever runs when a response has genuinely arrived — so it
+    // can't fire on stale data the way a signal-watching effect could).
+    // This effect's only job is to actually *send* the corrected query once
+    // the handler asks for one, because `read_task` (where that handler
+    // lives) is a plain async fn with no `ws` sender of its own — see
+    // `AuditState.pending_correction`'s doc comment. Because the handler
+    // re-derives eligibility fresh from `AuditState.pending_guess` on every
+    // single "audit-page" response — and `AuditPanel`'s mount `use_future`
+    // sets `pending_guess = true` again on every mount — this corrects
+    // itself once per *mount*, not once ever for the whole session.
     use_effect(move || {
         let a = audit_page();
-        if a.loaded && !audit_self_corrected() {
-            audit_self_corrected.set(true);
-            let newest_from_seq = a.total_len.saturating_sub(AUDIT_PAGE_SIZE as u64);
-            if a.from_seq != newest_from_seq {
-                audit_page.write().from_seq = newest_from_seq;
-                ws.send(FrontendMessage::Query {
-                    id: "audit-page".to_string(),
-                    payload: QueryPayload::ListAuditEntries {
-                        from_seq: newest_from_seq,
-                        limit: AUDIT_PAGE_SIZE,
-                    },
-                });
+        if let Some(from_seq) = a.pending_correction {
+            {
+                let mut aw = audit_page.write();
+                aw.from_seq = from_seq;
+                aw.pending_correction = None;
             }
+            ws.send(FrontendMessage::Query {
+                id: "audit-page".to_string(),
+                payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
+            });
         }
     });
 
@@ -1968,19 +1986,28 @@ fn AuditPanel() -> Element {
     let dashboard = use_context::<Signal<Dashboard>>();
 
     // Load the newest page on mount. This blind guess can't know the
-    // chain's true `total_len` before this first response arrives — on a
-    // chain longer than one page it necessarily asks for from_seq=0 (the
-    // OLDEST page). `App`'s one-shot `audit_self_corrected` effect fixes
-    // this up immediately once the real `total_len` is known (see there);
-    // this `use_future` itself only ever runs once (no restart), so it
-    // cannot self-correct on its own.
+    // chain's true `total_len` before this first response arrives — it's
+    // computed from whatever `total_len` happens to be cached from a
+    // previous visit (or 0, on the very first visit ever), which on a
+    // chain longer than one page (or one that has grown since the last
+    // visit) is generally wrong. `pending_guess = true` marks this specific
+    // request as an unverified guess so the "audit-page" response handler
+    // (in `read_task`) can check it against the real `total_len` once the
+    // response lands, and — via `App`'s effect — fire exactly one
+    // corrective follow-up if needed. Setting `pending_guess = true` here,
+    // on every mount, is what makes that correction available every time
+    // this panel is (re-)opened, not just the first time ever.
     use_future(move || async move {
         let total = audit().total_len;
         let from_seq = total.saturating_sub(AUDIT_PAGE_SIZE as u64);
         // Request-side bookkeeping: `AuditState.from_seq` always reflects
         // "what we last asked for" (set here, at mount, and again at each
         // Older/Newer click below) — never inferred from the response.
-        audit.write().from_seq = from_seq;
+        {
+            let mut a = audit.write();
+            a.from_seq = from_seq;
+            a.pending_guess = true;
+        }
         ws.send(FrontendMessage::Query {
             id: "audit-page".to_string(),
             payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
@@ -2025,7 +2052,15 @@ fn AuditPanel() -> Element {
                             disabled: at_oldest,
                             onclick: move |_| {
                                 let from_seq = audit().from_seq.saturating_sub(AUDIT_PAGE_SIZE as u64);
-                                audit.write().from_seq = from_seq;
+                                {
+                                    let mut a = audit.write();
+                                    a.from_seq = from_seq;
+                                    // Deliberate operator action, not a
+                                    // guess — must never be overridden by a
+                                    // delayed auto-correction meant for an
+                                    // earlier, still-in-flight mount guess.
+                                    a.pending_guess = false;
+                                }
                                 ws.send(FrontendMessage::Query {
                                     id: "audit-page".to_string(),
                                     payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
@@ -2040,7 +2075,12 @@ fn AuditPanel() -> Element {
                                 let a = audit();
                                 let newest_from_seq = a.total_len.saturating_sub(AUDIT_PAGE_SIZE as u64);
                                 let from_seq = (a.from_seq + AUDIT_PAGE_SIZE as u64).min(newest_from_seq);
-                                audit.write().from_seq = from_seq;
+                                {
+                                    let mut a = audit.write();
+                                    a.from_seq = from_seq;
+                                    // Same reasoning as "← Older" above.
+                                    a.pending_guess = false;
+                                }
                                 ws.send(FrontendMessage::Query {
                                     id: "audit-page".to_string(),
                                     payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
@@ -7400,19 +7440,39 @@ async fn read_task(
                     id,
                     payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
                 } if id == "audit-page" => {
-                    // `from_seq` is deliberately NOT set here — it's set at
-                    // each request site (mount / Older / Newer, in
-                    // `AuditPanel` and `App`'s one-shot corrector) right
-                    // before the query is sent, so `AuditState.from_seq`
-                    // always reflects "what we last asked for" rather than
+                    // `from_seq` is deliberately NOT set here from the
+                    // response's own data — it's set at each request site
+                    // (mount / Older / Newer, in `AuditPanel`; the
+                    // correction follow-up, in `App`'s effect) right before
+                    // the query is sent, so `AuditState.from_seq` always
+                    // reflects "what we last asked for" rather than
                     // something inferred (unreliably) from the response.
+                    //
+                    // What this response's own `total_len` DOES let us
+                    // check: whether the request that produced it was an
+                    // unverified mount-time guess (`pending_guess`), and if
+                    // so, whether that guess was wrong now that the real
+                    // `total_len` is known. This check is per-response, not
+                    // a one-shot-per-session latch — `pending_guess` is
+                    // reset to `true` by every fresh `AuditPanel` mount, so
+                    // a chain that grew while the operator was on another
+                    // screen gets corrected again on every later visit, not
+                    // just the first one ever.
                     let mut a = audit_page.write();
+                    let was_pending_guess = a.pending_guess;
                     a.entries = entries;
                     a.total_len = total_len;
-                    // First response in — see `Dashboard.loaded`'s own
-                    // precedent, and `App`'s `audit_self_corrected` effect
-                    // which reacts to this flip.
-                    a.loaded = true;
+                    a.pending_guess = false;
+                    if was_pending_guess {
+                        let newest_from_seq = total_len.saturating_sub(AUDIT_PAGE_SIZE as u64);
+                        if a.from_seq != newest_from_seq {
+                            // Hand off to `App`'s effect, which alone holds
+                            // the `ws` sender needed to actually fire the
+                            // follow-up query — see `pending_correction`'s
+                            // doc comment.
+                            a.pending_correction = Some(newest_from_seq);
+                        }
+                    }
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::VerifyAuditChain { ok, .. },
