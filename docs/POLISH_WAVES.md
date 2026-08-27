@@ -1,6 +1,7 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: SCOPED, not started.** `V09_PLAN.md` row 4 ("Polish waves —
+> **Status: sub-project 1 done (2026-08-27), 2–7 not started.**
+> `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
 > convention (`ROADMAP.md`'s "How this document is maintained") says a
@@ -41,7 +42,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 
 | # | Sub-project | Contains | Size | Status |
 |---|---|---|---|---|
-| 1 | **Small backlog sweep** | See below | Small each | Not started |
+| 1 | **Small backlog sweep** | See below | Small each | ✅ done 2026-08-27 (6 of 9 fixed, 1 already done, 1 checked/not reproducible, 1 deferred — see below) |
 | 2 | **`/classic` retirement** | See below | Medium, low risk | Not started |
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small–medium | Not started |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | Not started |
@@ -56,27 +57,60 @@ precedent (2026-08-26's 10-item cleanup) rather than full ceremony.
 
 ---
 
-## 1 · Small backlog sweep
+## 1 · Small backlog sweep — done 2026-08-27
 
-- Create-Agent nav placement — show only pre-genesis (`VITRINE.md`,
-  operator product thought #2).
-- Gatehouse token reveal/regenerate affordance (§13 desktop shell
-  operator UX note).
-- `SkillInvocation.session_id` diverges from `TurnStarted.session_id`
-  (§6, cosmetic chain inconsistency — investigate root cause).
-- Skill/topic naming leak — internal snake_case topic keys leaking
-  into operator-facing skill names (§6 P3).
-- Wiki topic-key normalization — `operator-note` vs `operator-notes`
-  (§4 watch-item — verify backlinks connect; fix if not).
-- Top-1 skill-cosine fuzziness between sibling skills (§5 residual
-  minor — consider logging runner-up scores per §6's own watch-item).
-- MCP tool-level health signal vs connection-level-only status (§10 —
-  a green server can still have a failing tool, per the DuckDuckGo
-  case).
-- Host-firewall visibility in the exposure story — `INSTALL.md`/
-  `GATEHOUSE.md` doc mention + startup hint (§0 P2).
-- Rate-limited `web ui: rejected token from <ip>` log line for stale
-  Basic-auth credentials (§0 P2 — the silent-dead-end finding).
+All 9 items resolved one way or another; none deferred silently.
+Verified: `cargo clippy --all-targets -- -D warnings` clean across
+default-members, full `cargo test` zero failures, throughout.
+
+- ✅ **Already done, found not fixed** — Create-Agent nav placement
+  (`VITRINE.md` operator product thought #2). Turned out to already be
+  implemented: `aivyx-web/src/main.rs`'s `Sidebar` component has a
+  `genesis_done` check dated "Operator ask (2026-07-06)" — the day
+  after Vitrine itself — that hides the Create nav entry once a
+  Profile exists. Shipped, just never recorded anywhere, same pattern
+  as Vitrine/Fleet-panel's own staleness. No code change needed.
+- ✅ **Fixed** — Gatehouse token reveal affordance (§13). New `aivyx
+  doctor` "Web UI (Gatehouse):" section reveals the configured token
+  instead of sending the operator to grep `aivyx.toml`. "Regenerate"
+  (a write) stayed out of scope for this read-only command.
+- ✅ **Fixed** — `SkillInvocation.session_id` vs `TurnStarted.session_id`
+  divergence (§6). Root-caused, not just logged: `IpcChannelBridge::
+  session_id()` delegated to the wrapped channel's own session instead
+  of parsing the same `sid` the turn's `Message.session_id` was built
+  from. Mutation-tested regression test added.
+- ✅ **Fixed** — skill/topic naming leak (§6 P3). Praxis-authored skill
+  names are now humanized (`overall_condition` → `Overall Condition`);
+  `domain` (the internal lookup key) is unchanged.
+- ✅ **Checked, not reproducible in current code** — wiki topic-key
+  normalization, `operator-note` vs `operator-notes` (§4 watch-item).
+  Every "operator-note" (singular) occurrence in the current codebase
+  is a `contradiction.rs` test fixture; the one real production
+  constant (`memory_recall.rs`'s `EXPLICIT_MEMORY_TOPIC`) is
+  "operator-notes" (plural), used consistently. The July-era divergence
+  (if real) isn't reproducible against today's code — no fix applied,
+  since there's nothing currently broken to fix.
+- ✅ **Fixed** — top-1 skill-cosine fuzziness (§5/§6 watch-item). The
+  injection log line now includes the runner-up skill's own name+score
+  alongside the winner, per the operator's own suggested diagnostic.
+- **Deferred, found to be bigger than "small"** — MCP tool-level health
+  signal (§10). Needs real audit-chain aggregation (recent per-tool
+  success/failure, not just connection-level status) plus a new
+  Lantern-screen surface — a real sub-project of its own, not a small
+  item. Left for a future pass; not silently dropped.
+- ✅ **Fixed** — host-firewall visibility (§0 P2). The non-loopback
+  startup warning now names the host firewall explicitly;
+  `docs/INSTALL.md` and a new `docs/GATEHOUSE.md` "Known gap" section
+  cross-reference the same finding.
+- ✅ **Fixed** — rate-limited rejected-token log line (§0 P2). Both 401
+  rejection sites in `aivyx-channel/src/web_ui.rs` now log `aivyx web
+  ui: rejected token from <ip>`, rate-limited per-IP (boundary-tested)
+  rather than once per request.
+
+Commits: `285ac107` (session_id), `2a2726fc` (skill naming),
+`2f8283a6` (runner-up logging), `ea6bb3b9` (rate-limited log +
+firewall docs), `d92d4746` (doctor Gatehouse hint). Merged to `main`,
+pushed.
 
 ## 2 · `/classic` retirement (V09_PLAN row 7)
 
@@ -202,6 +236,13 @@ solving once, deliberately, not per-feature.
   ask) — add/edit/update/remove `[[mcp_server]]` from the Studio,
   including `${VAR}`-interpolated `env`/`headers` (Chapter Conduit),
   ideally a "test connection" probe before save.
+- **MCP tool-level health signal** (§10, moved here 2026-08-27 from
+  sub-project 1's small-backlog sweep — found to need real audit-chain
+  aggregation plus a new Lantern-screen surface, bigger than "small").
+  Status is connection-level from the last daemon start today —
+  `web-search` showed green all day while DuckDuckGo refused its
+  queries. Natural to land alongside the MCP CRUD screen above rather
+  than as its own pass.
 - **Notify-target CRUD** (Chapter Herald's own explicit deferral) —
   creating/editing Telegram bot tokens, webhook URLs, SMTP creds from
   the web form; today read-only by deliberate decision pending this
