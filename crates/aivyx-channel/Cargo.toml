@@ -123,7 +123,8 @@ aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider
 # threads the daemon's shared pool/store through to every team mission's
 # specialist turns. Pinned by commit, not a version, since this crate isn't
 # published — see aivyx-kvcache's own CLAUDE.md for the repo's release status.
-aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
+# Pin lives in the workspace root's [workspace.dependencies].
+aivyx-kvcache = { workspace = true }
 
 # Phase 8 Task 4 — `aivyx --channel telegram` delegates into
 # `aivyx_telegram::run_telegram_session`. The dep is binary-only

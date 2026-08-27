@@ -251,6 +251,15 @@ aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "0
 # split is needed.
 aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "1292d6cbda34aa514856b81e11635f7385a4d168" }
 
+# KV-cache persistence against a llama-server backend (LlmPlanner/
+# SpecialistFactory `with_kv_cache`), adopted from the sibling aivyx-coder
+# repo rather than reimplemented here. Not on crates.io — pinned by commit
+# SHA. No platform-specific backend, same as aivyx-checkpoint, so no
+# default-features/target-gating split is needed. Centralized here
+# 2026-08-27 — previously duplicated verbatim across aivyx-core, aivyx-team,
+# aivyx-cli, and aivyx-channel's own Cargo.toml files.
+aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
