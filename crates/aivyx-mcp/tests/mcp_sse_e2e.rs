@@ -287,6 +287,7 @@ async fn proxy_tool_execute_over_channel_transport() {
         channel: &channel,
         audit: &audit,
         cancellation: &cancel,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     let outcome = echo

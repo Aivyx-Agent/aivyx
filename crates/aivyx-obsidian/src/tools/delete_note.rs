@@ -195,6 +195,7 @@ mod tests {
             channel: Box::leak(Box::new(N)),
             audit: Box::leak(Box::new(NullAuditHook)),
             cancellation: Box::leak(Box::new(CancellationToken::new())),
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

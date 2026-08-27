@@ -166,6 +166,7 @@ async fn real_binary_serves_inventory_list_over_the_harness() {
         channel: &channel,
         audit: &audit,
         cancellation: &channel.token,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     match proxy.execute(serde_json::json!({}), &ctx).await {

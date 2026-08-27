@@ -198,6 +198,7 @@ mod tests {
             channel,
             audit,
             cancellation: cancel,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

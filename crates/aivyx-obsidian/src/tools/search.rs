@@ -588,6 +588,7 @@ mod tests {
             channel: leaked_channel,
             audit: leaked_audit,
             cancellation: leaked_cancel,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
 

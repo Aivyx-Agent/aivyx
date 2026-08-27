@@ -484,6 +484,7 @@ async fn two_chats_isolated() {
             channel,
             audit,
             cancellation: cancel,
+            message_origin: aivyx_core::MessageOrigin::Operator,
         }
     }
     let cancel = CancellationToken::new();

@@ -211,6 +211,7 @@ async fn proxy_tool_execute_returns_completed() {
         channel: &channel,
         audit: &audit,
         cancellation: &cancel,
+        message_origin: aivyx_core::MessageOrigin::Operator,
     };
 
     let outcome = echo
