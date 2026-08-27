@@ -466,7 +466,18 @@ struct NotificationsState {
 struct AuditState {
     entries: Vec<AuditEntrySummary>,
     total_len: u64,
+    /// The `from_seq` most recently *requested* (set at the request side —
+    /// mount, "Older", "Newer" — never inferred from a response), so the
+    /// UI's own notion of "what window am I looking at" can never drift
+    /// from what was actually asked for.
     from_seq: u64,
+    /// `false` until the first `audit-page` response arrives. Same
+    /// precedent as `Dashboard.loaded`: distinguishes "not loaded yet"
+    /// from "loaded and genuinely empty", and gates `App`'s one-shot
+    /// first-visit self-correction (`audit_self_corrected`) — the mount
+    /// query can't know the chain's true `total_len` before this first
+    /// response lands.
+    loaded: bool,
 }
 
 /// Chapter Chime — Schedules screen UI state (the list itself lives in
@@ -733,6 +744,37 @@ fn App() -> Element {
             genesis_routed.set(true);
             let mut v = view;
             v.set(View::Onboarding);
+        }
+    });
+
+    // /classic retirement — the dedicated Audit screen's own mount query
+    // (in `AuditPanel`) can't know the chain's true `total_len` before its
+    // first response arrives, so on a chain longer than one page it
+    // necessarily asks for the OLDEST page first (from_seq=0), not the
+    // newest — unlike the Command Center's own `mc-audit` tail below,
+    // which self-corrects every poll tick, `AuditPanel`'s query is a
+    // one-shot `use_future` with no ongoing poll (by design — this screen
+    // doesn't need the Command Center's continuous refresh). Once the
+    // first `audit-page` response reveals the real `total_len`, immediately
+    // re-request the true newest window. Gated by its own one-shot latch
+    // (not by comparing `from_seq` on every change) so it never fights the
+    // operator's own "Older"/"Newer" pagination after the initial load.
+    let mut audit_self_corrected = use_signal(|| false);
+    use_effect(move || {
+        let a = audit_page();
+        if a.loaded && !audit_self_corrected() {
+            audit_self_corrected.set(true);
+            let newest_from_seq = a.total_len.saturating_sub(AUDIT_PAGE_SIZE as u64);
+            if a.from_seq != newest_from_seq {
+                audit_page.write().from_seq = newest_from_seq;
+                ws.send(FrontendMessage::Query {
+                    id: "audit-page".to_string(),
+                    payload: QueryPayload::ListAuditEntries {
+                        from_seq: newest_from_seq,
+                        limit: AUDIT_PAGE_SIZE,
+                    },
+                });
+            }
         }
     });
 
@@ -1925,10 +1967,20 @@ fn AuditPanel() -> Element {
     let audit = use_context::<Signal<AuditState>>();
     let dashboard = use_context::<Signal<Dashboard>>();
 
-    // Load the newest page each time the view opens.
+    // Load the newest page on mount. This blind guess can't know the
+    // chain's true `total_len` before this first response arrives — on a
+    // chain longer than one page it necessarily asks for from_seq=0 (the
+    // OLDEST page). `App`'s one-shot `audit_self_corrected` effect fixes
+    // this up immediately once the real `total_len` is known (see there);
+    // this `use_future` itself only ever runs once (no restart), so it
+    // cannot self-correct on its own.
     use_future(move || async move {
         let total = audit().total_len;
         let from_seq = total.saturating_sub(AUDIT_PAGE_SIZE as u64);
+        // Request-side bookkeeping: `AuditState.from_seq` always reflects
+        // "what we last asked for" (set here, at mount, and again at each
+        // Older/Newer click below) — never inferred from the response.
+        audit.write().from_seq = from_seq;
         ws.send(FrontendMessage::Query {
             id: "audit-page".to_string(),
             payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
@@ -1937,6 +1989,11 @@ fn AuditPanel() -> Element {
 
     let state = audit();
     let chain_ok = dashboard().chain_ok;
+
+    let at_oldest = state.from_seq == 0;
+    let at_newest = state.from_seq + AUDIT_PAGE_SIZE as u64 >= state.total_len;
+    let window_end = (state.from_seq + AUDIT_PAGE_SIZE as u64).min(state.total_len);
+    let window_start_display = if state.total_len == 0 { 0 } else { state.from_seq + 1 };
 
     rsx! {
         div { class: "dash-grid",
@@ -1960,6 +2017,39 @@ fn AuditPanel() -> Element {
                             None => rsx! { span {} },
                         }
                     }
+                    div {
+                        class: "glass-card",
+                        style: "margin-bottom:12px; display:flex; align-items:center; gap:12px;",
+                        button {
+                            class: "btn btn-ghost",
+                            disabled: at_oldest,
+                            onclick: move |_| {
+                                let from_seq = audit().from_seq.saturating_sub(AUDIT_PAGE_SIZE as u64);
+                                audit.write().from_seq = from_seq;
+                                ws.send(FrontendMessage::Query {
+                                    id: "audit-page".to_string(),
+                                    payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
+                                });
+                            },
+                            "← Older"
+                        }
+                        button {
+                            class: "btn btn-ghost",
+                            disabled: at_newest,
+                            onclick: move |_| {
+                                let a = audit();
+                                let newest_from_seq = a.total_len.saturating_sub(AUDIT_PAGE_SIZE as u64);
+                                let from_seq = (a.from_seq + AUDIT_PAGE_SIZE as u64).min(newest_from_seq);
+                                audit.write().from_seq = from_seq;
+                                ws.send(FrontendMessage::Query {
+                                    id: "audit-page".to_string(),
+                                    payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
+                                });
+                            },
+                            "Newer →"
+                        }
+                        span { class: "label-tech", "Showing {window_start_display}–{window_end} of {state.total_len}" }
+                    }
                     AuditFeed { entries: state.entries.clone() }
                 }
             }
@@ -1968,7 +2058,7 @@ fn AuditPanel() -> Element {
                     div { class: "panel-head", h3 { "About" } }
                     div { class: "glass-card",
                         p { class: "label-tech",
-                            "Every allowed or denied action, HMAC-chained and offline-verifiable. This screen shows the newest {AUDIT_PAGE_SIZE} events; the Command Center's own short tail is separate and always shows the very latest few."
+                            "Every allowed or denied action, HMAC-chained and offline-verifiable. This screen shows {AUDIT_PAGE_SIZE} events at a time — use Older/Newer to page through the chain. The Command Center's own short tail is separate and always shows the very latest few."
                         }
                     }
                 }
@@ -7310,9 +7400,19 @@ async fn read_task(
                     id,
                     payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
                 } if id == "audit-page" => {
+                    // `from_seq` is deliberately NOT set here — it's set at
+                    // each request site (mount / Older / Newer, in
+                    // `AuditPanel` and `App`'s one-shot corrector) right
+                    // before the query is sent, so `AuditState.from_seq`
+                    // always reflects "what we last asked for" rather than
+                    // something inferred (unreliably) from the response.
                     let mut a = audit_page.write();
                     a.entries = entries;
                     a.total_len = total_len;
+                    // First response in — see `Dashboard.loaded`'s own
+                    // precedent, and `App`'s `audit_self_corrected` effect
+                    // which reacts to this flip.
+                    a.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::VerifyAuditChain { ok, .. },
