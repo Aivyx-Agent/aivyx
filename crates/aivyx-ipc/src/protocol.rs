@@ -1437,12 +1437,16 @@ pub struct NotifyTargetView {
 }
 
 /// Minimal per-session metadata returned by
-/// [`QueryResponsePayload::ListSessions`]. Will grow with later
-/// Phase 47 tasks (mission/audit) — kept additive so older frontends
-/// still deserialize new daemons.
+/// Chapter Postern/`/classic` retirement — one session as shown on the
+/// Studio's Sessions screen: identity, channel, trust posture, and
+/// activity timestamps (Unix millis).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: String,
+    pub channel: aivyx_core::ChannelPlatform,
+    pub trust_tier: aivyx_capability::TrustTier,
+    pub created_at_ms: u64,
+    pub last_active_at_ms: u64,
 }
 
 /// Compact mission view for the dashboard list pane. Mirrors the
@@ -2984,8 +2988,20 @@ mod tests {
                 id: "q-001".into(),
                 payload: QueryResponsePayload::ListSessions {
                     sessions: vec![
-                        SessionSummary { session_id: "s-1".into() },
-                        SessionSummary { session_id: "s-2".into() },
+                        SessionSummary {
+                            session_id: "s-1".into(),
+                            channel: aivyx_core::ChannelPlatform::Local,
+                            trust_tier: aivyx_capability::TrustTier::Trusted,
+                            created_at_ms: 0,
+                            last_active_at_ms: 0,
+                        },
+                        SessionSummary {
+                            session_id: "s-2".into(),
+                            channel: aivyx_core::ChannelPlatform::Telegram,
+                            trust_tier: aivyx_capability::TrustTier::SemiTrusted,
+                            created_at_ms: 0,
+                            last_active_at_ms: 0,
+                        },
                     ],
                 },
             },
@@ -3498,7 +3514,13 @@ mod tests {
         let msg = DaemonMessage::QueryResponse {
             id: "q-1".into(),
             payload: QueryResponsePayload::ListSessions {
-                sessions: vec![SessionSummary { session_id: "abc".into() }],
+                sessions: vec![SessionSummary {
+                    session_id: "abc".into(),
+                    channel: aivyx_core::ChannelPlatform::Local,
+                    trust_tier: aivyx_capability::TrustTier::Trusted,
+                    created_at_ms: 0,
+                    last_active_at_ms: 0,
+                }],
             },
         };
         let frame = encode_frame(&msg).expect("encode");

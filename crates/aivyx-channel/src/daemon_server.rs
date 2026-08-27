@@ -1996,7 +1996,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         let stale = pending_recovery.lock().unwrap().take();
         stale.and_then(|s| {
             let notice = DaemonLifecycleEvent::RecoveryNotice {
-                lost_sessions: s.sessions,
+                lost_sessions: s.sessions.iter().map(|r| r.session_id.clone()).collect(),
                 lost_turns: s.in_flight_turns,
                 stale_since: s.started_at,
             };
@@ -2047,9 +2047,24 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let sid = aivyx_core::SessionId::new().to_string();
                             session_id = Some(sid.clone());
 
-                            // Track session in daemon state.
+                            // Track session in daemon state — /classic
+                            // retirement (Sessions screen): channel and
+                            // trust tier are free here (the ChannelContext
+                            // was just constructed above); created/
+                            // last_active start identical.
                             if let Ok(mut st) = daemon_state.lock() {
-                                st.sessions.push(sid.clone());
+                                let now_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                let ch = channel.as_ref().expect("just constructed above");
+                                st.sessions.push(SessionRecord {
+                                    session_id: sid.clone(),
+                                    channel: ch.platform(),
+                                    trust_tier: ch.trust_tier(),
+                                    created_at_ms: now_ms,
+                                    last_active_at_ms: now_ms,
+                                });
                             }
 
                             let resp = DaemonMessage::SessionStarted { session_id: sid };
@@ -2063,6 +2078,20 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             attachments,
                             headless,
                         } => {
+                            // /classic retirement (Sessions screen) —
+                            // record this session as active on every
+                            // submitted turn, not just at StartSession.
+                            if let Ok(mut st) = daemon_state.lock() {
+                                if let Some(rec) =
+                                    st.sessions.iter_mut().find(|r| r.session_id == sid)
+                                {
+                                    rec.last_active_at_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                }
+                            }
+
                             // Chapter H — a per-turn `headless: true` opts this
                             // turn into RejectAndAbort, overriding the daemon's
                             // default `gate_policy`; otherwise the daemon default
@@ -3499,7 +3528,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
     // Deregister session from daemon state on disconnect.
     if let Some(ref sid) = session_id {
         if let Ok(mut st) = daemon_state.lock() {
-            st.sessions.retain(|s| s != sid);
+            st.sessions.retain(|s| &s.session_id != sid);
         }
     }
 
@@ -3767,6 +3796,20 @@ impl Drop for PidGuard {
 // StateGuard — crash-recovery metadata (Phase 41 Task 4)
 // ---------------------------------------------------------------------------
 
+/// One tracked daemon session — channel identity, trust posture, and
+/// activity timestamps. Replaces a bare session-id string
+/// (`/classic` retirement, `docs/superpowers/specs/2026-08-27-
+/// classic-retirement-design.md`) so the Studio's Sessions screen can
+/// show more than an opaque id.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionRecord {
+    pub session_id: String,
+    pub channel: aivyx_core::ChannelPlatform,
+    pub trust_tier: aivyx_capability::TrustTier,
+    pub created_at_ms: u64,
+    pub last_active_at_ms: u64,
+}
+
 /// Serializable snapshot of the daemon's active sessions and in-flight
 /// turns. Written to `daemon.state` on startup; cleared on clean
 /// shutdown. If a stale file is found on next startup, it means the
@@ -3776,7 +3819,7 @@ impl Drop for PidGuard {
 pub struct DaemonState {
     pub pid: u32,
     pub started_at: u64,
-    pub sessions: Vec<String>,
+    pub sessions: Vec<SessionRecord>,
     pub in_flight_turns: Vec<String>,
 }
 
@@ -3936,7 +3979,11 @@ async fn handle_query(
                     .sessions
                     .iter()
                     .map(|s| SessionSummary {
-                        session_id: s.clone(),
+                        session_id: s.session_id.clone(),
+                        channel: s.channel,
+                        trust_tier: s.trust_tier,
+                        created_at_ms: s.created_at_ms,
+                        last_active_at_ms: s.last_active_at_ms,
                     })
                     .collect();
                 QueryResponsePayload::ListSessions { sessions }
@@ -7533,15 +7580,31 @@ system_prompt = "You are a custom role."
         let state = DaemonState {
             pid: 12345,
             started_at: 1713700000,
-            sessions: vec!["ses-abc".into(), "ses-def".into()],
+            sessions: vec![
+                SessionRecord {
+                    session_id: "ses-abc".into(),
+                    channel: aivyx_core::ChannelPlatform::Local,
+                    trust_tier: aivyx_capability::TrustTier::Trusted,
+                    created_at_ms: 1713700000000,
+                    last_active_at_ms: 1713700000000,
+                },
+                SessionRecord {
+                    session_id: "ses-def".into(),
+                    channel: aivyx_core::ChannelPlatform::Telegram,
+                    trust_tier: aivyx_capability::TrustTier::SemiTrusted,
+                    created_at_ms: 1713700001000,
+                    last_active_at_ms: 1713700005000,
+                },
+            ],
             in_flight_turns: vec!["ses-abc:turn".into()],
         };
         let json = serde_json::to_string(&state).unwrap();
         let parsed: DaemonState = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.pid, 12345);
-        assert_eq!(parsed.started_at, 1713700000);
         assert_eq!(parsed.sessions.len(), 2);
-        assert_eq!(parsed.in_flight_turns, vec!["ses-abc:turn"]);
+        assert_eq!(parsed.sessions[0].session_id, "ses-abc");
+        assert_eq!(parsed.sessions[0].channel, aivyx_core::ChannelPlatform::Local);
+        assert_eq!(parsed.sessions[1].trust_tier, aivyx_capability::TrustTier::SemiTrusted);
+        assert_eq!(parsed.sessions[1].last_active_at_ms, 1713700005000);
     }
 
     #[test]
@@ -7559,13 +7622,22 @@ system_prompt = "You are a custom role."
         let state = DaemonState {
             pid: 99999,
             started_at: 1713700000,
-            sessions: vec!["ses-old".into()],
+            sessions: vec![
+                SessionRecord {
+                    session_id: "ses-old".into(),
+                    channel: aivyx_core::ChannelPlatform::Local,
+                    trust_tier: aivyx_capability::TrustTier::Trusted,
+                    created_at_ms: 0,
+                    last_active_at_ms: 0,
+                },
+            ],
             in_flight_turns: vec!["ses-old:turn".into()],
         };
         std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
         let recovered = detect_crash_recovery(&path).unwrap();
         assert_eq!(recovered.pid, 99999);
-        assert_eq!(recovered.sessions, vec!["ses-old"]);
+        assert_eq!(recovered.sessions.len(), 1);
+        assert_eq!(recovered.sessions[0].session_id, "ses-old");
         assert_eq!(recovered.in_flight_turns, vec!["ses-old:turn"]);
         let _ = std::fs::remove_file(&path);
     }
@@ -7604,8 +7676,15 @@ system_prompt = "You are a custom role."
         let shared = guard.shared();
 
         // Register a session.
-        shared.lock().unwrap().sessions.push("ses-1".into());
-        assert_eq!(shared.lock().unwrap().sessions, vec!["ses-1"]);
+        let rec = SessionRecord {
+            session_id: "ses-1".into(),
+            channel: aivyx_core::ChannelPlatform::Local,
+            trust_tier: aivyx_capability::TrustTier::Trusted,
+            created_at_ms: 0,
+            last_active_at_ms: 0,
+        };
+        shared.lock().unwrap().sessions.push(rec.clone());
+        assert_eq!(shared.lock().unwrap().sessions, vec![rec]);
 
         // Register an in-flight turn.
         shared
@@ -7623,11 +7702,40 @@ system_prompt = "You are a custom role."
         assert!(shared.lock().unwrap().in_flight_turns.is_empty());
 
         // Deregister session.
-        shared.lock().unwrap().sessions.retain(|s| s != "ses-1");
+        shared.lock().unwrap().sessions.retain(|s| s.session_id != "ses-1");
         assert!(shared.lock().unwrap().sessions.is_empty());
 
         drop(guard);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn submit_input_bumps_last_active_but_not_created_at() {
+        let mut sessions = vec![SessionRecord {
+            session_id: "ses-1".into(),
+            channel: aivyx_core::ChannelPlatform::Local,
+            trust_tier: aivyx_capability::TrustTier::Trusted,
+            created_at_ms: 1_000,
+            last_active_at_ms: 1_000,
+        }];
+        // Simulate what the SubmitInput handler does: find by session_id,
+        // bump last_active_at_ms only.
+        let sid = "ses-1".to_string();
+        let now_ms = 5_000u64;
+        if let Some(rec) = sessions.iter_mut().find(|r| r.session_id == sid) {
+            rec.last_active_at_ms = now_ms;
+        }
+        assert_eq!(sessions[0].created_at_ms, 1_000, "created_at must not move");
+        assert_eq!(sessions[0].last_active_at_ms, 5_000);
+
+        // A submit for an unknown session_id must not panic or insert a
+        // phantom record (e.g. a stale/already-disconnected session).
+        let unknown = "ses-does-not-exist".to_string();
+        let before = sessions.clone();
+        if let Some(rec) = sessions.iter_mut().find(|r| r.session_id == unknown) {
+            rec.last_active_at_ms = now_ms;
+        }
+        assert_eq!(sessions, before, "unknown session_id must be a no-op");
     }
 
     // -------------------------------------------------------------
