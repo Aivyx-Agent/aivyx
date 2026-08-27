@@ -136,11 +136,12 @@ enum View {
     /// Studio Gallery — recent images generated via the configured
     /// `comfyui` `[[mcp_server]]`, read from ComfyUI's own `/history` API.
     Gallery,
+    Audit,
 }
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 20] = [
+    const ALL: [View; 21] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -161,6 +162,7 @@ impl View {
         View::Voice,
         View::Settings,
         View::Guide,
+        View::Audit,
     ];
 
     /// The URL-hash slug for this view (deep-linking: `…/#memory`).
@@ -186,6 +188,7 @@ impl View {
             View::Voice => "voice",
             View::Guide => "guide",
             View::Onboarding => "create",
+            View::Audit => "audit",
         }
     }
 
@@ -217,6 +220,7 @@ impl View {
             View::Voice => "Voice",
             View::Guide => "Guide",
             View::Onboarding => "Create",
+            View::Audit => "Audit",
         }
     }
 }
@@ -453,6 +457,18 @@ struct NotificationsState {
     last_seen_seq: u64,
 }
 
+/// `/classic` retirement — the dedicated Audit screen's state (distinct
+/// from `Dashboard.audit_entries`, the Command Center's own short,
+/// auto-following tail — this one is explicitly paginated by the
+/// operator). Chain-verify reuses `Dashboard.chain_ok` directly rather
+/// than duplicating it; see the AuditPanel component below.
+#[derive(Clone, Default, PartialEq)]
+struct AuditState {
+    entries: Vec<AuditEntrySummary>,
+    total_len: u64,
+    from_seq: u64,
+}
+
 /// Chapter Chime — Schedules screen UI state (the list itself lives in
 /// `Dashboard::schedules`, already polled every 5 s).
 #[derive(Clone, Default, PartialEq)]
@@ -633,6 +649,7 @@ fn App() -> Element {
     let gallery = use_signal(GalleryState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
+    let audit_page = use_signal(AuditState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -661,7 +678,7 @@ fn App() -> Element {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
             teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            connected, session, transcript, streaming, gate, mission_ui,
+            audit_page, connected, session, transcript, streaming, gate, mission_ui,
         )
     });
     use_context_provider(|| ws);
@@ -682,6 +699,7 @@ fn App() -> Element {
     use_context_provider(|| gallery);
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
+    use_context_provider(|| audit_page);
     // Chapter Chime — the Schedules screen reads the routine list from
     // the dashboard snapshot (already polled every 5 s). Dashboard had
     // only ever been passed as a prop; the missing provider panicked
@@ -806,6 +824,7 @@ fn App() -> Element {
         View::Voice => "Voice",
         View::Guide => "Guide",
         View::Onboarding => "Create your agent",
+        View::Audit => "Audit",
     };
 
     rsx! {
@@ -854,6 +873,7 @@ fn App() -> Element {
                         View::Voice => rsx! { VoicePanel {} },
                         View::Guide => rsx! { GuidePanel { page: guide_page } },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
+                        View::Audit => rsx! { AuditPanel {} },
                     }
                 }
             }
@@ -999,6 +1019,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             "System",
             vec![
                 (ICON_DOCUMENTS, "Documents", View::Documents),
+                (ICON_DOCUMENTS, "Audit", View::Audit),
                 (ICON_GALLERY, "Gallery", View::Gallery),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_PLUGINS, "MCP", View::Mcp),
@@ -1885,6 +1906,71 @@ fn NotificationHistoryRow(entry: NotificationHistoryEntry) -> Element {
                 span { "{rel_time(entry.dispatched_at_unix_ms)}" }
                 if !entry.outcome_detail.is_empty() {
                     span { style: "opacity:0.8;", "{entry.outcome_detail}" }
+                }
+            }
+        }
+    }
+}
+
+// ── /classic retirement — the dedicated Audit screen ────────────────────
+
+/// `/classic` retirement — the dedicated, paginated Audit screen.
+/// Reuses the existing AuditFeed row-renderer (built for the Command
+/// Center's short tail) rather than a second copy of the same markup.
+const AUDIT_PAGE_SIZE: u32 = 50;
+
+#[component]
+fn AuditPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let audit = use_context::<Signal<AuditState>>();
+    let dashboard = use_context::<Signal<Dashboard>>();
+
+    // Load the newest page each time the view opens.
+    use_future(move || async move {
+        let total = audit().total_len;
+        let from_seq = total.saturating_sub(AUDIT_PAGE_SIZE as u64);
+        ws.send(FrontendMessage::Query {
+            id: "audit-page".to_string(),
+            payload: QueryPayload::ListAuditEntries { from_seq, limit: AUDIT_PAGE_SIZE },
+        });
+    });
+
+    let state = audit();
+    let chain_ok = dashboard().chain_ok;
+
+    rsx! {
+        div { class: "dash-grid",
+            div { class: "dash-main",
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Audit chain" }
+                        span { class: "label-tech", "{state.total_len} total events" }
+                    }
+                    div { class: "glass-card", style: "margin-bottom:12px;",
+                        button {
+                            onclick: move |_| ws.send(FrontendMessage::Query {
+                                id: "mc-verify".to_string(),
+                                payload: QueryPayload::VerifyAuditChain,
+                            }),
+                            "Verify chain"
+                        }
+                        match chain_ok {
+                            Some(true) => rsx! { span { style: "color: var(--ok, #16a34a); margin-left:8px;", "✓ chain intact" } },
+                            Some(false) => rsx! { span { style: "color: var(--danger, #b91c1c); margin-left:8px;", "✗ chain verification failed" } },
+                            None => rsx! { span {} },
+                        }
+                    }
+                    AuditFeed { entries: state.entries.clone() }
+                }
+            }
+            aside { class: "dash-rail",
+                section { class: "panel",
+                    div { class: "panel-head", h3 { "About" } }
+                    div { class: "glass-card",
+                        p { class: "label-tech",
+                            "Every allowed or denied action, HMAC-chained and offline-verifiable. This screen shows the newest {AUDIT_PAGE_SIZE} events; the Command Center's own short tail is separate and always shows the very latest few."
+                        }
+                    }
                 }
             }
         }
@@ -6950,6 +7036,7 @@ async fn ws_task(
     gallery: Signal<GalleryState>,
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
+    audit_page: Signal<AuditState>,
     mut connected: Signal<bool>,
     session: Signal<Option<String>>,
     transcript: Signal<Vec<ChatLine>>,
@@ -6989,7 +7076,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
             teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            connected, session, transcript, streaming, gate, mission_ui,
+            audit_page, connected, session, transcript, streaming, gate, mission_ui,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -7084,6 +7171,7 @@ async fn read_task(
     mut gallery: Signal<GalleryState>,
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
+    mut audit_page: Signal<AuditState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -7202,15 +7290,29 @@ async fn read_task(
                 } if id.starts_with("mc-docs") => {
                     documents.write().notice = Some((false, message));
                 }
+                // /classic retirement — the dedicated Audit screen sends its
+                // own ListAuditEntries with a different id ("audit-page");
+                // guard this arm to the Command Center poll's own id so the
+                // two screens' state don't cross-populate (same pattern the
+                // GetProfile handler already uses to route mc-agents-get vs
+                // the dashboard's own snapshot).
                 DaemonEnvelope::QueryResponse {
+                    id,
                     payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
-                    ..
-                } => {
+                } if id == "mc-audit" => {
                     let mut d = dashboard.write();
                     d.audit_entries = entries;
                     d.audit_total = total_len;
                     // First dashboard snapshot in — switch off the skeleton.
                     d.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::ListAuditEntries { entries, total_len },
+                } if id == "audit-page" => {
+                    let mut a = audit_page.write();
+                    a.entries = entries;
+                    a.total_len = total_len;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::VerifyAuditChain { ok, .. },
