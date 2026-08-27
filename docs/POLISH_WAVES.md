@@ -43,12 +43,13 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | # | Sub-project | Contains | Size | Status |
 |---|---|---|---|---|
 | 1 | **Small backlog sweep** | See below | Small each | ✅ done 2026-08-27 (6 of 9 fixed, 1 already done, 1 checked/not reproducible, 1 deferred — see below) |
-| 2 | **`/classic` retirement** | See below | Medium, low risk | Not started |
+| 2 | **`/classic` retirement** | See below | Medium | Scoping in progress 2026-08-27 |
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small–medium | Not started |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | Not started |
 | 5 | **Missions polish** | See below | Medium | Not started |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | Not started |
 | 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | Not started |
+| 8 | **Tool/server call-stat observability** | See below | Large | Not started |
 
 Each sub-project gets its own brainstorm → spec → plan cycle when its
 turn comes, per the workspace's usual SDD process — items 1's small
@@ -112,26 +113,49 @@ Commits: `285ac107` (session_id), `2a2726fc` (skill naming),
 firewall docs), `d92d4746` (doctor Gatehouse hint). Merged to `main`,
 pushed.
 
-## 2 · `/classic` retirement (V09_PLAN row 7)
+## 2 · `/classic` retirement (V09_PLAN row 7) — scoping in progress
 
 Real inventory from `VITRINE.md` §11 (not `V09_PLAN.md`'s own "expect:
 3 panes" guess): **audit, sessions, notifications, learning**.
-Notifications already shipped (Chapter Herald, 2026-07-07) — 3 remain:
+Notifications already shipped (Chapter Herald, 2026-07-07) — 3 remain.
+Scoped into 5 pieces 2026-08-27, real code investigated (not guessed)
+for each:
 
-- Port **audit** — the full-chain browser (pagination, event types);
-  Studio today only has the Command Center's short tail.
-- Port **sessions** — no Studio equivalent at all today.
-- Port **learning** — the `GetLearningInsights` view (reflection
-  cadence, recall feedback); candidate per Vitrine's own note: fold
-  into the Command Center rather than a dedicated screen.
-- All four fit the proven read-only screen recipe (same shape as
-  Notifications/Skills).
-- Then the actual retirement: delete the `/classic` panes with Studio
-  equivalents, keep a minimal no-bundle fallback page (explicitly NOT
-  a blind delete — `/classic` is also today's no-bundle fallback).
-- Unblocks TUI parity: §12 notes the TUI's Audit/Tools panes are
-  "known placeholders — the /classic-port backlog," so this sub-project
-  closes that gap for both surfaces at once.
+- **A. Web Audit screen** — port `ListAuditEntries` (paginated,
+  `from_seq`/`limit`, server-capped at 500) + chain-verify, the proven
+  read-only recipe (same shape as Notifications).
+- **B. Web Sessions screen, enriched** (user decision 2026-08-27: not
+  a bare port) — `DaemonState.sessions` is a bare `Vec<String>` today
+  (`SessionSummary` carries only `session_id`); enrich with channel/
+  frontend type, trust tier, `created_at`, and `last_active_at`
+  (updated per-turn, not just at `StartSession`) — a real backend
+  change to `DaemonState`'s session tracking, not just a new screen.
+- **C. Learning → Command Center** (user decision 2026-08-27, matching
+  `VITRINE.md`'s own candidate) — a Learning panel/card on the existing
+  Command Center screen via `GetLearningInsights`, not a new nav
+  destination.
+- **D. The actual retirement** — once A/B/C exist, delete the
+  `/classic` panes with Studio equivalents from
+  `crates/aivyx-channel/src/web_ui_static.html`, replace `/`'s
+  no-bundle fallback with a small dedicated page (NOT the multi-pane
+  legacy app) — `/classic` currently serves double duty (the legacy
+  inspector *and* the emergency fallback when the wasm bundle isn't
+  built), so this needs care, not a blind delete.
+- **E. TUI Audit view** (user decision 2026-08-27: include TUI, not
+  web-only) — `aivyx-tui`'s `View::Audit` is a hardcoded
+  `placeholder_lines(...)` today (`render.rs`); wire the same
+  `ListAuditEntries` query A uses into a real ratatui rendering with
+  pagination keybindings. A genuine second implementation (ratatui,
+  not a copy of the Dioxus component) but the same backend query.
+
+**Split out 2026-08-27, not part of this sub-project:** the TUI's
+`View::Tools` placeholder ("the registered tools — provenance,
+capability scope, and call stats") is not a port — there is no
+existing backend query for tool-registry/call-stat data at all. Its
+call-stats half needs the same audit-chain aggregation mechanism as
+the MCP tool-level health signal (deferred to sub-project 7) — building
+that mechanism twice would be wasteful and inconsistent, so both now
+live together in **sub-project 8**.
 
 ## 3 · Repertoire / governed-write completions (V09_PLAN row 6)
 
@@ -236,13 +260,14 @@ solving once, deliberately, not per-feature.
   ask) — add/edit/update/remove `[[mcp_server]]` from the Studio,
   including `${VAR}`-interpolated `env`/`headers` (Chapter Conduit),
   ideally a "test connection" probe before save.
-- **MCP tool-level health signal** (§10, moved here 2026-08-27 from
-  sub-project 1's small-backlog sweep — found to need real audit-chain
-  aggregation plus a new Lantern-screen surface, bigger than "small").
-  Status is connection-level from the last daemon start today —
-  `web-search` showed green all day while DuckDuckGo refused its
-  queries. Natural to land alongside the MCP CRUD screen above rather
-  than as its own pass.
+- **MCP tool-level health signal** (§10) — moved to **sub-project 8**
+  2026-08-27 (originally landed here from sub-project 1's small-backlog
+  sweep, then moved again once sub-project 2's own TUI Tools scoping
+  found it shares its core mechanism — audit-chain call-stat
+  aggregation — with that item). Still natural to land the Lantern
+  screen's own surface alongside the MCP CRUD screen above when the
+  time comes; only the aggregation mechanism itself lives in
+  sub-project 8.
 - **Notify-target CRUD** (Chapter Herald's own explicit deferral) —
   creating/editing Telegram bot tokens, webhook URLs, SMTP creds from
   the web form; today read-only by deliberate decision pending this
@@ -267,6 +292,33 @@ solving once, deliberately, not per-feature.
   sub-projects 2, 3, and 6 landing first, and from the new visual
   language sub-project 6 establishes (new screens here should be built
   in it directly).
+
+## 8 · Tool/server call-stat observability
+
+New sub-project, split out of sub-project 2's scoping 2026-08-27. Two
+findings that turned out to be the same underlying problem: "is this
+tool/server actually working," derived from the audit chain rather
+than trusted from connection-time status alone.
+
+- **A shared audit-chain call-stat aggregator** — the piece neither
+  finding below has today: recent per-tool (or per-MCP-server) success/
+  failure counts derived from real audit entries, not just "did it
+  connect at daemon start." Design once, use twice.
+- **TUI Tools view** (`VITRINE.md` §12, `aivyx-tui`'s `View::Tools`) —
+  currently a hardcoded placeholder ("the registered tools —
+  provenance, capability scope, and call stats"); needs a brand-new
+  IPC query enumerating the registered `Tool` trait objects
+  (`id()`/`name()`/`required_scope()`) plus the shared aggregator's
+  call-stat data, rendered in ratatui.
+- **MCP tool-level health signal** (`VITRINE.md` §10) — the Lantern
+  screen's connection status is connection-level from the last daemon
+  start; `web-search` showed green all day while DuckDuckGo silently
+  refused its queries. The shared aggregator, surfaced per-server
+  instead of per-tool, closes this — natural to land alongside
+  sub-project 7's MCP CRUD screen.
+- Not yet scoped in detail (found, not designed) — this doc records
+  that it exists and why the two findings are joined; a real
+  brainstorm/design pass is its own future session.
 
 ---
 
