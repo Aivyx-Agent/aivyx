@@ -7106,7 +7106,22 @@ impl ChannelContext for IpcChannelBridge {
     }
 
     fn session_id(&self) -> aivyx_core::SessionId {
-        self.inner.session_id()
+        // VITRINE.md §6 P3 — this used to delegate to `self.inner.session_id()`,
+        // the wrapped daemon-stub channel's OWN stored session, which is set
+        // independently of `self.session_id` (this bridge's copy of `sid`, the
+        // exact string the caller already parsed into the turn's
+        // `Message.session_id` a few lines above where this bridge is built).
+        // TurnStarted reads this method; SkillInvocation reads
+        // `Message.session_id` directly — so the two audit events could carry
+        // two different session ids for the same turn. Parse the same string
+        // the same way, so both sides agree; fall back to the inner channel's
+        // id (not a fresh `SessionId::new()`) only if that string somehow
+        // isn't a valid UUID, so a parse failure still returns *a* stable id
+        // rather than a fresh one on every call.
+        self.session_id
+            .parse::<uuid::Uuid>()
+            .map(aivyx_core::SessionId)
+            .unwrap_or_else(|_| self.inner.session_id())
     }
 
     async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), aivyx_core::ChannelError> {
@@ -7217,6 +7232,69 @@ mod tests {
             !DaemonError::Io(Error::new(ErrorKind::PermissionDenied, "nope")).is_clean_disconnect()
         );
         assert!(!DaemonError::Protocol("bad handshake".into()).is_clean_disconnect());
+    }
+
+    // VITRINE.md §6 P3 — TurnStarted (via ChannelContext::session_id) and
+    // SkillInvocation (via Message.session_id) used to be able to disagree
+    // on the same turn's session id, since IpcChannelBridge::session_id()
+    // delegated to the wrapped inner channel's own, separately-tracked
+    // session instead of parsing the same `sid` string the Message's own
+    // session_id was built from.
+    #[tokio::test]
+    async fn ipc_channel_bridge_session_id_matches_the_parsed_sid_not_the_inner_channels() {
+        struct StubInner(aivyx_core::SessionId);
+        #[async_trait::async_trait]
+        impl aivyx_core::ChannelContext for StubInner {
+            fn channel_name(&self) -> &str {
+                "stub"
+            }
+            fn platform(&self) -> aivyx_core::ChannelPlatform {
+                aivyx_core::ChannelPlatform::Local
+            }
+            fn trust_tier(&self) -> aivyx_capability::TrustTier {
+                aivyx_capability::TrustTier::Trusted
+            }
+            fn session_id(&self) -> aivyx_core::SessionId {
+                self.0
+            }
+            async fn stream_event(
+                &self,
+                _e: aivyx_core::StreamEvent<'_>,
+            ) -> Result<(), aivyx_core::ChannelError> {
+                Ok(())
+            }
+            async fn finalize(
+                &self,
+                _o: &aivyx_core::TurnOutcome,
+            ) -> Result<(), aivyx_core::ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> aivyx_core::CancellationToken {
+                aivyx_core::CancellationToken::new()
+            }
+        }
+
+        let (a, _b) = tokio::net::UnixStream::pair().expect("socketpair");
+        let (_read, write) = a.into_split();
+
+        // Deliberately different from `real_sid` — reproduces the bug's
+        // precondition: the inner channel's own session diverges from the
+        // sid the current connection's turn actually carries.
+        let inner_sid = aivyx_core::SessionId::new();
+        let real_sid = aivyx_core::SessionId::new();
+
+        let bridge = IpcChannelBridge {
+            inner: Arc::new(StubInner(inner_sid)),
+            writer: Arc::new(tokio::sync::Mutex::new(write)),
+            session_id: real_sid.to_string(),
+        };
+
+        assert_eq!(
+            bridge.session_id(),
+            real_sid,
+            "must match the sid this bridge was built with, not the inner channel's own"
+        );
+        assert_ne!(bridge.session_id(), inner_sid);
     }
 
     #[test]
