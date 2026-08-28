@@ -27,7 +27,10 @@ use aivyx_channel::daemon_client::{
 use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload};
 
 use crate::event::{key_to_action, Action};
-use crate::model::{audit_page_from_seq, mission_rows_from_views, update, AppState, Msg, View};
+use crate::model::{
+    audit_initial_fetch_correction, audit_page_from_seq, mission_rows_from_views, update,
+    AppState, Msg, View,
+};
 use crate::terminal::Tui;
 
 /// How long to wait for an auto-spawned daemon to come up. Matches the
@@ -130,9 +133,27 @@ async fn run_loop(
                 let switching_to_audit = matches!(msg, Msg::SwitchView(View::Audit));
                 apply(state, msg);
                 if switching_to_audit {
-                    let from_seq =
+                    // The `from_seq` here is a *guess* — `state.audit_total`
+                    // is whatever happened to be cached before this fetch
+                    // (`0` on the session's first-ever visit, or possibly
+                    // stale if the chain grew since a previous visit). Once
+                    // the fetch reveals the real `total_len`, check the
+                    // guess against it and, if wrong, fetch again with the
+                    // corrected window — all synchronously, before control
+                    // returns to the render loop, so the operator never
+                    // sees the wrong page. Runs on every switch (no latch),
+                    // so a chain that grew between visits self-corrects
+                    // every time, not just once per session.
+                    let guessed_from_seq =
                         state.audit_total.saturating_sub(AUDIT_PAGE_SIZE as u64);
-                    fetch_audit_page(socket_path, state, from_seq).await;
+                    fetch_audit_page(socket_path, state, guessed_from_seq).await;
+                    if let Some(corrected_from_seq) = audit_initial_fetch_correction(
+                        guessed_from_seq,
+                        state.audit_total,
+                        AUDIT_PAGE_SIZE as u64,
+                    ) {
+                        fetch_audit_page(socket_path, state, corrected_from_seq).await;
+                    }
                 }
             }
             Action::Quit => apply(state, Msg::Quit),

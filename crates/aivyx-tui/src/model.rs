@@ -633,10 +633,54 @@ pub fn audit_page_from_seq(
     forward: bool,
 ) -> u64 {
     if forward {
-        let newest_from_seq = total_len.saturating_sub(page_size);
-        (current_from_seq + page_size).min(newest_from_seq)
+        (current_from_seq + page_size).min(audit_newest_from_seq(total_len, page_size))
     } else {
         current_from_seq.saturating_sub(page_size)
+    }
+}
+
+/// The `from_seq` of the newest full page for a chain of length
+/// `total_len` — shared by [`audit_page_from_seq`]'s forward clamp and
+/// [`audit_initial_fetch_correction`]'s self-correction check.
+fn audit_newest_from_seq(total_len: u64, page_size: u64) -> u64 {
+    total_len.saturating_sub(page_size)
+}
+
+/// `/classic` retirement (Task 5 fix) — decides whether the Audit view's
+/// *initial* fetch on switching into the view needs a follow-up
+/// correction.
+///
+/// That first fetch has to guess `from_seq` before the true chain
+/// length is known (from whatever `audit_total` happens to be cached —
+/// `0` on a session's first visit, or possibly stale after a revisit
+/// where the chain grew while the operator was on another tab). Once
+/// the fetch returns, the real `total_len` is known, so the guess can
+/// be checked against it: `guessed_from_seq` was right only if it
+/// already equals the newest window's start for that `total_len`.
+///
+/// Returns `Some(corrected_from_seq)` when the guess was wrong (the
+/// operator would otherwise be looking at a stale or oldest-first page
+/// with no indication anything is off) — the caller should fetch again
+/// with `corrected_from_seq`, once. Returns `None` when the guess was
+/// already correct (a short chain that fits in one page, or a revisit
+/// where the cache happened to be accurate) — no second fetch is
+/// wasted.
+///
+/// This is a plain comparison, re-derived from the *current* `total_len`
+/// every time it's called — it has no memory of "have I corrected once
+/// already", so it self-corrects on every switch into the view, not
+/// just the first one in a session (the exact latch bug the web Audit
+/// screen's first fix attempt had to be reworked away from).
+pub fn audit_initial_fetch_correction(
+    guessed_from_seq: u64,
+    total_len: u64,
+    page_size: u64,
+) -> Option<u64> {
+    let newest_from_seq = audit_newest_from_seq(total_len, page_size);
+    if guessed_from_seq == newest_from_seq {
+        None
+    } else {
+        Some(newest_from_seq)
     }
 }
 
@@ -1215,6 +1259,46 @@ mod tests {
         // so both directions are no-ops from the only page there is.
         assert_eq!(audit_page_from_seq(0, 30, 50, true), 0);
         assert_eq!(audit_page_from_seq(0, 30, 50, false), 0);
+    }
+
+    // ---- Audit initial-fetch self-correction (review fix, review round 2) ----
+
+    #[test]
+    fn audit_initial_fetch_corrects_a_zero_guess_on_a_long_chain() {
+        // First-ever visit of a session: audit_total was 0 before the
+        // fetch, so the guess was 0 (oldest page) — but the fetch reveals
+        // a 500-entry chain, so the newest window starts at 450.
+        assert_eq!(
+            audit_initial_fetch_correction(0, 500, 50),
+            Some(450),
+            "a zero guess on a long chain must be corrected to the newest window"
+        );
+    }
+
+    #[test]
+    fn audit_initial_fetch_corrects_a_stale_guess_after_the_chain_grew() {
+        // A revisit: audit_total was cached at 500 from a previous visit
+        // (guess = 450), but the chain grew to 900 while the operator was
+        // on another tab, so the real newest window now starts at 850.
+        // This must self-correct on *every* switch, not just the first
+        // one in a session.
+        assert_eq!(audit_initial_fetch_correction(450, 900, 50), Some(850));
+    }
+
+    #[test]
+    fn audit_initial_fetch_needs_no_correction_for_a_short_chain() {
+        // total=30 < page=50: the newest window saturates to 0, and a
+        // first-ever guess (also 0, since audit_total starts at 0) is
+        // already correct — no wasted second fetch.
+        assert_eq!(audit_initial_fetch_correction(0, 30, 50), None);
+    }
+
+    #[test]
+    fn audit_initial_fetch_needs_no_correction_when_the_cache_was_accurate() {
+        // A revisit where the chain hasn't grown since the cached guess
+        // was computed: the guess already lands on the true newest
+        // window, so no second fetch fires.
+        assert_eq!(audit_initial_fetch_correction(450, 500, 50), None);
     }
 
     #[test]
