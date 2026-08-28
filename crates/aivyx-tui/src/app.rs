@@ -21,13 +21,13 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
 use aivyx_channel::daemon_client::{
-    resolve_team_gate, spawn_daemon_and_wait, team_mission_list, team_run_goal,
-    DaemonCancelHandle, DaemonSession,
+    list_audit_entries, resolve_team_gate, spawn_daemon_and_wait, team_mission_list,
+    team_run_goal, DaemonCancelHandle, DaemonSession,
 };
 use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload};
 
 use crate::event::{key_to_action, Action};
-use crate::model::{mission_rows_from_views, update, AppState, Msg};
+use crate::model::{audit_page_from_seq, mission_rows_from_views, update, AppState, Msg, View};
 use crate::terminal::Tui;
 
 /// How long to wait for an auto-spawned daemon to come up. Matches the
@@ -42,6 +42,12 @@ const POLL: Duration = Duration::from_millis(100);
 /// `TeamMissionList` feed. Poll-based, mirroring `aivyx loop status`; a live
 /// mission updates within this window.
 const MISSION_POLL: Duration = Duration::from_millis(1500);
+
+/// `/classic` retirement (Task E) — the Audit view's page size. This is
+/// an operator-paginated screen, not a background-polled live feed like
+/// Missions, so there is no timer-driven refresh — only a fetch on
+/// switching into the view and on each pagination keypress.
+const AUDIT_PAGE_SIZE: u32 = 50;
 
 /// Connect (auto-spawning the daemon if needed), enter the terminal,
 /// and drive the TUI to completion. Restores the terminal on every
@@ -116,7 +122,19 @@ async fn run_loop(
                 // `Cancel` is only meaningful during a turn (handled in
                 // `run_turn`); at idle there's nothing to cancel.
             }
-            Action::Update(msg) => apply(state, msg),
+            Action::Update(msg) => {
+                // `/classic` retirement (Task E) — switching into the Audit
+                // view seeds it with the newest page; the view itself has
+                // no background refresh, so this is the only fetch until
+                // the operator pages (Action::AuditPage, below).
+                let switching_to_audit = matches!(msg, Msg::SwitchView(View::Audit));
+                apply(state, msg);
+                if switching_to_audit {
+                    let from_seq =
+                        state.audit_total.saturating_sub(AUDIT_PAGE_SIZE as u64);
+                    fetch_audit_page(socket_path, state, from_seq).await;
+                }
+            }
             Action::Quit => apply(state, Msg::Quit),
             Action::ResolveTeamGate(approved) => {
                 resolve_team_gate_action(socket_path, state, approved).await;
@@ -161,6 +179,22 @@ async fn run_loop(
                     }
                 }
             }
+            Action::AuditPage { forward } => {
+                // The window currently on screen starts at its first
+                // entry's `seq` (entries are contiguous, ascending); `0`
+                // before any page has loaded. See `audit_page_from_seq`'s
+                // own doc comment for why this isn't derived from
+                // `state.audit_total` alone.
+                let current_from_seq =
+                    state.audit_entries.first().map(|e| e.seq).unwrap_or(0);
+                let from_seq = audit_page_from_seq(
+                    current_from_seq,
+                    state.audit_total,
+                    AUDIT_PAGE_SIZE as u64,
+                    forward,
+                );
+                fetch_audit_page(socket_path, state, from_seq).await;
+            }
         }
     }
 }
@@ -173,6 +207,19 @@ async fn poll_missions(socket_path: &Path, state: &mut AppState) {
     if let Ok(records) = team_mission_list(socket_path).await {
         let views = records.iter().map(|r| r.to_view()).collect();
         apply(state, Msg::MissionsUpdated(mission_rows_from_views(views)));
+    }
+}
+
+/// `/classic` retirement (Task E) — fetch a fresh page of audit entries
+/// and push it into the Audit view. Called on switching into the view and
+/// on each pagination keypress. Best-effort, matching `poll_missions`: a
+/// fetch error (e.g. a daemon with no audit log configured) leaves the
+/// panel as-is rather than surfacing a chat error.
+async fn fetch_audit_page(socket_path: &Path, state: &mut AppState, from_seq: u64) {
+    if let Ok((entries, total_len)) =
+        list_audit_entries(socket_path, from_seq, AUDIT_PAGE_SIZE).await
+    {
+        apply(state, Msg::AuditUpdated { entries, total_len });
     }
 }
 

@@ -38,6 +38,10 @@ pub enum Action {
     /// Chapter L — submit the composed "new mission" goal: the driver sends
     /// `TeamRunGoal`, the daemon decomposes + runs it.
     SubmitMission,
+    /// `/classic` retirement (Task E) — page the Audit view's window one
+    /// page forward (toward the newest entries) or backward (toward the
+    /// oldest). The driver computes the new `from_seq` and re-fetches.
+    AuditPage { forward: bool },
     /// Tear down and exit.
     Quit,
     /// Ignore this keystroke.
@@ -129,6 +133,8 @@ pub fn key_to_action(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::PageDown => Action::Update(Msg::ScrollDown(PAGE)),
             KeyCode::Up => Action::Update(Msg::ScrollUp(1)),
             KeyCode::Down => Action::Update(Msg::ScrollDown(1)),
+            KeyCode::Left if state.view == View::Audit => Action::AuditPage { forward: false },
+            KeyCode::Right if state.view == View::Audit => Action::AuditPage { forward: true },
             _ => Action::None,
         };
     }
@@ -454,6 +460,32 @@ mod tests {
             key_to_action(key(KeyCode::Esc), &s),
             Action::Update(Msg::MissionComposeCancel)
         );
+    }
+
+    // ---- `/classic` retirement (Task E) — Audit view pagination keys ----
+
+    #[test]
+    fn audit_view_left_right_page_the_window() {
+        let mut s = AppState::new();
+        s.view = View::Audit;
+        assert_eq!(
+            key_to_action(key(KeyCode::Left), &s),
+            Action::AuditPage { forward: false }
+        );
+        assert_eq!(
+            key_to_action(key(KeyCode::Right), &s),
+            Action::AuditPage { forward: true }
+        );
+    }
+
+    #[test]
+    fn left_right_are_inert_outside_the_audit_view() {
+        // Missions has its own semantics elsewhere for these keys (none,
+        // currently) and Dashboard/Tools don't page — only Audit does.
+        let mut s = AppState::new();
+        s.view = View::Dashboard;
+        assert_eq!(key_to_action(key(KeyCode::Left), &s), Action::None);
+        assert_eq!(key_to_action(key(KeyCode::Right), &s), Action::None);
     }
 
     #[test]

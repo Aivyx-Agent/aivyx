@@ -160,10 +160,23 @@ fn panel_block(title: &str) -> Block<'_> {
 fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let (title, lines) = match state.view {
         View::Dashboard => ("DASHBOARD", dashboard_lines(state)),
-        View::Audit => (
-            "AUDIT",
-            placeholder_lines("the HMAC-chained audit stream — events, verification, JSONL export"),
-        ),
+        View::Audit => {
+            let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+                format!("{} total events — ← / → to page", state.audit_total),
+                fg(palette::DIMMER),
+            ))];
+            if state.audit_entries.is_empty() {
+                lines.push(Line::from(Span::styled("No entries loaded.", fg(palette::DIM))));
+            } else {
+                for e in state.audit_entries.iter().rev() {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("#{} ", e.seq), fg(palette::DIMMER)),
+                        Span::styled(e.event_type.clone(), fg(palette::AMBER)),
+                    ]));
+                }
+            }
+            ("AUDIT", lines)
+        }
         View::Tools => (
             "TOOLS",
             placeholder_lines("the registered tools — provenance, capability scope, and call stats"),
@@ -765,6 +778,62 @@ mod tests {
         let long = wrap_line("abcdefghijklmnop", 5);
         assert!(long.iter().all(|c| c.chars().count() <= 5));
         assert_eq!(long.concat(), "abcdefghijklmnop");
+    }
+
+    #[test]
+    fn audit_view_shows_empty_state_before_any_fetch() {
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Audit;
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("AUDIT"), "panel titled");
+        assert!(text.contains("0 total events"), "total shown even at zero");
+        assert!(text.contains("No entries loaded"), "empty state shown");
+        assert!(!text.contains("Phase 186"), "placeholder copy is gone");
+    }
+
+    #[test]
+    fn audit_view_renders_entries_newest_first() {
+        use aivyx_channel::daemon_ipc::AuditEntrySummary;
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Audit;
+        state.audit_total = 2;
+        state.audit_entries = vec![
+            AuditEntrySummary {
+                seq: 0,
+                appended_at_unix_ms: 1_000,
+                event_type: "TurnStarted".into(),
+                event: serde_json::json!({}),
+                mac_hex: "aaa".into(),
+            },
+            AuditEntrySummary {
+                seq: 1,
+                appended_at_unix_ms: 2_000,
+                event_type: "TurnEnded".into(),
+                event: serde_json::json!({}),
+                mac_hex: "bbb".into(),
+            },
+        ];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("2 total events"), "total shown");
+        assert!(text.contains("#0"), "seq 0 rendered");
+        assert!(text.contains("#1"), "seq 1 rendered");
+        assert!(text.contains("TurnStarted"), "event type rendered");
+        assert!(text.contains("TurnEnded"), "event type rendered");
+        // Newest first: seq 1 ("TurnEnded") appears before seq 0
+        // ("TurnStarted") in the rendered buffer.
+        let pos_1 = text.find("TurnEnded").unwrap();
+        let pos_0 = text.find("TurnStarted").unwrap();
+        assert!(pos_1 < pos_0, "newest entry (seq 1) renders above seq 0");
     }
 
     #[test]

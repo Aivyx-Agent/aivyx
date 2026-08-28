@@ -14,7 +14,7 @@
 //! The daemon is the agent; this is just a render + interaction layer
 //! over the IPC stream — no capability, trust, or audit concern.
 
-use aivyx_channel::daemon_ipc::StreamEventPayload;
+use aivyx_channel::daemon_ipc::{AuditEntrySummary, StreamEventPayload};
 use aivyx_channel::team_mission::{TeamMissionPhase, TeamMissionView, TeamStepState};
 
 /// The provenance of a rendered chat line. The terminal driver maps
@@ -282,7 +282,15 @@ fn step_state_from(s: TeamStepState) -> StepState {
 
 /// The complete UI state. Owned, cloneable, and free of terminal
 /// types so the reducer is pure.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// `Eq` was dropped from this derive when the Audit view's
+/// `audit_entries: Vec<AuditEntrySummary>` field was added
+/// (`/classic` retirement, Task E): `AuditEntrySummary` carries a
+/// `serde_json::Value` body and only derives `PartialEq`, not `Eq`, so
+/// this struct can no longer either. Nothing in this crate compares
+/// `AppState` for `Eq` (no `HashSet<AppState>` etc.) — every existing
+/// use is `assert_eq!`, which only needs `PartialEq` + `Debug`.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct AppState {
     /// The active top-level view (Chat by default).
     pub view: View,
@@ -313,6 +321,9 @@ pub struct AppState {
     /// Set once the operator asks to quit; the driver's event loop
     /// observes this and tears down the terminal.
     pub should_quit: bool,
+    /// `/classic` retirement — the Audit view's current page.
+    pub audit_entries: Vec<AuditEntrySummary>,
+    pub audit_total: u64,
 }
 
 /// A message into the reducer. Key events become editing / scroll /
@@ -393,6 +404,15 @@ pub enum Msg {
     Connected { role: Option<String> },
     /// Request to quit the application.
     Quit,
+
+    // ---- Audit view (`/classic` retirement, Task E) ----
+    /// A fresh page of audit entries arrived; replaces the current page +
+    /// total wholesale (this is a paginated view, not an append-only feed
+    /// like Missions).
+    AuditUpdated {
+        entries: Vec<AuditEntrySummary>,
+        total_len: u64,
+    },
 }
 
 impl AppState {
@@ -578,8 +598,46 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         }
 
         Msg::Quit => state.should_quit = true,
+
+        Msg::AuditUpdated { entries, total_len } => {
+            state.audit_entries = entries;
+            state.audit_total = total_len;
+        }
     }
     state
+}
+
+/// `/classic` retirement (Task E) — the pure pagination-window
+/// arithmetic behind the Audit view's Left/Right keys.
+///
+/// `current_from_seq` is where the window *currently on screen*
+/// starts — the smallest `seq` among `state.audit_entries`, or `0`
+/// before any page has loaded. `total_len` is the chain's total entry
+/// count as of the last fetch; `page_size` is the fixed page length
+/// (`AUDIT_PAGE_SIZE` in `app.rs`).
+///
+/// Moves the window by one page in the requested direction, clamped so
+/// `from_seq` never goes below `0` (backward) and never pages past the
+/// newest full window, `total_len.saturating_sub(page_size)` (forward)
+/// — matching the vetted arithmetic behind the web Audit screen's own
+/// Older/Newer buttons (Task 2's `AuditPanel`), which needed two
+/// rounds of fixing exactly this class of off-by-one before it was
+/// right. The naive formula this plan's own brief first proposed for
+/// this task ignored `current_from_seq` entirely (deriving the next
+/// window from `total_len` alone), which cannot page backward more
+/// than once — this function is the corrected replacement.
+pub fn audit_page_from_seq(
+    current_from_seq: u64,
+    total_len: u64,
+    page_size: u64,
+    forward: bool,
+) -> u64 {
+    if forward {
+        let newest_from_seq = total_len.saturating_sub(page_size);
+        (current_from_seq + page_size).min(newest_from_seq)
+    } else {
+        current_from_seq.saturating_sub(page_size)
+    }
 }
 
 /// Map a single daemon [`StreamEventPayload`] to one or more chat
@@ -1089,6 +1147,80 @@ mod tests {
         s = update(s, Msg::GateResolved { approved: true });
         assert!(s.gate.is_none());
         assert!(s.history.last().unwrap().text.contains("approved"));
+    }
+
+    // ---- Audit view (`/classic` retirement, Task E) ----
+
+    #[test]
+    fn audit_updated_replaces_entries_and_total() {
+        let s = AppState::new();
+        assert!(s.audit_entries.is_empty());
+        assert_eq!(s.audit_total, 0);
+
+        let entries = vec![AuditEntrySummary {
+            seq: 1,
+            appended_at_unix_ms: 1_000,
+            event_type: "TurnStarted".into(),
+            event: serde_json::json!({}),
+            mac_hex: "abc".into(),
+        }];
+        let s = update(s, Msg::AuditUpdated { entries: entries.clone(), total_len: 42 });
+        assert_eq!(s.audit_entries, entries);
+        assert_eq!(s.audit_total, 42);
+
+        // A second update fully replaces, it doesn't append.
+        let s = update(s, Msg::AuditUpdated { entries: vec![], total_len: 42 });
+        assert!(s.audit_entries.is_empty());
+    }
+
+    // ---- Audit pagination arithmetic (`/classic` retirement, Task E) ----
+
+    #[test]
+    fn audit_page_forward_advances_by_one_page() {
+        // total=120, page=50: newest window starts at 70. From the
+        // oldest-visible window (0), forward moves ahead exactly one page.
+        assert_eq!(audit_page_from_seq(0, 120, 50, true), 50);
+    }
+
+    #[test]
+    fn audit_page_backward_retreats_by_one_page() {
+        // From the newest window (70), backward moves ahead exactly one
+        // page toward the past.
+        assert_eq!(audit_page_from_seq(70, 120, 50, false), 20);
+    }
+
+    #[test]
+    fn audit_page_backward_clamps_at_zero() {
+        // Already within one page of the start — must not wrap or go
+        // negative (saturating), and must land exactly on 0, not some
+        // negative-clamped-to-huge value.
+        assert_eq!(audit_page_from_seq(20, 120, 50, false), 0);
+        assert_eq!(audit_page_from_seq(0, 120, 50, false), 0, "already oldest is a no-op");
+    }
+
+    #[test]
+    fn audit_page_forward_clamps_at_newest_window_not_total_len() {
+        // total=120, page=50: the newest *full* window starts at 70, not
+        // 120 — paging forward must never request an from_seq that would
+        // return an empty page.
+        assert_eq!(audit_page_from_seq(70, 120, 50, true), 70, "already newest is a no-op");
+        // One page short of newest: lands exactly on the newest window,
+        // not one page past it.
+        assert_eq!(audit_page_from_seq(50, 120, 50, true), 70);
+    }
+
+    #[test]
+    fn audit_page_handles_a_chain_shorter_than_one_page() {
+        // total=30 < page=50: the "newest window" start saturates to 0,
+        // so both directions are no-ops from the only page there is.
+        assert_eq!(audit_page_from_seq(0, 30, 50, true), 0);
+        assert_eq!(audit_page_from_seq(0, 30, 50, false), 0);
+    }
+
+    #[test]
+    fn audit_page_handles_an_empty_chain() {
+        assert_eq!(audit_page_from_seq(0, 0, 50, true), 0);
+        assert_eq!(audit_page_from_seq(0, 0, 50, false), 0);
     }
 
     // ---- event -> line mapping ----

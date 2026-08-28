@@ -1230,6 +1230,34 @@ pub async fn team_mission_list(
     }
 }
 
+/// `/classic` retirement (Task E) — paginated read of the audit chain
+/// for the TUI's Audit view. Mirrors the Studio's own ListAuditEntries
+/// query; the daemon caps `limit` at 500 server-side regardless of
+/// what's requested here.
+pub async fn list_audit_entries(
+    socket_path: &Path,
+    from_seq: u64,
+    limit: u32,
+) -> Result<(Vec<aivyx_ipc::protocol::AuditEntrySummary>, u64), DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "tui-audit",
+        QueryPayload::ListAuditEntries { from_seq, limit },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ListAuditEntries { entries, total_len } => {
+            Ok((entries, total_len))
+        }
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ListAuditEntries, got {other:?}"
+        ))),
+    }
+}
+
 /// Chapter L (L.5) — one team mission's snapshot, or `None` if unknown.
 pub async fn team_mission_status(
     socket_path: &Path,
