@@ -22,7 +22,7 @@ use aivyx_ipc::protocol::{
     NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, ScheduleView, SeedSkillWire, SettingsSnapshot, SkillView,
+    QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot, SkillView,
     StreamEventPayload, ToolCatalogEntry, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
@@ -137,11 +137,14 @@ enum View {
     /// `comfyui` `[[mcp_server]]`, read from ComfyUI's own `/history` API.
     Gallery,
     Audit,
+    /// `/classic` retirement — every active daemon session (channel, trust
+    /// tier, created/last-active), replacing `/classic`'s own sessions pane.
+    Sessions,
 }
 
 impl View {
     /// Every view, in sidebar order — drives the command palette + slug lookup.
-    const ALL: [View; 21] = [
+    const ALL: [View; 22] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -163,6 +166,7 @@ impl View {
         View::Settings,
         View::Guide,
         View::Audit,
+        View::Sessions,
     ];
 
     /// The URL-hash slug for this view (deep-linking: `…/#memory`).
@@ -189,6 +193,7 @@ impl View {
             View::Guide => "guide",
             View::Onboarding => "create",
             View::Audit => "audit",
+            View::Sessions => "sessions",
         }
     }
 
@@ -221,6 +226,7 @@ impl View {
             View::Guide => "Guide",
             View::Onboarding => "Create",
             View::Audit => "Audit",
+            View::Sessions => "Sessions",
         }
     }
 }
@@ -492,6 +498,14 @@ struct AuditState {
     pending_correction: Option<u64>,
 }
 
+/// `/classic` retirement — the Sessions screen's state. Loaded fresh
+/// each time the view opens (sessions are short-lived and this isn't
+/// a background-poll surface like Missions/Notifications).
+#[derive(Clone, Default, PartialEq)]
+struct SessionsState {
+    sessions: Vec<SessionSummary>,
+}
+
 /// Chapter Chime — Schedules screen UI state (the list itself lives in
 /// `Dashboard::schedules`, already polled every 5 s).
 #[derive(Clone, Default, PartialEq)]
@@ -673,6 +687,7 @@ fn App() -> Element {
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
     let audit_page = use_signal(AuditState::default);
+    let sessions_page = use_signal(SessionsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
     let transcript = use_signal(Vec::<ChatLine>::new);
@@ -701,7 +716,7 @@ fn App() -> Element {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
             teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            audit_page, connected, session, transcript, streaming, gate, mission_ui,
+            audit_page, sessions_page, connected, session, transcript, streaming, gate, mission_ui,
         )
     });
     use_context_provider(|| ws);
@@ -723,6 +738,7 @@ fn App() -> Element {
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
     use_context_provider(|| audit_page);
+    use_context_provider(|| sessions_page);
     // Chapter Chime — the Schedules screen reads the routine list from
     // the dashboard snapshot (already polled every 5 s). Dashboard had
     // only ever been passed as a prop; the missing provider panicked
@@ -885,6 +901,7 @@ fn App() -> Element {
         View::Guide => "Guide",
         View::Onboarding => "Create your agent",
         View::Audit => "Audit",
+        View::Sessions => "Sessions",
     };
 
     rsx! {
@@ -934,6 +951,7 @@ fn App() -> Element {
                         View::Guide => rsx! { GuidePanel { page: guide_page } },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
                         View::Audit => rsx! { AuditPanel {} },
+                        View::Sessions => rsx! { SessionsPanel {} },
                     }
                 }
             }
@@ -1080,6 +1098,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             vec![
                 (ICON_DOCUMENTS, "Documents", View::Documents),
                 (ICON_DOCUMENTS, "Audit", View::Audit),
+                (ICON_TEAMS, "Sessions", View::Sessions),
                 (ICON_GALLERY, "Gallery", View::Gallery),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_PLUGINS, "MCP", View::Mcp),
@@ -1966,6 +1985,70 @@ fn NotificationHistoryRow(entry: NotificationHistoryEntry) -> Element {
                 span { "{rel_time(entry.dispatched_at_unix_ms)}" }
                 if !entry.outcome_detail.is_empty() {
                     span { style: "opacity:0.8;", "{entry.outcome_detail}" }
+                }
+            }
+        }
+    }
+}
+
+// ── /classic retirement — the Sessions screen ───────────────────────────
+
+/// One rendered row: channel/trust-tier badge, session id, age, last
+/// active. `SessionSummary` fields are all `Copy`/cheap to read
+/// directly — no separate row-view type needed.
+#[component]
+fn SessionRow(entry: SessionSummary) -> Element {
+    rsx! {
+        div { class: "glass-card routine-row",
+            div { class: "row1",
+                span { class: "dot live" }
+                span { class: "name", "{entry.session_id}" }
+                span { class: "label-tech", style: "opacity:0.7;", "[{entry.channel:?} · {entry.trust_tier:?}]" }
+            }
+            div { class: "row2 label-tech",
+                span { "created {rel_time(entry.created_at_ms)}" }
+                span { style: "opacity:0.8;", "active {rel_time(entry.last_active_at_ms)}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn SessionsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let sessions = use_context::<Signal<SessionsState>>();
+
+    // Load the current session list each time the view opens.
+    use_future(move || async move {
+        ws.send(FrontendMessage::Query {
+            id: "sessions-page".to_string(),
+            payload: QueryPayload::ListSessions,
+        });
+    });
+
+    let state = sessions();
+    let mut rows = state.sessions.clone();
+    rows.sort_by(|a, b| b.last_active_at_ms.cmp(&a.last_active_at_ms));
+
+    rsx! {
+        div { class: "dash-grid",
+            div { class: "dash-main",
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Active sessions" }
+                        span { class: "label-tech", "{rows.len()} connected" }
+                    }
+                    if rows.is_empty() {
+                        div { class: "glass-card empty",
+                            p { class: "label-tech", "No active sessions." }
+                        }
+                    } else {
+                        div { class: "feed",
+                            for s in rows.iter() {
+                                SessionRow { entry: s.clone() }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -7167,6 +7250,7 @@ async fn ws_task(
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
     audit_page: Signal<AuditState>,
+    sessions_page: Signal<SessionsState>,
     mut connected: Signal<bool>,
     session: Signal<Option<String>>,
     transcript: Signal<Vec<ChatLine>>,
@@ -7206,7 +7290,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
             teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            audit_page, connected, session, transcript, streaming, gate, mission_ui,
+            audit_page, sessions_page, connected, session, transcript, streaming, gate, mission_ui,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -7302,6 +7386,7 @@ async fn read_task(
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
     mut audit_page: Signal<AuditState>,
+    mut sessions_page: Signal<SessionsState>,
     mut connected: Signal<bool>,
     mut session: Signal<Option<String>>,
     mut transcript: Signal<Vec<ChatLine>>,
@@ -7473,6 +7558,14 @@ async fn read_task(
                             a.pending_correction = Some(newest_from_seq);
                         }
                     }
+                }
+                // `/classic` retirement — the Sessions screen: no id-guard
+                // needed, `ListSessions` has no other consumer today.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ListSessions { sessions },
+                    ..
+                } => {
+                    sessions_page.write().sessions = sessions;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::VerifyAuditChain { ok, .. },
