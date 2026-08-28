@@ -43,7 +43,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | # | Sub-project | Contains | Size | Status |
 |---|---|---|---|---|
 | 1 | **Small backlog sweep** | See below | Small each | ✅ done 2026-08-27 (6 of 9 fixed, 1 already done, 1 checked/not reproducible, 1 deferred — see below) |
-| 2 | **`/classic` retirement** | See below | Medium | Scoping in progress 2026-08-27 |
+| 2 | **`/classic` retirement** | See below | Medium | ✅ done 2026-08-28 (all 5 pieces A–E shipped — see below) |
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small–medium | Not started |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | Not started |
 | 5 | **Missions polish** | See below | Medium | Not started |
@@ -113,7 +113,7 @@ Commits: `285ac107` (session_id), `2a2726fc` (skill naming),
 firewall docs), `d92d4746` (doctor Gatehouse hint). Merged to `main`,
 pushed.
 
-## 2 · `/classic` retirement (V09_PLAN row 7) — scoping in progress
+## 2 · `/classic` retirement (V09_PLAN row 7) — ✅ done 2026-08-28
 
 Real inventory from `VITRINE.md` §11 (not `V09_PLAN.md`'s own "expect:
 3 panes" guess): **audit, sessions, notifications, learning**.
@@ -134,13 +134,17 @@ for each:
   `VITRINE.md`'s own candidate) — a Learning panel/card on the existing
   Command Center screen via `GetLearningInsights`, not a new nav
   destination.
-- **D. The actual retirement** — once A/B/C exist, delete the
-  `/classic` panes with Studio equivalents from
-  `crates/aivyx-channel/src/web_ui_static.html`, replace `/`'s
-  no-bundle fallback with a small dedicated page (NOT the multi-pane
-  legacy app) — `/classic` currently serves double duty (the legacy
-  inspector *and* the emergency fallback when the wasm bundle isn't
-  built), so this needs care, not a blind delete.
+- **D. The actual retirement — ✅ done 2026-08-28.** With A/B/C in
+  place, the `/classic` route was deleted outright from `serve_static`
+  in `crates/aivyx-channel/src/web_ui.rs` — until this point it was
+  still serving double duty (the legacy multi-pane inspector *and*
+  `/`'s no-bundle fallback via the same `HTML` constant), so the
+  fallback role was replaced rather than dropped:
+  `web_ui_static.html` shrank from a 2,879-line multi-pane app to a
+  small dedicated "build the Studio bundle" fallback page that `/`
+  still serves when the wasm bundle isn't built. The dangling
+  `nav-classic` link in `aivyx-web/src/main.rs` was removed. A new
+  test (`classic_route_is_gone`) proves `/classic` now 404s.
 - **E. TUI Audit view** (user decision 2026-08-27: include TUI, not
   web-only) — `aivyx-tui`'s `View::Audit` is a hardcoded
   `placeholder_lines(...)` today (`render.rs`); wire the same

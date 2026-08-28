@@ -1138,8 +1138,6 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 }
             }
             div { style: "flex:1" }
-            a { class: "nav-item nav-classic", href: "/classic",
-                onclick: move |_| nav_open.set(false), "▸ Classic UI ↗" }
         }
     }
 }
