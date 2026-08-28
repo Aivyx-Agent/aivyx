@@ -528,7 +528,17 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         }
 
         Msg::ScrollUp(n) => {
-            let max = state.history.len();
+            // The scroll counter is shared across views (re-pinned to 0 on
+            // `SwitchView`-independent events like new chat content, same
+            // as before); its ceiling must match whichever view is
+            // currently reading it, or a view with a shorter backing
+            // list than the chat history (e.g. Audit, page-capped at 50
+            // entries) clamps scroll to a value too small to ever reach
+            // its own top row.
+            let max = match state.view {
+                View::Audit => state.audit_entries.len(),
+                _ => state.history.len(),
+            };
             state.scroll = (state.scroll + n).min(max);
         }
         Msg::ScrollDown(n) => {

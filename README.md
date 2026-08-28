@@ -112,7 +112,7 @@ Center** dashboard; use the **Chat** tab to talk to the agent,
 **Memory** to browse what it's learned, **Documents** to read and
 edit files in scope, and **Settings** to adjust access, autonomy, and budgets.
 The HMAC audit log (with offline **Verify chain**) lives in the
-legacy inspection panes at `/classic`.
+Studio's own **Audit** screen (sidebar, under System).
 
 To keep it running for days — scheduled routines firing, the loop
 available — install it as a background service (no hand-rolled

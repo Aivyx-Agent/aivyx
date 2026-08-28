@@ -7734,34 +7734,16 @@ system_prompt = "You are a custom role."
         assert!(!path.exists());
     }
 
-    #[test]
-    fn submit_input_bumps_last_active_but_not_created_at() {
-        let mut sessions = vec![SessionRecord {
-            session_id: "ses-1".into(),
-            channel: aivyx_core::ChannelPlatform::Local,
-            trust_tier: aivyx_capability::TrustTier::Trusted,
-            created_at_ms: 1_000,
-            last_active_at_ms: 1_000,
-        }];
-        // Simulate what the SubmitInput handler does: find by session_id,
-        // bump last_active_at_ms only.
-        let sid = "ses-1".to_string();
-        let now_ms = 5_000u64;
-        if let Some(rec) = sessions.iter_mut().find(|r| r.session_id == sid) {
-            rec.last_active_at_ms = now_ms;
-        }
-        assert_eq!(sessions[0].created_at_ms, 1_000, "created_at must not move");
-        assert_eq!(sessions[0].last_active_at_ms, 5_000);
-
-        // A submit for an unknown session_id must not panic or insert a
-        // phantom record (e.g. a stale/already-disconnected session).
-        let unknown = "ses-does-not-exist".to_string();
-        let before = sessions.clone();
-        if let Some(rec) = sessions.iter_mut().find(|r| r.session_id == unknown) {
-            rec.last_active_at_ms = now_ms;
-        }
-        assert_eq!(sessions, before, "unknown session_id must be a no-op");
-    }
+    // `submit_input_bumps_last_active_but_not_created_at` (final-review
+    // finding 1) was removed here: it built its own local `Vec<SessionRecord>`
+    // and re-implemented the `SubmitInput` handler's `iter_mut().find()`
+    // logic inline rather than calling it, so it could never fail if the
+    // real handler regressed. Its coverage — StartSession really captures
+    // channel/trust_tier/timestamps, and a real SubmitInput really bumps
+    // last_active_at_ms without moving created_at_ms — is now exercised
+    // against the actual daemon over real IPC by
+    // `list_sessions_query_round_trips_over_ipc` in
+    // `tests/daemon_roundtrip_e2e.rs`.
 
     // -------------------------------------------------------------
     // Phase 58 — Profile inspection query helpers.

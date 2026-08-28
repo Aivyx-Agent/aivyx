@@ -34,6 +34,20 @@ pub fn chat_scroll_offset(total: usize, viewport: usize, scroll: usize) -> u16 {
     top.min(u16::MAX as usize) as u16
 }
 
+/// The Audit view's own version of [`chat_scroll_offset`] — same
+/// signature and same key bindings (`Msg::ScrollUp`/`ScrollDown`), but
+/// anchored at the opposite end: the Audit panel renders its page
+/// newest-entry-first (see `render_panel`'s `.rev()`), so `0` scroll
+/// pins to the *top* of the buffer (freshest visible, header included)
+/// rather than chat's bottom-pinned "latest message" convention.
+/// Scrolling up (`Msg::ScrollUp`, growing `scroll`) still means "go see
+/// less-recent content" in both views — here that means moving the
+/// viewport further down the page, toward its older tail.
+pub fn audit_scroll_offset(total: usize, viewport: usize, scroll: usize) -> u16 {
+    let max_top = total.saturating_sub(viewport);
+    scroll.min(max_top).min(u16::MAX as usize) as u16
+}
+
 /// The display prefix + base style for a line kind. The prefix keeps
 /// provenance legible even where colour is unavailable (and is what
 /// the headless smoke test can assert on).
@@ -154,9 +168,12 @@ fn panel_block(title: &str) -> Block<'_> {
 }
 
 /// Render the active read-only panel (Dashboard / Audit / Tools). These
-/// show their frame + the state the model already holds; live IPC data
-/// (mission / loop / reminders / audit stream / tool stats) is the
-/// Phase 186 follow-on.
+/// show their frame + the state the model already holds. Audit is wired
+/// to live daemon data (`/classic` retirement, Task 5) and scrolls via
+/// [`audit_scroll_offset`] (the Audit-page counterpart of
+/// [`chat_scroll_offset`], which `render_chat` uses for the same
+/// purpose); Dashboard's mission/loop/reminders detail and Tools'
+/// capability/call-stats detail remain the Phase 186 follow-on.
 fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let (title, lines) = match state.view {
         View::Dashboard => ("DASHBOARD", dashboard_lines(state)),
@@ -183,7 +200,19 @@ fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         ),
         View::Chat | View::Missions => return,
     };
-    frame.render_widget(Paragraph::new(lines).block(panel_block(title)), area);
+
+    let line_count = lines.len();
+    let mut para = Paragraph::new(lines).block(panel_block(title));
+    if state.view == View::Audit {
+        // `panel_block` draws a top+bottom border (and no vertical
+        // padding), so the visible text viewport is 2 rows shorter than
+        // `area` — the same `chat_scroll_offset` math `render_chat` uses
+        // for its own unbordered Paragraph, adjusted for that border.
+        let viewport = area.height.saturating_sub(2) as usize;
+        let top = audit_scroll_offset(line_count, viewport, state.scroll);
+        para = para.scroll((top, 0));
+    }
+    frame.render_widget(para, area);
 }
 
 /// The Nonagon Missions/Fleet panel (Chapter J.7): a mission stream on the
@@ -599,6 +628,18 @@ mod tests {
     }
 
     #[test]
+    fn audit_scroll_offset_pins_to_top() {
+        // 10 lines, 4-row viewport, unscrolled: shows the top (freshest).
+        assert_eq!(audit_scroll_offset(10, 4, 0), 0);
+        // Scrolled down (toward older entries) by 2: top = 2.
+        assert_eq!(audit_scroll_offset(10, 4, 2), 2);
+        // Scrolled past the bottom clamps to max_top, not past it.
+        assert_eq!(audit_scroll_offset(10, 4, 100), 6);
+        // Everything fits: no offset regardless of scroll.
+        assert_eq!(audit_scroll_offset(3, 10, 5), 0);
+    }
+
+    #[test]
     fn renders_chat_and_status_into_buffer() {
         let backend = TestBackend::new(60, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -834,6 +875,49 @@ mod tests {
         let pos_1 = text.find("TurnEnded").unwrap();
         let pos_0 = text.find("TurnStarted").unwrap();
         assert!(pos_1 < pos_0, "newest entry (seq 1) renders above seq 0");
+    }
+
+    #[test]
+    fn audit_view_scrolls_to_reveal_entries_below_the_fold() {
+        // Final-review finding 2 — a short terminal + many entries means
+        // the page overflows the panel; before this fix `render_panel`
+        // never called `.scroll(...)` at all, so the oldest entries were
+        // permanently unreachable no matter what `state.scroll` held.
+        use aivyx_channel::daemon_ipc::AuditEntrySummary;
+        let backend = TestBackend::new(40, 8); // ~6 text rows inside the border
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Audit;
+        state.audit_total = 20;
+        state.audit_entries = (0..20u64)
+            .map(|seq| AuditEntrySummary {
+                seq,
+                appended_at_unix_ms: seq * 1_000,
+                event_type: format!("Event{seq}"),
+                event: serde_json::json!({}),
+                mac_hex: "aaa".into(),
+            })
+            .collect();
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let unscrolled = buffer_text(&terminal);
+        assert!(unscrolled.contains("Event19"), "newest entry visible by default");
+        assert!(
+            !unscrolled.contains("Event0 "),
+            "the oldest entry doesn't fit before scrolling"
+        );
+
+        // Scroll all the way toward the older tail of the page (a scroll
+        // request larger than the page clamps at the oldest entry rather
+        // than panicking or no-oping).
+        state = crate::model::update(state, crate::model::Msg::ScrollUp(30));
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let scrolled = buffer_text(&terminal);
+        assert!(
+            scrolled.contains("Event0"),
+            "scrolling to the bottom of the page must reach the oldest entry: {scrolled}"
+        );
+        assert_ne!(scrolled, unscrolled, "scrolling must actually change what's rendered");
     }
 
     #[test]

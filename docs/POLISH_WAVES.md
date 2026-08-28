@@ -134,6 +134,18 @@ for each:
   `VITRINE.md`'s own candidate) — a Learning panel/card on the existing
   Command Center screen via `GetLearningInsights`, not a new nav
   destination.
+  **Final-review correction (2026-08-29):** the shipped card is a
+  reduced subset of what the legacy `/classic` pane's `loadLearning()`
+  rendered, not the same data as originally claimed above — it shows
+  `recalls_scored`/`recalls_total`, `promoted`, `proposals_in_window`,
+  and `top_helpful` only. The legacy pane additionally rendered
+  `persona_selection`, `proactive`, `persona_lifecycle`,
+  `accumulated_helpfulness`, `cooccurrence`, and `cluster_recall`. No
+  capability was lost — every field is still available via the
+  `aivyx learning` CLI command — but the Studio's own GUI surface for
+  this data narrowed on the port. Expanding the card to show the full
+  field set is real, scoped follow-on work if wanted, not something
+  assumed done here.
 - **D. The actual retirement — ✅ done 2026-08-28.** With A/B/C in
   place, the `/classic` route was deleted outright from `serve_static`
   in `crates/aivyx-channel/src/web_ui.rs` — until this point it was

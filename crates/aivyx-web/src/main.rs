@@ -143,7 +143,13 @@ enum View {
 }
 
 impl View {
-    /// Every view, in sidebar order — drives the command palette + slug lookup.
+    /// Every view — drives the command palette + slug lookup. NOT sidebar
+    /// order: `Audit`/`Sessions` (`/classic` retirement) are appended here
+    /// after `Guide` to minimize diff noise against this array, while the
+    /// sidebar itself places them mid-"System" group (see `Sidebar`'s own
+    /// `groups`) — reordering this array is a bigger, riskier change than
+    /// this comment fix, since other code (e.g. Tab-cycling) may depend on
+    /// this exact order.
     const ALL: [View; 22] = [
         View::Command,
         View::Chat,
@@ -2179,6 +2185,7 @@ fn AuditPanel() -> Element {
                                     // delayed auto-correction meant for an
                                     // earlier, still-in-flight mount guess.
                                     a.pending_guess = false;
+                                    a.pending_correction = None;
                                 }
                                 ws.send(FrontendMessage::Query {
                                     id: "audit-page".to_string(),
@@ -2199,6 +2206,7 @@ fn AuditPanel() -> Element {
                                     a.from_seq = from_seq;
                                     // Same reasoning as "← Older" above.
                                     a.pending_guess = false;
+                                    a.pending_correction = None;
                                 }
                                 ws.send(FrontendMessage::Query {
                                     id: "audit-page".to_string(),

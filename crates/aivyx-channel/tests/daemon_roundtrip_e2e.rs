@@ -2510,6 +2510,84 @@ async fn list_sessions_query_round_trips_over_ipc() {
         sessions[0].session_id, started_session_id,
         "session_id in response must match the started session"
     );
+    // `/classic` retirement final-review fix — StartSession must really
+    // capture channel/trust_tier/timestamps, not just an id. This is a
+    // `LocalChannel`, so the daemon's real channel/trust_tier lookup
+    // must resolve to `Local`/`Trusted`; a `created_at_ms` of 0 would
+    // mean the timestamp capture regressed to a default.
+    assert_eq!(
+        sessions[0].channel,
+        aivyx_channel::daemon_ipc::WireChannelPlatform::Local,
+        "StartSession must capture the real channel platform"
+    );
+    assert_eq!(
+        sessions[0].trust_tier,
+        aivyx_capability::TrustTier::Trusted,
+        "StartSession must capture the real trust tier"
+    );
+    assert!(
+        sessions[0].created_at_ms > 0,
+        "StartSession must capture a real created_at_ms timestamp"
+    );
+    let created_at_ms = sessions[0].created_at_ms;
+    let first_last_active_ms = sessions[0].last_active_at_ms;
+    assert!(
+        first_last_active_ms > 0,
+        "StartSession must capture a real last_active_at_ms timestamp"
+    );
+
+    // `/classic` retirement final-review fix — drive a real SubmitInput
+    // through the daemon and confirm last_active_at_ms actually bumps
+    // (created_at_ms must not move), rather than only asserting the
+    // struct has the field.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let submit = FrontendMessage::SubmitInput {
+        session_id: started_session_id.clone(),
+        text: "bump last_active".into(),
+        mission_id: None,
+        attachments: vec![],
+        headless: false,
+    };
+    writer
+        .write_all(&encode_frame(&submit).unwrap())
+        .await
+        .unwrap();
+    let (_events, _outcome) = collect_turn_events(&mut reader, &mut buf).await;
+
+    let query2 = FrontendMessage::Query {
+        id: "q-test-002".into(),
+        payload: QueryPayload::ListSessions,
+    };
+    writer
+        .write_all(&encode_frame(&query2).unwrap())
+        .await
+        .unwrap();
+
+    let (rid2, sessions2) = loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::QueryResponse { id, payload }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::ListSessions { sessions } => break (id, sessions),
+                    QueryResponsePayload::QueryError { code, message } => {
+                        panic!("unexpected QueryError ({code}): {message}");
+                    }
+                    other => panic!("expected ListSessions, got {other:?}"),
+                }
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected QueryResponse, got {other:?}"),
+        }
+    };
+
+    assert_eq!(rid2, "q-test-002", "correlation id must echo");
+    assert_eq!(sessions2.len(), 1);
+    assert_eq!(sessions2[0].created_at_ms, created_at_ms, "created_at_ms must not move on SubmitInput");
+    assert!(
+        sessions2[0].last_active_at_ms > first_last_active_ms,
+        "SubmitInput must bump last_active_at_ms (before: {first_last_active_ms}, after: {})",
+        sessions2[0].last_active_at_ms
+    );
 
     let _ = writer
         .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
