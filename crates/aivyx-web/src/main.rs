@@ -444,6 +444,10 @@ struct Dashboard {
     /// The agent's scheduled background routines (`GetSchedules`) — drives the
     /// Routines panel + stat card, the "live agent working on its own" signal.
     schedules: Vec<ScheduleView>,
+    /// `/classic` retirement — the self-learning digest (VITRINE.md's
+    /// Learning pane, folded in here rather than a dedicated screen).
+    /// `None` until the first response arrives.
+    learning: Option<aivyx_ipc::insights::LearningDigest>,
     /// `false` until the first dashboard snapshot (the audit-entries response)
     /// arrives. Distinguishes "not loaded yet" from "loaded and genuinely
     /// empty" so the Command Center shows a skeleton instead of flashing zeros.
@@ -876,6 +880,12 @@ fn App() -> Element {
         ws.send(FrontendMessage::Query {
             id: "mc-schedules".to_string(),
             payload: QueryPayload::GetSchedules,
+        });
+        // `/classic` retirement — the self-learning digest, folded into the
+        // Command Center rail rather than a dedicated screen.
+        ws.send(FrontendMessage::Query {
+            id: "mc-learning".to_string(),
+            payload: QueryPayload::GetLearningInsights { window_secs: None },
         });
     });
 
@@ -1388,6 +1398,34 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
             }
             aside { class: "dash-rail",
                 AgentStatus { name: dashboard.assistant_name.clone(), connected, chain_ok: chain, settings: dashboard.settings.clone() }
+                section { class: "panel",
+                    div { class: "panel-head", h3 { "Learning" } }
+                    match &dashboard.learning {
+                        None => rsx! {
+                            div { class: "glass-card empty",
+                                p { class: "label-tech", "Loading…" }
+                            }
+                        },
+                        Some(d) if d.recalls_total == 0 => rsx! {
+                            div { class: "glass-card empty",
+                                p { class: "label-tech", "Nothing learned yet — no recalls in the lookback window." }
+                            }
+                        },
+                        Some(d) => rsx! {
+                            div { class: "glass-card",
+                                p { class: "label-tech", "{d.recalls_scored}/{d.recalls_total} recalls scored · {d.promoted} promoted · {d.proposals_in_window} proposals this window" }
+                                if !d.top_helpful.is_empty() {
+                                    p { class: "label-tech", style: "margin-top:6px;",
+                                        "Most helpful: "
+                                        for (topic, score) in d.top_helpful.iter().take(3) {
+                                            span { style: "margin-right:8px;", "{topic} ({score:.2})" }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
             }
         }
     }
@@ -7362,6 +7400,7 @@ fn reconnect_boot_queries() -> Vec<FrontendMessage> {
         q("mc-settings", QueryPayload::GetSettings),
         q("mc-schedules", QueryPayload::GetSchedules),
         q("mc-teams-roster", QueryPayload::GetTeamRoster),
+        q("mc-learning", QueryPayload::GetLearningInsights { window_secs: None }),
     ]
 }
 
@@ -7697,6 +7736,16 @@ async fn read_task(
                     ..
                 } => {
                     dashboard.write().schedules = schedules;
+                }
+                // `/classic` retirement — the self-learning digest. `proposals`
+                // and `persona_selection` are intentionally dropped here: this
+                // panel surfaces the digest only, matching the legacy pane's
+                // own primary content.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::LearningInsights { digest, .. },
+                    ..
+                } => {
+                    dashboard.write().learning = Some(digest);
                 }
                 // Chapter Chime — schedule mutation acks. The list itself
                 // refreshes via the GetSchedules chase the sender fired
