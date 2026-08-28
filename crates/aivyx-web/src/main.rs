@@ -686,7 +686,7 @@ fn App() -> Element {
     let gallery = use_signal(GalleryState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
-    let audit_page = use_signal(AuditState::default);
+    let mut audit_page = use_signal(AuditState::default);
     let sessions_page = use_signal(SessionsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
     let session = use_signal(|| None::<String>);
@@ -2028,7 +2028,7 @@ fn SessionsPanel() -> Element {
 
     let state = sessions();
     let mut rows = state.sessions.clone();
-    rows.sort_by(|a, b| b.last_active_at_ms.cmp(&a.last_active_at_ms));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.last_active_at_ms));
 
     rsx! {
         div { class: "dash-grid",
@@ -2065,7 +2065,7 @@ const AUDIT_PAGE_SIZE: u32 = 50;
 #[component]
 fn AuditPanel() -> Element {
     let ws = use_context::<Sender>();
-    let audit = use_context::<Signal<AuditState>>();
+    let mut audit = use_context::<Signal<AuditState>>();
     let dashboard = use_context::<Signal<Dashboard>>();
 
     // Load the newest page on mount. This blind guess can't know the
