@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-project 1 done (2026-08-27), 2–7 not started.**
+> **Status: sub-projects 1 (2026-08-27) and 2 (2026-08-29) done, 3–7 not started.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
