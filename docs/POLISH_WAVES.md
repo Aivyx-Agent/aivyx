@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27) and 2 (2026-08-29) done, 3–7 not started.**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), and 3 (2026-08-29) done, 4–7 not started.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -44,7 +44,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 |---|---|---|---|---|
 | 1 | **Small backlog sweep** | See below | Small each | ✅ done 2026-08-27 (6 of 9 fixed, 1 already done, 1 checked/not reproducible, 1 deferred — see below) |
 | 2 | **`/classic` retirement** | See below | Medium | ✅ done 2026-08-28 (all 5 pieces A–E shipped — see below) |
-| 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small–medium | Not started |
+| 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small | ✅ done 2026-08-29 |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | Not started |
 | 5 | **Missions polish** | See below | Medium | Not started |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | Not started |
@@ -173,13 +173,29 @@ the MCP tool-level health signal (deferred to sub-project 7) — building
 that mechanism twice would be wasteful and inconsistent, so both now
 live together in **sub-project 8**.
 
-## 3 · Repertoire / governed-write completions (V09_PLAN row 6)
+## 3 · Repertoire / governed-write completions (V09_PLAN row 6) — ✅ done 2026-08-29
 
-- Studio "Add skill" write UI (Tutor TU.3).
-- Repertoire approve-in-place.
-- Invocation history in the Repertoire screen.
-- No credentials involved — reuses the proven `toml_edit` writer +
-  server-side validation + restart-required UX recipe as-is.
+Real research (2026-08-29) found 2 of the 3 originally-listed items
+already shipped, confirmed against real code in `aivyx-web/src/main.rs`,
+not just `docs/REPERTOIRE.md`'s own "done" claim: **approve-in-place**
+(`ProposalCard` already renders inline approve/edit/reject for skill
+proposals) and **invocation history** (`SkillCard` already shows
+`"· invoked {view.invocations}×"` per skill, from the audit-chain-backed
+effectiveness ledger). Both were tagged "pre-v0.4.0" in `REPERTOIRE.md`
+— shipped long before this v0.9 phase even started; `V09_PLAN.md` row 6
+was simply never checked against `REPERTOIRE.md`'s later state.
+
+Only the **Studio "Add skill" write UI** was genuinely missing — closed
+by adding a "Teach a skill" form to the Skills screen, wired to Chapter
+Tutor's already-working `FrontendMessage::AuthorSkill`/
+`SkillAuthorOp::Teach` (already used by the CLI's `aivyx skills teach`;
+no backend changes needed at all). **Corrected mechanism assumption**:
+this row's own "reuses the proven `toml_edit` writer + ... restart-
+required UX recipe" claim was wrong — Chapter Tutor writes directly to
+the signed persona chain and takes effect live, no daemon restart. See
+`docs/superpowers/specs/2026-08-29-repertoire-teach-skill-design.md`
+and `docs/superpowers/plans/2026-08-29-repertoire-teach-skill.md` for
+the full account.
 
 ## 4 · Agent turn-quality fixes
 
