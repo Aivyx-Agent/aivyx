@@ -22,8 +22,8 @@ use aivyx_ipc::protocol::{
     NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot, SkillView,
-    StreamEventPayload, ToolCatalogEntry, VoiceSettingsSnapshot,
+    QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
+    SkillAuthorOp, SkillView, StreamEventPayload, ToolCatalogEntry, VoiceSettingsSnapshot,
 };
 use aivyx_ipc::{
     PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
@@ -526,6 +526,19 @@ struct SchedulesUi {
     confirm_delete: Option<String>,
 }
 
+/// Chapter Tutor — Skills screen "Teach a skill" form UI state. The form's
+/// own text fields (name/trigger/procedure) and open/closed toggle are
+/// local `use_signal`s inside `SkillsPanel` itself, not here — this only
+/// holds the cross-cutting mutation-ack outcome, exactly like
+/// `SchedulesUi.notice` above (the ack arrives in the shared `read_task`
+/// response dispatch, which doesn't have direct access to `SkillsPanel`'s
+/// own local component state).
+#[derive(Clone, Default, PartialEq)]
+struct SkillsUi {
+    /// `(ok, text)` outcome of the last `AuthorSkill` (Teach) attempt.
+    notice: Option<(bool, String)>,
+}
+
 /// One rendered chat transcript line.
 #[derive(Clone, PartialEq)]
 struct ChatLine {
@@ -691,6 +704,7 @@ fn App() -> Element {
     let documents = use_signal(DocumentsState::default);
     let voice = use_signal(VoiceState::default);
     let skills = use_signal(SkillsState::default);
+    let skills_ui = use_signal(SkillsUi::default);
     let mcp = use_signal(McpState::default);
     let tools = use_signal(ToolsState::default);
     let gallery = use_signal(GalleryState::default);
@@ -725,8 +739,9 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
-            teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            audit_page, sessions_page, connected, session, transcript, streaming, gate, mission_ui,
+            teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
+            notifications, audit_page, sessions_page, connected, session, transcript, streaming,
+            gate, mission_ui,
         )
     });
     use_context_provider(|| ws);
@@ -742,6 +757,7 @@ fn App() -> Element {
     use_context_provider(|| documents);
     use_context_provider(|| voice);
     use_context_provider(|| skills);
+    use_context_provider(|| skills_ui);
     use_context_provider(|| mcp);
     use_context_provider(|| tools);
     use_context_provider(|| gallery);
@@ -3232,6 +3248,35 @@ fn SkillsPanel() -> Element {
     // Chapter Repertoire (approve-in-place) — reuse the shared persona-
     // proposal feed + ProposalCard, filtered to skill proposals.
     let agents = use_context::<Signal<AgentsState>>();
+    // Chapter Tutor — "Teach a skill" form. Local fields (same pattern
+    // SchedulesPanel's own "Create schedule" form uses: cron/prompt are
+    // local signals there too, only the ack notice is shared context).
+    let mut skills_ui = use_context::<Signal<SkillsUi>>();
+    let mut teach_open = use_signal(|| false);
+    let mut teach_name = use_signal(String::new);
+    let mut teach_trigger = use_signal(String::new);
+    let mut teach_procedure = use_signal(String::new);
+    let teach = move |_| {
+        let n = teach_name().trim().to_string();
+        let t = teach_trigger().trim().to_string();
+        let p = teach_procedure().trim().to_string();
+        if n.is_empty() || t.is_empty() || p.is_empty() {
+            skills_ui.write().notice =
+                Some((false, "name, trigger, and procedure are all required".into()));
+            return;
+        }
+        ws.send(FrontendMessage::AuthorSkill {
+            id: format!("mc-skill-teach-{n}"),
+            op: SkillAuthorOp::Teach,
+            name: n,
+            trigger: Some(t),
+            procedure: Some(p),
+        });
+        ws.send(skills_query());
+        teach_name.set(String::new());
+        teach_trigger.set(String::new());
+        teach_procedure.set(String::new());
+    };
 
     // Load the inventory + the pending proposals each time the view opens,
     // and re-load after any proposal-resolve/revert ack bumps the shared
@@ -3272,6 +3317,53 @@ fn SkillsPanel() -> Element {
             div { class: "panel-head",
                 h3 { "Skills" }
                 span { class: "label-tech", "{s.skills.len()}" }
+                button {
+                    class: "btn btn-secondary btn-xs",
+                    onclick: move |_| teach_open.set(!teach_open()),
+                    if teach_open() { "Cancel" } else { "+ Teach a skill" }
+                }
+            }
+            if let Some((ok, text)) = skills_ui().notice {
+                div {
+                    class: "glass-card",
+                    style: if ok {
+                        "border-left: 3px solid var(--ok, #16a34a); margin-bottom: 12px; padding: 8px 12px;"
+                    } else {
+                        "border-left: 3px solid var(--danger, #b91c1c); margin-bottom: 12px; padding: 8px 12px;"
+                    },
+                    p { class: "label-tech", "{text}" }
+                }
+            }
+            if teach_open() {
+                div { class: "glass-card", style: "margin-bottom: 12px; padding: 12px;",
+                    label { class: "label-tech", "Name" }
+                    input {
+                        class: "input",
+                        placeholder: "summarize-document",
+                        value: "{teach_name}",
+                        oninput: move |e| teach_name.set(e.value()),
+                    }
+                    label { class: "label-tech", "Trigger (when should the agent use this?)" }
+                    input {
+                        class: "input",
+                        placeholder: "When the operator asks for a summary of a document or file.",
+                        value: "{teach_trigger}",
+                        oninput: move |e| teach_trigger.set(e.value()),
+                    }
+                    label { class: "label-tech", "Procedure (what should the agent do?)" }
+                    textarea {
+                        class: "input",
+                        rows: "4",
+                        placeholder: "1. Read the file. 2. Identify the key points. 3. Reply with a concise summary.",
+                        value: "{teach_procedure}",
+                        oninput: move |e| teach_procedure.set(e.value()),
+                    }
+                    button {
+                        class: "btn btn-primary btn-xs",
+                        onclick: teach,
+                        "Teach"
+                    }
+                }
             }
             if !skill_proposals.is_empty() {
                 div { class: "skills-proposals",
@@ -7288,6 +7380,7 @@ async fn ws_task(
     documents: Signal<DocumentsState>,
     voice: Signal<VoiceState>,
     skills: Signal<SkillsState>,
+    skills_ui: Signal<SkillsUi>,
     mcp: Signal<McpState>,
     tools: Signal<ToolsState>,
     gallery: Signal<GalleryState>,
@@ -7333,8 +7426,9 @@ async fn ws_task(
 
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
-            teams, documents, voice, skills, mcp, tools, gallery, schedules_ui, notifications,
-            audit_page, sessions_page, connected, session, transcript, streaming, gate, mission_ui,
+            teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
+            notifications, audit_page, sessions_page, connected, session, transcript, streaming,
+            gate, mission_ui,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -7425,6 +7519,7 @@ async fn read_task(
     mut documents: Signal<DocumentsState>,
     mut voice: Signal<VoiceState>,
     mut skills: Signal<SkillsState>,
+    mut skills_ui: Signal<SkillsUi>,
     mut mcp: Signal<McpState>,
     mut tools: Signal<ToolsState>,
     mut gallery: Signal<GalleryState>,
@@ -7712,6 +7807,18 @@ async fn read_task(
                 DaemonEnvelope::SkillForgotten { ok, removed, name, .. } if ok && removed => {
                     // Chapter Repertoire — drop the forgotten skill locally.
                     skills.write().skills.retain(|s| s.skill.name != name);
+                }
+                DaemonEnvelope::SkillAuthored { ok, error, .. } => {
+                    // Chapter Tutor — Studio "Teach a skill" form ack.
+                    // Matches ScheduleMutated's own shape exactly: the
+                    // form already cleared its local fields optimistically
+                    // on submit (Step 6 below); this only ever updates the
+                    // notice banner.
+                    skills_ui.write().notice = Some(if ok {
+                        (true, "Skill taught.".to_string())
+                    } else {
+                        (false, error.unwrap_or_else(|| "teach failed".into()))
+                    });
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetWikiPage { page },
