@@ -10437,6 +10437,51 @@ fn phase_124_family_strategy_defaults_match_sign_off() {
 }
 
 #[test]
+fn detect_gpt_oss_models() {
+    // POLISH_WAVES.md sub-project 4, item B.1 — gpt-oss has no numbered
+    // generations to date, unlike qwen/gemma/llama, so this matches the
+    // literal family-part string rather than extracting a major-version
+    // digit.
+    assert_eq!(
+        crate::detect_model_family("gpt-oss:20b").as_deref(),
+        Some("gpt-oss")
+    );
+    assert_eq!(
+        crate::detect_model_family("gpt-oss:120b").as_deref(),
+        Some("gpt-oss")
+    );
+    // A plain "gpt-4"/"gpt-4o-mini" cloud model name must NOT match —
+    // guards against a future broadening of this branch accidentally
+    // catching OpenAI's own cloud model names (already asserted None by
+    // `phase_122_detect_returns_none_for_non_ollama_model_names` above;
+    // this test re-confirms it stays that way once the gpt-oss branch
+    // exists).
+    assert!(crate::detect_model_family("gpt-4").is_none());
+    assert!(crate::detect_model_family("gpt-4o-mini").is_none());
+}
+
+#[test]
+fn gpt_oss_defaults_to_few_shot_examples() {
+    // POLISH_WAVES.md sub-project 4, item B.1 — reuses the existing
+    // lever already proven for qwen3/gemma4 (worked examples), just
+    // re-targeted at gpt-oss's post-tool finishing gap rather than
+    // tool-availability refusal. Not a new OllamaFamilyStrategy variant.
+    assert_eq!(
+        crate::OllamaFamilyStrategy::default_for_family("gpt-oss"),
+        crate::OllamaFamilyStrategy::FewShotExamples
+    );
+}
+
+#[test]
+fn resolve_gpt_oss_prompt_strategy_uses_few_shot_default() {
+    let overrides = std::collections::BTreeMap::new();
+    assert_eq!(
+        crate::resolve_ollama_prompt_strategy("gpt-oss:20b", &overrides),
+        crate::OllamaFamilyStrategy::FewShotExamples
+    );
+}
+
+#[test]
 fn phase_122_family_strategy_label_is_stable_lowercase() {
     // Labels match the TOML wire form so the operator's
     // aivyx.toml can pass `prompt_strategy = "none"` /

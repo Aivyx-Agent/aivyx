@@ -3531,6 +3531,13 @@ impl OllamaFamilyStrategy {
     /// - `llama3` → `None` — llama3's tool-use protocol is
     ///   presumed more reliable; pre-Phase-122 behavior
     ///   preserved across Phase 122 and Phase 124.
+    /// - `gpt-oss` → `FewShotExamples` (POLISH_WAVES.md sub-project 4) —
+    ///   `gpt-oss:20b`'s live repro was a bare JSON object of tool
+    ///   ARGUMENTS leaking as the final answer, and separate empty
+    ///   completions, both post-tool-call finishing failures rather
+    ///   than qwen3/gemma4's tool-availability refusal. Reuses the same
+    ///   worked-examples lever rather than inventing a new strategy —
+    ///   "show correct behavior" applies to either failure mode.
     /// - Unknown families → `None` — default-conservative
     ///   posture so a new model release doesn't silently get
     ///   substrate it wasn't tested against.
@@ -3539,6 +3546,7 @@ impl OllamaFamilyStrategy {
             "qwen3" => OllamaFamilyStrategy::FewShotExamples,
             "gemma4" => OllamaFamilyStrategy::FewShotExamples,
             "llama3" => OllamaFamilyStrategy::None,
+            "gpt-oss" => OllamaFamilyStrategy::FewShotExamples,
             _ => OllamaFamilyStrategy::None,
         }
     }
@@ -3631,6 +3639,13 @@ pub fn detect_model_family(model: &str) -> Option<String> {
         }
         let major: String = digits.chars().take(1).collect();
         return Some(format!("llama{major}"));
+    }
+
+    // gpt-oss:20b, gpt-oss:120b — no numbered generations to date
+    // (unlike qwen/gemma/llama), so match the literal family-part
+    // string directly rather than extracting a digit.
+    if family_part == "gpt-oss" {
+        return Some("gpt-oss".to_string());
     }
 
     // Unrecognized family — operator can still configure
