@@ -479,6 +479,12 @@ pub struct LlmPlanner {
     tools: Vec<LlmToolDescriptor>,
     history: Vec<LlmMessage>,
     pending_call_ids: VecDeque<String>,
+    /// POLISH_WAVES.md sub-project 4, item A — `(tool_id, count)` of the
+    /// current CONSECUTIVE-failure streak for one tool. `None` when the
+    /// last observed outcome was a success, or no outcome has been
+    /// observed yet. A different tool's failure resets the streak to
+    /// that tool rather than accumulating across tools.
+    consecutive_tool_failures: Option<(ToolId, usize)>,
     /// Cumulative token usage across all LLM steps in this turn.
     accumulated_usage: crate::TokenUsage,
     /// Running count of messages pruned during this turn for context
@@ -524,6 +530,15 @@ struct KvCacheConfig {
 /// wall-clock deadline task is even spawned, and the production
 /// transport has no HTTP timeout by design.
 const KVCACHE_WARM_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// POLISH_WAVES.md sub-project 4, item A — after this many CONSECUTIVE
+/// failures of the same tool, `observe_tool_outcome` appends a one-shot
+/// advisory to the tool result telling the model to stop retrying.
+/// Bridle's own breaker (`aivyx-core/src/agent.rs`) only catches
+/// consecutive IDENTICAL calls (same tool_id + same input); a model that
+/// varies its arguments each retry never trips it, so this is a
+/// deliberately separate, differently-keyed mechanism.
+const TOOL_FAILURE_NUDGE_THRESHOLD: usize = 3;
 
 // ---------------------------------------------------------------------------
 // One-shot-per-failure-class warning latches (final-review Fix 2).
@@ -649,6 +664,7 @@ impl LlmPlanner {
             tools,
             history: Vec::new(),
             pending_call_ids: VecDeque::new(),
+            consecutive_tool_failures: None,
             accumulated_usage: crate::TokenUsage::default(),
             pruned_message_count: 0,
             task_message_index: None,
@@ -1516,7 +1532,7 @@ impl TurnPlanner for LlmPlanner {
 
     async fn observe_tool_outcome(
         &mut self,
-        _tool_id: ToolId,
+        tool_id: ToolId,
         outcome: &ToolOutcome,
     ) {
         // `pending_call_ids` is populated by the most recent ToolCall(s)
@@ -1536,10 +1552,42 @@ impl TurnPlanner for LlmPlanner {
         // request past the real context window — the provider then
         // truncated server-side, silently, from the front, where the
         // system prompt lives.
-        let content = cap_tool_result_content(
+        let mut content = cap_tool_result_content(
             content,
             self.config.context_window_tokens,
         );
+
+        // POLISH_WAVES.md sub-project 4, item A — tool-failure thrash
+        // nudge. Live repro: web_search down, the model pivoted once
+        // reasonably then degenerated into 6 differing failed calls and
+        // a raw web.fetch of the search engine's own homepage, never
+        // reporting the outage. Track consecutive failures of the SAME
+        // tool regardless of input, and nudge once when the streak
+        // reaches the threshold.
+        self.consecutive_tool_failures = if is_error {
+            Some(match self.consecutive_tool_failures {
+                Some((id, count)) if id == tool_id => (id, count + 1),
+                _ => (tool_id, 1),
+            })
+        } else {
+            None
+        };
+        if let Some((id, count)) = self.consecutive_tool_failures
+            && id == tool_id
+            && count == TOOL_FAILURE_NUDGE_THRESHOLD
+        {
+            let tool_name = self
+                .registry
+                .get(tool_id)
+                .map(|t| t.name().to_string())
+                .unwrap_or_else(|| "the tool".to_string());
+            content.push_str(&format!(
+                "\n\n[SYSTEM NOTE: {tool_name} has failed {count} times in \
+                 a row. Stop retrying it — report the outage to the \
+                 operator instead of trying an unrelated approach.]"
+            ));
+        }
+
         self.history.push(LlmMessage::ToolResult {
             call_id,
             content,
@@ -2738,6 +2786,122 @@ mod tests {
                 // The content should round-trip back to the original output.
                 let parsed: Value = serde_json::from_str(content).unwrap();
                 assert_eq!(parsed, json!({"found": 3, "items": ["a", "b", "c"]}));
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn observe_tool_outcome_nudges_after_three_consecutive_failures() {
+        let tool = Arc::new(FakeTool::new("web_search"));
+        let tool_id = tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let failure = ToolOutcome::Failed(AivyxError::Internal("search backend down".to_string()));
+
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &failure).await;
+
+        let last = planner.history().last().unwrap();
+        match last {
+            LlmMessage::ToolResult { content, is_error, .. } => {
+                assert!(*is_error);
+                assert!(
+                    content.contains("failed 3 times in a row"),
+                    "3rd consecutive failure must carry the nudge: {content}"
+                );
+                assert!(content.contains("web_search"), "nudge names the tool: {content}");
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn observe_tool_outcome_nudge_fires_once_not_on_every_later_failure() {
+        let tool = Arc::new(FakeTool::new("web_search"));
+        let tool_id = tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let failure = ToolOutcome::Failed(AivyxError::Internal("down".to_string()));
+        for _ in 0..4 {
+            planner.observe_tool_outcome(tool_id, &failure).await;
+        }
+        let last = planner.history().last().unwrap();
+        match last {
+            LlmMessage::ToolResult { content, .. } => {
+                assert!(
+                    !content.contains("failed 3 times in a row"),
+                    "the 4th consecutive failure must not repeat the nudge: {content}"
+                );
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn observe_tool_outcome_failure_streak_resets_on_different_tool() {
+        let tool_a = Arc::new(FakeTool::new("web_search"));
+        let tool_b = Arc::new(FakeTool::new("web.fetch"));
+        let (id_a, id_b) = (tool_a.id(), tool_b.id());
+        let registry = Arc::new(ToolRegistry::new(vec![tool_a, tool_b]));
+        let mut planner = LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let failure = ToolOutcome::Failed(AivyxError::Internal("down".to_string()));
+        planner.observe_tool_outcome(id_a, &failure).await;
+        planner.observe_tool_outcome(id_a, &failure).await;
+        planner.observe_tool_outcome(id_b, &failure).await; // different tool — resets id_a's streak
+        planner.observe_tool_outcome(id_a, &failure).await;
+        let last = planner.history().last().unwrap();
+        match last {
+            LlmMessage::ToolResult { content, .. } => {
+                assert!(
+                    !content.contains("failed 3 times in a row"),
+                    "a different tool's failure must reset the streak: {content}"
+                );
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn observe_tool_outcome_failure_streak_resets_on_success() {
+        let tool = Arc::new(FakeTool::new("web_search"));
+        let tool_id = tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let failure = ToolOutcome::Failed(AivyxError::Internal("down".to_string()));
+        let success = ToolOutcome::Completed {
+            output: json!({}),
+            verified: Verification::NotApplicable,
+        };
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &success).await; // resets
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        let last = planner.history().last().unwrap();
+        match last {
+            LlmMessage::ToolResult { content, .. } => {
+                assert!(
+                    !content.contains("failed 3 times in a row"),
+                    "a success must reset the streak: {content}"
+                );
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
