@@ -658,6 +658,14 @@ impl Agent for ConcreteAgent {
         let duration = start.elapsed();
         let outcome = match loop_outcome {
             LoopOutcome::Completed => {
+                // POLISH_WAVES.md sub-project 4, item B.2 — floor an
+                // empty or bare-tool-args-JSON final message before any
+                // other post-processing runs on it (Candor below, and
+                // Task 5's identifier-fidelity check once it lands).
+                if let Some(floor) = floor_unusable_final_message(&final_message) {
+                    final_message = floor.to_string();
+                }
+
                 // Chapter Candor (#12) — append an honest note if the message
                 // claimed a concrete action whose tool was never called this
                 // turn. Tool names resolved from the turn's observations via the
@@ -1382,6 +1390,32 @@ fn fence_untrusted_output(
         ),
         "data": data,
     })
+}
+
+/// POLISH_WAVES.md sub-project 4, item B.2 — a universal, family-
+/// independent safety net for a turn's own `final_message`. Two shapes
+/// observed live on `gpt-oss:20b`'s post-tool finishing: a genuinely
+/// empty completion, and a bare JSON object of tool ARGUMENTS the model
+/// never actually dispatched, leaked as if it were the reply. Runs
+/// regardless of which model family produced the turn — the floor
+/// protects any current or future model that hits the same failure
+/// shape, not just gpt-oss (Task 2's family detection is a separate,
+/// independent fix). Returns `None` when `final_message` looks like a
+/// normal reply, including one that merely *mentions* JSON inline —
+/// only a message that is ENTIRELY a JSON object floors.
+fn floor_unusable_final_message(msg: &str) -> Option<&'static str> {
+    const FLOOR: &str =
+        "I wasn't able to produce a usable reply this turn — please try again.";
+    let trimmed = msg.trim();
+    if trimmed.is_empty() {
+        return Some(FLOOR);
+    }
+    if let Ok(serde_json::Value::Object(_)) =
+        serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        return Some(FLOOR);
+    }
+    None
 }
 
 fn tool_outcome_summary_str(s: &ToolOutcomeSummary) -> &'static str {
@@ -3003,6 +3037,37 @@ mod tests {
         });
         assert_eq!(cs.cfg.max_period, 2);
         assert_eq!(cs.cfg.min_repeats, 2);
+    }
+
+    #[test]
+    fn floor_unusable_final_message_floors_empty_and_whitespace() {
+        assert!(floor_unusable_final_message("").is_some());
+        assert!(floor_unusable_final_message("   \n\t  ").is_some());
+    }
+
+    #[test]
+    fn floor_unusable_final_message_floors_bare_tool_args_object() {
+        let leaked = r#"{"path": "airports.csv", "delimiter": ","}"#;
+        assert!(floor_unusable_final_message(leaked).is_some());
+    }
+
+    #[test]
+    fn floor_unusable_final_message_leaves_ordinary_prose_alone() {
+        assert!(floor_unusable_final_message("Your home airport is Jandakot.").is_none());
+    }
+
+    #[test]
+    fn floor_unusable_final_message_leaves_prose_with_inline_json_alone() {
+        let msg = r#"The config uses {"key": "value"} as an example."#;
+        assert!(floor_unusable_final_message(msg).is_none());
+    }
+
+    #[test]
+    fn floor_unusable_final_message_does_not_floor_a_json_array() {
+        // Tool ARGUMENTS are always an object; an array is not the leak
+        // shape this floor targets, and flooring on it would over-fire
+        // on any legitimate reply that happens to be a JSON array.
+        assert!(floor_unusable_final_message("[1, 2, 3]").is_none());
     }
 
     // ---- TurnSafety: the shared per-turn-knob choke point ----
