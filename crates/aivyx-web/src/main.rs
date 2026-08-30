@@ -8112,15 +8112,32 @@ async fn read_task(
                     }
                     _ => {}
                 },
-                DaemonEnvelope::TurnComplete { .. } => {
+                DaemonEnvelope::TurnComplete { outcome, .. } => {
                     let text = streaming();
                     if !text.is_empty() {
                         transcript.write().push(ChatLine::assistant(text));
+                    } else if let Some(rest) = outcome.strip_prefix("completed: ") {
+                        if rest.trim().is_empty() {
+                            // POLISH_WAVES.md sub-project 4, item C —
+                            // render something instead of a silent void
+                            // when a turn completes with no streamed
+                            // text AND no real final_message either.
+                            transcript.write().push(ChatLine::system("(no reply)".to_string()));
+                        } else {
+                            // Streamed Text events didn't carry the
+                            // final message for some reason, but the
+                            // turn's own outcome has real content
+                            // (e.g. the turn-loop's own reply floor) —
+                            // show it rather than a flat placeholder.
+                            transcript.write().push(ChatLine::assistant(rest.to_string()));
+                        }
                     } else {
-                        // POLISH_WAVES.md sub-project 4, item C — render
-                        // something instead of a silent void when a turn
-                        // completes with no streamed text at all.
-                        transcript.write().push(ChatLine::system("(no reply)".to_string()));
+                        // Final-review fix (POLISH_WAVES.md sub-project
+                        // 4) — a non-completed outcome (timed out,
+                        // cancelled, looping, escalated, failed) was
+                        // being overwritten with a flat "(no reply)",
+                        // discarding the real reason. Show it instead.
+                        transcript.write().push(ChatLine::system(outcome));
                     }
                     streaming.set(String::new());
                 }
