@@ -177,10 +177,35 @@ fn identifier_tokens(text: &str) -> Vec<String> {
     tokens
         .into_iter()
         .filter(|t| {
-            t.chars().count() >= 4
-                && (t.contains(|c: char| c.is_ascii_digit())
-                    || t.contains('-')
-                    || t.chars().all(|c| !c.is_ascii_alphabetic() || c.is_ascii_uppercase()))
+            let len = t.chars().count();
+            // POLISH_WAVES.md sub-project 4 final-review fix — the old
+            // "all-uppercase" check was vacuously true for tokens with
+            // NO alphabetic characters at all (nothing to violate the
+            // uppercase rule), so pure numbers like "3000"/"2025" were
+            // wrongly treated as identifiers, producing false
+            // "double-check this identifier" warnings on correct
+            // arithmetic. Also caps identifier length: real
+            // identifiers are short, and an unbounded length here fed
+            // an O(n*m) edit-distance check with no upper bound.
+            if !(4..=64).contains(&len) {
+                return false;
+            }
+            let has_digit = t.chars().any(|c| c.is_ascii_digit());
+            let has_alpha = t.chars().any(|c| c.is_ascii_alphabetic());
+            let is_hyphenated = t.contains('-');
+            // Exactly-4-char all-uppercase is ICAO/tail-number-code
+            // shaped (e.g. "YPJT"); restricting to length 4 (rather
+            // than "any all-uppercase run") excludes ordinary longer
+            // acronyms/words like "HTTPS" while still catching real
+            // 4-letter codes. A residual collision with genuine
+            // 4-letter uppercase acronyms (e.g. "HTTP") is an accepted,
+            // documented tradeoff — the same class of risk as the
+            // "TODO" acronym case already noted in this function's own
+            // design doc.
+            let is_icao_like = len == 4
+                && has_alpha
+                && t.chars().all(|c| !c.is_ascii_alphabetic() || c.is_ascii_uppercase());
+            (has_digit && has_alpha) || is_hyphenated || is_icao_like
         })
         .collect()
 }
@@ -363,6 +388,31 @@ mod tests {
     #[test]
     fn identifier_tokens_admits_icao_style_codes() {
         assert_eq!(identifier_tokens("departing YPJT today"), vec!["YPJT".to_string()]);
+    }
+
+    #[test]
+    fn identifier_drift_does_not_flag_pure_number_arithmetic() {
+        let sources = vec!["Revenue was 1000 and costs were 2000.".to_string()];
+        let notes = detect_identifier_drift("Total revenue was 3000 dollars.", &sources);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn identifier_tokens_excludes_pure_digit_runs() {
+        assert!(identifier_tokens("the total was 3000 today").is_empty());
+    }
+
+    #[test]
+    fn identifier_tokens_excludes_long_uppercase_acronyms() {
+        // Only exactly-4-char uppercase runs are ICAO-code-shaped;
+        // longer ones (ordinary acronyms/words) don't qualify.
+        assert!(identifier_tokens("connect over HTTPS please").is_empty());
+    }
+
+    #[test]
+    fn identifier_tokens_length_capped() {
+        let long_run = "A".repeat(100);
+        assert!(identifier_tokens(&long_run).is_empty());
     }
 
     #[test]
