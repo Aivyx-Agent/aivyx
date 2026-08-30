@@ -2487,6 +2487,52 @@ impl StreamEventPayload {
     }
 }
 
+/// Concatenate just the `Text` chunks from a turn's events, in order —
+/// the text a surface has displayed (or would display) as the
+/// assistant's answer. Ignores `Status`/`ToolCall*`/`ApprovalGate`
+/// events. Pure.
+pub fn concat_text_events(events: &[StreamEventPayload]) -> String {
+    let mut out = String::new();
+    for event in events {
+        if let StreamEventPayload::Text { text } = event {
+            out.push_str(text);
+        }
+    }
+    out
+}
+
+/// Compare what a surface already displayed/reconstructed for a turn
+/// (`displayed`, from [`concat_text_events`] or an equivalent
+/// live-accumulated buffer) against the turn's own authoritative
+/// `outcome` string (as sent on `TurnComplete`/`Msg::TurnFinished` —
+/// `"completed: {final_message}"` for a normal completion, a fixed
+/// reason string for every other `TurnOutcome` variant — see
+/// `format_outcome` in `aivyx-channel`'s `daemon_server.rs`). Returns
+/// `Some(line)` to show when they diverge in a way the operator should
+/// see; `None` when nothing needs correcting. The turn loop's own
+/// post-processing (a final-message floor, Candor's claim-check,
+/// an identifier-fidelity check) only ever touches `outcome`'s
+/// `final_message` — never the raw streamed text — so this is the seam
+/// a surface uses to catch up. Pure.
+pub fn turn_outcome_correction(displayed: &str, outcome: &str) -> Option<String> {
+    let displayed = displayed.trim();
+    match outcome.strip_prefix("completed: ") {
+        Some(final_message) => {
+            let final_message = final_message.trim();
+            if displayed.is_empty() && final_message.is_empty() {
+                Some("(no reply)".to_string())
+            } else if displayed == final_message {
+                None
+            } else if displayed.is_empty() {
+                Some(final_message.to_string())
+            } else {
+                Some(format!("⚠ corrected: {final_message}"))
+            }
+        }
+        None => Some(outcome.to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Framing: encode / decode
 // ---------------------------------------------------------------------------
@@ -4743,6 +4789,86 @@ mod tests {
         let rendered = payload.render_for_cli();
         assert!(rendered.contains("m-002/g-010"), "got: {rendered}");
         assert!(!rendered.contains("scope:"), "got: {rendered}");
+    }
+
+    // ---- concat_text_events / turn_outcome_correction (turn-outcome
+    // correction follow-up to POLISH_WAVES.md sub-project 4) ----
+
+    #[test]
+    fn concat_text_events_joins_only_text_chunks() {
+        let events = vec![
+            StreamEventPayload::Status {
+                status: "thinking".into(),
+            },
+            StreamEventPayload::Text { text: "Hi".into() },
+            StreamEventPayload::ToolCallStarted {
+                tool_id: "id".into(),
+                tool_name: "web_search".into(),
+                input: serde_json::json!({}),
+            },
+            StreamEventPayload::Text {
+                text: " there".into(),
+            },
+        ];
+        assert_eq!(concat_text_events(&events), "Hi there");
+    }
+
+    #[test]
+    fn concat_text_events_empty_for_no_text_events() {
+        let events = vec![StreamEventPayload::Status {
+            status: "thinking".into(),
+        }];
+        assert_eq!(concat_text_events(&events), "");
+    }
+
+    #[test]
+    fn turn_outcome_correction_none_when_text_matches_final_message() {
+        assert_eq!(
+            turn_outcome_correction("Your home airport is Jandakot.", "completed: Your home airport is Jandakot."),
+            None
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_no_reply_when_both_empty() {
+        assert_eq!(
+            turn_outcome_correction("", "completed: "),
+            Some("(no reply)".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_shows_final_message_when_nothing_displayed() {
+        assert_eq!(
+            turn_outcome_correction("", "completed: I wasn't able to produce a usable reply this turn — please try again."),
+            Some("I wasn't able to produce a usable reply this turn — please try again.".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_flags_a_correction_when_displayed_and_final_differ() {
+        let leaked = "{\"path\": \"airports.csv\"}";
+        let corrected = "completed: I wasn't able to produce a usable reply this turn — please try again.";
+        assert_eq!(
+            turn_outcome_correction(leaked, corrected),
+            Some("⚠ corrected: I wasn't able to produce a usable reply this turn — please try again.".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_always_surfaces_non_completed_outcomes() {
+        assert_eq!(
+            turn_outcome_correction("partial answer", "timed out"),
+            Some("timed out".to_string())
+        );
+        assert_eq!(
+            turn_outcome_correction("", "stopped: 3 repeated identical tool calls"),
+            Some("stopped: 3 repeated identical tool calls".to_string())
+        );
+        assert_eq!(
+            turn_outcome_correction("some text", "escalated: shell.exec needs approval"),
+            Some("escalated: shell.exec needs approval".to_string())
+        );
     }
 
     // ---- Phase 45 — IpcAttachment ----
