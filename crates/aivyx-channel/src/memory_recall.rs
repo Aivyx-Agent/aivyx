@@ -275,29 +275,23 @@ impl SemanticMemoryContext {
         }
     }
 
-    /// Chapter Etch (backlog #8) — persist an explicit operator "remember /
-    /// note / save this" request that the local model would otherwise treat as
-    /// conversation and drop. Best-effort: logs + swallows errors, never panics
-    /// (it runs inside the best-effort recall hook). Stores under
-    /// [`EXPLICIT_MEMORY_TOPIC`] and embeds the fact immediately so it is
-    /// semantically recallable on the next turn (the same put → embed →
-    /// put_vector path the hourly backfill uses); a failed embed still leaves
-    /// the text stored for lexical recall + the next backfill pass.
-    /// Store→embed a fact under `EXPLICIT_MEMORY_TOPIC`, the same path
-    /// `capture_explicit_memory` always used — factored out so
-    /// `capture_volunteered_answer` (POLISH_WAVES.md sub-project 4, item
-    /// G) shares it rather than duplicating the store→embed sequence.
-    /// Best-effort: logs + swallows errors, never panics.
+    /// Store→embed a fact under `EXPLICIT_MEMORY_TOPIC`. Shared by both
+    /// `capture_explicit_memory` (an explicit operator "remember this"
+    /// request) and `capture_volunteered_answer` (POLISH_WAVES.md
+    /// sub-project 4, item G — an answer to the agent's own question) —
+    /// neither is more "the real one"; this is just the common
+    /// store→embed→put_vector sequence both need. Best-effort: logs +
+    /// swallows errors, never panics.
     async fn persist_fact(&self, fact: String) {
         let seq = match self.memory.put(EXPLICIT_MEMORY_TOPIC, &fact).await {
             Ok(seq) => seq,
             Err(e) => {
-                eprintln!("aivyx memory: explicit-capture write failed: {e}");
+                eprintln!("aivyx memory: fact-capture write failed: {e}");
                 return;
             }
         };
         eprintln!(
-            "aivyx memory: captured explicit request → {EXPLICIT_MEMORY_TOPIC}: {fact}"
+            "aivyx memory: captured fact → {EXPLICIT_MEMORY_TOPIC}: {fact}"
         );
         if let Ok(mut vecs) = self.provider.embed(std::slice::from_ref(&fact)).await {
             if !vecs.is_empty() {
