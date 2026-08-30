@@ -2519,15 +2519,44 @@ pub fn turn_outcome_correction(displayed: &str, outcome: &str) -> Option<String>
     match outcome.strip_prefix("completed: ") {
         Some(final_message) => {
             let final_message = final_message.trim();
-            if displayed.is_empty() && final_message.is_empty() {
-                Some("(no reply)".to_string())
-            } else if displayed == final_message {
-                None
-            } else if displayed.is_empty() {
-                Some(final_message.to_string())
-            } else {
-                Some(format!("⚠ corrected: {final_message}"))
+            if final_message.is_empty() {
+                return if displayed.is_empty() {
+                    Some("(no reply)".to_string())
+                } else {
+                    // Something streamed even though the final step's
+                    // own text ended up empty (e.g. a tool-call-only
+                    // final step after real narration) — nothing
+                    // authoritative to add.
+                    None
+                };
             }
+            if displayed.is_empty() {
+                return Some(final_message.to_string());
+            }
+            // Multi-step turns stream EVERY step's text (including
+            // narration before a tool call — LlmPlanner::one_step
+            // relays every TextChunk as it arrives), but final_message
+            // is only ever the LAST step's text. A healthy multi-step
+            // turn's displayed text therefore legitimately contains
+            // MORE than final_message; the real answer still matches
+            // its tail, so there is nothing to correct.
+            if displayed.ends_with(final_message) {
+                return None;
+            }
+            // The turn loop's post-processing (Candor's claim-check,
+            // the identifier-fidelity check) appends "\n\n⚠ {note}"
+            // annotations to final_message. When the pre-annotation
+            // portion matches what already displayed, show ONLY the
+            // new annotation(s) — not the whole final_message, which
+            // would duplicate the already-correct answer behind a
+            // misleading "corrected" framing.
+            if let Some(idx) = final_message.find("\n\n⚠ ") {
+                let answer_part = final_message[..idx].trim_end();
+                if displayed.ends_with(answer_part) {
+                    return Some(final_message[idx..].trim_start().to_string());
+                }
+            }
+            Some(format!("⚠ corrected: {final_message}"))
         }
         None => Some(outcome.to_string()),
     }
@@ -4868,6 +4897,69 @@ mod tests {
         assert_eq!(
             turn_outcome_correction("some text", "escalated: shell.exec needs approval"),
             Some("escalated: shell.exec needs approval".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_none_when_displayed_has_preamble_before_a_tool_call() {
+        // Multi-step turn: the model narrated before calling a tool,
+        // then gave its real final answer. displayed contains BOTH;
+        // final_message is only the last step's text. Nothing to
+        // correct — the real answer matches the tail of what streamed.
+        assert_eq!(
+            turn_outcome_correction(
+                "Let me check that.Your home airport is Jandakot.",
+                "completed: Your home airport is Jandakot."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_shows_only_the_new_annotation_not_the_whole_message() {
+        assert_eq!(
+            turn_outcome_correction(
+                "Your home airport is Jandakot.",
+                "completed: Your home airport is Jandakot.\n\n⚠ I said I would check the calendar but never called calendar.list."
+            ),
+            Some("⚠ I said I would check the calendar but never called calendar.list.".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_shows_only_new_annotations_with_preamble_too() {
+        // Both effects at once: multi-step narration AND a trailing
+        // annotation. Only the annotation should show.
+        assert_eq!(
+            turn_outcome_correction(
+                "Let me check.Your home airport is Jandakot.",
+                "completed: Your home airport is Jandakot.\n\n⚠ note."
+            ),
+            Some("⚠ note.".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_shows_both_annotations_when_two_fired() {
+        assert_eq!(
+            turn_outcome_correction(
+                "Answer.",
+                "completed: Answer.\n\n⚠ note1.\n\n⚠ note2."
+            ),
+            Some("⚠ note1.\n\n⚠ note2.".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_outcome_correction_still_flags_a_genuine_correction() {
+        // The original repro this feature was built for: a bare-JSON
+        // leak, floored to a fixed reply-floor message with no shared
+        // suffix at all. Must still flag as a real correction.
+        let leaked = "{\"path\": \"airports.csv\"}";
+        let floored = "completed: I wasn't able to produce a usable reply this turn — please try again.";
+        assert_eq!(
+            turn_outcome_correction(leaked, floored),
+            Some("⚠ corrected: I wasn't able to produce a usable reply this turn — please try again.".to_string())
         );
     }
 
