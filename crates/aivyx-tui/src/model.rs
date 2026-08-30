@@ -14,7 +14,9 @@
 //! The daemon is the agent; this is just a render + interaction layer
 //! over the IPC stream — no capability, trust, or audit concern.
 
-use aivyx_channel::daemon_ipc::{AuditEntrySummary, StreamEventPayload};
+use aivyx_channel::daemon_ipc::{
+    concat_text_events, turn_outcome_correction, AuditEntrySummary, StreamEventPayload,
+};
 use aivyx_channel::team_mission::{TeamMissionPhase, TeamMissionView, TeamStepState};
 
 /// The provenance of a rendered chat line. The terminal driver maps
@@ -546,7 +548,14 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         }
         Msg::ScrollToBottom => state.scroll = 0,
 
-        Msg::TurnFinished { events, .. } => {
+        Msg::TurnFinished { events, outcome } => {
+            // Turn-outcome-correction follow-up (POLISH_WAVES.md
+            // sub-project 4) — compute what these events would display
+            // BEFORE the coalescing loop below consumes `events` by
+            // value, so it can be compared against the turn's own
+            // authoritative outcome.
+            let displayed = concat_text_events(&events);
+
             // Coalesce consecutive Text events first: the daemon
             // streams token-level chunks ("Hi", " there", "!"), and
             // rendering each as its own ChatLine put one word per
@@ -579,6 +588,9 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
                         scope: scope.clone(),
                     });
                 }
+            }
+            if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
+                state.push_line(ChatLine::new(LineKind::System, note));
             }
             state.status.working = false;
         }
@@ -936,6 +948,66 @@ mod tests {
             .collect();
         assert_eq!(agent_lines.len(), 1);
         assert_eq!(agent_lines[0].text, "Hi there!");
+    }
+
+    #[test]
+    fn turn_finished_appends_correction_when_outcome_differs() {
+        let mut s = typed(AppState::new(), "q");
+        s = update(s, Msg::Submit);
+        s = update(
+            s,
+            Msg::TurnFinished {
+                events: vec![StreamEventPayload::Text {
+                    text: "{\"path\": \"airports.csv\"}".into(),
+                }],
+                outcome: "completed: I wasn't able to produce a usable reply this turn — please try again.".into(),
+            },
+        );
+        let last = s.history.last().unwrap();
+        assert_eq!(last.kind, LineKind::System);
+        assert!(
+            last.text.contains("corrected"),
+            "expected a correction line, got: {}",
+            last.text
+        );
+    }
+
+    #[test]
+    fn turn_finished_no_correction_line_when_outcome_matches() {
+        let mut s = typed(AppState::new(), "q");
+        s = update(s, Msg::Submit);
+        let len_before = s.history.len();
+        s = update(
+            s,
+            Msg::TurnFinished {
+                events: vec![StreamEventPayload::Text {
+                    text: "an answer".into(),
+                }],
+                outcome: "completed: an answer".into(),
+            },
+        );
+        assert_eq!(s.history.last().unwrap().kind, LineKind::Agent);
+        assert_eq!(
+            s.history.len(),
+            len_before + 1,
+            "outcome matches displayed text — no extra correction line should be appended"
+        );
+    }
+
+    #[test]
+    fn turn_finished_surfaces_non_completed_outcome() {
+        let mut s = typed(AppState::new(), "q");
+        s = update(s, Msg::Submit);
+        s = update(
+            s,
+            Msg::TurnFinished {
+                events: vec![],
+                outcome: "stopped: 3 repeated identical tool calls".into(),
+            },
+        );
+        let last = s.history.last().unwrap();
+        assert_eq!(last.kind, LineKind::System);
+        assert_eq!(last.text, "stopped: 3 repeated identical tool calls");
     }
 
     #[test]
