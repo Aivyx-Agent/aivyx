@@ -336,6 +336,15 @@ impl SemanticMemoryContext {
         if trimmed.is_empty() {
             return;
         }
+        // Final-review fix (POLISH_WAVES.md sub-project 4) — the design's
+        // own scope called for skipping very short/low-signal answers via
+        // the existing recall gate; this was dropped in the original
+        // implementation. A bare "yes"/"no" no longer gets persisted as a
+        // durable, embedded fact under the operator's high-signal
+        // explicit-memory topic.
+        if crate::recall_gate::should_gate_recall(trimmed, self.recall_gate_min_chars) {
+            return;
+        }
         let Some(windows) = self.conversation_windows.as_ref() else {
             return;
         };
@@ -347,7 +356,21 @@ impl SemanticMemoryContext {
                 return;
             };
             match window.last() {
-                Some((Role::Assistant, text)) if text.trim().ends_with('?') => text.clone(),
+                Some((Role::Assistant, text)) => {
+                    // Final-review fix (POLISH_WAVES.md sub-project 4) —
+                    // a Candor/identifier-fidelity annotation ("\n⚠ ...")
+                    // is appended AFTER the model's real reply and
+                    // recorded verbatim into the conversation window;
+                    // strip it before checking whether the actual reply
+                    // ended in a question, so an annotated question-turn
+                    // doesn't silently disable this trigger.
+                    let real_reply = text.split("\n⚠ ").next().unwrap_or(text.as_str()).trim();
+                    if real_reply.ends_with('?') {
+                        real_reply.to_string()
+                    } else {
+                        return;
+                    }
+                }
                 _ => return,
             }
         };
@@ -2981,6 +3004,57 @@ mod tests {
             entries[0].body.contains("Jandakot") && !entries[0].body.starts_with("Q:"),
             "the explicit capture's own fact text should win: {:?}",
             entries[0].body
+        );
+    }
+
+    #[tokio::test]
+    async fn volunteered_answer_gated_by_recall_gate_min_chars() {
+        use crate::conversation_window::{record_turn, shared_conversation_windows};
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let windows = shared_conversation_windows();
+        let s = sid();
+        record_turn(&windows, s, "want tea?", "Would you like some tea?");
+
+        let context = ctx(Arc::clone(&memory), false, 0.0)
+            .with_conversation_windows(windows.clone(), 3)
+            .with_recall_gate(5);
+        let _ = context
+            .recall("no", s, aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator)
+            .await;
+
+        let entries = memory.get_recent(EXPLICIT_MEMORY_TOPIC, 10).await.unwrap();
+        assert!(
+            entries.is_empty(),
+            "a 2-char answer below the gate should not persist: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn volunteered_answer_survives_a_trailing_annotation() {
+        use crate::conversation_window::{record_turn, shared_conversation_windows};
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let windows = shared_conversation_windows();
+        let s = sid();
+        record_turn(
+            &windows,
+            s,
+            "what's my home airport?",
+            "Which airport is home for you?\n⚠ I mentioned saving to memory, but I didn't actually record it this turn — please ask me again if you want it saved.",
+        );
+
+        let context = ctx(Arc::clone(&memory), false, 0.0)
+            .with_conversation_windows(windows.clone(), 3);
+        let _ = context
+            .recall("Jandakot", s, aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator)
+            .await;
+
+        let entries = memory.get_recent(EXPLICIT_MEMORY_TOPIC, 10).await.unwrap();
+        assert!(
+            entries.iter().any(|e| e.body.contains("Which airport is home for you?")
+                && e.body.contains("Jandakot")),
+            "the trailing annotation must not block persistence: {entries:?}"
         );
     }
 }
