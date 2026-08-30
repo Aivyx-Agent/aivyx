@@ -540,6 +540,14 @@ const KVCACHE_WARM_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// deliberately separate, differently-keyed mechanism.
 const TOOL_FAILURE_NUDGE_THRESHOLD: usize = 3;
 
+/// The literal marker `observe_tool_outcome` appends the tool-failure
+/// nudge after. Shared with `tool_result_texts`, which strips
+/// everything from this marker onward before returning tool-result
+/// text as a "source of truth" pool — the nudge is Aivyx's own
+/// injected scaffolding, not tool-provided data (final-review fix,
+/// POLISH_WAVES.md sub-project 4).
+const TOOL_FAILURE_NUDGE_MARKER: &str = "\n\n[SYSTEM NOTE:";
+
 // ---------------------------------------------------------------------------
 // One-shot-per-failure-class warning latches (final-review Fix 2).
 // ---------------------------------------------------------------------------
@@ -1582,7 +1590,7 @@ impl TurnPlanner for LlmPlanner {
                 .map(|t| t.name().to_string())
                 .unwrap_or_else(|| "the tool".to_string());
             content.push_str(&format!(
-                "\n\n[SYSTEM NOTE: {tool_name} has failed {count} times in \
+                "{TOOL_FAILURE_NUDGE_MARKER} {tool_name} has failed {count} times in \
                  a row. Stop retrying it — report the outage to the \
                  operator instead of trying an unrelated approach.]"
             ));
@@ -1607,7 +1615,13 @@ impl TurnPlanner for LlmPlanner {
         self.history
             .iter()
             .filter_map(|m| match m {
-                LlmMessage::ToolResult { content, .. } => Some(content.clone()),
+                LlmMessage::ToolResult { content, .. } => {
+                    let text = content
+                        .split(TOOL_FAILURE_NUDGE_MARKER)
+                        .next()
+                        .unwrap_or(content.as_str());
+                    Some(text.to_string())
+                }
                 _ => None,
             })
             .collect()
@@ -2850,6 +2864,30 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn tool_result_texts_excludes_the_failure_nudge_text() {
+        let tool = Arc::new(FakeTool::new("web_search"));
+        let tool_id = tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let failure = ToolOutcome::Failed(AivyxError::Internal("down".to_string()));
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &failure).await;
+        planner.observe_tool_outcome(tool_id, &failure).await; // 3rd — nudge appended
+
+        let texts = planner.tool_result_texts();
+        assert_eq!(texts.len(), 3);
+        assert!(
+            !texts[2].contains("SYSTEM NOTE"),
+            "tool_result_texts must strip the nudge, got: {:?}",
+            texts[2]
+        );
     }
 
     #[tokio::test]
