@@ -76,6 +76,8 @@ impl TeamAssembly {
             String,
         )>,
         message_origin: aivyx_core::MessageOrigin,
+        // POLISH_WAVES.md sub-project 5, item D.
+        mission_topic_prefix: Option<String>,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
@@ -85,7 +87,8 @@ impl TeamAssembly {
             .with_dialogue(Arc::clone(&bus), dialogue.clone())
             .with_member_backends(member_backends)
             .with_checkpointer(checkpointer)
-            .with_kv_cache(kv_cache_handles);
+            .with_kv_cache(kv_cache_handles)
+            .with_mission_topic_prefix(mission_topic_prefix);
         let pool = Arc::new(SpecialistPool::new(
             factory,
             config.clone(),
@@ -209,6 +212,7 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
+            None,
         )
         .expect("valid team")
     }
@@ -229,6 +233,7 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
+            None,
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
     }
@@ -295,6 +300,7 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
+            None,
         )
         .unwrap();
 

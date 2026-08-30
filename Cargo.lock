@@ -677,6 +677,7 @@ dependencies = [
  "aivyx-core",
  "aivyx-kvcache",
  "aivyx-llm",
+ "aivyx-memory",
  "aivyx-team-types",
  "async-trait",
  "futures-util",

@@ -689,7 +689,7 @@ pub async fn drive_registered(
             record_snapshot.as_ref().and_then(|r| r.triggered_by.as_deref()),
         );
         let (runtime, meter) =
-            assemble_runtime(deps, config, message_origin, seed_tokens, seed_usd)?;
+            assemble_runtime(deps, config, message_origin, seed_tokens, seed_usd, id)?;
         let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
         let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
         // Only a completed mission is artifact-graded; anything else is terminal.
@@ -1587,6 +1587,9 @@ fn assemble_runtime(
     // Reprise retry all construct a fresh hook via this same function).
     seed_tokens: u64,
     seed_usd: f64,
+    // POLISH_WAVES.md sub-project 5, item D — the mission's own id, used
+    // to derive a mission-scoped memory-topic prefix.
+    mission_id: &str,
 ) -> Result<(Arc<TeamRuntime>, Option<crate::mission_meter::MissionMeter>), MissionDriverError> {
     // Chapter Ensemble — bind the daemon's real authority so specialists can
     // actually use their tools (write files, fetch, run commands). See the fn.
@@ -1624,6 +1627,11 @@ fn assemble_runtime(
         deps.member_provider_builder.as_ref(),
     )?;
 
+    // POLISH_WAVES.md sub-project 5, item D — a short, readable
+    // mission-scoped prefix. Mission ids are UUID v4 strings; the first
+    // 8 hex characters are enough to disambiguate concurrent missions
+    // without making every memory topic name unreadably long.
+    let mission_topic_prefix = format!("m-{}-", &mission_id[..mission_id.len().min(8)]);
     let assembly = TeamAssembly::build(
         config,
         Arc::clone(&deps.provider),
@@ -1636,6 +1644,7 @@ fn assemble_runtime(
         deps.checkpointer.clone(),
         deps.kv_cache_handles.clone(),
         message_origin,
+        Some(mission_topic_prefix),
     )?;
     Ok((assembly.runtime(), meter))
 }
