@@ -867,9 +867,113 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
+---
+
+### Task 5: Daemon-backed CLI REPL wiring
+
+Added during this plan's final review: the final review's own surface enumeration was incomplete. `run_daemon_session_connected` (the default `aivyx` interactive chat entry point — `crates/aivyx-cli/src/bin/aivyx.rs:9558`) already captures `outcome` (not `_outcome`) from `session.submit_input(...)`, but only stores it into the returned `SessionReport`, never writes it to the terminal. Same class of gap as the TUI (Task 3), same fix shape.
+
+**Files:**
+- Modify: `crates/aivyx-channel/src/daemon_session.rs:18` (import), `:132-139` (event-rendering block in `run_daemon_session_inner`)
+
+**Interfaces:**
+- Consumes: `crate::daemon_ipc::{concat_text_events, turn_outcome_correction}` (Task 1, re-exported via `aivyx-channel`'s `daemon_ipc` module).
+
+- [ ] **Step 1: Add the import**
+
+Find:
+
+```rust
+use crate::daemon_ipc::{FrontendType, StreamEventPayload};
+```
+
+Replace with:
+
+```rust
+use crate::daemon_ipc::{concat_text_events, turn_outcome_correction, FrontendType, StreamEventPayload};
+```
+
+- [ ] **Step 2: Wire the correction into the REPL loop**
+
+Find, inside `run_daemon_session_inner`'s `loop { ... }` body (search for `let (events, outcome) = session.submit_input(input.to_string())`):
+
+```rust
+        let (events, outcome) = session.submit_input(input.to_string())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for event in &events {
+            let rendered = event.render_for_cli();
+            write!(writer, "{rendered}").map_err(|e| format!("render write: {e}"))?;
+        }
+        writer.flush().map_err(|e| format!("render flush: {e}"))?;
+
+        for event in &events {
+            if let StreamEventPayload::ApprovalGate {
+```
+
+Replace with:
+
+```rust
+        let (events, outcome) = session.submit_input(input.to_string())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for event in &events {
+            let rendered = event.render_for_cli();
+            write!(writer, "{rendered}").map_err(|e| format!("render write: {e}"))?;
+        }
+        writer.flush().map_err(|e| format!("render flush: {e}"))?;
+
+        // Turn-outcome-correction follow-up (POLISH_WAVES.md
+        // sub-project 4) — show the turn's own authoritative outcome
+        // when it diverges from what the streamed events alone
+        // rendered (a reply floor, a Candor/identifier-fidelity
+        // annotation, or a non-completed outcome's reason). `outcome`
+        // was already captured here (used below for the session
+        // report) but never written to the terminal.
+        let displayed = concat_text_events(&events);
+        if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
+            writeln!(writer, "{note}").map_err(|e| format!("outcome-correction write: {e}"))?;
+            writer.flush().map_err(|e| format!("outcome-correction flush: {e}"))?;
+        }
+
+        for event in &events {
+            if let StreamEventPayload::ApprovalGate {
+```
+
+(Leave the rest of the loop — the approval-gate handling, `turns_run += 1;`, `last_outcome_str = Some(outcome);` — exactly as-is; `outcome` is a `String` that gets moved into `last_outcome_str` at the end of the loop body, and this step only reads it by reference via `&outcome`, so no ownership conflict.)
+
+- [ ] **Step 3: Compile-check**
+
+Run: `cargo check -p aivyx-channel && cargo clippy -p aivyx-channel --all-targets -- -D warnings`
+Expected: clean.
+
+No new automated test for this task: `run_daemon_session_inner` takes a concrete `DaemonSession` (a real daemon connection, not a trait), so it cannot be unit-tested without a live daemon — matching this file's own existing convention (no `#[cfg(test)] mod tests` block exists in `daemon_session.rs` at all). Verification is compile + clippy plus the code-inspection argument above (this is the identical 3-line pattern already proven correct and tested at the shared-helper level in Task 1, and identical in shape to Task 3's TUI wiring).
+
+- [ ] **Step 4: Full-crate check and commit**
+
+Run: `cargo test -p aivyx-channel`
+Expected: all pre-existing tests still pass (this change adds no new test surface, so this just confirms no regression).
+
+```bash
+git add crates/aivyx-channel/src/daemon_session.rs
+git commit -m "feat(channel): wire turn_outcome_correction into the daemon-backed CLI REPL
+
+Found during this plan's own final review — the surface enumeration
+in the design spec missed the default 'aivyx' interactive chat entry
+point (run_daemon_session_connected). It already captured outcome
+(used only for the session report) but never wrote it to the
+terminal. Same 3-line pattern as the TUI's Task 3 fix.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+```
+
+---
+
 ## Final Verification
 
-After all 4 tasks:
+After all 5 tasks:
 
 ```bash
 cargo clippy --workspace --exclude aivyx-desktop --all-targets -- -D warnings
