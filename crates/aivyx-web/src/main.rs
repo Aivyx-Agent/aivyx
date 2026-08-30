@@ -252,6 +252,10 @@ struct MemoryState {
     /// `false` until the first entries snapshot arrives — distinguishes "still
     /// loading" from "genuinely no memories yet" so the panel shows a skeleton.
     loaded: bool,
+    /// POLISH_WAVES.md sub-project 5, item E — Concord-detected memory
+    /// contradictions, refreshed on view-open and after every
+    /// resolve/dismiss ack.
+    conflicts: Vec<aivyx_ipc::conflict::MemoryConflict>,
 }
 
 /// Chapter Codex — knowledge-wiki browser state. `pages` is the index
@@ -540,6 +544,14 @@ struct SkillsUi {
     notice: Option<(bool, String)>,
 }
 
+/// POLISH_WAVES.md sub-project 5, item E — Memory screen UI state
+/// (resolve/dismiss action feedback), mirroring `SkillsUi`/`SchedulesUi`'s
+/// own minimal shape exactly.
+#[derive(Clone, Default, PartialEq)]
+struct MemoryUi {
+    notice: Option<(bool, String)>,
+}
+
 /// One rendered chat transcript line.
 #[derive(Clone, PartialEq)]
 struct ChatLine {
@@ -706,6 +718,7 @@ fn App() -> Element {
     let voice = use_signal(VoiceState::default);
     let skills = use_signal(SkillsState::default);
     let skills_ui = use_signal(SkillsUi::default);
+    let memory_ui = use_signal(MemoryUi::default);
     let mcp = use_signal(McpState::default);
     let tools = use_signal(ToolsState::default);
     let gallery = use_signal(GalleryState::default);
@@ -739,7 +752,7 @@ fn App() -> Element {
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
-            rx, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
+            rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
             notifications, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui,
@@ -750,6 +763,7 @@ fn App() -> Element {
     // gate on a live socket instead of sending into a zombie page.
     use_context_provider(|| connected);
     use_context_provider(|| memory);
+    use_context_provider(|| memory_ui);
     use_context_provider(|| wiki);
     use_context_provider(|| lattice);
     use_context_provider(|| settings);
@@ -2942,6 +2956,7 @@ fn GatePrompt(gate: GateInfo) -> Element {
 fn MemoryPanel() -> Element {
     let ws = use_context::<Sender>();
     let memory = use_context::<Signal<MemoryState>>();
+    let memory_ui = use_context::<Signal<MemoryUi>>();
     let mut query = use_signal(String::new);
     let mut semantic = use_signal(|| false);
     // Active scope label: "recent" | "topic:<t>" | "search:<q>".
@@ -2955,6 +2970,7 @@ fn MemoryPanel() -> Element {
         ws.send(mem_topics_query());
         ws.send(mem_search_query(String::new(), false));
         ws.send(mem_graph_query());
+        ws.send(mem_conflicts_query());
     });
 
     let m = memory();
@@ -2975,6 +2991,7 @@ fn MemoryPanel() -> Element {
                         let topic = t.clone();
                         let label = t.clone();
                         let sel = scope() == format!("topic:{t}");
+                        let conflicted = m.conflicts.iter().any(|c| c.a.topic == topic || c.b.topic == topic);
                         rsx! {
                             button {
                                 class: if sel { "mem-topic active" } else { "mem-topic" },
@@ -2983,6 +3000,9 @@ fn MemoryPanel() -> Element {
                                     ws.send(mem_topic_query(topic.clone()));
                                 },
                                 "{label}"
+                                if conflicted {
+                                    span { class: "chip amber", title: "contradictory entries", " ⚠" }
+                                }
                             }
                         }
                     }
@@ -3067,8 +3087,85 @@ fn MemoryPanel() -> Element {
                         }
                     }
                 }
+                if let Some(current_topic) = scope().strip_prefix("topic:").map(|s| s.to_string()) {
+                    ConflictsPanel { topic: current_topic, conflicts: m.conflicts.clone() }
+                }
+                if let Some((ok, msg)) = memory_ui().notice.clone() {
+                    div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
+                }
             }
         }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 5, item E — the currently-selected topic's
+/// open conflicts (if any), with resolve/dismiss actions matching the
+/// CLI's own `aivyx memory conflicts` semantics exactly: "keep this one"
+/// deletes the OTHER side (`ResolveMemoryConflict` names the loser's own
+/// `topic`/`seq` as `archive_seq`); "not a conflict" dismisses the pair as
+/// a false positive without deleting anything.
+#[component]
+fn ConflictsPanel(topic: String, conflicts: Vec<aivyx_ipc::conflict::MemoryConflict>) -> Element {
+    let ws = use_context::<Sender>();
+    let relevant: Vec<_> = conflicts
+        .into_iter()
+        .filter(|c| c.a.topic == topic || c.b.topic == topic)
+        .collect();
+    if relevant.is_empty() {
+        return rsx! { Fragment {} };
+    }
+    rsx! {
+        div { class: "conflicts",
+            for c in relevant.iter() {
+                {
+                    let conflict_id = c.id.clone();
+                    let a = c.a.clone();
+                    let b = c.b.clone();
+                    let (keep_a_topic, keep_a_seq) = (b.topic.clone(), b.seq);
+                    let (keep_b_topic, keep_b_seq) = (a.topic.clone(), a.seq);
+                    let dismiss_id = conflict_id.clone();
+                    rsx! {
+                        div { class: "glass-card conflict", key: "{conflict_id}",
+                            p { class: "notice err", "{c.reason}" }
+                            div { class: "conflict-side", span { class: "label-tech", "{a.topic} #{a.seq}" } p { "{a.body}" } }
+                            div { class: "conflict-side", span { class: "label-tech", "{b.topic} #{b.seq}" } p { "{b.body}" } }
+                            div { class: "conflict-actions",
+                                button {
+                                    class: "btn btn-sage btn-xs",
+                                    onclick: move |_| ws.send(resolve_memory_conflict_query(keep_a_topic.clone(), keep_a_seq)),
+                                    "Keep \"{a.topic} #{a.seq}\""
+                                }
+                                button {
+                                    class: "btn btn-sage btn-xs",
+                                    onclick: move |_| ws.send(resolve_memory_conflict_query(keep_b_topic.clone(), keep_b_seq)),
+                                    "Keep \"{b.topic} #{b.seq}\""
+                                }
+                                button {
+                                    class: "btn btn-ghost btn-xs",
+                                    onclick: move |_| ws.send(dismiss_memory_conflict_query(dismiss_id.clone())),
+                                    "Not a conflict"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn resolve_memory_conflict_query(topic: String, archive_seq: u64) -> FrontendMessage {
+    FrontendMessage::ResolveMemoryConflict {
+        id: "mc-mem-conflict-resolve".to_string(),
+        topic,
+        archive_seq,
+    }
+}
+
+fn dismiss_memory_conflict_query(conflict_id: String) -> FrontendMessage {
+    FrontendMessage::DismissMemoryConflict {
+        id: "mc-mem-conflict-dismiss".to_string(),
+        conflict_id,
     }
 }
 
@@ -3111,6 +3208,13 @@ fn mem_graph_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-mem-graph".to_string(),
         payload: QueryPayload::GetMemoryGraph { limit: 60 },
+    }
+}
+
+fn mem_conflicts_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mem-conflicts".to_string(),
+        payload: QueryPayload::GetMemoryConflicts,
     }
 }
 
@@ -7413,6 +7517,7 @@ async fn ws_task(
     running_overlay: Signal<HashMap<String, HashSet<usize>>>,
     dashboard: Signal<Dashboard>,
     memory: Signal<MemoryState>,
+    memory_ui: Signal<MemoryUi>,
     wiki: Signal<WikiState>,
     lattice: Signal<GraphKnowledgeState>,
     settings: Signal<SettingsState>,
@@ -7466,7 +7571,7 @@ async fn ws_task(
         let (mut write, read) = ws.split();
 
         spawn(read_task(
-            read, missions, running_overlay, dashboard, memory, wiki, lattice, settings, agents,
+            read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
             notifications, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui,
@@ -7552,6 +7657,7 @@ async fn read_task(
     mut running_overlay: Signal<HashMap<String, HashSet<usize>>>,
     mut dashboard: Signal<Dashboard>,
     mut memory: Signal<MemoryState>,
+    mut memory_ui: Signal<MemoryUi>,
     mut wiki: Signal<WikiState>,
     mut lattice: Signal<GraphKnowledgeState>,
     mut settings: Signal<SettingsState>,
@@ -7575,6 +7681,16 @@ async fn read_task(
     mut gate: Signal<Option<GateInfo>>,
     mut mission_ui: Signal<MissionControlUi>,
 ) {
+    // POLISH_WAVES.md sub-project 5, item E — the conflict resolve/dismiss
+    // acks below need to re-issue `mem_conflicts_query()` after a
+    // successful mutation. `read_task` is a spawned task (not a
+    // component), so it can't take `Sender` as an explicit prop the way
+    // components grab it via `use_context::<Sender>()` — but this task IS
+    // scope-bound to `App` (spawned by `ws_task`, itself the body of
+    // `App`'s own `use_coroutine`), and `use_coroutine` auto-registers its
+    // returned handle as context on that same scope, so the lookup
+    // resolves here exactly as it does inside any child component.
+    let ws = use_context::<Sender>();
     {
         while let Some(Ok(Message::Text(text))) = read.next().await {
             let Ok(env) = serde_json::from_str::<DaemonEnvelope>(&text) else {
@@ -7800,6 +7916,38 @@ async fn read_task(
                     m.entries = matches;
                     m.fell_back = fell_back_to_keyword;
                     m.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::MemoryConflicts { conflicts },
+                    ..
+                } => {
+                    memory.write().conflicts = conflicts;
+                }
+                DaemonEnvelope::MemoryConflictResolved { ok, removed, error, .. } => {
+                    let msg = if ok {
+                        if removed {
+                            "Conflict resolved.".to_string()
+                        } else {
+                            "That entry was already gone.".to_string()
+                        }
+                    } else {
+                        error.unwrap_or_else(|| "Resolve failed.".to_string())
+                    };
+                    memory_ui.write().notice = Some((ok, msg));
+                    if ok {
+                        ws.send(mem_conflicts_query());
+                    }
+                }
+                DaemonEnvelope::MemoryConflictDismissed { ok, error, .. } => {
+                    let msg = if ok {
+                        "Dismissed — kept both.".to_string()
+                    } else {
+                        error.unwrap_or_else(|| "Dismiss failed.".to_string())
+                    };
+                    memory_ui.write().notice = Some((ok, msg));
+                    if ok {
+                        ws.send(mem_conflicts_query());
+                    }
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ListWikiPages { pages },
