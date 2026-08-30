@@ -25,7 +25,7 @@ use aivyx_llm::embedding::EmbeddingProvider;
 use aivyx_memory::{Memory, MemoryEntry};
 
 use crate::conversation_window::{
-    assemble_for, SharedConversationWindows,
+    assemble_for, Role, SharedConversationWindows,
 };
 
 /// Per-entry body cap in the injected block. Recall is a
@@ -283,10 +283,12 @@ impl SemanticMemoryContext {
     /// semantically recallable on the next turn (the same put → embed →
     /// put_vector path the hourly backfill uses); a failed embed still leaves
     /// the text stored for lexical recall + the next backfill pass.
-    async fn capture_explicit_memory(&self, user_message: &str) {
-        let Some(fact) = extract_remember_request(user_message) else {
-            return;
-        };
+    /// Store→embed a fact under `EXPLICIT_MEMORY_TOPIC`, the same path
+    /// `capture_explicit_memory` always used — factored out so
+    /// `capture_volunteered_answer` (POLISH_WAVES.md sub-project 4, item
+    /// G) shares it rather than duplicating the store→embed sequence.
+    /// Best-effort: logs + swallows errors, never panics.
+    async fn persist_fact(&self, fact: String) {
         let seq = match self.memory.put(EXPLICIT_MEMORY_TOPIC, &fact).await {
             Ok(seq) => seq,
             Err(e) => {
@@ -297,9 +299,7 @@ impl SemanticMemoryContext {
         eprintln!(
             "aivyx memory: captured explicit request → {EXPLICIT_MEMORY_TOPIC}: {fact}"
         );
-        if let Ok(mut vecs) =
-            self.provider.embed(std::slice::from_ref(&fact)).await
-        {
+        if let Ok(mut vecs) = self.provider.embed(std::slice::from_ref(&fact)).await {
             if !vecs.is_empty() {
                 let _ = self
                     .memory
@@ -307,6 +307,57 @@ impl SemanticMemoryContext {
                     .await;
             }
         }
+    }
+
+    /// Returns `true` iff it persisted a fact. The caller (`recall`)
+    /// uses this to skip `capture_volunteered_answer` when the operator's
+    /// message was ALSO an explicit "remember this" request — avoids
+    /// persisting the same turn twice under two different framings.
+    async fn capture_explicit_memory(&self, user_message: &str) -> bool {
+        let Some(fact) = extract_remember_request(user_message) else {
+            return false;
+        };
+        self.persist_fact(fact).await;
+        true
+    }
+
+    /// POLISH_WAVES.md sub-project 4, item G — closes Etch's persist
+    /// gap. Chapter Thread's history replay lets a volunteered answer to
+    /// the agent's OWN question connect conversationally, but the fact
+    /// was never `memory.write`-persisted — only an explicit "remember
+    /// this" phrase triggered a deterministic save. When the session's
+    /// last recorded turn was the assistant ending in '?', the
+    /// operator's current message is persisted as
+    /// `"Q: {question} A: {answer}"`. Best-effort, same posture as
+    /// `capture_explicit_memory`. Scoped to this (smart/embedded) path
+    /// only — `LiteRecallContext` has no `conversation_windows` handle
+    /// at all, so it can't participate; a documented, accepted gap, not
+    /// a silent omission.
+    async fn capture_volunteered_answer(
+        &self,
+        session_id: aivyx_core::SessionId,
+        user_message: &str,
+    ) {
+        let trimmed = user_message.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let Some(windows) = self.conversation_windows.as_ref() else {
+            return;
+        };
+        let last_question = {
+            let Ok(map) = windows.read() else {
+                return;
+            };
+            let Some(window) = map.get(&session_id) else {
+                return;
+            };
+            match window.last() {
+                Some((Role::Assistant, text)) if text.trim().ends_with('?') => text.clone(),
+                _ => return,
+            }
+        };
+        self.persist_fact(format!("Q: {last_question} A: {trimmed}")).await;
     }
 
     /// Chapter Lattice (LT.6) — attach the typed knowledge-graph store +
@@ -529,7 +580,10 @@ impl ContextProvider for SemanticMemoryContext {
         // structural and guaranteed. Best-effort + fire-and-forget: it never
         // affects the recall result below. Runs BEFORE the recall gate so even a
         // short "remember X" message is still captured.
-        self.capture_explicit_memory(user_message).await;
+        let captured_explicit = self.capture_explicit_memory(user_message).await;
+        if !captured_explicit {
+            self.capture_volunteered_answer(session_id, user_message).await;
+        }
 
         // Phase 90 — heuristic recall gate. On a noise turn
         // (trimmed message shorter than the operator-set
@@ -2840,5 +2894,99 @@ mod tests {
             .await
             .expect("captured fact is lexically recallable");
         assert!(block.contains("YSSY"), "captured home airport: {block}");
+    }
+
+    /// POLISH_WAVES.md sub-project 4, item G — closing Etch's persist
+    /// gap. Chapter Thread's history replay already lets the model
+    /// itself see that it just asked a question; the fact still wasn't
+    /// memory.written. When the session's last recorded turn was the
+    /// assistant ending in '?', the operator's next message is
+    /// persisted as the candidate answer.
+    #[tokio::test]
+    async fn volunteered_answer_is_persisted_when_last_reply_was_a_question() {
+        use crate::conversation_window::{record_turn, shared_conversation_windows};
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let windows = shared_conversation_windows();
+        let s = sid();
+        record_turn(
+            &windows,
+            s,
+            "what's my home airport?",
+            "Could you tell me your home airport?",
+        );
+
+        let context = ctx(Arc::clone(&memory), false, 0.0)
+            .with_conversation_windows(windows.clone(), 3);
+        let _ = context
+            .recall("Jandakot", s, aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator)
+            .await;
+
+        let entries = memory.get_recent(EXPLICIT_MEMORY_TOPIC, 10).await.unwrap();
+        assert!(
+            entries.iter().any(|e| e.body.contains("Could you tell me your home airport?")
+                && e.body.contains("Jandakot")),
+            "volunteered answer must persist under {EXPLICIT_MEMORY_TOPIC}: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn volunteered_answer_not_captured_when_last_reply_was_not_a_question() {
+        use crate::conversation_window::{record_turn, shared_conversation_windows};
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let windows = shared_conversation_windows();
+        let s = sid();
+        record_turn(
+            &windows,
+            s,
+            "what's my home airport?",
+            "I'm not sure, let me know.",
+        );
+
+        let context = ctx(Arc::clone(&memory), false, 0.0)
+            .with_conversation_windows(windows.clone(), 3);
+        let _ = context
+            .recall("Jandakot", s, aivyx_core::TurnId::new(), aivyx_core::MessageOrigin::Operator)
+            .await;
+
+        let entries = memory.get_recent(EXPLICIT_MEMORY_TOPIC, 10).await.unwrap();
+        assert!(
+            entries.is_empty(),
+            "no pending question — nothing should persist: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn volunteered_answer_skipped_when_explicit_phrase_already_captured() {
+        use crate::conversation_window::{record_turn, shared_conversation_windows};
+
+        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
+        let windows = shared_conversation_windows();
+        let s = sid();
+        record_turn(&windows, s, "what's my home airport?", "Which airport is home for you?");
+
+        let context = ctx(Arc::clone(&memory), false, 0.0)
+            .with_conversation_windows(windows.clone(), 3);
+        let _ = context
+            .recall(
+                "remember that my home airport is Jandakot",
+                s,
+                aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
+            )
+            .await;
+
+        let entries = memory.get_recent(EXPLICIT_MEMORY_TOPIC, 10).await.unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the explicit-phrase capture should fire, not both: {entries:?}"
+        );
+        assert!(
+            entries[0].body.contains("Jandakot") && !entries[0].body.starts_with("Q:"),
+            "the explicit capture's own fact text should win: {:?}",
+            entries[0].body
+        );
     }
 }

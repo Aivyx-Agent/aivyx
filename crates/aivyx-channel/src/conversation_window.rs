@@ -102,6 +102,15 @@ impl ConversationWindow {
         self.turns.len()
     }
 
+    /// The most recently pushed `(Role, text)` entry, or `None` for an
+    /// empty window. POLISH_WAVES.md sub-project 4, item G — lets a
+    /// consumer check whether the session's last recorded turn was the
+    /// assistant asking a question, without assembling the full
+    /// relevance-query text `assemble()` builds.
+    pub fn last(&self) -> Option<&(Role, String)> {
+        self.turns.back()
+    }
+
     /// Assemble the relevance query: the last
     /// `window_turns - 1` prior turns (oldest → newest), then
     /// `current` LAST so it dominates the embedding. Output is
