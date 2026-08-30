@@ -677,10 +677,7 @@ impl Agent for ConcreteAgent {
                 for note in
                     crate::claim_check::detect_unfulfilled_claims(&final_message, &called_tools)
                 {
-                    if !final_message.ends_with('\n') {
-                        final_message.push('\n');
-                    }
-                    final_message.push_str(&format!("\n⚠ {note}"));
+                    append_turn_note(&mut final_message, &note);
                 }
 
                 // POLISH_WAVES.md sub-project 4, item E — the
@@ -691,10 +688,7 @@ impl Agent for ConcreteAgent {
                 for note in
                     crate::claim_check::detect_identifier_drift(&final_message, &tool_result_texts)
                 {
-                    if !final_message.ends_with('\n') {
-                        final_message.push('\n');
-                    }
-                    final_message.push_str(&format!("\n⚠ {note}"));
+                    append_turn_note(&mut final_message, &note);
                 }
 
                 TurnOutcome::Completed {
@@ -1431,6 +1425,18 @@ fn floor_unusable_final_message(msg: &str) -> Option<&'static str> {
         return Some(FLOOR);
     }
     None
+}
+
+/// Append one Candor-style honest-note annotation ("⚠ {note}") to a
+/// turn's final message, ensuring a newline separates it from whatever
+/// came before. Shared by both the claim-check loop and the
+/// identifier-fidelity loop below it — previously duplicated verbatim
+/// in each.
+fn append_turn_note(final_message: &mut String, note: &str) {
+    if !final_message.ends_with('\n') {
+        final_message.push('\n');
+    }
+    final_message.push_str(&format!("\n⚠ {note}"));
 }
 
 fn tool_outcome_summary_str(s: &ToolOutcomeSummary) -> &'static str {
