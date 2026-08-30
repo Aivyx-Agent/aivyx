@@ -2434,6 +2434,13 @@ fn MissionRow(mission: TeamMissionView) -> Element {
                 span { class: "goal", "{mission.goal}" }
                 span { class: "lead label-tech", "{mission.lead}" }
             }
+            // POLISH_WAVES.md sub-project 5, item A — the operator
+            // previously saw REJECTED/HALTED with no explanation;
+            // halt_reason already carries the judge's precise verdict
+            // (or the halt cause) and already flows over the wire.
+            if let Some(reason) = mission.halt_reason.as_ref() {
+                div { class: "notice err", "{reason}" }
+            }
             div { class: "progress", div { class: "fill", style: "width: {pct}%;" } }
             div { class: "steps",
                 for step in mission.steps.iter() {
