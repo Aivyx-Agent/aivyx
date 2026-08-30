@@ -534,7 +534,7 @@ async fn run_telegram_daemon_chat_task(
         // ordering invariant to be testable) — nothing else to do here.
 
         // Phase 45 — forward image data through IPC when present.
-        let (events, _outcome) = if let Some(ref img) = msg.image {
+        let (events, outcome) = if let Some(ref img) = msg.image {
             use base64::Engine;
             let encoder = base64::engine::general_purpose::STANDARD;
             let att = crate::daemon_ipc::IpcAttachment {
@@ -549,7 +549,7 @@ async fn run_telegram_daemon_chat_task(
             session.submit_input(msg.text).await?
         };
 
-        let buf = render_events_for_telegram(&events);
+        let buf = build_telegram_reply(&events, &outcome);
 
         transport
             .send_message(OutgoingMessage {
@@ -633,6 +633,27 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
     }
 }
 
+/// Build the outbound Telegram reply text: the rendered event journal
+/// (tool-call/status lines + streamed text), plus a correction line
+/// when the turn's own outcome diverges from what the events alone
+/// would show (a reply floor, a Candor/identifier-fidelity annotation,
+/// or a non-completed outcome's reason). Skips the correction only
+/// when it would exactly duplicate `render_events_for_telegram`'s own
+/// empty-events "(no reply)" fallback.
+fn build_telegram_reply(events: &[StreamEventPayload], outcome: &str) -> String {
+    let displayed = crate::daemon_ipc::concat_text_events(events);
+    let mut buf = render_events_for_telegram(events);
+    if let Some(note) = crate::daemon_ipc::turn_outcome_correction(&displayed, outcome) {
+        if !(note == "(no reply)" && buf.trim() == "(no reply)") {
+            if !buf.is_empty() && !buf.ends_with('\n') {
+                buf.push('\n');
+            }
+            buf.push_str(&note);
+        }
+    }
+    buf
+}
+
 // `parse_gate_command` lived here through Phases 19–110. Phase 111
 // extracted it into `crate::gate_command` so the Discord and Slack
 // daemon-frontends could share the parser. Three-data-point
@@ -655,6 +676,40 @@ mod tests {
         assert!(rendered.contains("APPROVAL GATE"));
         assert!(rendered.contains("/approve m-001 g-abc"));
         assert!(rendered.contains("/reject  m-001 g-abc"));
+    }
+
+    #[test]
+    fn build_telegram_reply_appends_correction_when_outcome_differs() {
+        let events = vec![StreamEventPayload::Text {
+            text: "{\"path\": \"airports.csv\"}".into(),
+        }];
+        let out = build_telegram_reply(
+            &events,
+            "completed: I wasn't able to produce a usable reply this turn — please try again.",
+        );
+        assert!(out.contains("{\"path\": \"airports.csv\"}"), "{out}");
+        assert!(out.contains("corrected"), "{out}");
+    }
+
+    #[test]
+    fn build_telegram_reply_no_correction_when_outcome_matches() {
+        let events = vec![StreamEventPayload::Text {
+            text: "an answer".into(),
+        }];
+        let out = build_telegram_reply(&events, "completed: an answer");
+        assert_eq!(out, "an answer");
+    }
+
+    #[test]
+    fn build_telegram_reply_does_not_double_up_no_reply() {
+        let out = build_telegram_reply(&[], "completed: ");
+        assert_eq!(out, "(no reply)", "must not print (no reply) twice: {out}");
+    }
+
+    #[test]
+    fn build_telegram_reply_surfaces_non_completed_outcome() {
+        let out = build_telegram_reply(&[], "timed out");
+        assert!(out.contains("timed out"), "{out}");
     }
 
     // Audit C1+H1 regression — see DESIGN.md D1 turn-loop
