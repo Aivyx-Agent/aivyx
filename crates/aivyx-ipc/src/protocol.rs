@@ -2544,13 +2544,25 @@ pub fn turn_outcome_correction(displayed: &str, outcome: &str) -> Option<String>
                 return None;
             }
             // The turn loop's post-processing (Candor's claim-check,
-            // the identifier-fidelity check) appends "\n\n⚠ {note}"
-            // annotations to final_message. When the pre-annotation
-            // portion matches what already displayed, show ONLY the
-            // new annotation(s) — not the whole final_message, which
-            // would duplicate the already-correct answer behind a
-            // misleading "corrected" framing.
-            if let Some(idx) = final_message.find("\n\n⚠ ") {
+            // the identifier-fidelity check — see
+            // `append_turn_note` in `aivyx-core`'s `agent.rs`, the
+            // sole owner of this "\n\n⚠ {note}" format; aivyx-ipc
+            // can't depend on aivyx-core to share a constant, so
+            // this string is duplicated by convention, not by
+            // reference — keep the two in sync by hand if either
+            // changes) appends "\n\n⚠ {note}" annotations to
+            // final_message. When the pre-annotation portion matches
+            // what already displayed, show ONLY the new annotation(s)
+            // — not the whole final_message, which would duplicate
+            // the already-correct answer behind a misleading
+            // "corrected" framing. Re-review fix: use the FIRST
+            // marker whose preceding text actually matches displayed
+            // (not just the first marker in the string) — the
+            // model's own organic text can legitimately contain a
+            // bare "⚠ " paragraph before a real annotation is ever
+            // appended, and the first `find` alone would land on that
+            // organic marker instead of the real annotation boundary.
+            for (idx, _) in final_message.match_indices("\n\n⚠ ") {
                 let answer_part = final_message[..idx].trim_end();
                 if displayed.ends_with(answer_part) {
                     return Some(final_message[idx..].trim_start().to_string());
@@ -4951,15 +4963,18 @@ mod tests {
     }
 
     #[test]
-    fn turn_outcome_correction_still_flags_a_genuine_correction() {
-        // The original repro this feature was built for: a bare-JSON
-        // leak, floored to a fixed reply-floor message with no shared
-        // suffix at all. Must still flag as a real correction.
-        let leaked = "{\"path\": \"airports.csv\"}";
-        let floored = "completed: I wasn't able to produce a usable reply this turn — please try again.";
+    fn turn_outcome_correction_finds_the_real_annotation_boundary_past_organic_warning_text() {
+        // Re-review fix — the model's OWN text can legitimately open a
+        // paragraph with a bare "⚠ " before a real annotation is ever
+        // appended (e.g. warning the operator about a destructive
+        // action). The first "\n\n⚠ " in final_message is that organic
+        // paragraph, not the real annotation boundary; only the SECOND
+        // one's preceding text actually matches `displayed`.
+        let displayed = "Here are the risks:\n\n⚠ This deletes the table.";
+        let outcome = "completed: Here are the risks:\n\n⚠ This deletes the table.\n\n⚠ I said I would check the calendar but never called calendar.list.";
         assert_eq!(
-            turn_outcome_correction(leaked, floored),
-            Some("⚠ corrected: I wasn't able to produce a usable reply this turn — please try again.".to_string())
+            turn_outcome_correction(displayed, outcome),
+            Some("⚠ I said I would check the calendar but never called calendar.list.".to_string())
         );
     }
 
