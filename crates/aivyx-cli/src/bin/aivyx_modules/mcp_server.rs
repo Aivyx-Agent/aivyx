@@ -480,7 +480,7 @@ async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<Strin
                     "DuckDuckGo returned HTTP {status} (anti-bot challenge or \
                      rate limit) — the zero-config search backend is currently \
                      unavailable; this is NOT an empty result set. A keyed \
-                     backend (BRAVE_SEARCH_API_KEY or SERPAPI_API_KEY) avoids \
+                     backend (BRAVE_SEARCH_API_KEY or SERPAPI_KEY) avoids \
                      this."
                 ));
             }

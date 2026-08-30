@@ -362,6 +362,35 @@ args = [
 
 ---
 
+## Bundled `web-search` fallback backend
+
+Aivyx's own bundled `web-search` MCP server (`aivyx mcp-server`,
+started automatically — no `[[mcp_server]]` entry needed) defaults to
+DuckDuckGo's zero-config HTML search with no API key required. Under
+sustained or automated use DuckDuckGo answers with HTTP **202** and a
+bot-challenge page rather than real results — the bundled server
+surfaces this as an explicit tool error ("the zero-config search
+backend is currently unavailable") rather than a silent empty result
+set, but it can't make DuckDuckGo answer.
+
+If your operator routines (trend-scans, missions, or just chatty
+day-to-day use) hit this wall, set one of these environment variables
+before starting the daemon to switch to a keyed backend — priority
+order is Brave, then SerpAPI, then the DuckDuckGo fallback:
+
+- `BRAVE_SEARCH_API_KEY` — sign up at `api.search.brave.com`.
+- `SERPAPI_KEY` — sign up at `serpapi.com`.
+
+No `aivyx.toml` change needed; the bundled server checks these two
+env vars directly at request time. This is a *different* server from
+the `brave-search` recipe below — that recipe is the official
+`@modelcontextprotocol/server-brave-search` package (its own
+`BRAVE_API_KEY`, its own `web_search` + `local_search` tool surface);
+use it only if you specifically want that server's tool surface
+instead of the bundled one.
+
+---
+
 ## brave-search
 
 Web + local search via the Brave Search API. Aivyx already ships
