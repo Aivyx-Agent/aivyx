@@ -8097,8 +8097,15 @@ async fn read_task(
                     StreamEventPayload::Status { status } => {
                         transcript.write().push(ChatLine::system(format!("· {status}")));
                     }
-                    StreamEventPayload::ToolCallStarted { tool_name, .. } => {
-                        transcript.write().push(ChatLine::system(format!("→ {tool_name}")));
+                    StreamEventPayload::ToolCallStarted { tool_name, input, .. } => {
+                        // POLISH_WAVES.md sub-project 4, item D — parity
+                        // with mission/cron turns, which already journal
+                        // full args via StreamEventPayload::render_for_cli
+                        // (`→ {tool_name} {input}`); chat previously
+                        // dropped `input` here, so distinct calls with
+                        // different arguments looked like stuck repetition.
+                        let input_oneline = serde_json::to_string(&input).unwrap_or_default();
+                        transcript.write().push(ChatLine::system(format!("→ {tool_name} {input_oneline}")));
                     }
                     StreamEventPayload::ApprovalGate { mission_id, gate_id, reason, .. } => {
                         gate.set(Some(GateInfo { mission_id, gate_id, reason }));
@@ -8109,6 +8116,11 @@ async fn read_task(
                     let text = streaming();
                     if !text.is_empty() {
                         transcript.write().push(ChatLine::assistant(text));
+                    } else {
+                        // POLISH_WAVES.md sub-project 4, item C — render
+                        // something instead of a silent void when a turn
+                        // completes with no streamed text at all.
+                        transcript.write().push(ChatLine::system("(no reply)".to_string()));
                     }
                     streaming.set(String::new());
                 }
