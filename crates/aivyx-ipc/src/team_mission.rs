@@ -238,6 +238,7 @@ impl TeamMissionRecord {
             phase: self.phase,
             pending_gate: self.pending_gate.clone(),
             halt_reason: self.halt_reason.clone(),
+            verify_attempts: self.verify_attempts,
             progress: ((done * 100) / total) as u16,
             steps,
         }
@@ -288,6 +289,14 @@ pub struct TeamMissionView {
     /// when `phase == Halted`. Lets a client show *which* cause ended it.
     #[serde(default)]
     pub halt_reason: Option<String>,
+    /// POLISH_WAVES.md sub-project 5, item B — the mission's current
+    /// Chapter Reprise verification-retry attempt count, so a repeated
+    /// approval gate (the same `gate_review_brief` re-shown on each
+    /// retry) can tell the operator which attempt this is. `0`/`1` both
+    /// mean "no retry has happened yet" — same meaning as
+    /// `TeamMissionRecord::verify_attempts`'s own default of `0`.
+    #[serde(default)]
+    pub verify_attempts: u32,
     /// Completion percent in `0..=100` (completed steps / total).
     pub progress: u16,
     pub steps: Vec<TeamStepView>,
@@ -390,6 +399,14 @@ mod tests {
         assert_eq!(view.steps[2].state, TeamStepState::Pending);
         assert!(view.steps[1].label.contains("manager (gate)"));
         assert_eq!(view.progress, 33);
+    }
+
+    #[test]
+    fn to_view_carries_verify_attempts() {
+        let mut rec = sample("v3");
+        rec.verify_attempts = 2;
+        let view = rec.to_view();
+        assert_eq!(view.verify_attempts, 2);
     }
 
     #[test]

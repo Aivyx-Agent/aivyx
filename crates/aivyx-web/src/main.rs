@@ -2449,22 +2449,34 @@ fn MissionRow(mission: TeamMissionView) -> Element {
             }
             if awaiting {
                 if let Some(gate) = mission.pending_gate.clone() {
-                    GateControls { mission_id: mission.id.clone(), step: gate }
+                    GateControls { mission_id: mission.id.clone(), step: gate, verify_attempts: mission.verify_attempts }
                 }
             }
         }
     }
 }
 
+/// POLISH_WAVES.md sub-project 5, item B — the gate label, with attempt
+/// context only when this isn't the first attempt (a first-attempt gate
+/// needs no "(attempt 1)" noise). Extracted as a pure function so it's
+/// testable without a Dioxus runtime.
+fn gate_label(step: &str, verify_attempts: u32) -> String {
+    if verify_attempts > 1 {
+        format!("⚑ awaiting approval — {step} (attempt {verify_attempts})")
+    } else {
+        format!("⚑ awaiting approval — {step}")
+    }
+}
+
 #[component]
-fn GateControls(mission_id: String, step: String) -> Element {
+fn GateControls(mission_id: String, step: String, verify_attempts: u32) -> Element {
     let ws = use_context::<Sender>();
     let approve = (mission_id.clone(), step.clone());
     let reject = (mission_id.clone(), step.clone());
-    let label = step.clone();
+    let label = gate_label(&step, verify_attempts);
     rsx! {
         div { class: "gate",
-            span { class: "gate-label", "⚑ awaiting approval — {label}" }
+            span { class: "gate-label", "{label}" }
             button {
                 class: "btn btn-sage",
                 onclick: move |_| ws.send(resolve_team_query(approve.0.clone(), approve.1.clone(), true)),
@@ -2686,7 +2698,7 @@ fn MissionControls(mission: TeamMissionView) -> Element {
         div { class: "mission-controls",
             if shown.contains(&"gate") {
                 if let Some(gate) = mission.pending_gate.clone() {
-                    GateControls { mission_id: mission.id.clone(), step: gate }
+                    GateControls { mission_id: mission.id.clone(), step: gate, verify_attempts: mission.verify_attempts }
                 }
             }
             if shown.contains(&"pause") {
@@ -6222,6 +6234,7 @@ mod mission_control_tests {
             phase: TeamMissionPhase::Executing,
             pending_gate: None,
             halt_reason: None,
+            verify_attempts: 0,
             progress,
             steps: vec![],
         }
@@ -6620,6 +6633,26 @@ mod mission_control_tests {
     fn scopes_of_returns_none_for_a_lead_not_on_the_given_roster() {
         let roster = sample_roster();
         assert_eq!(scopes_of(&roster, "packlead"), None);
+    }
+
+    #[test]
+    fn gate_label_omits_attempt_suffix_on_first_attempt() {
+        assert_eq!(
+            gate_label("gate_review_brief", 0),
+            "⚑ awaiting approval — gate_review_brief"
+        );
+        assert_eq!(
+            gate_label("gate_review_brief", 1),
+            "⚑ awaiting approval — gate_review_brief"
+        );
+    }
+
+    #[test]
+    fn gate_label_includes_attempt_suffix_on_retry() {
+        assert_eq!(
+            gate_label("gate_review_brief", 2),
+            "⚑ awaiting approval — gate_review_brief (attempt 2)"
+        );
     }
 
     #[test]
