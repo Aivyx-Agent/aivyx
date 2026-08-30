@@ -155,12 +155,16 @@ pub fn detect_identifier_drift(final_message: &str, source_texts: &[String]) -> 
     notes
 }
 
-/// Identifier-shaped tokens: alphanumeric-and-hyphen runs, at least 4
+/// Identifier-shaped tokens: alphanumeric-and-hyphen runs, 4-64
 /// characters, that look like a registration/code rather than an
-/// ordinary word — a digit, a hyphen, or being fully uppercase all
-/// qualify. Covers "VH-EZT" (hyphen), "22012KT" (digit), and 4-letter
-/// ICAO codes like "YPJT" (uppercase) — no single shared shape covers
-/// all three, so the three conditions are combined with OR. Pure.
+/// ordinary word — a hyphen (with at least one digit or letter), a
+/// digit-and-letter mix, or being exactly 4 characters and fully
+/// uppercase all qualify. Covers "VH-EZT" (hyphen), "22012KT"
+/// (digit+letter), and 4-letter ICAO codes like "YPJT" (uppercase) —
+/// no single shared shape covers all three, so the conditions are
+/// combined with OR. Pure numbers ("3000") and pure punctuation runs
+/// ("-----") are deliberately excluded — see the inline comments below
+/// for why. Pure.
 fn identifier_tokens(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -192,7 +196,16 @@ fn identifier_tokens(text: &str) -> Vec<String> {
             }
             let has_digit = t.chars().any(|c| c.is_ascii_digit());
             let has_alpha = t.chars().any(|c| c.is_ascii_alphabetic());
-            let is_hyphenated = t.contains('-');
+            // Re-review fix — the hyphen branch was unguarded, so a
+            // token with NO alphanumeric characters at all (a markdown
+            // table separator like "-----", a horizontal rule) still
+            // qualified as an "identifier" whenever its dash count
+            // differed from a look-alike in the source pool. Requiring
+            // at least one digit or letter still admits real
+            // hyphenated identifiers (VH-EZT) and dates
+            // (2026-08-28 vs 2026-08-27, where flagging a drifted date
+            // is arguably desirable) while excluding pure punctuation.
+            let is_hyphenated = t.contains('-') && (has_digit || has_alpha);
             // Exactly-4-char all-uppercase is ICAO/tail-number-code
             // shaped (e.g. "YPJT"); restricting to length 4 (rather
             // than "any all-uppercase run") excludes ordinary longer
@@ -379,10 +392,36 @@ mod tests {
     }
 
     #[test]
-    fn identifier_tokens_requires_digit_hyphen_or_uppercase() {
+    fn identifier_tokens_excludes_ordinary_mixed_case_words() {
         // "This" is 4 letters but mixed-case — never an identifier
         // candidate.
         assert!(identifier_tokens("This is a test").is_empty());
+    }
+
+    #[test]
+    fn identifier_tokens_excludes_pure_punctuation_runs() {
+        // Re-review fix — a markdown table separator/horizontal rule
+        // has no alphanumeric characters at all and must never qualify
+        // as an "identifier," even though it contains a hyphen.
+        assert!(identifier_tokens("-----").is_empty());
+        assert!(identifier_tokens("----").is_empty());
+    }
+
+    #[test]
+    fn identifier_drift_does_not_flag_markdown_table_separators() {
+        let sources = vec!["| col |\n| ---- |".to_string()];
+        let notes = detect_identifier_drift("| col |\n| ----- |", &sources);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn identifier_tokens_admits_hyphenated_dates() {
+        // A hyphenated run with digits (a date) still qualifies —
+        // flagging a drifted date is desirable, unlike pure punctuation.
+        assert_eq!(
+            identifier_tokens("filed on 2026-08-28"),
+            vec!["2026-08-28".to_string()]
+        );
     }
 
     #[test]
