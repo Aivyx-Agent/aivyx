@@ -1143,6 +1143,7 @@ mod tests {
             phase: TeamMissionPhase::AwaitingApproval,
             pending_gate: Some("approve".into()),
             halt_reason: None,
+            verify_attempts: 0,
             progress: 33,
             steps: vec![
                 TeamStepView {
@@ -1208,6 +1209,7 @@ mod tests {
             phase: TeamMissionPhase::Rejected,
             pending_gate: None,
             halt_reason: None,
+            verify_attempts: 0,
             progress: 50,
             steps: vec![TeamStepView {
                 label: "approve — reviewer (gate)".into(),
@@ -1233,6 +1235,7 @@ mod tests {
             phase: TeamMissionPhase::Paused,
             pending_gate: None,
             halt_reason: None,
+            verify_attempts: 0,
             progress: 50,
             steps: vec![],
         };

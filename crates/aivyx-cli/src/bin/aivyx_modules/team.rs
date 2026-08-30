@@ -264,6 +264,11 @@ pub async fn run_mission(
         // unattended trigger, so the recursive-scheduling guard doesn't
         // apply here.
         aivyx_core::MessageOrigin::Operator,
+        // POLISH_WAVES.md sub-project 5, item D -- the CLI's own `aivyx
+        // team run` has no persisted mission record to derive a
+        // mission-scoped memory-topic prefix from (unlike the daemon's
+        // Nonagon missions), so specialists keep bare logical topics here.
+        None,
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 
