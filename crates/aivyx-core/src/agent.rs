@@ -682,6 +682,21 @@ impl Agent for ConcreteAgent {
                     }
                     final_message.push_str(&format!("\n⚠ {note}"));
                 }
+
+                // POLISH_WAVES.md sub-project 4, item E — the
+                // identifier-fidelity check, using this turn's own
+                // tool-result text as the source pool (turn-scoped,
+                // not global memory).
+                let tool_result_texts = planner.tool_result_texts();
+                for note in
+                    crate::claim_check::detect_identifier_drift(&final_message, &tool_result_texts)
+                {
+                    if !final_message.ends_with('\n') {
+                        final_message.push('\n');
+                    }
+                    final_message.push_str(&format!("\n⚠ {note}"));
+                }
+
                 TurnOutcome::Completed {
                     final_message,
                     tool_calls_made,

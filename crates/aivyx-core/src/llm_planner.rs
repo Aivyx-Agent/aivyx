@@ -1602,6 +1602,16 @@ impl TurnPlanner for LlmPlanner {
     fn model(&self) -> &str {
         &self.config.model
     }
+
+    fn tool_result_texts(&self) -> Vec<String> {
+        self.history
+            .iter()
+            .filter_map(|m| match m {
+                LlmMessage::ToolResult { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl Drop for LlmPlanner {
@@ -2789,6 +2799,27 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn tool_result_texts_collects_only_tool_result_content() {
+        let tool = Arc::new(FakeTool::new("memory.read"));
+        let tool_id = tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(
+            FakeLlmProvider::new(vec![]),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let outcome = ToolOutcome::Completed {
+            output: json!({"registration": "VH-EZT"}),
+            verified: Verification::NotApplicable,
+        };
+        planner.observe_tool_outcome(tool_id, &outcome).await;
+
+        let texts = planner.tool_result_texts();
+        assert_eq!(texts.len(), 1);
+        assert!(texts[0].contains("VH-EZT"), "{texts:?}");
     }
 
     #[tokio::test]

@@ -113,6 +113,106 @@ pub fn detect_unfulfilled_claims(final_message: &str, called_tools: &[String]) -
     notes
 }
 
+/// POLISH_WAVES.md sub-project 4, item E — a Candor-adjacent identifier-
+/// fidelity check. Distinct from `detect_unfulfilled_claims`'s phrase-
+/// matching `RULES` above: this compares REPLY TOKENS against
+/// identifiers the turn's own tool calls surfaced, flagging a token
+/// that's a single-character slip away from the source (three
+/// independent live repros: an aircraft registration, a METAR wind
+/// group, and an ICAO-code transposition family — see
+/// `docs/VITRINE.md` §2b).
+///
+/// Turn-scoped only — `source_texts` is this turn's own tool-result
+/// text (via `TurnPlanner::tool_result_texts`), never global memory —
+/// which bounds both cost and false-positive surface. Conservative:
+/// only an exact single-edit mismatch flags (not "similar"), and only
+/// identifier-shaped tokens ever enter either pool. Does not block the
+/// turn — same non-blocking posture as `detect_unfulfilled_claims`.
+pub fn detect_identifier_drift(final_message: &str, source_texts: &[String]) -> Vec<String> {
+    let source_pool: std::collections::HashSet<String> = source_texts
+        .iter()
+        .flat_map(|t| identifier_tokens(t))
+        .collect();
+    if source_pool.is_empty() {
+        return Vec::new();
+    }
+    let mut notes = Vec::new();
+    let mut flagged: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for token in identifier_tokens(final_message) {
+        if source_pool.contains(&token) || flagged.contains(&token) {
+            continue;
+        }
+        if let Some(closest) = source_pool
+            .iter()
+            .find(|candidate| edit_distance_is_one(&token, candidate))
+        {
+            notes.push(format!(
+                "I wrote '{token}' but the source said '{closest}' — please double-check this identifier."
+            ));
+            flagged.insert(token);
+        }
+    }
+    notes
+}
+
+/// Identifier-shaped tokens: alphanumeric-and-hyphen runs, at least 4
+/// characters, that look like a registration/code rather than an
+/// ordinary word — a digit, a hyphen, or being fully uppercase all
+/// qualify. Covers "VH-EZT" (hyphen), "22012KT" (digit), and 4-letter
+/// ICAO codes like "YPJT" (uppercase) — no single shared shape covers
+/// all three, so the three conditions are combined with OR. Pure.
+fn identifier_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+        .into_iter()
+        .filter(|t| {
+            t.chars().count() >= 4
+                && (t.contains(|c: char| c.is_ascii_digit())
+                    || t.contains('-')
+                    || t.chars().all(|c| !c.is_ascii_alphabetic() || c.is_ascii_uppercase()))
+        })
+        .collect()
+}
+
+/// `true` iff `a` and `b` differ by exactly one single-character edit
+/// (insertion, deletion, or substitution) — Levenshtein distance == 1.
+/// Identical strings return `false` (distance 0, not 1). Full DP rather
+/// than a hand-rolled early-exit: identifier tokens here are a handful
+/// of characters, so O(len(a) * len(b)) is negligible, and DP is less
+/// error-prone than enumerating edit cases by hand.
+fn edit_distance_is_one(a: &str, b: &str) -> bool {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for i in 1..=a.len() {
+        let mut curr = vec![0usize; b.len() + 1];
+        curr[0] = i;
+        for j in 1..=b.len() {
+            curr[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
+            } else {
+                1 + prev[j - 1].min(prev[j]).min(curr[j - 1])
+            };
+        }
+        prev = curr;
+    }
+    prev[b.len()] == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +307,70 @@ mod tests {
             &tools(&[]),
         );
         assert_eq!(notes.len(), 2);
+    }
+
+    #[test]
+    fn identifier_drift_flags_single_character_slip() {
+        let sources = vec!["Aircraft VH-EZT is currently on the ramp.".to_string()];
+        let notes = detect_identifier_drift("The aircraft in question is VH-EQT.", &sources);
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].contains("VH-EQT") && notes[0].contains("VH-EZT"),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn identifier_drift_does_not_flag_exact_match() {
+        let sources = vec!["Aircraft VH-EZT is currently on the ramp.".to_string()];
+        let notes = detect_identifier_drift("The aircraft in question is VH-EZT.", &sources);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn identifier_drift_does_not_flag_unrelated_tokens() {
+        let sources = vec!["Aircraft VH-EZT is currently on the ramp.".to_string()];
+        let notes = detect_identifier_drift("Everything checks out fine today.", &sources);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn identifier_drift_ignores_short_and_lowercase_words() {
+        // Nothing identifier-shaped in either pool — no false positive
+        // from ordinary lowercase words even ones that are a
+        // single-character edit apart ("cat"/"car" are both filtered
+        // out: lowercase, no digit, no hyphen).
+        let sources = vec!["the cat sat on the mat".to_string()];
+        let notes = detect_identifier_drift("the car sat on the mat", &sources);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn identifier_drift_is_turn_scoped_only() {
+        // An empty source pool (no tool calls this turn) never flags,
+        // regardless of what final_message contains.
+        let notes = detect_identifier_drift("VH-EQT departed on schedule.", &[]);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn identifier_tokens_requires_digit_hyphen_or_uppercase() {
+        // "This" is 4 letters but mixed-case — never an identifier
+        // candidate.
+        assert!(identifier_tokens("This is a test").is_empty());
+    }
+
+    #[test]
+    fn identifier_tokens_admits_icao_style_codes() {
+        assert_eq!(identifier_tokens("departing YPJT today"), vec!["YPJT".to_string()]);
+    }
+
+    #[test]
+    fn edit_distance_is_one_matches_substitution_insertion_and_deletion() {
+        assert!(edit_distance_is_one("VH-EZT", "VH-EQT")); // substitution
+        assert!(edit_distance_is_one("YPJT", "YPJ")); // deletion
+        assert!(edit_distance_is_one("YPJ", "YPJT")); // insertion
+        assert!(!edit_distance_is_one("YPJT", "YPJT")); // identical -> distance 0
+        assert!(!edit_distance_is_one("YPJT", "YSSY")); // distance > 1
     }
 }

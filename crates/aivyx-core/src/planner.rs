@@ -130,6 +130,18 @@ pub trait TurnPlanner: Send + Sync {
     ) {
     }
 
+    /// POLISH_WAVES.md sub-project 4, item E — the rendered tool-result
+    /// text this turn's planner has accumulated. The turn loop's own
+    /// `observed: Vec<StepObservation>` deliberately carries only a
+    /// summary, not tool output text (see `StepObservation`'s own doc
+    /// comment) — this is the seam the turn loop uses instead, after
+    /// the step loop exits, to build the identifier-fidelity check's
+    /// source pool. Deterministic planners return empty (the default)
+    /// — they have no LLM history to draw from.
+    fn tool_result_texts(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Cumulative token usage across all LLM steps in this turn.
     /// The turn loop reads this after the step loop exits and passes
     /// it into `AuditTag::TurnEnded`. Deterministic planners return
