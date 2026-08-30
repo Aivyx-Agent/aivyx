@@ -283,6 +283,7 @@ mod tests {
             phase: TeamMissionPhase::Executing,
             pending_gate: None,
             halt_reason: None,
+            verify_attempts: 0,
             progress: 0,
             steps: vec![],
         };
