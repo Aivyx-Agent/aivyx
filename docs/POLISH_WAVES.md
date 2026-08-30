@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), and 3 (2026-08-29) done, 4–7 not started.**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), and 4 (2026-08-30) done, 5–7 not started.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -45,7 +45,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 1 | **Small backlog sweep** | See below | Small each | ✅ done 2026-08-27 (6 of 9 fixed, 1 already done, 1 checked/not reproducible, 1 deferred — see below) |
 | 2 | **`/classic` retirement** | See below | Medium | ✅ done 2026-08-28 (all 5 pieces A–E shipped — see below) |
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small | ✅ done 2026-08-29 |
-| 4 | **Agent turn-quality fixes** | See below | Medium–large | Not started |
+| 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
 | 5 | **Missions polish** | See below | Medium | Not started |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | Not started |
 | 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | Not started |
@@ -197,7 +197,7 @@ the signed persona chain and takes effect live, no daemon restart. See
 and `docs/superpowers/plans/2026-08-29-repertoire-teach-skill.md` for
 the full account.
 
-## 4 · Agent turn-quality fixes
+## 4 · Agent turn-quality fixes — ✅ done 2026-08-30
 
 All backend/prompt-logic, no new screens (one Studio line-rendering
 change only):
@@ -230,6 +230,78 @@ change only):
   Thread) — an answer to the agent's own question now *connects*
   (history replay) but still isn't `memory.write`-persisted; close the
   ask→answered→persist loop.
+
+All 8 items shipped as designed (see
+`docs/superpowers/specs/2026-08-29-agent-turn-quality-design.md` and
+`docs/superpowers/plans/2026-08-30-agent-turn-quality.md`), then a
+real Critical bug surfaced in the final whole-branch review and was
+fixed before merge, then closed with a second follow-up plan:
+
+- **Final-review fix wave** (2026-08-30, one combined commit per
+  finding-group): the identifier-fidelity check's token filter was
+  vacuously true for pure-digit tokens ("3000"/"2025" flagged as
+  drifted identifiers on correct arithmetic) and admitted any-length
+  all-uppercase acronyms; the tool-failure nudge's own injected text
+  leaked into the identifier check's "trustworthy source" pool; no
+  upper bound on identifier-token length left an O(n·m) edit-distance
+  check unbounded outside the turn's wall-clock deadline; Studio's
+  "(no reply)" render overwrote the real reason for every
+  non-completed turn (timed out/looping/escalated); the volunteered-
+  fact persist gap fix shipped with no length gate (the design's own
+  "reuse the recall gate" requirement was dropped during
+  implementation) and could be silently disabled by a trailing
+  Candor/identifier annotation stripping the trailing "?" its
+  question-check relies on. A second review round then found the same
+  identifier-filter class of bug once more (a hyphen-only branch was
+  still vacuously true for pure-punctuation tokens like markdown table
+  separators) — fixed directly.
+- **Turn-outcome-correction follow-up** (2026-08-30,
+  `docs/superpowers/specs/2026-08-30-turn-outcome-correction-design.md`,
+  `docs/superpowers/plans/2026-08-30-turn-outcome-correction.md`) — the
+  same final review found an architectural gap: the turn loop's
+  post-processing (the reply floor, Candor's claim-check, the
+  identifier-fidelity check) never reaches Studio, the TUI, Telegram,
+  Discord, or Slack, because those surfaces display raw streamed
+  `Text` events and discard the turn's own authoritative `outcome`
+  string; only headless was already correct. Closed with two shared
+  pure functions (`concat_text_events`, `turn_outcome_correction` in
+  `aivyx-ipc`) plus per-surface wiring — deliberately *not* buffering
+  the live stream itself (declined during brainstorming as too
+  invasive a change to code shared by every channel). That plan's own
+  final review then found a Critical regression in the shared helper
+  (it assumed a healthy turn's streamed text always equals
+  `final_message`, which is false for any multi-step turn where the
+  model narrates before a tool call — the common agentic shape — so it
+  falsely flagged "⚠ corrected:" and duplicated the answer on ordinary
+  successful turns) plus a related bug that duplicated the answer
+  behind Candor/identifier annotations instead of showing only the new
+  note; both fixed, and a second review round found one more instance
+  of the same "wrong marker occurrence" bug (the model's own organic
+  text opening a paragraph with a bare "⚠ " could still misfire) —
+  fixed. The review also found the daemon-backed CLI REPL (the default
+  `aivyx` interactive chat) had the identical gap; added as a 5th task
+  and closed in the same pass.
+- **Deferred, not fixed on this branch** — the same final review named
+  two more surfaces with the identical raw-event-vs-outcome gap:
+  **voice** (`aivyx-voice/src/session.rs`) and the **in-process REPL
+  fallback** (`aivyx-channel/src/session.rs`). Both hold an in-process
+  `TurnOutcome` rather than a formatted string, so they need
+  `TurnOutcome::Completed { final_message, .. }` handling rather than
+  the string-based helper — a real, scoped follow-up, not a silent
+  gap. Also deferred: `format_outcome`'s `Looping`/`MaxStepsExceeded`
+  variants drop the turn's own guidance text (`looping_message`/
+  `cycle_message`) in favor of a generic reason string, which is now
+  the visible ceiling on what the 6 corrected surfaces can show;
+  third-party channel-adapter docs (`docs/CHANNEL_SDK.md`,
+  `docs/DAEMON_IPC.md`) still describe collapsing everything to `Text`
+  without mentioning `outcome` is authoritative, so a new adapter could
+  reintroduce this exact gap; Telegram/Discord/Slack replies have no
+  length cap (pre-existing, mildly amplified by the correction line);
+  and a handful of Minor code-quality notes from the review rounds
+  (test-placement cosmetics, a dead post-construction guard, a stale
+  charter doc-comment estimate, non-deterministic "closest identifier"
+  selection when multiple pool tokens tie, capping the number of
+  identifier-drift notes per turn) — none blocking, all small.
 
 ## 5 · Missions polish
 
