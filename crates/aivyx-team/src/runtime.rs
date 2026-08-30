@@ -308,7 +308,15 @@ impl TeamRuntime {
         if step.deps.is_empty() {
             return base;
         }
-        let mut ctx = String::from("\n\n--- Context from upstream steps ---");
+        // POLISH_WAVES.md sub-project 5, item C — live mission repro
+        // (725be8d8): the writer specialist opened its turn by reading
+        // `workspace: …/brief_text.md`, a file no step ever wrote — the
+        // real handoff (the researcher's output) was sitting right here
+        // in the message. State plainly that this text IS the input.
+        let mut ctx = String::from(
+            "\n\n--- Context from upstream steps (this IS your real \
+             input — nothing is written to a file for you) ---",
+        );
         for dep in &step.deps {
             if let Some(out) = outputs.get(dep) {
                 ctx.push_str(&format!("\n[{dep}]: {out}"));
