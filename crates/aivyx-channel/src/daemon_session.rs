@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::daemon_client::{spawn_daemon_and_wait, DaemonSession};
-use crate::daemon_ipc::{FrontendType, StreamEventPayload};
+use crate::daemon_ipc::{concat_text_events, turn_outcome_correction, FrontendType, StreamEventPayload};
 use crate::session::SessionReport;
 
 const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -138,6 +138,19 @@ where
             write!(writer, "{rendered}").map_err(|e| format!("render write: {e}"))?;
         }
         writer.flush().map_err(|e| format!("render flush: {e}"))?;
+
+        // Turn-outcome-correction follow-up (POLISH_WAVES.md
+        // sub-project 4) — show the turn's own authoritative outcome
+        // when it diverges from what the streamed events alone
+        // rendered (a reply floor, a Candor/identifier-fidelity
+        // annotation, or a non-completed outcome's reason). `outcome`
+        // was already captured here (used below for the session
+        // report) but never written to the terminal.
+        let displayed = concat_text_events(&events);
+        if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
+            writeln!(writer, "{note}").map_err(|e| format!("outcome-correction write: {e}"))?;
+            writer.flush().map_err(|e| format!("outcome-correction flush: {e}"))?;
+        }
 
         for event in &events {
             if let StreamEventPayload::ApprovalGate {
