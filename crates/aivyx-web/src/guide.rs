@@ -307,4 +307,99 @@ mod tests {
         assert!(!is_markdown_path("notes.txt"));
         assert!(!is_markdown_path("script.js"));
     }
+
+    // --- strip_tag_attrs: direct unit tests -------------------------------
+    //
+    // These call `strip_tag_attrs` itself (not through
+    // `render_untrusted_markdown`) so they exercise its parsing directly,
+    // independent of the blanket-escape safety net `push_html` provides
+    // downstream. Several of them pin *current, non-ideal* parsing
+    // behavior rather than asserting a "correct" HTML parse — see each
+    // comment for why that behavior is still safe once the caller pushes
+    // the result as an `Event::Text` and `pulldown_cmark::html::push_html`
+    // escapes it with `escape_html_body_text` (which — per
+    // `pulldown-cmark-escape`'s `HTML_BODY_TEXT_ESCAPE_TABLE` — escapes
+    // only `&`, `<`, `>` in body text; `"` and `'` pass through
+    // unescaped, since they're only dangerous inside an attribute value,
+    // which this text never is).
+
+    #[test]
+    fn strip_tag_attrs_leaves_a_bare_tag_with_no_attributes_alone() {
+        assert_eq!(strip_tag_attrs("<script>"), "<script>");
+    }
+
+    #[test]
+    fn strip_tag_attrs_drops_attributes_including_event_handlers() {
+        // The case the review named directly.
+        assert_eq!(strip_tag_attrs("<a href=\"x\" onclick=\"evil()\">"), "<a>");
+    }
+
+    #[test]
+    fn strip_tag_attrs_current_behavior_for_a_gt_inside_a_quoted_attribute_value() {
+        // `strip_tag_attrs` has no concept of quoted attribute values: it
+        // treats the *first* `>` anywhere after `<` as the tag's end. So
+        // for `<a title=">">`, the tag is (mis)parsed as ending right after
+        // `title="` (the `>` that's really just part of the quoted value),
+        // leaving the tag name `a` extracted correctly but everything after
+        // — `">` — falls through as ordinary text appended after the `<a>`
+        // skeleton, verbatim.
+        //
+        // This is pinned as *current* behavior, not "correct" HTML parsing.
+        // It remains safe: the caller pushes the whole returned string as a
+        // single `Event::Text`, and `push_html`'s body-text escaping turns
+        // the leftover `<` markers (none survive here) and `>` into `&gt;`
+        // — there is no way for this to become live markup. If this
+        // assertion ever needs to change because the parsing was
+        // deliberately improved, update it; if it changes because of an
+        // accidental regression, the safety argument above is what to
+        // re-check first.
+        assert_eq!(strip_tag_attrs("<a title=\">\">"), "<a>\">");
+    }
+
+    #[test]
+    fn strip_tag_attrs_pulls_the_name_out_of_multiple_concatenated_tags() {
+        // Can `strip_tag_attrs` actually receive multiple tags in one
+        // fragment from a real pulldown-cmark 0.12 event stream? For
+        // `Event::InlineHtml`, no: `Parser::scan_inline_html`
+        // (pulldown-cmark 0.12.2's `parse.rs`) scans exactly one tag,
+        // comment, or processing instruction per call, so inline HTML is
+        // always one tag per event.
+        //
+        // For `Event::Html` (HTML *blocks*), yes: `firstpass.rs`'s
+        // `parse_html_block_type_6_or_7` walks the block line by line and
+        // `append_html_line` appends one `ItemBody::Html` item per source
+        // *line*, not per tag. A single line containing several tags —
+        // e.g. `<div><span onclick="evil()">x</span></div>` as its own
+        // paragraph, which qualifies as an HTML block because `div` is a
+        // type-6 block tag — becomes one `Event::Html` carrying that whole
+        // line. This test's input models that real case, not an invented
+        // one.
+        assert_eq!(
+            strip_tag_attrs("<div><span onclick=\"evil()\">x</span></div>"),
+            "<div><span>x</span></div>"
+        );
+    }
+
+    #[test]
+    fn strip_tag_attrs_current_behavior_for_an_unterminated_tag() {
+        // No matching `>` in the fragment at all: `strip_tag_attrs` falls
+        // back to copying the rest through as plain text, character by
+        // character, rather than guessing where the tag would have ended.
+        // The stray `<` survives into the returned string, but — same as
+        // above — it's only ever pushed as `Event::Text`, so `push_html`
+        // escapes it to `&lt;` rather than it opening real markup.
+        assert_eq!(strip_tag_attrs("<script"), "<script");
+    }
+
+    #[test]
+    fn strip_tag_attrs_drops_the_self_closing_slash() {
+        // Current behavior: the tag-name scan stops at the first
+        // non-alphanumeric/non-hyphen character, so the trailing `/` in a
+        // self-closing tag like `<br/>` is not part of the extracted name
+        // and is silently dropped — `<br/>` becomes `<br>`, not `<br/>`.
+        // Harmless here (this is reduced to inert escaped text either way,
+        // never live markup), but worth pinning explicitly since the task
+        // review called it out by name.
+        assert_eq!(strip_tag_attrs("<br/>"), "<br>");
+    }
 }
