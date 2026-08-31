@@ -73,16 +73,6 @@ pub struct SpecialistFactory {
         Arc<aivyx_kvcache::LlamaServerSlotStore>,
         String,
     )>,
-    /// POLISH_WAVES.md sub-project 5, item D — attached to every
-    /// specialist this factory builds, so every `memory.write` call
-    /// during this mission is automatically, deterministically
-    /// prefixed with the same mission-scoped string — a real fix for
-    /// specialists filing inconsistent topic names within one mission
-    /// (bare-ICAO vs `overall_conditions` vs
-    /// `overall_conditions_summary`, observed live), not a hopeful
-    /// prompt instruction. `None` (the default) preserves pre-existing
-    /// behavior.
-    mission_topic_prefix: Option<String>,
 }
 
 impl SpecialistFactory {
@@ -103,7 +93,6 @@ impl SpecialistFactory {
             member_backends: std::collections::HashMap::new(),
             checkpointer: None,
             kv_cache_handles: None,
-            mission_topic_prefix: None,
         }
     }
 
@@ -149,14 +138,6 @@ impl SpecialistFactory {
         )>,
     ) -> Self {
         self.kv_cache_handles = kv_cache_handles;
-        self
-    }
-
-    /// Attach a mission-scoped memory-topic prefix to every specialist
-    /// this factory builds. `None` (the default) preserves pre-existing
-    /// behavior (bare logical topics, no automatic prefixing).
-    pub fn with_mission_topic_prefix(mut self, prefix: Option<String>) -> Self {
-        self.mission_topic_prefix = prefix;
         self
     }
 
@@ -222,8 +203,7 @@ impl SpecialistFactory {
                 Box::new(planner)
             },
         )
-        .with_checkpointer(self.checkpointer.clone())
-        .with_memory_topic_prefix(self.mission_topic_prefix.clone());
+        .with_checkpointer(self.checkpointer.clone());
         // Team specialists run autonomously inside a mission — no human watches
         // each turn to `/cancel` a runaway — so they take the autonomous safety
         // posture: the small-cycle breaker as a built-in floor (always on, like
@@ -636,62 +616,6 @@ mod tests {
              — proves SpecialistFactory::build actually wired the \
              checkpointer through, not just that build() tolerates None: {refs}"
         );
-    }
-
-    /// End-to-end proof that `SpecialistFactory::build` actually wires a
-    /// mission-scoped topic prefix into
-    /// `ConcreteAgent::new(...).with_memory_topic_prefix(...)` — not just
-    /// that `build()` still returns `Ok` (which would pass identically
-    /// whether the wiring exists or not, since `new` already defaults the
-    /// prefix to `None`). Mirrors `build_attaches_the_checkpointer_when_
-    /// configured`'s exact shape, one field over: drives a real
-    /// `memory.write` tool call through a real `SpecialistFactory::build`-
-    /// constructed `ConcreteAgent`, then inspects the real `Memory`
-    /// substrate to confirm the entry landed under the PREFIXED physical
-    /// topic, not the bare logical one the agent typed.
-    #[tokio::test]
-    async fn build_attaches_the_mission_topic_prefix_when_configured() {
-        use crate::testutil::{FakeLeadChannel, FakeProvider};
-        use aivyx_core::{ChannelContext, Message};
-        use aivyx_memory::{InMemoryMemory, Memory, MemoryWriteTool};
-
-        let memory: Arc<dyn Memory> = Arc::new(InMemoryMemory::new());
-        let write_tool: Arc<dyn Tool> = Arc::new(MemoryWriteTool::new(Arc::clone(&memory)));
-
-        // required_scope reads the UNPREFIXED logical topic the agent
-        // types (the prefix is applied only at execute-time, inside the
-        // memory tool itself) — see aivyx-memory/src/tools.rs's own
-        // doc comment on this exact split.
-        let write_scope = "memory.write:topic:overall_conditions";
-        let lead = CapabilitySet::from_scopes([Scope::parse(write_scope).unwrap()]);
-        let m = member("spec", &[write_scope], &["memory.write"]);
-
-        let provider = FakeProvider::tool_call_then_done(
-            "memory.write",
-            serde_json::json!({ "topic": "overall_conditions", "body": "VFR at all three fields" }),
-        );
-        let f = SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), vec![write_tool])
-            .with_mission_topic_prefix(Some("m-a1b2c3d4-".to_string()));
-
-        let specialist = f.build(&m, &lead).expect("build");
-
-        let channel = FakeLeadChannel::at(TrustTier::Trusted);
-        let message = Message::text(channel.session_id(), "log conditions");
-        let _ = specialist.turn(message, &channel).await;
-
-        let prefixed = memory.get_recent("m-a1b2c3d4-overall_conditions", 10).await.unwrap();
-        assert_eq!(
-            prefixed.len(),
-            1,
-            "the write must land under the mission-prefixed physical topic"
-        );
-        assert_eq!(prefixed[0].body, "VFR at all three fields");
-
-        // The bare, unprefixed logical topic must have nothing written
-        // under it — proves the prefix was actually applied, not just
-        // present alongside an unprefixed duplicate.
-        let unprefixed = memory.get_recent("overall_conditions", 10).await.unwrap();
-        assert!(unprefixed.is_empty(), "nothing should land under the bare logical topic");
     }
 
     // --- kvcache wiring (Task 6 fix wave) -----------------------------------

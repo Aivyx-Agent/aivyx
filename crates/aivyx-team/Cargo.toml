@@ -50,7 +50,3 @@ tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 # checkpoint tests and the three channel crates' analogous tests.
 aivyx-checkpoint = { workspace = true }
 tempfile = "3.27.0"
-# POLISH_WAVES.md sub-project 5, item D — the mission-topic-prefix e2e
-# test drives a real MemoryWriteTool + InMemoryMemory, mirroring the
-# checkpointer e2e test's own shape one field over.
-aivyx-memory = { path = "../aivyx-memory" }
