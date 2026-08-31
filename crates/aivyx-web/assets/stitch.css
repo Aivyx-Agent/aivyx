@@ -299,6 +299,11 @@ a { color: var(--color-primary); text-decoration: none; }
   background: rgba(53,52,59,0.4); backdrop-filter: blur(12px);
   border: 1px solid var(--color-border-warm);
   border-radius: 0.5rem; padding: 16px;
+  /* POLISH_WAVES.md sub-project 6, item A — the brand guide's own Shadow
+     System table assigns shadow-md to "Cards"; this token existed but was
+     never applied to the card class itself, only to overlay chrome
+     (command palette, mobile nav drawer). */
+  box-shadow: var(--shadow-md);
 }
 
 .input {
@@ -326,7 +331,11 @@ a { color: var(--color-primary); text-decoration: none; }
 .chip.sage  { background: rgba(77,139,106,0.15); color: var(--color-sage); }
 .chip.error { background: rgba(196,85,62,0.15); color: var(--color-error); }
 
-.stat-card { display: flex; flex-direction: column; gap: 6px; }
+.stat-card {
+  display: flex; flex-direction: column; gap: 6px;
+  transition: box-shadow 0.15s var(--ease-smooth);
+}
+.stat-card:hover { box-shadow: var(--shadow-glow); }
 .stat-card .value { font-family: var(--font-display); font-weight: 700; font-size: 26px; }
 
 /* progress bar */
@@ -372,7 +381,14 @@ a { color: var(--color-primary); text-decoration: none; }
 @media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } .stat-row { grid-template-columns: repeat(2, 1fr); } }
 .dash-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .dash-rail { display: flex; flex-direction: column; gap: 18px; }
-.panel { display: flex; flex-direction: column; gap: 12px; }
+.panel {
+  display: flex; flex-direction: column; gap: 12px;
+  /* shadow-ambient is the brand guide's "Page sections" tier — the
+     softer, wider falloff that sits under the tighter shadow-md on the
+     cards inside each panel, matching "inner cards sit atop sections,
+     which sit on the global canvas" (brand-guidelines.md §5). */
+  box-shadow: var(--shadow-ambient);
+}
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; }
 .panel-head h3 { font-size: 16px; }
 
