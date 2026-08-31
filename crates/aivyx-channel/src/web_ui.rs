@@ -175,6 +175,10 @@ pub async fn run_web_ui_server(
     let allowed_origins = Arc::new(allowed_origins);
     let auth_token = Arc::new(auth_token);
     let comfyui_base_url = Arc::new(comfyui_base_url);
+    // POLISH_WAVES.md sub-project 6, item B — one random id per daemon
+    // process, stable for its whole lifetime. See `DaemonEnvelope::
+    // ServerInfo`'s doc comment (aivyx-ipc) for what this detects.
+    let boot_id = Arc::new(uuid::Uuid::new_v4().to_string());
 
     // Chapter Harbor F-4 — binding beyond loopback is a deliberate network
     // exposure. Warn once at startup so an operator who flips web_ui_host can't
@@ -230,6 +234,7 @@ pub async fn run_web_ui_server(
         };
 
         let conn_socket_path = Arc::clone(&socket_path);
+        let conn_boot_id = Arc::clone(&boot_id);
         let conn_broadcaster = web_ui_broadcaster.clone();
         let conn_allowed_origins = Arc::clone(&allowed_origins);
         let conn_auth_token = Arc::clone(&auth_token);
@@ -240,6 +245,7 @@ pub async fn run_web_ui_server(
                 stream,
                 remote,
                 &conn_socket_path,
+                &conn_boot_id,
                 port,
                 &conn_allowed_origins,
                 conn_auth_token.as_deref(),
@@ -369,6 +375,17 @@ fn log_rejected_token_once(ip: std::net::IpAddr) {
     }
 }
 
+/// The JSON shape sent to the browser for `POLISH_WAVES.md` sub-project 6,
+/// item B. Split out from `handle_websocket`'s send call so the shape is
+/// unit-testable without a real connection — mirrors `should_log_rejected_
+/// token`'s own split from its side-effecting caller.
+fn server_info_json(boot_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "ServerInfo",
+        "boot_id": boot_id,
+    })
+}
+
 /// Handle a single TCP connection. Peek at the first bytes to
 /// determine the HTTP path, then either serve HTML or upgrade to
 /// WebSocket.
@@ -381,6 +398,7 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     remote_addr: std::net::SocketAddr,
     socket_path: &Path,
+    boot_id: &str,
     port: u16,
     allowed_origins: &[String],
     auth_token: Option<&str>,
@@ -437,7 +455,7 @@ async fn handle_connection(
             .await
             .map_err(|e| DaemonError::WebSocket(format!("ws handshake: {e}")))?;
 
-        handle_websocket(ws_stream, socket_path, web_ui_broadcaster).await
+        handle_websocket(ws_stream, socket_path, boot_id, web_ui_broadcaster).await
     } else {
         // Chapter Postern — gate static routes too when a token is set: the
         // browser gets a native Basic-Auth prompt, and a valid load plants the
@@ -775,6 +793,7 @@ async fn serve_bytes_ext(
 async fn handle_websocket(
     ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     socket_path: &Path,
+    boot_id: &str,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
     // Connect to the daemon's Unix socket.
@@ -869,6 +888,18 @@ async fn handle_websocket(
         let _ = sink
             .send(tokio_tungstenite::tungstenite::Message::Text(
                 session_started_json.to_string().into(),
+            ))
+            .await;
+    }
+
+    // Send ServerInfo to the browser (POLISH_WAVES.md sub-project 6, item
+    // B) — one shot per connection, same pattern as SessionStarted above.
+    let server_info_json = server_info_json(boot_id);
+    {
+        let mut sink = ws_sink.lock().await;
+        let _ = sink
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                server_info_json.to_string().into(),
             ))
             .await;
     }
@@ -1089,6 +1120,13 @@ mod tests {
         // A different IP is tracked independently — not starved by ip_a's
         // own cooldown.
         assert!(should_log_rejected_token(&map, ip_b, t0));
+    }
+
+    #[test]
+    fn server_info_json_shape() {
+        let v = server_info_json("abc-123");
+        assert_eq!(v["type"], "ServerInfo");
+        assert_eq!(v["boot_id"], "abc-123");
     }
 
     #[test]

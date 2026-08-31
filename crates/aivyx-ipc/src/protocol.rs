@@ -2655,6 +2655,19 @@ pub enum DaemonEnvelope {
     SessionStarted {
         session_id: String,
     },
+    /// POLISH_WAVES.md sub-project 6, item B. Sent once per WebSocket
+    /// connection by the web-UI bridge (`aivyx-channel/src/web_ui.rs`)
+    /// immediately after `SessionStarted` — never by the daemon core
+    /// itself, so there is no `DaemonMessage` counterpart. `boot_id` is a
+    /// random id minted once when the bridge's `run_web_ui_server` starts,
+    /// stable for that process's lifetime and different after any
+    /// restart. Studio compares it across reconnects to detect "the
+    /// daemon I'm now talking to isn't the one I started against" — a
+    /// direct proxy for "a redeployed dist bundle restarted the daemon" —
+    /// and hints that a reload will pick up the newer bundle.
+    ServerInfo {
+        boot_id: String,
+    },
     StreamEvent {
         session_id: String,
         event: StreamEventPayload,
@@ -4327,6 +4340,17 @@ mod tests {
             let (back, _): (DaemonEnvelope, _) = decode_frame(&frame).expect("decode");
             assert_eq!(back, env);
         }
+    }
+
+    #[test]
+    fn server_info_round_trips() {
+        let msg = DaemonEnvelope::ServerInfo {
+            boot_id: "test-boot-id".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"ServerInfo\""));
+        let back: DaemonEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
     }
 
     #[test]
