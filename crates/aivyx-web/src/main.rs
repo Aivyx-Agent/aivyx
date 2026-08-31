@@ -8873,6 +8873,16 @@ async fn read_task(
                 } if id.starts_with("mc-teams") => {
                     teams.write().notice = Some((false, message));
                 }
+                // Chapter Lantern — an MCP server config save/delete failure
+                // (e.g. `"stdio transport requires command"`). Ids are
+                // prefixed `mc-mcp` (covers both `mc-mcp-set` and
+                // `mc-mcp-delete`) so it lands on the MCP config banner.
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-mcp") => {
+                    mcp_config_ui.write().notice = Some((false, message));
+                }
                 // Chapter Mission Control — an abort/pause/resume rejected by
                 // the daemon (e.g. resume on a mission that isn't paused).
                 // Ids are prefixed `mc-abort`/`mc-pause`/`mc-resume` so it
