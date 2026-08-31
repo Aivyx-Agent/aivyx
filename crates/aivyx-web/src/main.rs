@@ -18,8 +18,8 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
-    GalleryImage, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode, NotificationHistoryEntry,
-    NotifyTargetView, PersonaDeltaSummary,
+    GalleryImage, McpServerConfigView, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode,
+    NotificationHistoryEntry, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
@@ -306,6 +306,7 @@ struct McpState {
     servers: Vec<McpServerStatusView>,
     captured_unix: u64,
     loaded: bool,
+    configs: Vec<McpServerConfigView>,
 }
 
 /// Chapter Almanac — Tools screen state: the daemon's registered tool
@@ -563,6 +564,13 @@ struct MemoryUi {
     notice: Option<(bool, String)>,
 }
 
+/// POLISH_WAVES.md sub-project 7, item B — MCP config-write UI state
+/// (save/delete outcome feedback), mirroring `MemoryUi`'s own minimal shape.
+#[derive(Clone, Default, PartialEq)]
+struct McpConfigUi {
+    notice: Option<(bool, String)>,
+}
+
 /// POLISH_WAVES.md sub-project 6, item B — tracks the most recent
 /// `DaemonEnvelope::ServerInfo.boot_id` Studio has seen, and whether a
 /// *different* one has arrived since (meaning the daemon this tab now
@@ -791,6 +799,7 @@ fn App() -> Element {
     let memory_ui = use_signal(MemoryUi::default);
     let server_info = use_signal(ServerInfoUi::default);
     let mcp = use_signal(McpState::default);
+    let mcp_config_ui = use_signal(McpConfigUi::default);
     let tools = use_signal(ToolsState::default);
     let gallery = use_signal(GalleryState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
@@ -824,7 +833,7 @@ fn App() -> Element {
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
-            teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
+            teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
             notifications, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         )
@@ -845,6 +854,7 @@ fn App() -> Element {
     use_context_provider(|| skills);
     use_context_provider(|| skills_ui);
     use_context_provider(|| mcp);
+    use_context_provider(|| mcp_config_ui);
     use_context_provider(|| tools);
     use_context_provider(|| gallery);
     use_context_provider(|| schedules_ui);
@@ -3697,15 +3707,49 @@ fn mcp_query() -> FrontendMessage {
     }
 }
 
+fn mcp_server_configs_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mcp-configs".to_string(),
+        payload: QueryPayload::GetMcpServerConfigs,
+    }
+}
+
+fn set_mcp_server_query(entry: McpServerConfigView) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mcp-set".to_string(),
+        payload: QueryPayload::SetMcpServer {
+            name: entry.name,
+            transport: entry.transport,
+            command: entry.command,
+            args: entry.args,
+            env: entry.env,
+            headers: entry.headers,
+            url: entry.url,
+            enabled: entry.enabled,
+        },
+    }
+}
+
+fn delete_mcp_server_query(name: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mcp-delete".to_string(),
+        payload: QueryPayload::DeleteMcpServer { name },
+    }
+}
+
 #[component]
 fn McpPanel() -> Element {
     let ws = use_context::<Sender>();
     let mcp = use_context::<Signal<McpState>>();
+    let mcp_config_ui = use_context::<Signal<McpConfigUi>>();
+    let mut editing = use_signal(|| None::<McpServerConfigView>);
+    let mut adding = use_signal(|| false);
 
     // Load the snapshot each time the view opens (it only changes on a
     // daemon restart, so on-open + a manual refresh is enough — no poll).
     use_future(move || async move {
         ws.send(mcp_query());
+        ws.send(mcp_server_configs_query());
     });
 
     let m = mcp();
@@ -3719,7 +3763,7 @@ fn McpPanel() -> Element {
                 }
                 button {
                     class: "btn-ghost",
-                    onclick: move |_| ws.send(mcp_query()),
+                    onclick: move |_| { ws.send(mcp_query()); ws.send(mcp_server_configs_query()); },
                     "Refresh"
                 }
             }
@@ -3728,13 +3772,56 @@ fn McpPanel() -> Element {
             } else if m.servers.is_empty() {
                 div { class: "glass-card empty",
                     p { class: "label-tech",
-                        "No MCP servers reported at the last daemon start. Add one with a `[[mcp_server]]` block in aivyx.toml (see docs/MCP_RECIPES.md), then restart the daemon."
+                        "No MCP servers reported at the last daemon start. Add one below, then restart the daemon."
                     }
                 }
             } else {
                 div { class: "mcp-grid",
                     for sv in m.servers.iter() {
                         { rsx! { McpServerCard { key: "{sv.name}", view: sv.clone() } } }
+                    }
+                }
+            }
+
+            div { class: "panel-head", style: "margin-top:22px;",
+                h3 { "Configured servers" }
+                button { class: "btn btn-primary btn-xs", onclick: move |_| { editing.set(None); adding.set(true); }, "Add server" }
+            }
+            if let Some((ok, text)) = mcp_config_ui().notice {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
+            }
+            if adding() || editing().is_some() {
+                McpServerForm {
+                    initial: editing(),
+                    on_cancel: move |_| { adding.set(false); editing.set(None); },
+                    on_save: move |entry: McpServerConfigView| {
+                        ws.send(set_mcp_server_query(entry));
+                        adding.set(false);
+                        editing.set(None);
+                    },
+                }
+            } else if m.configs.is_empty() {
+                div { class: "glass-card empty", p { class: "label-tech", "No `[[mcp_server]]` entries configured yet." } }
+            } else {
+                div { class: "mcp-grid",
+                    for cfg in m.configs.iter() {
+                        {
+                            let cfg2 = cfg.clone();
+                            let name = cfg.name.clone();
+                            rsx! {
+                                div { key: "{cfg.name}", class: "glass-card mcp-card",
+                                    div { class: "mcp-card-head",
+                                        span { class: "mcp-name", "{cfg.name}" }
+                                        span { class: "label-tech", "{cfg.transport}" }
+                                        span { class: if cfg.enabled { "chip sage" } else { "chip" }, if cfg.enabled { "enabled" } else { "disabled" } }
+                                    }
+                                    div { style: "display:flex; gap:8px; margin-top:8px;",
+                                        button { class: "btn btn-glass btn-xs", onclick: move |_| { adding.set(false); editing.set(Some(cfg2.clone())); }, "Edit" }
+                                        button { class: "btn btn-glass btn-xs", onclick: move |_| ws.send(delete_mcp_server_query(name.clone())), "Delete" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3772,6 +3859,110 @@ fn McpServerCard(view: McpServerStatusView) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn McpServerForm(
+    initial: Option<McpServerConfigView>,
+    on_cancel: EventHandler<()>,
+    on_save: EventHandler<McpServerConfigView>,
+) -> Element {
+    let seed = initial.clone().unwrap_or(McpServerConfigView {
+        name: String::new(),
+        transport: "stdio".to_string(),
+        command: None,
+        args: Vec::new(),
+        env: Vec::new(),
+        headers: Vec::new(),
+        url: None,
+        enabled: true,
+    });
+    let editing_existing = initial.is_some();
+    let mut name = use_signal(|| seed.name.clone());
+    let mut transport = use_signal(|| seed.transport.clone());
+    let mut command = use_signal(|| seed.command.clone().unwrap_or_default());
+    let mut args_raw = use_signal(|| seed.args.join(" "));
+    let mut url = use_signal(|| seed.url.clone().unwrap_or_default());
+    let mut env_raw = use_signal(|| {
+        seed.env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("\n")
+    });
+    let mut headers_raw = use_signal(|| {
+        seed.headers.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("\n")
+    });
+    let mut enabled = use_signal(|| seed.enabled);
+    let is_stdio = transport() == "stdio";
+
+    let parse_pairs = |raw: &str| -> Vec<(String, String)> {
+        raw.lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .filter(|(k, _)| !k.is_empty())
+            .collect()
+    };
+
+    rsx! {
+        div { class: "glass-card",
+            div { class: "field-row",
+                label { "Name" }
+                input { class: "input", value: "{name}", disabled: editing_existing, oninput: move |e| name.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Transport" }
+                select { class: "input", value: "{transport}", onchange: move |e| transport.set(e.value()),
+                    option { value: "stdio", "stdio" }
+                    option { value: "sse", "sse" }
+                    option { value: "http", "http" }
+                }
+            }
+            if is_stdio {
+                div { class: "field-row",
+                    label { "Command" }
+                    input { class: "input", value: "{command}", oninput: move |e| command.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { "Args (space-separated)" }
+                    input { class: "input", value: "{args_raw}", oninput: move |e| args_raw.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { "Env (one KEY=value per line)" }
+                    textarea { class: "doc-edit", value: "{env_raw}", oninput: move |e| env_raw.set(e.value()) }
+                }
+            } else {
+                div { class: "field-row",
+                    label { "URL" }
+                    input { class: "input", value: "{url}", oninput: move |e| url.set(e.value()) }
+                }
+                div { class: "field-row",
+                    label { "Headers (one Name=value per line)" }
+                    textarea { class: "doc-edit", value: "{headers_raw}", oninput: move |e| headers_raw.set(e.value()) }
+                }
+            }
+            div { class: "field-row",
+                label { "Enabled" }
+                input { r#type: "checkbox", checked: enabled(), onchange: move |e| enabled.set(e.checked()) }
+            }
+            div { style: "display:flex; gap:8px; margin-top:12px;",
+                button {
+                    class: "btn btn-primary btn-xs",
+                    onclick: move |_| {
+                        let entry = McpServerConfigView {
+                            name: name().trim().to_string(),
+                            transport: transport(),
+                            command: if is_stdio && !command().trim().is_empty() { Some(command().trim().to_string()) } else { None },
+                            args: if is_stdio { args_raw().split_whitespace().map(str::to_string).collect() } else { Vec::new() },
+                            env: if is_stdio { parse_pairs(&env_raw()) } else { Vec::new() },
+                            headers: if is_stdio { Vec::new() } else { parse_pairs(&headers_raw()) },
+                            url: if is_stdio || url().trim().is_empty() { None } else { Some(url().trim().to_string()) },
+                            enabled: enabled(),
+                        };
+                        on_save.call(entry);
+                    },
+                    "Save"
+                }
+                button { class: "btn btn-glass btn-xs", onclick: move |_| on_cancel.call(()), "Cancel" }
             }
         }
     }
@@ -7942,6 +8133,7 @@ async fn ws_task(
     skills: Signal<SkillsState>,
     skills_ui: Signal<SkillsUi>,
     mcp: Signal<McpState>,
+    mcp_config_ui: Signal<McpConfigUi>,
     tools: Signal<ToolsState>,
     gallery: Signal<GalleryState>,
     schedules_ui: Signal<SchedulesUi>,
@@ -7987,7 +8179,7 @@ async fn ws_task(
 
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
-            teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
+            teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
             notifications, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         ));
@@ -8083,6 +8275,7 @@ async fn read_task(
     mut skills: Signal<SkillsState>,
     mut skills_ui: Signal<SkillsUi>,
     mut mcp: Signal<McpState>,
+    mut mcp_config_ui: Signal<McpConfigUi>,
     mut tools: Signal<ToolsState>,
     mut gallery: Signal<GalleryState>,
     mut schedules_ui: Signal<SchedulesUi>,
@@ -8391,6 +8584,19 @@ async fn read_task(
                     m.servers = servers;
                     m.captured_unix = captured_unix;
                     m.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetMcpServerConfigs { servers },
+                    ..
+                } => {
+                    mcp.write().configs = servers;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::McpServersApplied { servers, .. },
+                    ..
+                } => {
+                    mcp.write().configs = servers;
+                    mcp_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::Gallery { available, images },
