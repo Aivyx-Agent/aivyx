@@ -4083,6 +4083,13 @@ fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element 
         })
         .collect();
     let pos = compute_layout(&nodes, &layout_edges);
+    let sides = label_sides(&nodes, &pos);
+    // POLISH_WAVES.md sub-project 6, item C — same threshold/rationale as
+    // MemoryGraph; also gates the edge-predicate labels below, which are
+    // an even denser source of overlap than the node labels alone.
+    const LABEL_ALWAYS_ON_MAX: usize = 25;
+    let always_on = nodes.len() <= LABEL_ALWAYS_ON_MAX;
+    let mut hovered = use_signal(|| None::<String>);
     let idx: std::collections::HashMap<&str, usize> =
         nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
 
@@ -4117,7 +4124,9 @@ fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element 
                                     x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
                                     class: "lattice-edge", marker_end: "url(#lattice-arrow)",
                                 }
-                                text { x: "{mx}", y: "{my}", class: "lattice-edge-label", text_anchor: "middle", "{label}" }
+                                if always_on {
+                                    text { x: "{mx}", y: "{my}", class: "lattice-edge-label", text_anchor: "middle", "{label}" }
+                                }
                             }
                         }
                     }
@@ -4127,10 +4136,23 @@ fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element 
                     {
                         let (cx, cy) = pos[i];
                         let r = node_radius(ent.degree);
+                        let side = sides[i];
+                        let ly = cy + side * (r + 11.0);
+                        let name_hover = ent.name.clone();
+                        let name_leave = ent.name.clone();
+                        let show_label = always_on || hovered() == Some(ent.name.clone());
                         rsx! {
                             g { class: "mem-node",
+                                onmouseenter: move |_| hovered.set(Some(name_hover.clone())),
+                                onmouseleave: move |_| {
+                                    if hovered() == Some(name_leave.clone()) {
+                                        hovered.set(None);
+                                    }
+                                },
                                 circle { cx: "{cx}", cy: "{cy}", r: "{r}" }
-                                text { x: "{cx}", y: "{cy + r + 11.0}", text_anchor: "middle", "{ent.name}" }
+                                if show_label {
+                                    text { x: "{cx}", y: "{ly}", text_anchor: "middle", "{ent.name}" }
+                                }
                             }
                         }
                     }
@@ -4236,6 +4258,80 @@ fn node_radius(entry_count: u32) -> f64 {
     (6.0 + (entry_count as f64).sqrt() * 3.0).min(24.0)
 }
 
+/// Approximate on-screen width of a label in SVG viewBox units. No real
+/// text-measurement API exists outside the DOM, so this is a fixed
+/// per-character estimate tuned to `.mem-node text`'s font-size — a
+/// heuristic for a collision *check*, not a pixel-perfect layout.
+const LABEL_CHAR_WIDTH: f64 = 6.0;
+const LABEL_HEIGHT: f64 = 12.0;
+
+fn label_width(label: &str) -> f64 {
+    label.chars().count() as f64 * LABEL_CHAR_WIDTH
+}
+
+/// Two labels "collide" when their approximate bounding boxes — centered
+/// on `(ax, ay)`/`(bx, by)`, `label_width` wide, `LABEL_HEIGHT` tall —
+/// overlap.
+fn labels_collide(ax: f64, ay: f64, a_label: &str, bx: f64, by: f64, b_label: &str) -> bool {
+    let (aw, bw) = (label_width(a_label), label_width(b_label));
+    let dx = (ax - bx).abs();
+    let dy = (ay - by).abs();
+    dx < (aw + bw) / 2.0 && dy < LABEL_HEIGHT
+}
+
+/// One label placement side per node, in `nodes`/`pos` order: `1.0` places
+/// the label below the node (today's only behavior), `-1.0` places it
+/// above. A node's label goes above only when placing it below would
+/// collide with an EARLIER node's label at that node's own decided side —
+/// a single greedy left-to-right pass, not a full layout solve, but
+/// enough to break the dense-cluster case that made every label overlap.
+/// Shared by `MemoryGraph` and `LatticeGraph` (the latter already builds
+/// a `Vec<MemoryGraphNode>` locally to reuse `compute_layout`, and reuses
+/// this the same way).
+fn label_sides(nodes: &[MemoryGraphNode], pos: &[(f64, f64)]) -> Vec<f64> {
+    let mut sides: Vec<f64> = Vec::with_capacity(nodes.len());
+    for i in 0..nodes.len() {
+        let (xi, yi) = pos[i];
+        let ri = node_radius(nodes[i].entry_count);
+        let below = yi + ri + 11.0;
+        let collides = (0..i).any(|j| {
+            let (xj, yj) = pos[j];
+            let rj = node_radius(nodes[j].entry_count);
+            let yj_label = yj + sides[j] * (rj + 11.0);
+            labels_collide(xi, below, &nodes[i].topic, xj, yj_label, &nodes[j].topic)
+        });
+        sides.push(if collides { -1.0 } else { 1.0 });
+    }
+    sides
+}
+
+#[cfg(test)]
+mod graph_label_tests {
+    use super::*;
+
+    fn node(topic: &str, entry_count: u32) -> MemoryGraphNode {
+        MemoryGraphNode { topic: topic.to_string(), entry_count }
+    }
+
+    #[test]
+    fn far_apart_labels_both_go_below() {
+        let nodes = vec![node("alpha", 1), node("beta", 1)];
+        let pos = vec![(0.0, 0.0), (500.0, 400.0)];
+        let sides = label_sides(&nodes, &pos);
+        assert_eq!(sides, vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn close_labels_alternate_to_avoid_collision() {
+        let nodes = vec![node("alpha", 1), node("beta", 1)];
+        // Same y, close x — "below" placement for both would overlap.
+        let pos = vec![(100.0, 100.0), (108.0, 100.0)];
+        let sides = label_sides(&nodes, &pos);
+        assert_eq!(sides[0], 1.0);
+        assert_eq!(sides[1], -1.0);
+    }
+}
+
 /// The memory knowledge graph — a force-directed SVG of topic nodes (sized by
 /// entry count) + weighted co-occurrence edges. Clicking a node selects that
 /// topic. Read-only. The layout is deterministic (no animation loop).
@@ -4246,6 +4342,13 @@ fn MemoryGraph(
     on_select: EventHandler<String>,
 ) -> Element {
     let pos = compute_layout(&nodes, &edges);
+    let sides = label_sides(&nodes, &pos);
+    // POLISH_WAVES.md sub-project 6, item C — past this many nodes,
+    // always-on labels overlap into an unreadable smear; show a label
+    // only for the hovered node instead.
+    const LABEL_ALWAYS_ON_MAX: usize = 25;
+    let always_on = nodes.len() <= LABEL_ALWAYS_ON_MAX;
+    let mut hovered = use_signal(|| None::<String>);
     let idx: std::collections::HashMap<&str, usize> =
         nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
     let max_score = edges.iter().map(|e| e.score).fold(0.1_f32, f32::max);
@@ -4266,7 +4369,7 @@ fn MemoryGraph(
                             let (x2, y2) = pos[j];
                             let frac = (e.score / max_score).clamp(0.1, 1.0) as f64;
                             let w = 0.6 + frac * 3.4;
-                            let op = 0.12 + frac * 0.5;
+                            let op = 0.08 + frac * 0.4;
                             rsx! {
                                 line {
                                     x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
@@ -4282,12 +4385,25 @@ fn MemoryGraph(
                     {
                         let (cx, cy) = pos[i];
                         let r = node_radius(node.entry_count);
+                        let side = sides[i];
+                        let ly = cy + side * (r + 11.0);
                         let topic = node.topic.clone();
+                        let topic_hover = node.topic.clone();
+                        let topic_leave = node.topic.clone();
+                        let show_label = always_on || hovered() == Some(node.topic.clone());
                         rsx! {
                             g { class: "mem-node",
                                 onclick: move |_| on_select.call(topic.clone()),
+                                onmouseenter: move |_| hovered.set(Some(topic_hover.clone())),
+                                onmouseleave: move |_| {
+                                    if hovered() == Some(topic_leave.clone()) {
+                                        hovered.set(None);
+                                    }
+                                },
                                 circle { cx: "{cx}", cy: "{cy}", r: "{r}" }
-                                text { x: "{cx}", y: "{cy + r + 11.0}", text_anchor: "middle", "{node.topic}" }
+                                if show_label {
+                                    text { x: "{cx}", y: "{ly}", text_anchor: "middle", "{node.topic}" }
+                                }
                             }
                         }
                     }
