@@ -83,6 +83,17 @@ const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
 const ICON_TOOLS: Asset = asset!("/assets/icons/tools.svg");
 const ICON_GALLERY: Asset = asset!("/assets/icons/gallery.svg");
+// POLISH_WAVES.md sub-project 6, item D — vendored, not referenced from
+// the base app shell (see FileViewer's mermaid loader below): loading it
+// eagerly on every Studio boot would cost every operator a few hundred
+// KB of transfer for a screen most sessions never open. `with_minify
+// (false)` because the file is already minified upstream — running it
+// through the bundler's own minifier again is redundant risk for zero
+// benefit.
+const MERMAID_JS: Asset = asset!(
+    "/assets/vendor/mermaid.min.js",
+    JsAssetOptions::new().with_minify(false)
+);
 
 /// The shared WebSocket-sender handle (poll loop + UI handlers send to it).
 type Sender = Coroutine<FrontendMessage>;
@@ -7615,6 +7626,47 @@ fn DocumentsPanel() -> Element {
     }
 }
 
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
+export function mermaid_run() {
+    if (window.mermaid) {
+        window.mermaid.run();
+    }
+}
+")]
+extern "C" {
+    fn mermaid_run();
+}
+
+/// Load the vendored mermaid.js exactly once per page session (checking
+/// `window.mermaid` first so a second `.md` file with a mermaid fence
+/// doesn't re-inject the `<script>` tag), then call `mermaid.run()` once
+/// it's loaded — or immediately if it was already loaded by an earlier
+/// call. `dangerous_inner_html`-injected `<script>` tags never execute
+/// per the HTML spec, so this creates a real, appended `<script>` element
+/// via `web_sys` instead.
+fn ensure_mermaid_loaded_then_run() {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else { return };
+    let Some(document) = window.document() else { return };
+    let already_loaded = js_sys::Reflect::has(&window, &"mermaid".into()).unwrap_or(false);
+    if already_loaded {
+        mermaid_run();
+        return;
+    }
+    let Ok(script) = document.create_element("script") else { return };
+    script.set_attribute("src", &MERMAID_JS.to_string()).ok();
+    let onload = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+        mermaid_run();
+    });
+    if let Some(el) = script.dyn_ref::<web_sys::HtmlScriptElement>() {
+        el.set_onload(Some(onload.as_ref().unchecked_ref()));
+    }
+    onload.forget();
+    if let Some(head) = document.head() {
+        let _ = head.append_child(&script);
+    }
+}
+
 /// The file content pane — an editor for text files (textarea + Save), or a
 /// "not shown" note for binary / over-cap files.
 #[component]
@@ -7669,9 +7721,22 @@ fn FileViewer(file: DocFile, root: String) -> Element {
                 div { class: "notice err", "Showing the first 256 KB of a larger file — editing is disabled to avoid truncating it." }
             }
             if is_md && preview() {
-                div {
-                    class: "guide-content doc-preview",
-                    dangerous_inner_html: guide::render_untrusted_markdown(file.content.as_deref().unwrap_or_default()),
+                {
+                    let content = file.content.as_deref().unwrap_or_default();
+                    let html = guide::render_untrusted_markdown(content);
+                    let has_mermaid = html.contains("class=\"mermaid\"");
+                    if has_mermaid {
+                        // Runs after this render commits the new DOM nodes
+                        // mermaid needs to find — `use_effect` fires after
+                        // the render, `dangerous_inner_html` included.
+                        use_effect(ensure_mermaid_loaded_then_run);
+                    }
+                    rsx! {
+                        div {
+                            class: "guide-content doc-preview",
+                            dangerous_inner_html: html,
+                        }
+                    }
                 }
             } else if editable && !file.truncated {
                 textarea { class: "doc-edit", spellcheck: "false",
