@@ -4093,8 +4093,19 @@ fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element 
             samples: t.mentions,
         })
         .collect();
-    let pos = compute_layout(&nodes, &layout_edges);
-    let sides = label_sides(&nodes, &pos);
+    // Memoized on `nodes`/`layout_edges` content (not on the `zoom`/`pan`/
+    // `dragging`/`hovered` signals read further down in this same
+    // component) — otherwise every pan-drag `onmousemove` or hover
+    // enter/leave re-renders this component and would re-run the O(n²)
+    // force-directed layout for no reason, since node positions only
+    // depend on the graph's own nodes/edges, never the viewport or hover
+    // state.
+    let layout = use_memo(use_reactive!(|nodes, layout_edges| {
+        let pos = compute_layout(&nodes, &layout_edges);
+        let sides = label_sides(&nodes, &pos);
+        (pos, sides)
+    }));
+    let (pos, sides) = layout();
     // POLISH_WAVES.md sub-project 6, item C — same threshold/rationale as
     // MemoryGraph; also gates the edge-predicate labels below, which are
     // an even denser source of overlap than the node labels alone.
@@ -4392,8 +4403,19 @@ fn MemoryGraph(
     edges: Vec<PairScore>,
     on_select: EventHandler<String>,
 ) -> Element {
-    let pos = compute_layout(&nodes, &edges);
-    let sides = label_sides(&nodes, &pos);
+    // Memoized on `nodes`/`edges` content (not on the `zoom`/`pan`/
+    // `dragging`/`hovered` signals read further down in this same
+    // component) — otherwise every pan-drag `onmousemove` or hover
+    // enter/leave re-renders this component and would re-run the O(n²)
+    // force-directed layout for no reason, since node positions only
+    // depend on the graph's own nodes/edges, never the viewport or hover
+    // state.
+    let layout = use_memo(use_reactive!(|nodes, edges| {
+        let pos = compute_layout(&nodes, &edges);
+        let sides = label_sides(&nodes, &pos);
+        (pos, sides)
+    }));
+    let (pos, sides) = layout();
     // POLISH_WAVES.md sub-project 6, item C — past this many nodes,
     // always-on labels overlap into an unreadable smear; show a label
     // only for the hovered node instead.
@@ -7685,6 +7707,32 @@ fn FileViewer(file: DocFile, root: String) -> Element {
     let is_md = guide::is_markdown_path(&file.path) && file.content.is_some() && !file.truncated;
     let mut preview = use_signal(move || is_md);
 
+    // Computed once per render (not inside the `use_effect` below) so the
+    // rendered HTML is reused rather than rebuilt twice; only actually
+    // rendering markdown when there's a chance it's shown avoids paying for
+    // it in Source mode.
+    let mut preview_html: Option<String> = None;
+    let mut has_mermaid = false;
+    if is_md && preview() {
+        let content = file.content.as_deref().unwrap_or_default();
+        let html = guide::render_untrusted_markdown(content);
+        has_mermaid = html.contains("class=\"mermaid\"");
+        preview_html = Some(html);
+    }
+
+    // Hoisted unconditional (not inside `if has_mermaid { ... }`, which
+    // would violate the rules of hooks) so it's called on every render, and
+    // reads `preview()` inside its own body so it re-subscribes and re-runs
+    // whenever Source <-> Preview is toggled — not just on the component's
+    // first render. Toggling back into Preview re-inserts fresh, unprocessed
+    // `<pre class="mermaid">` markup via `dangerous_inner_html`, which needs
+    // mermaid.js to run again to typeset it.
+    use_effect(move || {
+        if preview() && is_md && has_mermaid {
+            ensure_mermaid_loaded_then_run();
+        }
+    });
+
     rsx! {
         div { class: "glass-card doc-viewer",
             div { class: "panel-head",
@@ -7722,15 +7770,7 @@ fn FileViewer(file: DocFile, root: String) -> Element {
             }
             if is_md && preview() {
                 {
-                    let content = file.content.as_deref().unwrap_or_default();
-                    let html = guide::render_untrusted_markdown(content);
-                    let has_mermaid = html.contains("class=\"mermaid\"");
-                    if has_mermaid {
-                        // Runs after this render commits the new DOM nodes
-                        // mermaid needs to find — `use_effect` fires after
-                        // the render, `dangerous_inner_html` included.
-                        use_effect(ensure_mermaid_loaded_then_run);
-                    }
+                    let html = preview_html.clone().unwrap_or_default();
                     rsx! {
                         div {
                             class: "guide-content doc-preview",

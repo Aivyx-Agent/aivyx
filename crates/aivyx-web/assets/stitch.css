@@ -335,7 +335,7 @@ a { color: var(--color-primary); text-decoration: none; }
   display: flex; flex-direction: column; gap: 6px;
   transition: box-shadow 0.15s var(--ease-smooth);
 }
-.stat-card:hover { box-shadow: var(--shadow-glow); }
+.stat-card:hover { box-shadow: var(--shadow-md), var(--shadow-glow); }
 .stat-card .value { font-family: var(--font-display); font-weight: 700; font-size: 26px; }
 
 /* progress bar */

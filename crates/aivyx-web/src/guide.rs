@@ -127,12 +127,23 @@ pub fn render(markdown: &str) -> String {
 /// Render markdown that may contain content the operator didn't author
 /// themselves — an agent's `fs.write`, or arbitrary content under the
 /// Documents screen's "Files" filesystem root. Unlike [`render`], this
-/// never passes raw HTML through: `Event::Html`/`Event::InlineHtml` are
-/// re-emitted as escaped visible text instead of executable markup,
-/// closing the injection path `render`'s own doc comment says it depends
-/// on trusted input to avoid. A fenced ` ```mermaid ` code block is
-/// special-cased to `<pre class="mermaid">` — the markup mermaid.js's
-/// browser build expects to find and typeset in place (see
+/// closes two injection paths `render`'s own doc comment says it depends
+/// on trusted input to avoid:
+///
+/// 1. Raw HTML: `Event::Html`/`Event::InlineHtml` are re-emitted as
+///    escaped visible text instead of executable markup.
+/// 2. Unsafe link/image destination schemes: `pulldown_cmark::html::push_html`
+///    percent-encodes a link/image `dest_url` but never validates its
+///    *scheme* — `[x](javascript:...)`/`[x](data:...)` pass straight
+///    through as a live, clickable `href`/`src` otherwise. Every
+///    `Tag::Link`/`Tag::Image`'s `dest_url` is checked against an
+///    allowlist (`http`, `https`, `mailto`, or no scheme at all —
+///    relative paths and `#anchor`s) and rewritten to `#` when it isn't
+///    one of those, before the event stream ever reaches `push_html`.
+///
+/// A fenced ` ```mermaid ` code block is special-cased to
+/// `<pre class="mermaid">` — the markup mermaid.js's browser build
+/// expects to find and typeset in place (see
 /// `crates/aivyx-web/src/main.rs`'s `FileViewer`/mermaid loader).
 pub fn render_untrusted_markdown(markdown: &str) -> String {
     let mut options = Options::empty();
@@ -162,6 +173,22 @@ pub fn render_untrusted_markdown(markdown: &str) -> String {
             Event::Text(text) if in_mermaid => {
                 mermaid_src.push_str(&text);
             }
+            Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
+                events.push(Event::Start(Tag::Link {
+                    link_type,
+                    dest_url: safe_dest_url(&dest_url),
+                    title,
+                    id,
+                }));
+            }
+            Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+                events.push(Event::Start(Tag::Image {
+                    link_type,
+                    dest_url: safe_dest_url(&dest_url),
+                    title,
+                    id,
+                }));
+            }
             Event::Html(raw) | Event::InlineHtml(raw) => {
                 // Reduce each tag to its bare "<name>"/"</name>" skeleton —
                 // dropping attributes — then re-emit as an ordinary Text
@@ -183,6 +210,40 @@ pub fn render_untrusted_markdown(markdown: &str) -> String {
     let mut out = String::new();
     html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Neutralize a markdown link/image destination whose URL scheme isn't on
+/// the safe allowlist (`http`, `https`, `mailto`, or no scheme at all —
+/// a relative path or `#anchor`), returning `"#"` in that case so the
+/// link/image survives (keeping its visible text) with a dead, inert
+/// destination instead of a live `javascript:`/`data:`/`vbscript:`/`file:`/…
+/// URL. `pulldown_cmark::html::push_html` percent-encodes whatever
+/// `dest_url` it's given (`escape_href`) but never checks its scheme, so
+/// this check has to happen before the event reaches `push_html`.
+///
+/// The scheme is everything before the first `:` that appears before any
+/// `/`, `?`, or `#` — matching how browsers resolve a URL scheme. A
+/// destination with no such `:` (a relative path, or a bare `#anchor`)
+/// has no scheme and is always safe. The scheme comparison is
+/// case-insensitive (`jAvAsCrIpT:` is exactly as live as `javascript:`).
+fn safe_dest_url(dest_url: &str) -> CowStr<'static> {
+    let scheme_end = dest_url
+        .find([':', '/', '?', '#'])
+        .filter(|&i| dest_url.as_bytes()[i] == b':');
+    let is_safe = match scheme_end {
+        None => true, // no scheme at all — relative path or #anchor
+        Some(end) => {
+            let scheme = &dest_url[..end];
+            scheme.eq_ignore_ascii_case("http")
+                || scheme.eq_ignore_ascii_case("https")
+                || scheme.eq_ignore_ascii_case("mailto")
+        }
+    };
+    if is_safe {
+        CowStr::from(dest_url.to_string())
+    } else {
+        CowStr::from("#")
+    }
 }
 
 /// Escape the two characters that can turn text into markup (`&`, `<`) —
@@ -298,6 +359,47 @@ mod tests {
         let out = render_untrusted_markdown("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
         assert!(out.contains("<h1>Title</h1>"));
         assert!(out.contains("<table>"));
+    }
+
+    #[test]
+    fn javascript_scheme_link_is_neutralized() {
+        let out = render_untrusted_markdown("[click me](javascript:alert(document.domain))");
+        assert!(!out.contains("href=\"javascript:"));
+        assert!(out.contains("href=\"#\""));
+        assert!(out.contains("click me"));
+    }
+
+    #[test]
+    fn mixed_case_javascript_scheme_link_is_also_neutralized() {
+        let out = render_untrusted_markdown("[click me](jAvAsCrIpT:alert(1))");
+        assert!(!out.to_lowercase().contains("href=\"javascript:"));
+        assert!(out.contains("href=\"#\""));
+    }
+
+    #[test]
+    fn data_scheme_link_is_neutralized() {
+        let out =
+            render_untrusted_markdown("[click me](data:text/html,<script>alert(1)</script>)");
+        assert!(!out.contains("href=\"data:"));
+        assert!(out.contains("href=\"#\""));
+    }
+
+    #[test]
+    fn https_link_still_renders_as_a_real_clickable_href() {
+        let out = render_untrusted_markdown("[normal link](https://example.com)");
+        assert!(out.contains("href=\"https://example.com\""));
+    }
+
+    #[test]
+    fn relative_link_still_renders_as_a_real_href() {
+        let out = render_untrusted_markdown("[relative link](../other.md)");
+        assert!(out.contains("href=\"../other.md\""));
+    }
+
+    #[test]
+    fn anchor_link_still_renders_as_a_real_href() {
+        let out = render_untrusted_markdown("[anchor](#section)");
+        assert!(out.contains("href=\"#section\""));
     }
 
     #[test]
