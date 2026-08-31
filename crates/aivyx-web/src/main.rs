@@ -552,6 +552,65 @@ struct MemoryUi {
     notice: Option<(bool, String)>,
 }
 
+/// POLISH_WAVES.md sub-project 6, item B — tracks the most recent
+/// `DaemonEnvelope::ServerInfo.boot_id` Studio has seen, and whether a
+/// *different* one has arrived since (meaning the daemon this tab now
+/// talks to isn't the one it started against).
+#[derive(Clone, Default, PartialEq)]
+struct ServerInfoUi {
+    boot_id: Option<String>,
+    update_available: bool,
+}
+
+/// The state transition `ServerInfoUi` takes on receiving a `boot_id`:
+/// the first one seen this session is just recorded (no banner); any
+/// later one that *differs* latches `update_available` on. It stays on
+/// once set — a flapping reconnect landing back on the same new boot_id
+/// doesn't clear it, and a manual dismiss (not modeled here; see the
+/// render step) is the only way off, so a real update can't be hidden by
+/// a lucky match.
+fn apply_server_info(current: &ServerInfoUi, boot_id: String) -> ServerInfoUi {
+    match &current.boot_id {
+        None => ServerInfoUi { boot_id: Some(boot_id), update_available: false },
+        Some(seen) if *seen == boot_id => current.clone(),
+        Some(_) => ServerInfoUi { boot_id: Some(boot_id), update_available: true },
+    }
+}
+
+#[cfg(test)]
+mod server_info_tests {
+    use super::*;
+
+    #[test]
+    fn first_boot_id_is_recorded_without_a_banner() {
+        let next = apply_server_info(&ServerInfoUi::default(), "a".to_string());
+        assert_eq!(next.boot_id, Some("a".to_string()));
+        assert!(!next.update_available);
+    }
+
+    #[test]
+    fn same_boot_id_again_does_not_trigger_the_banner() {
+        let seen = ServerInfoUi { boot_id: Some("a".to_string()), update_available: false };
+        let next = apply_server_info(&seen, "a".to_string());
+        assert!(!next.update_available);
+    }
+
+    #[test]
+    fn a_different_boot_id_triggers_the_banner() {
+        let seen = ServerInfoUi { boot_id: Some("a".to_string()), update_available: false };
+        let next = apply_server_info(&seen, "b".to_string());
+        assert_eq!(next.boot_id, Some("b".to_string()));
+        assert!(next.update_available);
+    }
+
+    #[test]
+    fn banner_stays_on_across_a_further_reconnect_to_the_same_new_id() {
+        let updated = ServerInfoUi { boot_id: Some("b".to_string()), update_available: true };
+        let next = apply_server_info(&updated, "b".to_string());
+        assert!(next.update_available);
+    }
+}
+
 /// One rendered chat transcript line.
 #[derive(Clone, PartialEq)]
 struct ChatLine {
@@ -719,6 +778,7 @@ fn App() -> Element {
     let skills = use_signal(SkillsState::default);
     let skills_ui = use_signal(SkillsUi::default);
     let memory_ui = use_signal(MemoryUi::default);
+    let server_info = use_signal(ServerInfoUi::default);
     let mcp = use_signal(McpState::default);
     let tools = use_signal(ToolsState::default);
     let gallery = use_signal(GalleryState::default);
@@ -755,7 +815,7 @@ fn App() -> Element {
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
             notifications, audit_page, sessions_page, connected, session, transcript, streaming,
-            gate, mission_ui,
+            gate, mission_ui, server_info,
         )
     });
     use_context_provider(|| ws);
@@ -968,6 +1028,35 @@ fn App() -> Element {
                         style: "position:sticky;top:0;z-index:1000;background:var(--danger, #b91c1c);color:#fff;text-align:center;padding:6px 12px;font-size:13px;letter-spacing:0.02em;",
                         role: "alert",
                         "Connection to the agent lost — reconnecting…"
+                    }
+                }
+                if server_info().update_available {
+                    div { class: "notice info reload-hint", role: "status",
+                        "A new version of Aivyx Studio is available. "
+                        button {
+                            class: "btn btn-primary btn-xs",
+                            onclick: move |_| {
+                                if let Some(w) = web_sys::window() {
+                                    let _ = w.location().reload();
+                                }
+                            },
+                            "Reload"
+                        }
+                        button {
+                            class: "btn btn-glass btn-xs",
+                            onclick: move |_| {
+                                // `server_info` is passed PLAIN (non-`mut`) into `App`'s
+                                // `use_coroutine` call per this file's established
+                                // convention (see `memory_ui`); shadow it with a local
+                                // `mut` binding here to call `.set()`, mirroring the
+                                // `view`/`palette_open` pattern above.
+                                let mut server_info = server_info;
+                                let mut cur = server_info();
+                                cur.update_available = false;
+                                server_info.set(cur);
+                            },
+                            "Dismiss"
+                        }
                     }
                 }
                 Topbar { title, light, nav_open, view, guide_page }
@@ -7545,6 +7634,7 @@ async fn ws_task(
     streaming: Signal<String>,
     gate: Signal<Option<GateInfo>>,
     mission_ui: Signal<MissionControlUi>,
+    server_info: Signal<ServerInfoUi>,
 ) {
     // Vitrine walkthrough fix (2026-07-05, third operator casualty): a
     // daemon restart used to END this task — the socket died, `connected`
@@ -7579,7 +7669,7 @@ async fn ws_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, tools, gallery, schedules_ui,
             notifications, audit_page, sessions_page, connected, session, transcript, streaming,
-            gate, mission_ui,
+            gate, mission_ui, server_info,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -7685,6 +7775,7 @@ async fn read_task(
     mut streaming: Signal<String>,
     mut gate: Signal<Option<GateInfo>>,
     mut mission_ui: Signal<MissionControlUi>,
+    mut server_info: Signal<ServerInfoUi>,
 ) {
     // POLISH_WAVES.md sub-project 5, item E — the conflict resolve/dismiss
     // acks below need to re-issue `mem_conflicts_query()` after a
@@ -8320,6 +8411,10 @@ async fn read_task(
                 }
                 DaemonEnvelope::Error { message, .. } => {
                     transcript.write().push(ChatLine::error(message));
+                }
+                DaemonEnvelope::ServerInfo { boot_id } => {
+                    let current = server_info();
+                    server_info.set(apply_server_info(&current, boot_id));
                 }
                 _ => {}
             }

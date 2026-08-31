@@ -566,8 +566,14 @@ select.input { appearance: none; cursor: pointer; }
   color: var(--color-text-primary);
 }
 .notice { padding: 10px 14px; border-radius: 0.5rem; font-size: 13px; }
-.notice.ok  { background: rgba(77, 139, 106, 0.12); color: var(--color-sage); }
-.notice.err { background: rgba(196, 85, 62, 0.15); color: var(--color-error); }
+.notice.ok   { background: rgba(77, 139, 106, 0.12); color: var(--color-sage); }
+.notice.err  { background: rgba(196, 85, 62, 0.15); color: var(--color-error); }
+.notice.info { background: rgba(255, 183, 125, 0.12); color: var(--color-primary); }
+.reload-hint {
+  position: sticky; top: 0; z-index: 999;
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+  border-radius: 0;
+}
 
 /* Confirm-first modal (expanded access levels). */
 .modal-scrim {
