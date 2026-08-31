@@ -569,6 +569,10 @@ struct MemoryUi {
 #[derive(Clone, Default, PartialEq)]
 struct McpConfigUi {
     notice: Option<(bool, String)>,
+    /// Chapter Lantern follow-up — the most recent
+    /// `TestMcpServerConnection` result (`ok`, display text), rendered
+    /// inline in `McpServerForm`.
+    test_result: Option<(bool, String)>,
 }
 
 /// POLISH_WAVES.md sub-project 6, item B — tracks the most recent
@@ -3870,6 +3874,8 @@ fn McpServerForm(
     on_cancel: EventHandler<()>,
     on_save: EventHandler<McpServerConfigView>,
 ) -> Element {
+    let ws = use_context::<Sender>();
+    let mcp_config_ui = use_context::<Signal<McpConfigUi>>();
     let seed = initial.clone().unwrap_or(McpServerConfigView {
         name: String::new(),
         transport: "stdio".to_string(),
@@ -3962,7 +3968,28 @@ fn McpServerForm(
                     },
                     "Save"
                 }
+                button {
+                    class: "btn btn-glass btn-xs",
+                    onclick: move |_| {
+                        let msg = FrontendMessage::Query {
+                            id: "mc-mcp-test".to_string(),
+                            payload: QueryPayload::TestMcpServerConnection {
+                                transport: transport(),
+                                command: if is_stdio && !command().trim().is_empty() { Some(command().trim().to_string()) } else { None },
+                                args: if is_stdio { args_raw().split_whitespace().map(str::to_string).collect() } else { Vec::new() },
+                                env: if is_stdio { parse_pairs(&env_raw()) } else { Vec::new() },
+                                headers: if is_stdio { Vec::new() } else { parse_pairs(&headers_raw()) },
+                                url: if is_stdio || url().trim().is_empty() { None } else { Some(url().trim().to_string()) },
+                            },
+                        };
+                        ws.send(msg);
+                    },
+                    "Test connection"
+                }
                 button { class: "btn btn-glass btn-xs", onclick: move |_| on_cancel.call(()), "Cancel" }
+            }
+            if let Some((ok, text)) = mcp_config_ui().test_result {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
             }
         }
     }
@@ -8597,6 +8624,17 @@ async fn read_task(
                 } => {
                     mcp.write().configs = servers;
                     mcp_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::McpServerTestResult { ok, tool_count, error },
+                    ..
+                } => {
+                    let text = if ok {
+                        format!("Connected — {tool_count} tool(s) found.")
+                    } else {
+                        error.unwrap_or_else(|| "connection failed".to_string())
+                    };
+                    mcp_config_ui.write().test_result = Some((ok, text));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::Gallery { available, images },
