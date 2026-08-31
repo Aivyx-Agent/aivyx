@@ -17,20 +17,26 @@ design decision:
   to build; dropped from this design.
 - **MCP tool-level health signal** (item B) — already correctly noted
   in the doc as moved to sub-project 8. Not in scope here.
-- **Schedules screen** (item D) — **partially shipped**. Studio
-  already has full schedule creation (Chapter Chime: a cron-builder
-  form, `FrontendMessage::CreateSchedule`), and `UpdateSchedule`/
-  `DeleteSchedule` are already wired in the UI
-  (`crates/aivyx-web/src/main.rs:2007`/`2024`). What V09_PLAN row 8
-  actually still needs is much smaller than "build a screen": found by
-  reading `crates/aivyx-channel/src/schedule_tool.rs` directly,
-  `schedule.create`'s tool already blocks agent self-scheduling via
-  `GrowthAdoption::None` (a knob `AutonomyLevel::expand()` derives from
-  the `[autonomy]` dial — `crates/aivyx-config/src/autonomy.rs`), plus
-  a frequency floor and an agent-schedule count cap. `schedule.update`
-  and `schedule.delete`'s `execute()` methods have **no equivalent
-  check at all** — confirmed by reading both functions in full. This
-  design closes that asymmetry; it is not a new screen.
+- **Schedules screen** (item D) — **fully shipped, not partially.**
+  Studio already has full schedule creation (Chapter Chime: a
+  cron-builder form, `FrontendMessage::CreateSchedule`), and
+  `UpdateSchedule`/`DeleteSchedule` are already wired in the UI
+  (`crates/aivyx-web/src/main.rs:2007`/`2024`). **Correction from an
+  earlier planning pass**: this section originally claimed `schedule.
+  update`/`schedule.delete` had no autonomy-gating check at all, based
+  on a flawed grep that silently matched nothing. Re-reading both
+  functions in full (`crates/aivyx-channel/src/schedule_tool.rs`)
+  found they already have exactly the protection this design was
+  about to propose as new work: `if record.created_by !=
+  ScheduleProvenance::Agent { reject }` on both (an agent may only
+  touch schedules it created, never the operator's or config's,
+  regardless of autonomy tier), a `MessageOrigin::System` block on
+  both (no recursive scheduling from within a triggered/scheduled
+  run), and `schedule.update` additionally has full growth-tier
+  awareness — an edit under a low autonomy tier doesn't reject, it
+  re-disables the schedule, forcing re-approval. All wired at daemon
+  startup (`schedule_update_tool.set_growth(...)` in `aivyx.rs`).
+  **Item D is dropped from this design — there is no remaining gap.**
 - **MCP full CRUD** (item A) and **Notify-target CRUD** (item C) are
   genuinely unbuilt — confirmed by reading `McpPanel`/
   `NotificationsPanel` in `main.rs`, both explicitly read-only today
@@ -60,21 +66,20 @@ field convention; MCP CRUD (incl. a test-connection probe); Notify-
 target CRUD (`[[notify_target]]` + the shared `[email]` block) **and**
 the channel adapters' own inbound bot tokens (`[telegram]`/
 `[discord]`/`[slack]`, per explicit user decision — broader than this
-design's own initial recommendation of outbound-only); the `schedule.
-update`/`schedule.delete` autonomy-gating fix, including a stronger
-protection than V09_PLAN row 8 literally asked for (see item D
-below); Settings coverage expansion for `[embedding]`, `[memory]
-profile`, `[proactive]`, and `[[reflection_schedule]]`'s primary
-fields.
+design's own initial recommendation of outbound-only); Settings
+coverage expansion for `[embedding]`, `[memory] profile`,
+`[proactive]`, and `[[reflection_schedule]]`'s primary fields.
 
-**Out** — MCP tool-level health (sub-project 8); every other
+**Out** — MCP tool-level health (sub-project 8); the schedule
+autonomy-gating item (V09_PLAN row 8) — **already fully shipped, no
+work remains**, see the Motivation section's correction; every other
 `aivyx.toml` section not named above (persona consolidation,
 correction judgment, tool relevance, skill auto-propose, and ~25
 others stay TOML-only — no operator ask names them); a separate
 encrypted-secrets file (rejected below); sandbox/`bundled` fields on
 `[[mcp_server]]` (advanced/internal, stay TOML-only).
 
-One design doc. Given the size (4 substantial pieces sharing one
+One design doc. Given the size (3 substantial pieces sharing one
 primitive), this is likely 2+ implementation plans rather than one —
 that split happens at planning time, not here.
 
@@ -187,35 +192,7 @@ recommendation).
   definitions (not fully enumerated here — `TelegramConfig`'s shape at
   `crates/aivyx-config/src/lib.rs:1578` is the confirmed template).
 
-## D. Schedule autonomy-gating fix
-
-Small and separate from the screen work above — `SchedulesPanel`
-already exists.
-
-- Add the same `GrowthAdoption::None` check `schedule.create` already
-  has to `ScheduleUpdateTool`/`ScheduleDeleteTool`'s `execute()` in
-  `crates/aivyx-channel/src/schedule_tool.rs` — an agent's `schedule.
-  update`/`schedule.delete` call fails with the same "the autonomy
-  level does not permit self-scheduling" shape of error `schedule.
-  create` already returns.
-- **Additional protection, per explicit user decision** (stronger than
-  V09_PLAN row 8's literal ask, and independent of the growth-tier
-  check above): an agent's `schedule.update`/`schedule.delete` may
-  **only ever target a schedule where `created_by == Agent`** — full
-  stop, regardless of autonomy tier. Even at `BroadAuto`, an agent
-  cannot touch an operator-created schedule. This mirrors the same
-  instinct behind the existing agent-schedule count cap and frequency
-  floor: the agent manages its own self-scheduling, never the
-  operator's.
-- **Not gated at all:** Studio's own `UpdateSchedule`/`DeleteSchedule`
-  IPC path (confirm at plan time this is a distinct daemon-side
-  handler from the `Tool` trait's `execute()`, not a shared code path
-  — if it turns out to share code with the tool, the plan needs an
-  explicit "is this call operator- or agent-initiated" signal instead
-  of assuming the split is free). The operator must always be able to
-  edit/delete any schedule via Studio regardless of autonomy tier.
-
-## E. Settings coverage expansion
+## D. Settings coverage expansion
 
 Primary fields only — advanced tuning knobs on each of these structs
 stay TOML-only; confirmed at plan time by reading each struct's full
@@ -262,13 +239,7 @@ available: bool`, so this is a genuine gap, not a UI-only miss).
   and per channel adapter; a specific test for `is_default`'s
   at-most-one-default rejection surfacing correctly through the wire
   error.
-- **D (schedule gating):** unit tests on `ScheduleUpdateTool`/
-  `ScheduleDeleteTool::execute()` — `GrowthAdoption::None` rejects an
-  agent call; an agent call targeting a `created_by == Operator`
-  schedule rejects regardless of growth tier; an operator-initiated
-  update/delete (via whatever the plan confirms is the real call path)
-  is unaffected by either check.
-- **E (Settings coverage):** round-trip tests per new section; a
+- **D (Settings coverage):** round-trip tests per new section; a
   `[proactive] target` write referencing a nonexistent notify-target
   name surfaces a real validation error (matching the loader's own
   existing cross-reference validation for `[[trigger]].notify_targets`,
@@ -286,10 +257,14 @@ available: bool`, so this is a genuine gap, not a UI-only miss).
 - MCP tool-level health signal (sub-project 8) — a different
   mechanism (audit-chain call-stat aggregation), only naturally
   co-located with the MCP CRUD screen, not part of this design.
-- Any `aivyx.toml` section not explicitly named in items A-E above —
+- Any `aivyx.toml` section not explicitly named in items A-D above —
   confirmed there is no operator ask naming any of the other ~25
   sections; a future one becomes its own small follow-up, not guessed
   at here.
+- The schedule autonomy-gating item (V09_PLAN row 8 / POLISH_WAVES.md
+  item D) — already fully shipped, see the Motivation section's
+  correction. No task in the implementation plan(s) touches
+  `schedule_tool.rs`.
 - MCP `sandbox`/`bundled` fields, and a general sandbox-preset picker
   UI (`docs/TOOL_SDK.md` §9's own future design).
 - A separate encrypted-secrets file/store for these credentials — per
