@@ -4090,6 +4090,16 @@ fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element 
     const LABEL_ALWAYS_ON_MAX: usize = 25;
     let always_on = nodes.len() <= LABEL_ALWAYS_ON_MAX;
     let mut hovered = use_signal(|| None::<String>);
+    // POLISH_WAVES.md sub-project 6, item C — pan/zoom so a dense graph
+    // can be explored instead of always fit-to-canvas. `zoom` scales the
+    // visible viewBox (>1.0 = zoomed in / a smaller visible area); `pan`
+    // is the viewBox's top-left corner in the same SVG-unit space.
+    let mut zoom = use_signal(|| 1.0_f64);
+    let mut pan = use_signal(|| (0.0_f64, 0.0_f64));
+    let mut dragging = use_signal(|| None::<(f64, f64)>);
+    let (vb_x, vb_y) = pan();
+    let vb_w = GRAPH_W / zoom();
+    let vb_h = GRAPH_H / zoom();
     let idx: std::collections::HashMap<&str, usize> =
         nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
 
@@ -4097,7 +4107,37 @@ fn LatticeGraph(entities: Vec<GraphEntity>, edges: Vec<GraphTriple>) -> Element 
         div { class: "glass-card mem-graph-card",
             svg {
                 class: "mem-graph",
-                view_box: "0 0 {GRAPH_W} {GRAPH_H}",
+                view_box: "{vb_x} {vb_y} {vb_w} {vb_h}",
+                onwheel: move |e| {
+                    e.prevent_default();
+                    let dy = e.delta().strip_units().y;
+                    let factor = if dy > 0.0 { 0.9 } else { 1.1 };
+                    let z = (zoom() * factor).clamp(0.4, 3.0);
+                    zoom.set(z);
+                },
+                onmousedown: move |e| {
+                    let p = e.client_coordinates();
+                    dragging.set(Some((p.x, p.y)));
+                },
+                onmousemove: move |e| {
+                    if let Some((sx, sy)) = dragging() {
+                        let p = e.client_coordinates();
+                        let (dx, dy) = (p.x - sx, p.y - sy);
+                        // Drag right/down should move the *view* left/up
+                        // (the content should follow the cursor), and the
+                        // delta is in screen pixels while pan is in
+                        // viewBox units — scale by the current zoom so a
+                        // drag feels the same speed at any zoom level.
+                        let (px, py) = pan();
+                        pan.set((px - dx / zoom(), py - dy / zoom()));
+                        dragging.set(Some((p.x, p.y)));
+                    }
+                },
+                onmouseup: move |_| dragging.set(None),
+                // A simpler fallback for "the drag ended off-element"
+                // than a window-level listener: releasing outside the
+                // SVG just stops the pan, it doesn't need to resume.
+                onmouseleave: move |_| dragging.set(None),
                 defs {
                     marker {
                         id: "lattice-arrow", view_box: "0 0 10 10",
@@ -4349,6 +4389,16 @@ fn MemoryGraph(
     const LABEL_ALWAYS_ON_MAX: usize = 25;
     let always_on = nodes.len() <= LABEL_ALWAYS_ON_MAX;
     let mut hovered = use_signal(|| None::<String>);
+    // POLISH_WAVES.md sub-project 6, item C — pan/zoom so a dense graph
+    // can be explored instead of always fit-to-canvas. `zoom` scales the
+    // visible viewBox (>1.0 = zoomed in / a smaller visible area); `pan`
+    // is the viewBox's top-left corner in the same SVG-unit space.
+    let mut zoom = use_signal(|| 1.0_f64);
+    let mut pan = use_signal(|| (0.0_f64, 0.0_f64));
+    let mut dragging = use_signal(|| None::<(f64, f64)>);
+    let (vb_x, vb_y) = pan();
+    let vb_w = GRAPH_W / zoom();
+    let vb_h = GRAPH_H / zoom();
     let idx: std::collections::HashMap<&str, usize> =
         nodes.iter().enumerate().map(|(i, nd)| (nd.topic.as_str(), i)).collect();
     let max_score = edges.iter().map(|e| e.score).fold(0.1_f32, f32::max);
@@ -4360,7 +4410,37 @@ fn MemoryGraph(
             }
             svg {
                 class: "mem-graph",
-                view_box: "0 0 {GRAPH_W} {GRAPH_H}",
+                view_box: "{vb_x} {vb_y} {vb_w} {vb_h}",
+                onwheel: move |e| {
+                    e.prevent_default();
+                    let dy = e.delta().strip_units().y;
+                    let factor = if dy > 0.0 { 0.9 } else { 1.1 };
+                    let z = (zoom() * factor).clamp(0.4, 3.0);
+                    zoom.set(z);
+                },
+                onmousedown: move |e| {
+                    let p = e.client_coordinates();
+                    dragging.set(Some((p.x, p.y)));
+                },
+                onmousemove: move |e| {
+                    if let Some((sx, sy)) = dragging() {
+                        let p = e.client_coordinates();
+                        let (dx, dy) = (p.x - sx, p.y - sy);
+                        // Drag right/down should move the *view* left/up
+                        // (the content should follow the cursor), and the
+                        // delta is in screen pixels while pan is in
+                        // viewBox units — scale by the current zoom so a
+                        // drag feels the same speed at any zoom level.
+                        let (px, py) = pan();
+                        pan.set((px - dx / zoom(), py - dy / zoom()));
+                        dragging.set(Some((p.x, p.y)));
+                    }
+                },
+                onmouseup: move |_| dragging.set(None),
+                // A simpler fallback for "the drag ended off-element"
+                // than a window-level listener: releasing outside the
+                // SVG just stops the pan, it doesn't need to resume.
+                onmouseleave: move |_| dragging.set(None),
                 // Edges first (under the nodes).
                 for e in edges.iter() {
                     if let (Some(&i), Some(&j)) = (idx.get(e.a.as_str()), idx.get(e.b.as_str())) {

@@ -736,7 +736,8 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 /* ── Memory knowledge graph (Chapter MG). ── */
 .mem-viewtoggle { display: flex; gap: 6px; margin-left: auto; }
 .mem-graph-card { padding: 8px; }
-.mem-graph { width: 100%; height: auto; display: block; }
+.mem-graph { width: 100%; height: auto; display: block; cursor: grab; }
+.mem-graph:active { cursor: grabbing; }
 .mem-edge { stroke: var(--color-secondary); }
 .mem-node { cursor: pointer; }
 .mem-node circle {
