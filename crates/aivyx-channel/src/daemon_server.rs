@@ -4412,6 +4412,15 @@ async fn handle_query(
                 servers,
             }
         }
+        QueryPayload::GetMcpServerConfigs => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            QueryResponsePayload::GetMcpServerConfigs {
+                servers: read_mcp_server_configs(path, role_override),
+            }
+        }
         QueryPayload::GetSchedules => {
             // Command Center — the agent's scheduled background routines.
             // Read-only: list the schedule store, map each record to a wasm-clean
@@ -5417,6 +5426,57 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::SetMcpServer {
+            name,
+            transport,
+            command,
+            args,
+            env,
+            headers,
+            url,
+            enabled,
+        } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::McpServerEntryWrite {
+                name: name.clone(),
+                transport,
+                command,
+                args,
+                env,
+                headers,
+                url,
+                enabled,
+            };
+            match aivyx_config::config_write::write_mcp_server_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "mcp_server", &format!("set {name}"));
+                    QueryResponsePayload::McpServersApplied {
+                        servers: read_mcp_server_configs(path, role_override),
+                        restart_required: true,
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::DeleteMcpServer { name } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::remove_mcp_server_section(path, &name) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "mcp_server", &format!("delete {name}"));
+                    QueryResponsePayload::McpServersApplied {
+                        servers: read_mcp_server_configs(path, role_override),
+                        restart_required: true,
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::SetBudget {
             per_run_usd,
             per_day_usd,
@@ -6025,6 +6085,7 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
         E::RootRequired { .. } => "root_required",
         E::RootNotAllowed { .. } => "root_not_allowed",
         E::InvalidBudget { .. } => "invalid_budget",
+        E::InvalidMcpServer { .. } => "invalid_mcp_server",
         E::Parse { .. } => "config_parse_failed",
         E::Io { .. } => "config_write_failed",
     };
@@ -6032,6 +6093,38 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
         code: code.into(),
         message: e.to_string(),
     }
+}
+
+/// Re-read `[[mcp_server]]` from disk into the wire view type — shared by
+/// `GetMcpServerConfigs`/`SetMcpServer`/`DeleteMcpServer`'s handlers so the
+/// response always reflects authoritative on-disk state, same principle as
+/// `settings_applied`'s own fresh re-read (and reusing the exact same
+/// `load_settings_config` helper it calls).
+fn read_mcp_server_configs(
+    path: &std::path::Path,
+    role_override: Option<&str>,
+) -> Vec<aivyx_ipc::protocol::McpServerConfigView> {
+    let Ok(cfg) = load_settings_config(path, role_override) else {
+        return Vec::new();
+    };
+    cfg.mcp_servers
+        .iter()
+        .map(|s| aivyx_ipc::protocol::McpServerConfigView {
+            name: s.name.clone(),
+            transport: match s.transport {
+                aivyx_config::McpTransportKind::Stdio => "stdio",
+                aivyx_config::McpTransportKind::Sse => "sse",
+                aivyx_config::McpTransportKind::Http => "http",
+            }
+            .to_string(),
+            command: s.command.clone(),
+            args: s.args.clone(),
+            env: s.env.clone(),
+            headers: s.headers.clone(),
+            url: s.url.clone(),
+            enabled: s.enabled,
+        })
+        .collect()
 }
 
 /// Chapter U — display label for a provider in the read-only Settings card.
