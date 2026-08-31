@@ -402,12 +402,13 @@ a { color: var(--color-primary); text-decoration: none; }
 @media (max-width: 860px) { .mem { grid-template-columns: 1fr; } }
 .mem-rail { display: flex; flex-direction: column; gap: 4px; }
 .mem-topic {
+  display: flex; align-items: center; gap: 6px;
   text-align: left; font: inherit; font-size: 13px; cursor: pointer;
   background: transparent; border: 0; border-radius: 8px;
   padding: 8px 11px; color: var(--color-text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
 }
+.mem-topic span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .mem-topic:hover { background: var(--color-bg-elevated); color: var(--color-text-primary); }
 .mem-topic.active { background: var(--color-bg-elevated); color: var(--color-primary); box-shadow: inset 2px 0 0 var(--color-primary); }
 
@@ -417,6 +418,16 @@ a { color: var(--color-primary); text-decoration: none; }
 .btn-glass.on { border-color: var(--color-secondary); color: var(--color-secondary); }
 
 .mem-entries { display: flex; flex-direction: column; gap: 12px; }
+
+.mem-topic-flag { flex-shrink: 0; }
+
+/* POLISH_WAVES.md sub-project 5, item E — the per-topic contradiction
+   resolve/dismiss panel. */
+.conflicts { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.conflict { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
+.conflict-side { display: flex; flex-direction: column; gap: 2px; }
+.conflict-side p { margin: 0; font-size: 13px; color: var(--color-text-primary); }
+.conflict-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .mem-entry { display: flex; flex-direction: column; gap: 8px; }
 .mem-entry-head { display: flex; align-items: center; gap: 10px; }
 .mem-entry-head .when { margin-left: auto; }

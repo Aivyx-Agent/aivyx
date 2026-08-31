@@ -2999,10 +2999,10 @@ fn MemoryPanel() -> Element {
                                     scope.set(format!("topic:{topic}"));
                                     ws.send(mem_topic_query(topic.clone()));
                                 },
-                                "{label}"
                                 if conflicted {
-                                    span { class: "chip amber", title: "contradictory entries", " ⚠" }
+                                    span { class: "chip amber mem-topic-flag", title: "contradictory entries", "⚠" }
                                 }
+                                span { "{label}" }
                             }
                         }
                     }
@@ -7688,9 +7688,11 @@ async fn read_task(
     // components grab it via `use_context::<Sender>()` — but this task IS
     // scope-bound to `App` (spawned by `ws_task`, itself the body of
     // `App`'s own `use_coroutine`), and `use_coroutine` auto-registers its
-    // returned handle as context on that same scope, so the lookup
-    // resolves here exactly as it does inside any child component.
-    let ws = use_context::<Sender>();
+    // returned handle as context on that same scope, so consume_context()
+    // is the non-hook equivalent, avoiding a rules-of-hooks violation from
+    // calling a hook outside a render pass, while resolving the same
+    // context.
+    let ws = consume_context::<Sender>();
     {
         while let Some(Ok(Message::Text(text))) = read.next().await {
             let Ok(env) = serde_json::from_str::<DaemonEnvelope>(&text) else {
