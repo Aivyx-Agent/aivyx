@@ -619,6 +619,24 @@ pub enum QueryPayload {
     /// no entry with that name exists). Takes effect on the next daemon
     /// start. Responds with [`QueryResponsePayload::McpServersApplied`].
     DeleteMcpServer { name: String },
+    /// POLISH_WAVES.md sub-project 7, item B — attempt a real connection
+    /// (the same logic the daemon uses at boot) against in-progress form
+    /// values, before the operator saves. Never joins the live server
+    /// list — a one-shot probe, torn down after. Responds with
+    /// [`QueryResponsePayload::McpServerTestResult`].
+    TestMcpServerConnection {
+        transport: String,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: Vec<(String, String)>,
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+        #[serde(default)]
+        url: Option<String>,
+    },
     /// Studio Gallery — recent images generated via the configured
     /// `comfyui` `[[mcp_server]]`, read directly from ComfyUI's own
     /// `/history` HTTP API (not the MCP tool surface). Read-only.
@@ -954,6 +972,16 @@ pub enum QueryResponsePayload {
     McpServersApplied {
         servers: Vec<McpServerConfigView>,
         restart_required: bool,
+    },
+    /// Response to [`QueryPayload::TestMcpServerConnection`]. `error` is
+    /// `None` iff `ok` — the raw connection error string otherwise (not a
+    /// `QueryError`, since a failed test-connection is an expected,
+    /// non-exceptional outcome the form should just display inline).
+    McpServerTestResult {
+        ok: bool,
+        tool_count: usize,
+        #[serde(default)]
+        error: Option<String>,
     },
     /// Command Center — response to [`QueryPayload::GetSchedules`]: the agent's
     /// scheduled background routines for the dashboard.
@@ -5171,6 +5199,18 @@ mod tests {
         let json = serde_json::to_string(&view).unwrap();
         let back: McpServerConfigView = serde_json::from_str(&json).unwrap();
         assert_eq!(back, view);
+    }
+
+    #[test]
+    fn mcp_server_test_result_round_trips() {
+        let msg = QueryResponsePayload::McpServerTestResult {
+            ok: true,
+            tool_count: 4,
+            error: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: QueryResponsePayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
     }
 
     // ---- Piece C (2026-08-23) — RunTeamMissionChannel IPC ----
