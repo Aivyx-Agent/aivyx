@@ -5477,6 +5477,76 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::TestMcpServerConnection {
+            transport,
+            command,
+            args,
+            env,
+            headers,
+            url,
+        } => {
+            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+            let bridge_result = match transport.as_str() {
+                "stdio" => {
+                    let Some(cmd) = command.as_deref() else {
+                        return QueryResponsePayload::McpServerTestResult {
+                            ok: false,
+                            tool_count: 0,
+                            error: Some("stdio transport requires `command`".to_string()),
+                        };
+                    };
+                    aivyx_mcp::McpServerBridge::start_with_sandbox(
+                        cmd, &args_ref, &env, None, None, "test-connection",
+                    )
+                    .await
+                }
+                "sse" | "http" | "streamable-http" => {
+                    let Some(u) = url.as_deref() else {
+                        return QueryResponsePayload::McpServerTestResult {
+                            ok: false,
+                            tool_count: 0,
+                            error: Some("sse/http transport requires `url`".to_string()),
+                        };
+                    };
+                    let transport_result = if transport == "sse" {
+                        aivyx_mcp::SseTransport::connect(u, &headers)
+                            .await
+                            .map(|t| std::sync::Arc::new(t) as std::sync::Arc<dyn aivyx_mcp::McpTransport>)
+                    } else {
+                        aivyx_mcp::StreamableHttpTransport::connect(u, &headers)
+                            .await
+                            .map(|t| std::sync::Arc::new(t) as std::sync::Arc<dyn aivyx_mcp::McpTransport>)
+                    };
+                    match transport_result {
+                        Ok(t) => aivyx_mcp::McpServerBridge::from_transport(t, "test-connection").await,
+                        Err(e) => Err(e),
+                    }
+                }
+                other => {
+                    return QueryResponsePayload::McpServerTestResult {
+                        ok: false,
+                        tool_count: 0,
+                        error: Some(format!("unknown transport {other:?}")),
+                    };
+                }
+            };
+            match bridge_result {
+                Ok(bridge) => {
+                    let tool_count = bridge.list_tools().await.map(|t| t.len()).unwrap_or(0);
+                    let _ = bridge.shutdown().await;
+                    QueryResponsePayload::McpServerTestResult {
+                        ok: true,
+                        tool_count,
+                        error: None,
+                    }
+                }
+                Err(e) => QueryResponsePayload::McpServerTestResult {
+                    ok: false,
+                    tool_count: 0,
+                    error: Some(e),
+                },
+            }
+        }
         QueryPayload::SetBudget {
             per_run_usd,
             per_day_usd,

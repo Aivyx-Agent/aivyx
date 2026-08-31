@@ -165,6 +165,7 @@ dependencies = [
  "aivyx-ipc",
  "aivyx-kvcache",
  "aivyx-llm",
+ "aivyx-mcp",
  "aivyx-memory",
  "aivyx-slack",
  "aivyx-storage",
