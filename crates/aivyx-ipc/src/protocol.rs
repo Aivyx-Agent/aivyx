@@ -592,6 +592,33 @@ pub enum QueryPayload {
     SetTeamRoster {
         roster: aivyx_team_types::TeamConfig,
     },
+    /// POLISH_WAVES.md sub-project 7, item B — the editable MCP server
+    /// list (distinct from `GetMcpStatus`'s live connection status).
+    /// Responds with [`QueryResponsePayload::GetMcpServerConfigs`].
+    GetMcpServerConfigs,
+    /// Add or replace (by `name`) one `[[mcp_server]]` entry. Takes effect
+    /// on the next daemon start (MCP servers are boot-constructed).
+    /// Responds with [`QueryResponsePayload::McpServersApplied`] (or
+    /// `QueryError` on a structural validation failure).
+    SetMcpServer {
+        name: String,
+        transport: String,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: Vec<(String, String)>,
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+        #[serde(default)]
+        url: Option<String>,
+        enabled: bool,
+    },
+    /// Remove one `[[mcp_server]]` entry by name (a no-op, not an error, if
+    /// no entry with that name exists). Takes effect on the next daemon
+    /// start. Responds with [`QueryResponsePayload::McpServersApplied`].
+    DeleteMcpServer { name: String },
     /// Studio Gallery — recent images generated via the configured
     /// `comfyui` `[[mcp_server]]`, read directly from ComfyUI's own
     /// `/history` HTTP API (not the MCP tool surface). Read-only.
@@ -695,6 +722,25 @@ impl McpServerStatusView {
             stderr_tail,
         }
     }
+}
+
+/// The **editable configuration** of one `[[mcp_server]]` entry — distinct
+/// from `McpServerStatusView` (the connection's live runtime status).
+/// `env`/`headers` are NOT secrets on this wire type — see
+/// `crates/aivyx-config/src/lib.rs`'s own doc comment on `McpServerConfig`:
+/// the intended operator practice is a `${VAR}` placeholder, resolved from
+/// the daemon's own environment at load time, not a literal secret value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerConfigView {
+    pub name: String,
+    /// `"stdio"`, `"sse"`, or `"http"`.
+    pub transport: String,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub headers: Vec<(String, String)>,
+    pub url: Option<String>,
+    pub enabled: bool,
 }
 
 /// Command Center — one scheduled background routine for the dashboard.
@@ -898,6 +944,16 @@ pub enum QueryResponsePayload {
     GetMcpStatus {
         captured_unix: u64,
         servers: Vec<McpServerStatusView>,
+    },
+    /// Response to [`QueryPayload::GetMcpServerConfigs`].
+    GetMcpServerConfigs { servers: Vec<McpServerConfigView> },
+    /// Response to [`QueryPayload::SetMcpServer`] / [`QueryPayload::
+    /// DeleteMcpServer`]. Carries the **fresh** list (re-read from disk)
+    /// and `restart_required` (always `true` — MCP servers are
+    /// boot-constructed).
+    McpServersApplied {
+        servers: Vec<McpServerConfigView>,
+        restart_required: bool,
     },
     /// Command Center — response to [`QueryPayload::GetSchedules`]: the agent's
     /// scheduled background routines for the dashboard.
@@ -5081,6 +5137,40 @@ mod tests {
         assert!(json.contains("\"source\":\"toml\""));
         let back: RedactedSecret = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn set_mcp_server_round_trips() {
+        let msg = QueryPayload::SetMcpServer {
+            name: "github".to_string(),
+            transport: "stdio".to_string(),
+            command: Some("npx".to_string()),
+            args: vec!["-y".to_string()],
+            env: vec![("TOKEN".to_string(), "${GITHUB_TOKEN}".to_string())],
+            headers: Vec::new(),
+            url: None,
+            enabled: true,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: QueryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn mcp_server_config_view_round_trips() {
+        let view = McpServerConfigView {
+            name: "github".to_string(),
+            transport: "stdio".to_string(),
+            command: Some("npx".to_string()),
+            args: vec!["-y".to_string()],
+            env: Vec::new(),
+            headers: Vec::new(),
+            url: None,
+            enabled: true,
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        let back: McpServerConfigView = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, view);
     }
 
     // ---- Piece C (2026-08-23) — RunTeamMissionChannel IPC ----
