@@ -505,6 +505,15 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 4: Mission topic-naming discipline
 
+> **⏳ Reverted at final review (2026-08-31, commit f02f0032) — do not
+> re-execute this task as written.** The mechanism below was
+> implemented, then found to (1) not actually fix the naming-
+> discipline finding it cites and (2) measurably harm Task 5's own
+> Concord conflict-detector plus knowledge-wiki synthesis cost plus
+> the Memory screen's topic rail. See `docs/POLISH_WAVES.md`'s §5 for
+> the full account and the lesson for a future attempt. Left below
+> for historical reference only.
+
 **Files:**
 - Modify: `crates/aivyx-team/src/factory.rs` (`SpecialistFactory` struct + builder + `build()`)
 - Modify: `crates/aivyx-team/src/assembly.rs` (`TeamAssembly::build` signature + its 2 test call sites)

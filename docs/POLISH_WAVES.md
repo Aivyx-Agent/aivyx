@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), and 4 (2026-08-30) done, 5–7 not started.**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), and 4 (2026-08-30) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 6–7 not started.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -46,7 +46,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 2 | **`/classic` retirement** | See below | Medium | ✅ done 2026-08-28 (all 5 pieces A–E shipped — see below) |
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small | ✅ done 2026-08-29 |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
-| 5 | **Missions polish** | See below | Medium | Not started |
+| 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | Not started |
 | 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | Not started |
 | 8 | **Tool/server call-stat observability** | See below | Large | Not started |
@@ -303,30 +303,61 @@ fixed before merge, then closed with a second follow-up plan:
   selection when multiple pool tokens tie, capping the number of
   identifier-drift notes per turn) — none blocking, all small.
 
-## 5 · Missions polish
+## 5 · Missions polish — ✅ 4 of 5 done 2026-08-31, 1 still open
 
-- **Rejected-mission reason display** (§3 P2 — **confirmed still open
-  2026-08-27**: `halt_reason` is set once in `aivyx-web/src/main.rs`
-  to `None` as a struct default and never read/rendered anywhere;
-  Mission Control's new screen did not add this). `TeamMissionRecord`
-  already carries the judge's precise verdict — just needs a render.
-- **Gate labels with attempt context** (§3, named in the Reprise
-  retry-cap fix's own note — "the gate label P3 stands").
-- **Handoff-fidelity prompts** (§3 P2 ×2) — specialists confabulate
-  file-based handoffs and ignore real data sitting in mission memory;
-  plan/member prompts should state where each artifact lives and that
-  inputs arrive in the message, not on disk.
-- **Mission topic-naming discipline** (§4 P2) — specialists file
-  memory under inconsistent conventions (bare-ICAO vs
-  `overall_conditions` vs `overall_conditions_summary`) in one mission;
-  needs a topic-naming hint or mission-scoped prefix.
-- **Contradictory-memory badge** (§4 P2) — Concord already detects
-  conflicts (surfaced via `aivyx memory conflicts` CLI only); the
-  Memory screen should badge conflicted topics.
-- Worth verifying against Mission Control's actual shipped behavior
-  before scoping in detail — some Run-feedback gaps described in §3
-  (`TeamRunStarted` handling) may be partially superseded by that
-  chapter's new live graph view; re-check rather than assume either way.
+Full account: `docs/superpowers/specs/2026-08-30-missions-polish-design.md`,
+`docs/superpowers/plans/2026-08-30-missions-polish.md`. Verified against
+Mission Control's actual shipped behavior before scoping in detail, per
+the original "worth verifying" note below — the §3 Run-feedback gap
+(`TeamRunStarted` handling) was already fixed same-day per `VITRINE.md`'s
+own account and Mission Control's later live-graph work never reopened
+it; no 6th item was hiding there.
+
+- ✅ **Rejected-mission reason display** (§3 P2). `TeamMissionView.
+  halt_reason` already flowed over the wire; `MissionRow` (the plain
+  Missions list — Mission Control's own "watchable" set deliberately
+  excludes Rejected/Halted missions) now renders it.
+- ✅ **Gate labels with attempt context** (§3). `TeamMissionView` gained
+  `verify_attempts`; `GateControls` shows "(attempt N)" once a retry has
+  happened. **Final-review fix**: the first cut used the wrong threshold
+  and was off-by-one (`verify_attempts` counts *failed* verifications,
+  capped at `1` by `MAX_MISSION_ATTEMPTS = 2`, so the original `> 1`
+  check with a bare `{verify_attempts}` display could never fire in
+  production and would have shown "attempt 1" during the actual 2nd
+  attempt if it had). Fixed to `>= 1` / `verify_attempts + 1`.
+- ✅ **Handoff-fidelity prompts** (§3 P2 ×2). One string in
+  `aivyx-team`'s shared `build_input` (used by both the CLI's `aivyx
+  team run` and Mission-Control-driven missions) now states plainly
+  that upstream context IS the specialist's real input.
+- ⏳ **Mission topic-naming discipline** (§4 P2) — **still open.**
+  Attempted via a mission-scoped memory-topic prefix (reusing the
+  pre-existing, already-enforced `ConcreteAgent::with_memory_topic_
+  prefix` mechanism) — implemented, then **reverted at final review**
+  once two real problems surfaced: (1) it doesn't actually fix the
+  cited finding — a mission's specialists still write 3 inconsistent
+  logical topic names, just now isolated per mission instead of
+  unified within one; (2) it measurably harmed the *next* item's own
+  Concord conflict-detector (needs ≥2 entries under one topic name to
+  compare — a mission-fragmented topic space often produces exactly 1),
+  plus added unbounded per-mission pages to knowledge-wiki synthesis
+  and cluttered the Memory screen's topic rail. **Lesson for the next
+  attempt**: a mission-scoped hash prefix isolates missions from each
+  other but doesn't make specialists *agree on one name* within a
+  mission — the real fix likely needs the LEAD's own plan decomposition
+  to hand each step a canonical topic name to use, not a prefix applied
+  after the fact.
+- ✅ **Contradictory-memory badge** (§4 P2) — scoped up to the full
+  resolve/dismiss loop (not just a badge) once research found Concord's
+  entire operator loop (`GetMemoryConflicts`/`ResolveMemoryConflict`/
+  `DismissMemoryConflict`) already existed and worked, CLI-only. Studio's
+  Memory screen now badges conflicted topics and offers "keep this
+  one"/"not a conflict" per conflict, matching the CLI's own semantics.
+  Known gap, not silently dropped: a successful resolve only re-fetches
+  the conflict list, not the currently-open entry list, so a just-
+  archived entry stays visible until the operator re-selects the topic
+  (`read_task`, where the ack lands, has no access to the Memory
+  screen's own local view-scope signal — closing this needs either a
+  shared scope signal or a different refresh mechanism).
 
 ## 6 · UI Modernization pass
 
