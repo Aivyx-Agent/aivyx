@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), and 4 (2026-08-30) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 6–7 not started.**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), and 6 (2026-08-31) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 7 not started.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -47,7 +47,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small | ✅ done 2026-08-29 |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
 | 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
-| 6 | **UI Modernization pass** | See below | Large, design-heavy | Not started |
+| 6 | **UI Modernization pass** | See below | Large, design-heavy | ✅ done 2026-08-31 (all 4 items, 7 tasks — see below) |
 | 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | Not started |
 | 8 | **Tool/server call-stat observability** | See below | Large | Not started |
 
@@ -359,35 +359,75 @@ it; no 6th item was hiding there.
   screen's own local view-scope signal — closing this needs either a
   shared scope signal or a different refresh mechanism).
 
-## 6 · UI Modernization pass
+## 6 · UI Modernization pass — done 2026-08-31
 
-- **Command Center dashboard restyle** (§1 P3, the walkthrough's own
-  headline item) — cards read as "flat and boxy, similar to every
-  other agentic dashboard"; direction: revisit `aivyx-brand`'s Stitch
-  mockups for unrealized design intent, plus fresh research on modern
-  dashboard treatments (depth/elevation, gradients/glass, asymmetric
-  layout, motion).
-- **Memory/Wiki graph-view cleanup** (§4 P3) — "messy and unintuitive"
-  per the operator; data is correct, presentation needs layout/
-  readability work (clustering, label collision, visual hierarchy).
-- **Version-mismatch reload hint** (§1) — a redeployed WASM bundle
-  needs one manual reload today; a "new version available — reload"
-  hint is a small, natural rider on this pass.
-- **Documents markdown rendering** (§8 P3) — render `.md` files as
-  markdown (headings, tables, lists, mermaid) instead of raw
-  monospace; natural fit since agent deliverables are markdown. Could
-  ride this pass or `/classic` retirement's Documents-adjacent work —
-  sequence with whichever lands first.
-- Sequenced after `/classic` retirement (already shipped) and before
-  the config-write surface area below. **Corrected 2026-08-31**: this
-  bullet previously claimed the opposite ("sequenced late... by the
-  time this runs, the config-write surface area... will have added
-  screens"), contradicting both the sequence table above and item
-  7's own note ("benefits from... the new visual language sub-project
-  6 establishes") — two signals against one stale one. The reconciled
-  reading: this pass establishes the new visual language now, and
-  item 7's new Schedules/MCP/notify-target screens are built directly
-  in it, never restyled.
+All 4 findings shipped, as 7 tasks on branch `ui-modernization`
+(merged to main). Design spec:
+`docs/superpowers/specs/2026-08-31-ui-modernization-design.md`. Plan:
+`docs/superpowers/plans/2026-08-31-ui-modernization.md`.
+
+- ✅ **Command Center dashboard restyle** (§1 P3) — root cause was
+  precise, not stylistic: `--shadow-md`/`--shadow-ambient` were
+  already-defined brand-spec tokens (`brand-guidelines.md`'s own
+  Shadow System table assigns them to "Cards"/"Page sections"
+  respectively) that were simply never applied to `.glass-card`/
+  `.panel` — a CSS-only fix, app-wide by construction since every
+  screen already uses those classes. Also added the existing
+  `--shadow-glow` hover treatment to stat cards (final review caught
+  a real regression here — see below).
+- ✅ **Version-mismatch reload hint** (§1) — shipped with a corrected
+  mechanism from the one the spec originally proposed: comparing
+  `aivyx-web`'s own crate version (`version.workspace = true`, rarely
+  bumped) would almost never have fired. Instead the WS bridge
+  (`aivyx-channel/src/web_ui.rs`) mints a random `boot_id` once per
+  daemon process and sends it via a new, bridge-only
+  `DaemonEnvelope::ServerInfo` message; Studio compares it across
+  reconnects and shows a dismissible banner when it changes — a
+  direct proxy for "this daemon isn't the one I started against."
+- ✅ **Memory/Wiki graph-view cleanup** (§4 P3) — root cause was label
+  collision (no avoidance at all) in the one `compute_layout` engine
+  both `MemoryGraph`/`LatticeGraph` already shared, not the layout
+  math itself. Fixed with a shared `label_sides` collision-avoidance
+  pass, hover-only label disclosure past 25 nodes, and pan/zoom on
+  both SVG canvases.
+- ✅ **Documents markdown rendering** (§8 P3) — ships with mermaid
+  diagram support (scoped in during brainstorming, not originally
+  planned). The real finding here was a genuine content-injection gap
+  in the natural implementation path: reusing the existing
+  `guide::render` (used by the Guide screen) verbatim would have
+  passed raw HTML from untrusted content (agent-written or filesystem
+  files) straight through `dangerous_inner_html`. A new, separate
+  `render_untrusted_markdown` closes it — and needed a 2nd round: the
+  first shipped version filtered raw HTML/InlineHtml events but not
+  link/image destination schemes, so `[x](javascript:...)` still
+  passed through as a live `href` (**caught only at final
+  whole-branch review**, fixed and independently re-verified against
+  35 crafted bypass attempts before merge). Mermaid.js is vendored
+  (not CDN-loaded, matching the local-first stance) and lazy-loaded
+  only when a file's rendered preview actually contains a mermaid
+  fence.
+
+**Two more real defects surfaced only at final whole-branch review**
+(on top of the injection gap above), both cross-task interactions no
+single task's narrow review scope could see: mermaid diagrams didn't
+re-render after a Source→Preview toggle (a conditionally-called
+`use_effect` reading no reactive signal, so it fired once per mount);
+and the knowledge-graph's O(n²) force-directed layout was recomputing
+on every pan/hover-triggered render instead of only when the
+underlying data changed. Both fixed and re-verified before merge.
+
+**Known remaining Minor gaps, not fixed in this branch** (all
+confirmed non-blocking, logged here rather than silently dropped):
+the reload-hint banner's copy ("new version available") slightly
+overstates what `boot_id` actually detects (a daemon restart, which
+usually but not always means a new bundle); mermaid's `securityLevel`
+relies on the vendored library's own default (`'strict'`) rather than
+being pinned explicitly at the call site; the mermaid-fence detection
+heuristic can false-positive on literal text mentioning the class
+name (wasted local fetch only, no security impact); graph pan/zoom
+has no reset-to-fit control and zooms from the viewBox origin rather
+than the cursor; a drag starting/ending on a graph node still fires
+its click/select handler.
 
 ## 7 · Config-write surface area ("credentials in Studio") — V09_PLAN row 8 folded in
 
