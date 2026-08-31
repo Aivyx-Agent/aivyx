@@ -290,11 +290,14 @@ pub struct TeamMissionView {
     #[serde(default)]
     pub halt_reason: Option<String>,
     /// POLISH_WAVES.md sub-project 5, item B — the mission's current
-    /// Chapter Reprise verification-retry attempt count, so a repeated
-    /// approval gate (the same `gate_review_brief` re-shown on each
-    /// retry) can tell the operator which attempt this is. `0`/`1` both
-    /// mean "no retry has happened yet" — same meaning as
-    /// `TeamMissionRecord::verify_attempts`'s own default of `0`.
+    /// Chapter Reprise verification-retry attempt count: the number of
+    /// FAILED verifications so far, so a repeated approval gate (the
+    /// same `gate_review_brief` re-shown on each retry) can tell the
+    /// operator which attempt this is. `0` means no retry has happened
+    /// yet (the operator is on attempt 1); a client displays the
+    /// human-facing attempt number as `verify_attempts + 1`.
+    /// `MAX_MISSION_ATTEMPTS` (`aivyx-channel`'s `team_mission_driver.rs`)
+    /// caps this at `1` in practice — a mission never retries twice.
     #[serde(default)]
     pub verify_attempts: u32,
     /// Completion percent in `0..=100` (completed steps / total).

@@ -2475,8 +2475,14 @@ fn MissionRow(mission: TeamMissionView) -> Element {
 /// needs no "(attempt 1)" noise). Extracted as a pure function so it's
 /// testable without a Dioxus runtime.
 fn gate_label(step: &str, verify_attempts: u32) -> String {
-    if verify_attempts > 1 {
-        format!("⚑ awaiting approval — {step} (attempt {verify_attempts})")
+    // Final-review fix (POLISH_WAVES.md sub-project 5) — verify_attempts
+    // counts FAILED verifications, so a value of 1 means the mission is
+    // already on its second attempt. The original `> 1` threshold with a
+    // bare `{verify_attempts}` display was both unreachable in practice
+    // (MAX_MISSION_ATTEMPTS caps this at 1) and off-by-one even if it had
+    // fired.
+    if verify_attempts >= 1 {
+        format!("⚑ awaiting approval — {step} (attempt {})", verify_attempts + 1)
     } else {
         format!("⚑ awaiting approval — {step}")
     }
@@ -6745,16 +6751,15 @@ mod mission_control_tests {
             gate_label("gate_review_brief", 0),
             "⚑ awaiting approval — gate_review_brief"
         );
-        assert_eq!(
-            gate_label("gate_review_brief", 1),
-            "⚑ awaiting approval — gate_review_brief"
-        );
     }
 
     #[test]
     fn gate_label_includes_attempt_suffix_on_retry() {
+        // verify_attempts == 1 means one verification has already failed —
+        // the mission is on its 2nd attempt (MAX_MISSION_ATTEMPTS caps this
+        // count at 1, so this is the only value that ever fires in practice).
         assert_eq!(
-            gate_label("gate_review_brief", 2),
+            gate_label("gate_review_brief", 1),
             "⚑ awaiting approval — gate_review_brief (attempt 2)"
         );
     }
