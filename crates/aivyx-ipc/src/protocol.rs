@@ -1327,6 +1327,21 @@ pub struct BudgetSnapshot {
     pub alert_at: Option<f64>,
 }
 
+/// A secret field's wire representation on the READ side, for every
+/// config-write consumer in POLISH_WAVES.md sub-project 7 (MCP env/header
+/// values are NOT secrets by this codebase's convention — see
+/// `McpServerConfigView`'s own doc comment — so this type's first real use
+/// is the Notify-target/channel-adapter and Settings-coverage plans, not
+/// this one). Never carries the real value: `configured` says whether a
+/// value exists at all, `source` says where it came from (`"toml"`,
+/// `"env"`, ...) — mirrors `aivyx_config::SourcedSecret`'s own `Debug`
+/// redaction and its `FieldSource` provenance, on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedactedSecret {
+    pub configured: bool,
+    pub source: String,
+}
+
 /// Phase 119 Task 6 — wire-format per-row dump entry for
 /// [`QueryResponsePayload::ToolRelevanceDump`]. Flattens the
 /// `(keyword_key, OutcomeRow)` pair so the CLI renders one
@@ -5056,6 +5071,16 @@ mod tests {
         let json = serde_json::to_string(&att).expect("ser");
         let back: IpcAttachment = serde_json::from_str(&json).expect("de");
         assert_eq!(back, att);
+    }
+
+    #[test]
+    fn redacted_secret_round_trips_without_the_real_value() {
+        let s = RedactedSecret { configured: true, source: "toml".to_string() };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"configured\":true"));
+        assert!(json.contains("\"source\":\"toml\""));
+        let back: RedactedSecret = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
     }
 
     // ---- Piece C (2026-08-23) — RunTeamMissionChannel IPC ----
