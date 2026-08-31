@@ -378,10 +378,16 @@ it; no 6th item was hiding there.
   monospace; natural fit since agent deliverables are markdown. Could
   ride this pass or `/classic` retirement's Documents-adjacent work —
   sequence with whichever lands first.
-- Sequenced late deliberately: by the time this runs, `/classic`
-  retirement (new read-only screens) and the config-write surface area
-  below (new Schedules/MCP screens) will have added screens that
-  should get the *new* visual language once, not the old one twice.
+- Sequenced after `/classic` retirement (already shipped) and before
+  the config-write surface area below. **Corrected 2026-08-31**: this
+  bullet previously claimed the opposite ("sequenced late... by the
+  time this runs, the config-write surface area... will have added
+  screens"), contradicting both the sequence table above and item
+  7's own note ("benefits from... the new visual language sub-project
+  6 establishes") — two signals against one stale one. The reconciled
+  reading: this pass establishes the new visual language now, and
+  item 7's new Schedules/MCP/notify-target screens are built directly
+  in it, never restyled.
 
 ## 7 · Config-write surface area ("credentials in Studio") — V09_PLAN row 8 folded in
 
