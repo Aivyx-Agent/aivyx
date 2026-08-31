@@ -7625,13 +7625,27 @@ fn FileViewer(file: DocFile, root: String) -> Element {
     // remounts — and re-seeds — when a different file is opened).
     let mut edited = use_signal(|| file.content.clone().unwrap_or_default());
     let editable = file.content.is_some() && !file.binary;
+    // POLISH_WAVES.md sub-project 6, item D — a non-truncated .md file
+    // with content defaults to a rendered Preview instead of the plain
+    // editable textarea every other file type gets; any file can still be
+    // flipped to Source (which is exactly today's textarea/pre behavior,
+    // unchanged) to see or edit the raw text.
+    let is_md = guide::is_markdown_path(&file.path) && file.content.is_some() && !file.truncated;
+    let mut preview = use_signal(move || is_md);
 
     rsx! {
         div { class: "glass-card doc-viewer",
             div { class: "panel-head",
                 h4 { "{file.path}" }
                 span { class: "chip", {fmt_size(file.size_bytes)} }
-                if editable {
+                if is_md {
+                    button {
+                        class: "btn btn-glass btn-xs",
+                        onclick: move |_| preview.set(!preview()),
+                        {if preview() { "Source" } else { "Preview" }}
+                    }
+                }
+                if editable && !(is_md && preview()) {
                     {
                         let (r, p) = (root.clone(), file.path.clone());
                         rsx! {
@@ -7654,7 +7668,12 @@ fn FileViewer(file: DocFile, root: String) -> Element {
             if file.truncated {
                 div { class: "notice err", "Showing the first 256 KB of a larger file — editing is disabled to avoid truncating it." }
             }
-            if editable && !file.truncated {
+            if is_md && preview() {
+                div {
+                    class: "guide-content doc-preview",
+                    dangerous_inner_html: guide::render_untrusted_markdown(file.content.as_deref().unwrap_or_default()),
+                }
+            } else if editable && !file.truncated {
                 textarea { class: "doc-edit", spellcheck: "false",
                     value: "{edited}", oninput: move |e| edited.set(e.value()) }
             } else {

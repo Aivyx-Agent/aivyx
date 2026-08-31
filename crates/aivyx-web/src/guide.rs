@@ -14,7 +14,7 @@
 //! Adding a page = drop a `NN-name.md` in `docs/guide/` and add one [`Page`]
 //! entry below (order here is the order in the screen's page list).
 
-use pulldown_cmark::{html, Options, Parser};
+use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 
 /// One guide page: a stable `id`, the source `file` name (used to resolve
 /// in-app `.md` cross-links), a short `title` for the page list, and the raw
@@ -122,4 +122,189 @@ pub fn render(markdown: &str) -> String {
     let mut out = String::new();
     html::push_html(&mut out, parser);
     out
+}
+
+/// Render markdown that may contain content the operator didn't author
+/// themselves — an agent's `fs.write`, or arbitrary content under the
+/// Documents screen's "Files" filesystem root. Unlike [`render`], this
+/// never passes raw HTML through: `Event::Html`/`Event::InlineHtml` are
+/// re-emitted as escaped visible text instead of executable markup,
+/// closing the injection path `render`'s own doc comment says it depends
+/// on trusted input to avoid. A fenced ` ```mermaid ` code block is
+/// special-cased to `<pre class="mermaid">` — the markup mermaid.js's
+/// browser build expects to find and typeset in place (see
+/// `crates/aivyx-web/src/main.rs`'s `FileViewer`/mermaid loader).
+pub fn render_untrusted_markdown(markdown: &str) -> String {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(markdown, options);
+
+    let mut events: Vec<Event> = Vec::new();
+    let mut in_mermaid = false;
+    let mut mermaid_src = String::new();
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
+                if info.as_ref() == "mermaid" =>
+            {
+                in_mermaid = true;
+                mermaid_src.clear();
+            }
+            Event::End(TagEnd::CodeBlock) if in_mermaid => {
+                in_mermaid = false;
+                let escaped = escape_html(&mermaid_src);
+                events.push(Event::Html(CowStr::from(format!(
+                    "<pre class=\"mermaid\">{escaped}</pre>"
+                ))));
+            }
+            Event::Text(text) if in_mermaid => {
+                mermaid_src.push_str(&text);
+            }
+            Event::Html(raw) | Event::InlineHtml(raw) => {
+                // Reduce each tag to its bare "<name>"/"</name>" skeleton —
+                // dropping attributes — then re-emit as an ordinary Text
+                // event. `html::push_html` HTML-escapes every `Event::Text`
+                // itself (via `escape_html_body_text`) when it writes it
+                // out, so we push the skeleton UNESCAPED here; escaping it
+                // ourselves too would double-escape (`<` -> `&lt;` ->
+                // `&amp;lt;`). Dropping attributes (rather than displaying
+                // them verbatim as inert escaped text) means a payload like
+                // `<a href="x" onclick="evil()">` can't leave its
+                // `onclick="evil()"` substring sitting in the page's text
+                // at all, on top of it never being live markup.
+                events.push(Event::Text(CowStr::from(strip_tag_attrs(&raw))));
+            }
+            other => events.push(other),
+        }
+    }
+
+    let mut out = String::new();
+    html::push_html(&mut out, events.into_iter());
+    out
+}
+
+/// Escape the two characters that can turn text into markup (`&`, `<`) —
+/// used for a mermaid fence's source before it's wrapped, unescaped, in a
+/// raw `<pre>` [`Event::Html`] block (so this is the only thing standing
+/// between that source and the page). `>` is deliberately left alone: it
+/// can't open a tag on its own, and mermaid's own arrow syntax (`-->`)
+/// uses it constantly — escaping it would just make rendered diagram
+/// source harder to read for no safety benefit.
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reduce a raw HTML fragment (a `pulldown_cmark::Event::Html` /
+/// `Event::InlineHtml` payload — a single tag, a run of several, or free
+/// text mixed with tags) to just its element skeleton: every `<tag ...>` /
+/// `</tag>` keeps its angle brackets and bare name but loses every
+/// attribute, and anything that isn't a recognizable element tag (a
+/// comment, a doctype, a malformed fragment) is dropped entirely rather
+/// than guessed at. Text outside any tag passes through untouched — the
+/// caller pushes the result as an `Event::Text`, so `html::push_html`'s own
+/// escaping (`<`, `>`, `&`) is what actually neutralizes it as markup; this
+/// function's job is only to keep attribute values (`onclick="evil()"`)
+/// from sitting in the page's visible text at all.
+fn strip_tag_attrs(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '<' {
+            if let Some(rel_end) = chars[i..].iter().position(|&c| c == '>') {
+                let end = i + rel_end;
+                let body: String = chars[i + 1..end].iter().collect();
+                let closing = body.starts_with('/');
+                let name_src = if closing { &body[1..] } else { body.as_str() };
+                let name: String = name_src
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .collect();
+                if !name.is_empty() {
+                    if closing {
+                        out.push_str(&format!("</{name}>"));
+                    } else {
+                        out.push_str(&format!("<{name}>"));
+                    }
+                }
+                // Comments (`<!--`), doctypes, CDATA, or anything else that
+                // doesn't start with a tag name: contribute nothing rather
+                // than emit a guess.
+                i = end + 1;
+                continue;
+            }
+            // No matching `>` in this fragment — treat the rest as plain
+            // text; `push_html`'s escaping still neutralizes the stray `<`.
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// True for a path whose extension is `.md` or `.markdown` (case-sensitive
+/// — matches how agents/operators actually name files in this workspace;
+/// broaden to case-insensitive later if that proves too strict).
+pub fn is_markdown_path(path: &str) -> bool {
+    path.ends_with(".md") || path.ends_with(".markdown")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escapes_raw_html_instead_of_passing_it_through() {
+        let out = render_untrusted_markdown("hello <script>alert(1)</script> world");
+        assert!(!out.contains("<script>"));
+        assert!(out.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn inline_html_is_also_escaped() {
+        let out = render_untrusted_markdown("click <a href=\"x\" onclick=\"evil()\">here</a>");
+        assert!(!out.contains("onclick="));
+    }
+
+    #[test]
+    fn mermaid_fence_becomes_a_mermaid_pre_block() {
+        let out = render_untrusted_markdown("```mermaid\ngraph TD; A-->B;\n```");
+        assert!(out.contains("<pre class=\"mermaid\">"));
+        assert!(out.contains("graph TD; A-->B;"));
+    }
+
+    #[test]
+    fn non_mermaid_fence_renders_as_an_ordinary_code_block() {
+        let out = render_untrusted_markdown("```rust\nfn f() {}\n```");
+        assert!(out.contains("<pre><code"));
+        assert!(!out.contains("class=\"mermaid\""));
+    }
+
+    #[test]
+    fn ordinary_markdown_renders_headings_and_tables() {
+        let out = render_untrusted_markdown("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
+        assert!(out.contains("<h1>Title</h1>"));
+        assert!(out.contains("<table>"));
+    }
+
+    #[test]
+    fn is_markdown_path_matches_md_and_markdown_extensions() {
+        assert!(is_markdown_path("notes.md"));
+        assert!(is_markdown_path("README.markdown"));
+        assert!(!is_markdown_path("notes.txt"));
+        assert!(!is_markdown_path("script.js"));
+    }
 }

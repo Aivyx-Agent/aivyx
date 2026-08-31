@@ -899,6 +899,10 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .guide-content td { color: var(--color-text-secondary); }
 .guide-content hr { border: none; border-top: 1px solid var(--color-secondary-dim); margin: 28px 0; }
 
+/* Documents preview reuses .guide-content's typography (POLISH_WAVES.md
+   sub-project 6, item D) but not its Guide-specific max-width. */
+.doc-preview { max-width: none; padding: 12px 14px; }
+
 @media (max-width: 720px) {
   .guide { grid-template-columns: 1fr; }
   .guide-nav { position: static; flex-direction: row; flex-wrap: wrap; }
