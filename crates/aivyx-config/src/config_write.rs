@@ -49,6 +49,11 @@ pub enum ConfigWriteError {
     /// `[0.0, 1.0]`). Mirrors the loader's validation so the write is refused
     /// before it can corrupt the next load.
     InvalidBudget { reason: String },
+    /// An `[[mcp_server]]` entry is structurally invalid — mirrors the
+    /// loader's own transport-field validation (`aivyx-config/src/lib.rs`'s
+    /// mcp_servers parsing) so a bad write is refused before it corrupts
+    /// the next daemon load, same principle as `InvalidBudget`.
+    InvalidMcpServer { reason: String },
     /// The existing file did not parse as TOML.
     Parse { reason: String },
     /// The file could not be read or written.
@@ -69,6 +74,7 @@ impl std::fmt::Display for ConfigWriteError {
                 level.as_str()
             ),
             ConfigWriteError::InvalidBudget { reason } => write!(f, "invalid budget: {reason}"),
+            ConfigWriteError::InvalidMcpServer { reason } => write!(f, "invalid MCP server entry: {reason}"),
             ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx.toml: {reason}"),
             ConfigWriteError::Io { reason } => write!(f, "{reason}"),
         }
@@ -344,6 +350,136 @@ fn remove_voice_key(doc: &mut DocumentMut, key: &str) {
     if let Some(t) = doc.get_mut("voice").and_then(|v| v.as_table_mut()) {
         t.remove(key);
     }
+}
+
+/// One `[[mcp_server]]` entry as Studio's write form submits it. A plain
+/// (non-wire) struct — `aivyx-ipc` has its own serde-derived mirror type
+/// for the wire; `aivyx-channel`'s daemon handler converts between them,
+/// matching how `write_budget_section` takes `&aivyx_cost::BudgetConfig`
+/// rather than a wire type directly.
+pub struct McpServerEntryWrite {
+    pub name: String,
+    /// `"stdio"`, `"sse"`, or `"http"` — matches the loader's own accepted
+    /// strings (`aivyx-config/src/lib.rs`'s mcp_servers parsing; that parser
+    /// also accepts `"streamable-http"` as an alias for `"http"`, but writes
+    /// always normalize to `"http"`).
+    pub transport: String,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub headers: Vec<(String, String)>,
+    pub url: Option<String>,
+    pub enabled: bool,
+}
+
+/// Add or replace (by `name`) one `[[mcp_server]]` entry, preserving every
+/// other entry, section, and the operator's comments. Validates the
+/// transport-specific required field the same way the loader does
+/// (`command` for stdio, `url` for sse/http) — refused here rather than
+/// failing the next daemon load.
+pub fn write_mcp_server_section(
+    path: &Path,
+    server: &McpServerEntryWrite,
+) -> Result<(), ConfigWriteError> {
+    if server.name.trim().is_empty() {
+        return Err(ConfigWriteError::InvalidMcpServer {
+            reason: "name must not be empty".to_string(),
+        });
+    }
+    let transport_key = match server.transport.as_str() {
+        "stdio" => "stdio",
+        "sse" => "sse",
+        "http" | "streamable-http" => "http",
+        other => {
+            return Err(ConfigWriteError::InvalidMcpServer {
+                reason: format!(
+                    "server {:?}: unknown transport {:?} (expected \"stdio\", \"sse\", or \"http\")",
+                    server.name, other
+                ),
+            });
+        }
+    };
+    if transport_key == "stdio" && server.command.is_none() {
+        return Err(ConfigWriteError::InvalidMcpServer {
+            reason: format!("server {:?}: stdio transport requires `command`", server.name),
+        });
+    }
+    if transport_key != "stdio" && server.url.is_none() {
+        return Err(ConfigWriteError::InvalidMcpServer {
+            reason: format!("server {:?}: {transport_key} transport requires `url`", server.name),
+        });
+    }
+
+    let mut doc = load_document(path)?;
+    let arr = mcp_server_array_mut(&mut doc);
+
+    let mut table = toml_edit::Table::new();
+    table["name"] = value(server.name.as_str());
+    table["transport"] = value(transport_key);
+    table["enabled"] = value(server.enabled);
+    if let Some(cmd) = &server.command {
+        table["command"] = value(cmd.as_str());
+    }
+    if !server.args.is_empty() {
+        let mut arr_val = toml_edit::Array::new();
+        for a in &server.args {
+            arr_val.push(a.as_str());
+        }
+        table["args"] = toml_edit::Item::Value(arr_val.into());
+    }
+    if !server.env.is_empty() {
+        let mut env_table = toml_edit::InlineTable::new();
+        for (k, v) in &server.env {
+            env_table.insert(k, v.as_str().into());
+        }
+        table["env"] = toml_edit::Item::Value(env_table.into());
+    }
+    if !server.headers.is_empty() {
+        let mut headers_table = toml_edit::InlineTable::new();
+        for (k, v) in &server.headers {
+            headers_table.insert(k, v.as_str().into());
+        }
+        table["headers"] = toml_edit::Item::Value(headers_table.into());
+    }
+    if let Some(url) = &server.url {
+        table["url"] = value(url.as_str());
+    }
+
+    let idx = arr.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(server.name.as_str()));
+    match idx {
+        Some(i) => {
+            *arr.get_mut(i).expect("index just found") = table;
+        }
+        None => {
+            arr.push(table);
+        }
+    }
+
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Remove one `[[mcp_server]]` entry by `name`. A no-op (not an error) when
+/// no entry with that name exists — matches DELETE-idempotent semantics
+/// used elsewhere in this codebase's IPC handlers.
+pub fn remove_mcp_server_section(path: &Path, name: &str) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    let arr = mcp_server_array_mut(&mut doc);
+    let idx = arr.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(name));
+    if let Some(i) = idx {
+        arr.remove(i);
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// The `[[mcp_server]]` array, creating an empty one if the section is
+/// absent from the document yet.
+fn mcp_server_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTables {
+    if doc.get("mcp_server").and_then(toml_edit::Item::as_array_of_tables).is_none() {
+        doc["mcp_server"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    doc["mcp_server"]
+        .as_array_of_tables_mut()
+        .expect("just ensured present")
 }
 
 /// Stable `[budget] on_exceeded` token — matches `BudgetAction`'s
@@ -773,5 +909,106 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "got {mode:o}");
         std::fs::remove_file(&path).ok();
+    }
+
+    fn stdio_entry(name: &str) -> McpServerEntryWrite {
+        McpServerEntryWrite {
+            name: name.to_string(),
+            transport: "stdio".to_string(),
+            command: Some("npx".to_string()),
+            args: vec!["-y".to_string(), "some-server".to_string()],
+            env: vec![("TOKEN".to_string(), "${GITHUB_TOKEN}".to_string())],
+            headers: Vec::new(),
+            url: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn mcp_server_write_adds_a_new_entry() {
+        let path = temp_toml("mcp-add");
+        std::fs::write(&path, "[access]\nlevel = \"sandbox\"\n").unwrap();
+        write_mcp_server_section(&path, &stdio_entry("github")).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("[access]"), "unrelated section survives");
+        assert!(contents.contains("[[mcp_server]]"));
+        assert!(contents.contains("name = \"github\""));
+        assert!(contents.contains("command = \"npx\""));
+    }
+
+    #[test]
+    fn mcp_server_write_replaces_an_existing_entry_by_name() {
+        let path = temp_toml("mcp-replace");
+        std::fs::write(&path, "").unwrap();
+        write_mcp_server_section(&path, &stdio_entry("github")).unwrap();
+        let mut updated = stdio_entry("github");
+        updated.command = Some("uvx".to_string());
+        write_mcp_server_section(&path, &updated).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        // Exactly one entry named "github" — not two.
+        assert_eq!(contents.matches("name = \"github\"").count(), 1);
+        assert!(contents.contains("command = \"uvx\""));
+        assert!(!contents.contains("command = \"npx\""));
+    }
+
+    #[test]
+    fn mcp_server_write_preserves_a_different_existing_entry() {
+        let path = temp_toml("mcp-preserve");
+        std::fs::write(&path, "").unwrap();
+        write_mcp_server_section(&path, &stdio_entry("github")).unwrap();
+        write_mcp_server_section(&path, &stdio_entry("filesystem")).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("name = \"github\""));
+        assert!(contents.contains("name = \"filesystem\""));
+    }
+
+    #[test]
+    fn mcp_server_write_rejects_stdio_without_command() {
+        let path = temp_toml("mcp-stdio-no-cmd");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = stdio_entry("github");
+        entry.command = None;
+        let err = write_mcp_server_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidMcpServer { .. }));
+    }
+
+    #[test]
+    fn mcp_server_write_rejects_sse_without_url() {
+        let path = temp_toml("mcp-sse-no-url");
+        std::fs::write(&path, "").unwrap();
+        let entry = McpServerEntryWrite {
+            name: "remote".to_string(),
+            transport: "sse".to_string(),
+            command: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            headers: Vec::new(),
+            url: None,
+            enabled: true,
+        };
+        let err = write_mcp_server_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidMcpServer { .. }));
+    }
+
+    #[test]
+    fn mcp_server_remove_drops_the_named_entry_only() {
+        let path = temp_toml("mcp-remove");
+        std::fs::write(&path, "").unwrap();
+        write_mcp_server_section(&path, &stdio_entry("github")).unwrap();
+        write_mcp_server_section(&path, &stdio_entry("filesystem")).unwrap();
+        remove_mcp_server_section(&path, "github").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("name = \"github\""));
+        assert!(contents.contains("name = \"filesystem\""));
+    }
+
+    #[test]
+    fn mcp_server_remove_of_unknown_name_is_a_harmless_no_op() {
+        let path = temp_toml("mcp-remove-unknown");
+        std::fs::write(&path, "").unwrap();
+        write_mcp_server_section(&path, &stdio_entry("github")).unwrap();
+        remove_mcp_server_section(&path, "does-not-exist").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("name = \"github\""));
     }
 }
