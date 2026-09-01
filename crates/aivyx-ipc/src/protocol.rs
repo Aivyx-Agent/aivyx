@@ -679,6 +679,75 @@ pub enum QueryPayload {
     /// `/history` HTTP API (not the MCP tool surface). Read-only.
     /// Responds with [`QueryResponsePayload::Gallery`].
     GetGallery,
+    /// Response: [`QueryResponsePayload::GetEmailConfig`].
+    GetEmailConfig,
+    /// `password: None` means leave the existing SMTP password untouched.
+    /// Responds with [`QueryResponsePayload::EmailConfigApplied`].
+    SetEmailConfig {
+        #[serde(default)]
+        host: Option<String>,
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        tls_mode: Option<String>,
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+    },
+    /// Response: [`QueryResponsePayload::GetTelegramConfig`].
+    GetTelegramConfig,
+    /// `token: None` means leave the existing bot token untouched.
+    /// Responds with [`QueryResponsePayload::TelegramConfigApplied`].
+    SetTelegramConfig {
+        #[serde(default)]
+        token: Option<String>,
+        #[serde(default)]
+        chat_id: Option<i64>,
+        #[serde(default)]
+        team_run_channel: Option<bool>,
+        #[serde(default)]
+        team_trigger_rate_limit: Option<u32>,
+        #[serde(default)]
+        team_command_allowed_senders: Option<Vec<i64>>,
+    },
+    /// Response: [`QueryResponsePayload::GetDiscordConfig`].
+    GetDiscordConfig,
+    /// `token: None` means leave the existing bot token untouched.
+    /// Responds with [`QueryResponsePayload::DiscordConfigApplied`].
+    SetDiscordConfig {
+        #[serde(default)]
+        token: Option<String>,
+        #[serde(default)]
+        application_id: Option<u64>,
+        #[serde(default)]
+        team_run_channel: Option<bool>,
+        #[serde(default)]
+        team_trigger_rate_limit: Option<u32>,
+        #[serde(default)]
+        team_command_allowed_senders: Option<Vec<u64>>,
+    },
+    /// Response: [`QueryResponsePayload::GetSlackConfig`].
+    GetSlackConfig,
+    /// `bot_token`/`app_token`: `None` means leave that token untouched
+    /// (each rotatable independently). Responds with
+    /// [`QueryResponsePayload::SlackConfigApplied`].
+    SetSlackConfig {
+        #[serde(default)]
+        bot_token: Option<String>,
+        #[serde(default)]
+        app_token: Option<String>,
+        #[serde(default)]
+        team_id: Option<String>,
+        #[serde(default)]
+        team_run_channel: Option<bool>,
+        #[serde(default)]
+        team_trigger_rate_limit: Option<u32>,
+        #[serde(default)]
+        team_command_allowed_senders: Option<Vec<String>>,
+    },
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1370,6 +1439,14 @@ pub enum QueryResponsePayload {
         available: bool,
         images: Vec<GalleryImage>,
     },
+    GetEmailConfig { config: EmailConfigView },
+    EmailConfigApplied { config: EmailConfigView, restart_required: bool },
+    GetTelegramConfig { config: TelegramConfigView },
+    TelegramConfigApplied { config: TelegramConfigView, restart_required: bool },
+    GetDiscordConfig { config: DiscordConfigView },
+    DiscordConfigApplied { config: DiscordConfigView, restart_required: bool },
+    GetSlackConfig { config: SlackConfigView },
+    SlackConfigApplied { config: SlackConfigView, restart_required: bool },
 }
 
 /// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean
@@ -1470,6 +1547,52 @@ pub struct BudgetSnapshot {
 pub struct RedactedSecret {
     pub configured: bool,
     pub source: String,
+}
+
+/// The **editable configuration** of the shared `[email]` SMTP block.
+/// `password` never carries the real value (see [`RedactedSecret`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmailConfigView {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub tls_mode: Option<String>,
+    pub username: Option<String>,
+    pub password: RedactedSecret,
+    pub from: Option<String>,
+}
+
+/// The **editable configuration** of the `[telegram]` channel adapter.
+/// `token` never carries the real value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TelegramConfigView {
+    pub token: RedactedSecret,
+    pub chat_id: Option<i64>,
+    pub team_run_channel: bool,
+    pub team_trigger_rate_limit: Option<u32>,
+    pub team_command_allowed_senders: Vec<i64>,
+}
+
+/// The **editable configuration** of the `[discord]` channel adapter.
+/// `token` never carries the real value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscordConfigView {
+    pub token: RedactedSecret,
+    pub application_id: Option<u64>,
+    pub team_run_channel: bool,
+    pub team_trigger_rate_limit: Option<u32>,
+    pub team_command_allowed_senders: Vec<u64>,
+}
+
+/// The **editable configuration** of the `[slack]` channel adapter. Two
+/// independent secrets, neither ever carrying its real value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlackConfigView {
+    pub bot_token: RedactedSecret,
+    pub app_token: RedactedSecret,
+    pub team_id: Option<String>,
+    pub team_run_channel: bool,
+    pub team_trigger_rate_limit: Option<u32>,
+    pub team_command_allowed_senders: Vec<String>,
 }
 
 /// Phase 119 Task 6 — wire-format per-row dump entry for
@@ -5349,5 +5472,36 @@ mod tests {
                 mission_id: "m-1".to_string()
             }
         );
+    }
+
+    #[test]
+    fn email_config_view_round_trips_with_redacted_password() {
+        let view = EmailConfigView {
+            host: Some("smtp.example.com".to_string()),
+            port: Some(587),
+            tls_mode: Some("starttls".to_string()),
+            username: Some("bot@example.com".to_string()),
+            password: RedactedSecret { configured: true, source: "toml".to_string() },
+            from: Some("bot@example.com".to_string()),
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(!json.contains("hunter2"), "no real secret value in the type at all, sanity check on the test itself");
+        let back: EmailConfigView = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, view);
+    }
+
+    #[test]
+    fn set_slack_config_round_trips() {
+        let msg = QueryPayload::SetSlackConfig {
+            bot_token: Some("xoxb-1".to_string()),
+            app_token: None,
+            team_id: None,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: QueryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
     }
 }
