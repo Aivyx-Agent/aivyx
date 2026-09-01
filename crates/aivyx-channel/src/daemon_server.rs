@@ -9334,4 +9334,133 @@ system_prompt = "You are a custom role."
             }
         }
     }
+
+    // ---- notify-target config views never leak the raw secret (review finding, Task 5) ----
+    //
+    // Task 2's tests cover read_*_section/write_*_section round-tripping the
+    // raw value; Task 4's tests cover RedactedSecret/*ConfigView's JSON
+    // *shape* with an already-redacted value hand-built in place. Neither
+    // exercises the actual code path a Get/SetEmailConfig-etc. handler runs:
+    // write_*_section(path, ...) -> read_*_section(path) -> *_config_view(&e).
+    // `handle_query` itself takes ~30 daemon-context parameters (audit log,
+    // memory, persona stores, ...) and isn't practically unit-testable in
+    // isolation, so these tests reproduce that exact write/read/view chain
+    // directly against the private view-builder helpers in this module —
+    // the same layer where `redact()` is actually called — with a planted
+    // fake secret, and assert the raw value never survives into the
+    // serialized wire response.
+
+    const LEAKED_SECRET: &str = "super-secret-do-not-leak";
+
+    fn secret_leak_temp_toml(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "aivyx-daemon-secret-leak-{}-{}-{tag}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        p
+    }
+
+    #[test]
+    fn email_config_view_never_leaks_the_raw_password() {
+        let path = secret_leak_temp_toml("email");
+        std::fs::write(&path, "").unwrap();
+        aivyx_config::config_write::write_email_section(
+            &path,
+            &aivyx_config::config_write::EmailEntryWrite {
+                host: Some("smtp.example.com".to_string()),
+                port: Some(587),
+                tls_mode: Some("starttls".to_string()),
+                username: Some("bot@example.com".to_string()),
+                password: Some(LEAKED_SECRET.to_string()),
+                from: Some("bot@example.com".to_string()),
+            },
+        )
+        .unwrap();
+        let entry = aivyx_config::config_write::read_email_section(&path).unwrap();
+        let view = email_config_view(&entry);
+        let json = serde_json::to_string(&view).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(!json.contains(LEAKED_SECRET), "raw password leaked into wire response: {json}");
+        assert!(json.contains("\"configured\":true"), "expected configured:true in {json}");
+    }
+
+    #[test]
+    fn telegram_config_view_never_leaks_the_raw_token() {
+        let path = secret_leak_temp_toml("telegram");
+        std::fs::write(&path, "").unwrap();
+        aivyx_config::config_write::write_telegram_section(
+            &path,
+            &aivyx_config::config_write::TelegramEntryWrite {
+                token: Some(LEAKED_SECRET.to_string()),
+                chat_id: Some(123456),
+                team_run_channel: Some(true),
+                team_trigger_rate_limit: None,
+                team_command_allowed_senders: None,
+            },
+        )
+        .unwrap();
+        let entry = aivyx_config::config_write::read_telegram_section(&path).unwrap();
+        let view = telegram_config_view(&entry);
+        let json = serde_json::to_string(&view).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(!json.contains(LEAKED_SECRET), "raw token leaked into wire response: {json}");
+        assert!(json.contains("\"configured\":true"), "expected configured:true in {json}");
+    }
+
+    #[test]
+    fn discord_config_view_never_leaks_the_raw_token() {
+        let path = secret_leak_temp_toml("discord");
+        std::fs::write(&path, "").unwrap();
+        aivyx_config::config_write::write_discord_section(
+            &path,
+            &aivyx_config::config_write::DiscordEntryWrite {
+                token: Some(LEAKED_SECRET.to_string()),
+                application_id: Some(42),
+                team_run_channel: Some(true),
+                team_trigger_rate_limit: None,
+                team_command_allowed_senders: None,
+            },
+        )
+        .unwrap();
+        let entry = aivyx_config::config_write::read_discord_section(&path).unwrap();
+        let view = discord_config_view(&entry);
+        let json = serde_json::to_string(&view).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(!json.contains(LEAKED_SECRET), "raw token leaked into wire response: {json}");
+        assert!(json.contains("\"configured\":true"), "expected configured:true in {json}");
+    }
+
+    #[test]
+    fn slack_config_view_never_leaks_the_raw_tokens() {
+        let path = secret_leak_temp_toml("slack");
+        std::fs::write(&path, "").unwrap();
+        aivyx_config::config_write::write_slack_section(
+            &path,
+            &aivyx_config::config_write::SlackEntryWrite {
+                bot_token: Some(LEAKED_SECRET.to_string()),
+                app_token: Some(format!("app-{LEAKED_SECRET}")),
+                team_id: Some("T123".to_string()),
+                team_run_channel: Some(true),
+                team_trigger_rate_limit: None,
+                team_command_allowed_senders: None,
+            },
+        )
+        .unwrap();
+        let entry = aivyx_config::config_write::read_slack_section(&path).unwrap();
+        let view = slack_config_view(&entry);
+        let json = serde_json::to_string(&view).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(!json.contains(LEAKED_SECRET), "raw token leaked into wire response: {json}");
+        // Two RedactedSecret fields (bot_token, app_token) both configured.
+        assert_eq!(json.matches("\"configured\":true").count(), 2, "expected both tokens configured:true in {json}");
+    }
 }
