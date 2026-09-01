@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), and 6 (2026-08-31) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 7 not started.**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), and 6 (2026-08-31) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 7 in progress (plan 1 of 3 shipped 2026-09-01, 2 items dropped as already-shipped, plans 2-3 not started).**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -48,7 +48,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
 | 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | ✅ done 2026-08-31 (all 4 items, 7 tasks — see below) |
-| 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | Not started |
+| 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ⏳ plan 1 of 3 shipped 2026-09-01 (architecture + MCP CRUD); 2 items dropped as already-shipped; plans 2-3 not started |
 | 8 | **Tool/server call-stat observability** | See below | Large | Not started |
 
 Each sub-project gets its own brainstorm → spec → plan cycle when its
@@ -434,13 +434,73 @@ its click/select handler.
 The largest, most architecturally novel piece: the first time Aivyx
 handles real credentials (bot tokens, webhook URLs, SMTP creds, MCP
 server `env`/`headers`) through a web form rather than hand-edited
-TOML. One design problem unlocks three separate operator asks — worth
-solving once, deliberately, not per-feature.
+TOML. Design:
+`docs/superpowers/specs/2026-08-31-config-write-surface-design.md`.
+Split into multiple implementation plans (a shared architecture is the
+real "one design problem" the original framing pointed at; each
+consumer screen is its own plan, sequenced so the first proves the
+primitive against a real screen before the rest reuse it).
 
-- **MCP full lifecycle CRUD** (§10 P2, the operator's own headline
-  ask) — add/edit/update/remove `[[mcp_server]]` from the Studio,
-  including `${VAR}`-interpolated `env`/`headers` (Chapter Conduit),
-  ideally a "test connection" probe before save.
+Two of the six originally-listed items resolved before any plan was
+written, during brainstorming — grounded against real code, not the
+tracking doc's own prose:
+- **Autonomy-tier confirm dialog** (§9 P3) — already fully shipped
+  (Chapter Reins). Dropped, nothing to build.
+- **Schedules screen / V09_PLAN row 8** (`schedule.create/update/
+  delete` autonomy-dial gating) — already fully shipped. Studio
+  already has full schedule creation (Chapter Chime) with Update/
+  Delete wired in the UI; `schedule.update`/`.delete`'s tools already
+  enforce own-schedules-only authority (`created_by != Agent` rejects,
+  regardless of autonomy tier) plus a `MessageOrigin::System` block,
+  and `schedule.update` has full growth-tier-aware re-approval —
+  confirmed by reading `schedule_tool.rs` in full (an earlier planning
+  pass had wrongly concluded these were missing, based on a flawed
+  grep). Dropped, nothing to build.
+
+- ✅ **Plan 1 — Config-write architecture + MCP full lifecycle CRUD**
+  (§10 P2, the operator's own headline ask) — shipped 2026-09-01.
+  Extends `aivyx-config`'s existing single-section `toml_edit` write
+  recipe (Chapter U) to array-of-tables (`[[mcp_server]]`), plus a
+  `RedactedSecret` wire-type foundation for the later plans that
+  actually carry raw secrets. Add/edit/remove `[[mcp_server]]` entries
+  from Studio (transport-specific fields, `${VAR}`-interpolated `env`/
+  `headers`) and a "test connection" probe reusing the real,
+  boot-time `aivyx-mcp` connection logic. **Final whole-branch review
+  found and fixed 2 Critical issues before merge**: the config-read
+  path was sending the daemon's fully `${VAR}`-*resolved* env/header
+  values to the browser, which Save then baked back into plaintext
+  `aivyx.toml` on a single click, permanently destroying the
+  placeholder (fixed with a raw-TOML, non-interpolating reader); and
+  the array-of-table upsert was silently deleting `[mcp_server.
+  sandbox]`/`bundled` on every edit, removing a documented
+  `THREAT_MODEL.md` control (fixed by preserving unknown keys — which
+  then needed a *second* fix round when preservation turned out to
+  carry a stdio-only `sandbox` block onto a switched transport,
+  reproducing the exact daemon-won't-boot failure class a sibling fix
+  had just closed). Also fixed: a stale-form-state bug in the Add/Edit
+  UI, a probe with no timeout that could hang a whole Studio
+  connection, and a swallowed post-write reload failure. Full account:
+  `docs/superpowers/plans/2026-09-01-config-write-mcp-crud.md`.
+  **Incidental discovery, unrelated to this plan's own tasks**: sub-
+  project 6's own `dist/` rebuild commit predated that branch's final-
+  review fix commit (the Documents-markdown XSS fix among others) —
+  `main`'s committed Studio bundle was serving pre-fix code from that
+  merge until this plan's own routine `dist/` rebuild corrected it.
+  Logged as a process gap (`cargo test` doesn't exercise `dist/`, so
+  staleness there is invisible to normal verification), not a defect
+  of either branch's real work.
+- **Plan 2 — Notify-target + channel-adapter CRUD** (Chapter Herald's
+  own explicit deferral) — not started. Creating/editing Telegram/
+  Discord/Slack bot tokens, `[[notify_target]]` entries (webhook URLs,
+  SMTP creds via the shared `[email]` block); today read-only. Reuses
+  plan 1's array-of-table primitive and the `RedactedSecret` wire type
+  it built ahead of need.
+- **Plan 3 — Settings coverage expansion** (§9 P2, product) — not
+  started. `[memory] profile`, `[embedding]`, `[proactive]` (whose
+  `target` picker benefits from plan 2's notify-target list existing),
+  `[[reflection_schedule]]` (another array-of-table consumer of plan
+  1's primitive) — primary fields only, not an inventory of every
+  `aivyx.toml` section.
 - **MCP tool-level health signal** (§10) — moved to **sub-project 8**
   2026-08-27 (originally landed here from sub-project 1's small-backlog
   sweep, then moved again once sub-project 2's own TUI Tools scoping
@@ -449,30 +509,10 @@ solving once, deliberately, not per-feature.
   screen's own surface alongside the MCP CRUD screen above when the
   time comes; only the aggregation mechanism itself lives in
   sub-project 8.
-- **Notify-target CRUD** (Chapter Herald's own explicit deferral) —
-  creating/editing Telegram bot tokens, webhook URLs, SMTP creds from
-  the web form; today read-only by deliberate decision pending this
-  design.
-- **Schedules screen** (`VITRINE.md` operator product thought #1) —
-  create/edit crons from the Studio for both operator-created routines
-  (the proven non-credentialed write recipe) and agent-created ones
-  (resolves **V09_PLAN row 8**, the parked `[autonomy]`-dial gating for
-  `schedule.create/update/delete` — distinct from the already-shipped,
-  security-motivated Recursive-Scheduling Guard, see `V09_PLAN.md`
-  row 8's own note). Show per-cron provenance (operator vs agent).
-- **Settings coverage expansion** (§9 P2, product) — inventory
-  `aivyx.toml`'s operator-relevant knobs and expose them properly;
-  reuses the same `toml_edit` recipe already proven by Settings/Teams/
-  Roster, just wider surface area.
-- **Autonomy-tier confirm dialog** (§9 P3, safety UX) — a dial that
-  composes the agent's entire permission posture currently saves as
-  casually as any other field; needs an explicit, unmissable
-  destructive-action-style confirmation, and arguably a Command Center
-  chip for a pending-restart divergence.
 - Sequenced last: benefits from the write-recipe patterns proven by
   sub-projects 2, 3, and 6 landing first, and from the new visual
-  language sub-project 6 establishes (new screens here should be built
-  in it directly).
+  language sub-project 6 establishes (new screens here are built in it
+  directly).
 
 ## 8 · Tool/server call-stat observability
 
