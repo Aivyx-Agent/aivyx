@@ -5539,6 +5539,51 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::GetReflectionScheduleConfigs => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match read_reflection_schedule_configs(path) {
+                Ok(schedules) => QueryResponsePayload::GetReflectionScheduleConfigs { schedules },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "config_reload_failed".into(),
+                    message: format!("failed to read reflection schedule configs: {e}"),
+                },
+            }
+        }
+        QueryPayload::SetReflectionSchedule { name, cron, lookback_window_secs, enabled } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::ReflectionScheduleEntryWrite {
+                name: name.clone(),
+                cron,
+                lookback_window_secs,
+                enabled,
+            };
+            match aivyx_config::config_write::write_reflection_schedule_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "reflection_schedule", &format!("set {name}"));
+                    reflection_schedules_applied_after_write(path, "set")
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::DeleteReflectionSchedule { name } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::remove_reflection_schedule_section(path, &name) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "reflection_schedule", &format!("delete {name}"));
+                    reflection_schedules_applied_after_write(path, "delete")
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::GetEmailConfig => {
             let path = match config_toml_path {
                 Some(p) => p,
@@ -6370,6 +6415,10 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
         E::InvalidMcpServer { .. } => "invalid_mcp_server",
         E::InvalidNotifyTarget { .. } => "invalid_notify_target",
         E::InvalidEmailConfig { .. } => "invalid_email_config",
+        E::InvalidReflectionSchedule { .. } => "invalid_reflection_schedule",
+        E::InvalidMemoryProfile { .. } => "invalid_memory_profile",
+        E::InvalidEmbeddingConfig { .. } => "invalid_embedding_config",
+        E::InvalidProactiveConfig { .. } => "invalid_proactive_config",
         E::Parse { .. } => "config_parse_failed",
         E::Io { .. } => "config_write_failed",
     };
@@ -6475,6 +6524,42 @@ fn notify_targets_applied_after_write(path: &std::path::Path, verb: &str) -> Que
         Err(e) => QueryResponsePayload::QueryError {
             code: "config_reload_failed".into(),
             message: format!("notify target {verb} succeeded, but reloading the list failed: {e}"),
+        },
+    }
+}
+
+/// Re-read `[[reflection_schedule]]` from disk into the wire view type —
+/// shared by `GetReflectionScheduleConfigs`/`SetReflectionSchedule`/
+/// `DeleteReflectionSchedule`'s handlers, mirroring
+/// `read_notify_target_configs`'s own convention exactly.
+fn read_reflection_schedule_configs(
+    path: &std::path::Path,
+) -> Result<Vec<aivyx_ipc::protocol::ReflectionScheduleConfigView>, String> {
+    let entries = aivyx_config::config_write::read_reflection_schedule_entries(path)
+        .map_err(|e| e.to_string())?;
+    Ok(entries
+        .into_iter()
+        .map(|e| aivyx_ipc::protocol::ReflectionScheduleConfigView {
+            name: e.name,
+            cron: e.cron,
+            lookback_window_secs: e.lookback_window_secs,
+            enabled: e.enabled,
+        })
+        .collect())
+}
+
+/// Mirrors `notify_targets_applied_after_write`'s own convention
+/// exactly, including surfacing a re-read failure as a `QueryError`
+/// rather than silently claiming zero entries.
+fn reflection_schedules_applied_after_write(path: &std::path::Path, verb: &str) -> QueryResponsePayload {
+    match read_reflection_schedule_configs(path) {
+        Ok(schedules) => QueryResponsePayload::ReflectionScheduleConfigApplied {
+            schedules,
+            restart_required: true,
+        },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("reflection schedule {verb} succeeded, but reloading the list failed: {e}"),
         },
     }
 }
@@ -9463,5 +9548,26 @@ system_prompt = "You are a custom role."
         assert!(!json.contains(LEAKED_SECRET), "raw token leaked into wire response: {json}");
         // Two RedactedSecret fields (bot_token, app_token) both configured.
         assert_eq!(json.matches("\"configured\":true").count(), 2, "expected both tokens configured:true in {json}");
+    }
+
+    #[test]
+    fn reflection_schedule_configs_reflect_a_real_write() {
+        let path = secret_leak_temp_toml("reflection-schedule");
+        std::fs::write(&path, "").unwrap();
+        aivyx_config::config_write::write_reflection_schedule_section(
+            &path,
+            &aivyx_config::config_write::ReflectionScheduleEntryWrite {
+                name: "nightly".to_string(),
+                cron: "0 0 9 * * * *".to_string(),
+                lookback_window_secs: 86_400,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        let configs = read_reflection_schedule_configs(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "nightly");
+        assert_eq!(configs[0].cron, "0 0 9 * * * *");
     }
 }

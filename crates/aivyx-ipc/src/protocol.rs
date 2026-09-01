@@ -748,6 +748,24 @@ pub enum QueryPayload {
         #[serde(default)]
         team_command_allowed_senders: Option<Vec<String>>,
     },
+    /// POLISH_WAVES.md sub-project 7 plan 3 — the editable
+    /// `[[reflection_schedule]]` list. Responds with
+    /// [`QueryResponsePayload::GetReflectionScheduleConfigs`].
+    GetReflectionScheduleConfigs,
+    /// Add or replace (by `name`) one `[[reflection_schedule]]` entry.
+    /// Takes effect on the next daemon start. Responds with
+    /// [`QueryResponsePayload::ReflectionScheduleConfigApplied`] (or
+    /// `QueryError`).
+    SetReflectionSchedule {
+        name: String,
+        cron: String,
+        lookback_window_secs: u64,
+        enabled: bool,
+    },
+    /// Remove one `[[reflection_schedule]]` entry by name (a no-op if
+    /// absent). Responds with
+    /// [`QueryResponsePayload::ReflectionScheduleConfigApplied`].
+    DeleteReflectionSchedule { name: String },
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1447,6 +1465,13 @@ pub enum QueryResponsePayload {
     DiscordConfigApplied { config: DiscordConfigView, restart_required: bool },
     GetSlackConfig { config: SlackConfigView },
     SlackConfigApplied { config: SlackConfigView, restart_required: bool },
+    /// Response to [`QueryPayload::GetReflectionScheduleConfigs`].
+    GetReflectionScheduleConfigs { schedules: Vec<ReflectionScheduleConfigView> },
+    /// Response to [`QueryPayload::SetReflectionSchedule`] /
+    /// [`QueryPayload::DeleteReflectionSchedule`]. Carries the fresh
+    /// list and `restart_required` (config is load-time), mirroring
+    /// `NotifyTargetsApplied`'s own shape.
+    ReflectionScheduleConfigApplied { schedules: Vec<ReflectionScheduleConfigView>, restart_required: bool },
 }
 
 /// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean
@@ -1723,6 +1748,18 @@ pub struct NotifyTargetConfigView {
     pub retry_backoff_ms_start: u64,
     pub rate_limit_max: Option<u32>,
     pub rate_limit_window_secs: Option<u64>,
+}
+
+/// The **editable configuration** of one `[[reflection_schedule]]`
+/// entry. `role_override`/`skip_when_idle`/`min_audit_entries_to_fire`
+/// stay TOML-only — not represented here; a write preserves them via
+/// the `KNOWN_KEYS` mechanism in `write_reflection_schedule_section`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReflectionScheduleConfigView {
+    pub name: String,
+    pub cron: String,
+    pub lookback_window_secs: u64,
+    pub enabled: bool,
 }
 
 /// Wire-safe mirror of `aivyx_core::ChannelPlatform` (Chapter Postern).
@@ -5429,6 +5466,32 @@ mod tests {
         let json = serde_json::to_string(&view).unwrap();
         let back: NotifyTargetConfigView = serde_json::from_str(&json).unwrap();
         assert_eq!(back, view);
+    }
+
+    #[test]
+    fn set_reflection_schedule_round_trips_over_json() {
+        let msg = QueryPayload::SetReflectionSchedule {
+            name: "nightly".to_string(),
+            cron: "0 0 9 * * * *".to_string(),
+            lookback_window_secs: 86_400,
+            enabled: true,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: QueryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn reflection_schedule_config_view_round_trips_over_json() {
+        let view = ReflectionScheduleConfigView {
+            name: "nightly".to_string(),
+            cron: "0 0 9 * * * *".to_string(),
+            lookback_window_secs: 86_400,
+            enabled: true,
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        let back: ReflectionScheduleConfigView = serde_json::from_str(&json).unwrap();
+        assert_eq!(view, back);
     }
 
     #[test]
