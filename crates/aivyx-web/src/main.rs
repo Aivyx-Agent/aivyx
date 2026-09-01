@@ -19,7 +19,7 @@
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
     GalleryImage, McpServerConfigView, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode,
-    NotificationHistoryEntry, NotifyTargetView, PersonaDeltaSummary,
+    NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
@@ -488,6 +488,10 @@ struct NotificationsState {
     history: Vec<NotificationHistoryEntry>,
     total_len: u64,
     last_seen_seq: u64,
+    /// POLISH_WAVES.md sub-project 7 plan 2 — the editable notify-target
+    /// list (distinct from `targets`, the read-only status view above),
+    /// mirroring how `McpState` carries both `servers` and `configs`.
+    configs: Vec<NotifyTargetConfigView>,
 }
 
 /// `/classic` retirement — the dedicated Audit screen's state (distinct
@@ -573,6 +577,13 @@ struct McpConfigUi {
     /// `TestMcpServerConnection` result (`ok`, display text), rendered
     /// inline in `McpServerForm`.
     test_result: Option<(bool, String)>,
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 2 — notify-target/channel-adapter
+/// config-write UI state, mirroring `McpConfigUi`'s own minimal shape.
+#[derive(Clone, Default, PartialEq)]
+struct NotifyConfigUi {
+    notice: Option<(bool, String)>,
 }
 
 /// POLISH_WAVES.md sub-project 6, item B — tracks the most recent
@@ -808,6 +819,7 @@ fn App() -> Element {
     let gallery = use_signal(GalleryState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
+    let notify_config_ui = use_signal(NotifyConfigUi::default);
     let mut audit_page = use_signal(AuditState::default);
     let sessions_page = use_signal(SessionsState::default);
     // Chat state, shared with the read task + the Chat view (via context).
@@ -838,7 +850,7 @@ fn App() -> Element {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         )
     });
@@ -863,6 +875,7 @@ fn App() -> Element {
     use_context_provider(|| gallery);
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
+    use_context_provider(|| notify_config_ui);
     use_context_provider(|| audit_page);
     use_context_provider(|| sessions_page);
     // Chapter Chime — the Schedules screen reads the routine list from
@@ -2081,8 +2094,26 @@ fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
 
 #[component]
 fn NotificationsPanel() -> Element {
+    let ws = use_context::<Sender>();
     let n = use_context::<Signal<NotificationsState>>();
+    let notify_config_ui = use_context::<Signal<NotifyConfigUi>>();
+    let mut editing = use_signal(|| None::<NotifyTargetConfigView>);
+    let mut adding = use_signal(|| false);
     let state = n();
+
+    // POLISH_WAVES.md sub-project 7 plan 2 — load the editable target list
+    // each time the screen opens, alongside the existing target-status
+    // query (the read-only "Targets" rail's data is otherwise refreshed
+    // by the App-level 5 s poll — see `GetNotifyTargets` above — but
+    // resending it here too, McpPanel-style, means this screen doesn't
+    // depend on the poll having already ticked once).
+    use_future(move || async move {
+        ws.send(FrontendMessage::Query {
+            id: "mc-notify-targets".to_string(),
+            payload: QueryPayload::GetNotifyTargets,
+        });
+        ws.send(notify_target_configs_query());
+    });
 
     rsx! {
         div { class: "dash-grid",
@@ -2108,6 +2139,65 @@ fn NotificationsPanel() -> Element {
                             // newest window; oldest→newest within it).
                             for e in state.history.iter().rev() {
                                 NotificationHistoryRow { entry: e.clone() }
+                            }
+                        }
+                    }
+                }
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Configure targets" }
+                        button { class: "btn btn-primary btn-xs", onclick: move |_| { editing.set(None); adding.set(true); }, "Add target" }
+                    }
+                    if let Some((ok, text)) = notify_config_ui().notice {
+                        div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
+                    }
+                    if adding() || editing().is_some() {
+                        NotifyTargetForm {
+                            // Plan 1's `McpServerForm` final-review fix,
+                            // applied from the start here: forces a fresh
+                            // component instance (rather than diffing
+                            // props onto the live one) whenever which
+                            // target is being edited changes, including
+                            // the "editing X" → "adding new" transition —
+                            // otherwise the form's `use_signal` seed
+                            // initializers (first-mount-only) would keep
+                            // showing the previous target's stale field
+                            // values, with Save overwriting the wrong entry.
+                            key: "{editing().map(|e| e.name.clone()).unwrap_or_else(|| \"new\".to_string())}",
+                            initial: editing(),
+                            on_cancel: move |_| { adding.set(false); editing.set(None); },
+                            on_save: move |entry: NotifyTargetConfigView| {
+                                ws.send(set_notify_target_query(entry));
+                                adding.set(false);
+                                editing.set(None);
+                            },
+                        }
+                    } else if state.configs.is_empty() {
+                        div { class: "glass-card empty", p { class: "label-tech", "No `[[notify_target]]` entries configured yet." } }
+                    } else {
+                        div { class: "feed",
+                            for cfg in state.configs.iter() {
+                                {
+                                    let cfg2 = cfg.clone();
+                                    let name = cfg.name.clone();
+                                    rsx! {
+                                        div { key: "{cfg.name}", class: "glass-card routine-row",
+                                            div { class: "row1",
+                                                span { class: "dot live" }
+                                                span { class: "name", "{cfg.name}" }
+                                                span { class: "label-tech", style: "opacity:0.7;", "[{cfg.kind}]" }
+                                                if cfg.is_default {
+                                                    span { class: "label-tech", style: "color: var(--ok, #16a34a);", "default" }
+                                                }
+                                                span { class: if cfg.enabled { "chip sage" } else { "chip" }, if cfg.enabled { "enabled" } else { "disabled" } }
+                                            }
+                                            div { style: "display:flex; gap:8px; margin-top:8px;",
+                                                button { class: "btn btn-glass btn-xs", onclick: move |_| { adding.set(false); editing.set(Some(cfg2.clone())); }, "Edit" }
+                                                button { class: "btn btn-glass btn-xs", onclick: move |_| ws.send(delete_notify_target_query(name.clone())), "Delete" }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2141,10 +2231,141 @@ fn NotificationsPanel() -> Element {
                     div { class: "panel-head", h3 { "About" } }
                     div { class: "glass-card",
                         p { class: "label-tech",
-                            "Targets are managed in aivyx.toml (not editable here yet). Any mission or schedule with no explicit notify target falls back to whichever target above is marked default."
+                            "Add or edit targets in the \"Configure targets\" section. Changes take effect on the next daemon restart. Any mission or schedule with no explicit notify target falls back to whichever target above is marked default."
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 2 — the editable notify-target
+/// query builders, mirroring `mcp_server_configs_query`/`set_mcp_server_
+/// query`/`delete_mcp_server_query`'s own shape exactly.
+fn notify_target_configs_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-configs".to_string(),
+        payload: QueryPayload::GetNotifyTargetConfigs,
+    }
+}
+
+fn set_notify_target_query(target: NotifyTargetConfigView) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-set".to_string(),
+        payload: QueryPayload::SetNotifyTarget {
+            name: target.name,
+            kind: target.kind,
+            chat_id: target.chat_id,
+            url: target.url,
+            to: target.to,
+            enabled: target.enabled,
+            is_default: target.is_default,
+            retry_count: target.retry_count,
+            retry_backoff_ms_start: target.retry_backoff_ms_start,
+            rate_limit_max: target.rate_limit_max,
+            rate_limit_window_secs: target.rate_limit_window_secs,
+        },
+    }
+}
+
+fn delete_notify_target_query(name: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-delete".to_string(),
+        payload: QueryPayload::DeleteNotifyTarget { name },
+    }
+}
+
+#[component]
+fn NotifyTargetForm(
+    initial: Option<NotifyTargetConfigView>,
+    on_cancel: EventHandler<()>,
+    on_save: EventHandler<NotifyTargetConfigView>,
+) -> Element {
+    let seed = initial.clone().unwrap_or(NotifyTargetConfigView {
+        name: String::new(),
+        kind: "telegram".to_string(),
+        chat_id: None,
+        url: None,
+        to: None,
+        enabled: true,
+        is_default: false,
+        retry_count: 0,
+        retry_backoff_ms_start: 500,
+        rate_limit_max: None,
+        rate_limit_window_secs: None,
+    });
+    let editing_existing = initial.is_some();
+    let mut name = use_signal(|| seed.name.clone());
+    let mut kind = use_signal(|| seed.kind.clone());
+    let mut chat_id = use_signal(|| seed.chat_id.clone().unwrap_or_default());
+    let mut url = use_signal(|| seed.url.clone().unwrap_or_default());
+    let mut to = use_signal(|| seed.to.clone().unwrap_or_default());
+    let mut enabled = use_signal(|| seed.enabled);
+    let mut is_default = use_signal(|| seed.is_default);
+
+    rsx! {
+        div { class: "glass-card",
+            div { class: "field-row",
+                label { "Name" }
+                input { class: "input", value: "{name}", disabled: editing_existing, oninput: move |e| name.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Kind" }
+                select { class: "input", value: "{kind}", onchange: move |e| kind.set(e.value()),
+                    option { value: "telegram", "telegram" }
+                    option { value: "webhook", "webhook" }
+                    option { value: "email", "email" }
+                    option { value: "web-ui", "web-ui" }
+                }
+            }
+            if kind() == "telegram" {
+                div { class: "field-row",
+                    label { "Chat ID" }
+                    input { class: "input", value: "{chat_id}", oninput: move |e| chat_id.set(e.value()) }
+                }
+            } else if kind() == "webhook" {
+                div { class: "field-row",
+                    label { "URL" }
+                    input { class: "input", value: "{url}", oninput: move |e| url.set(e.value()) }
+                }
+            } else if kind() == "email" {
+                div { class: "field-row",
+                    label { "To" }
+                    input { class: "input", value: "{to}", oninput: move |e| to.set(e.value()) }
+                }
+            }
+            div { class: "field-row",
+                label { "Enabled" }
+                input { r#type: "checkbox", checked: enabled(), onchange: move |e| enabled.set(e.checked()) }
+            }
+            div { class: "field-row",
+                label { "Default target" }
+                input { r#type: "checkbox", checked: is_default(), onchange: move |e| is_default.set(e.checked()) }
+            }
+            div { style: "display:flex; gap:8px; margin-top:12px;",
+                button {
+                    class: "btn btn-primary btn-xs",
+                    onclick: move |_| {
+                        let k = kind();
+                        let entry = NotifyTargetConfigView {
+                            name: name().trim().to_string(),
+                            kind: k.clone(),
+                            chat_id: if k == "telegram" && !chat_id().trim().is_empty() { Some(chat_id().trim().to_string()) } else { None },
+                            url: if k == "webhook" && !url().trim().is_empty() { Some(url().trim().to_string()) } else { None },
+                            to: if k == "email" && !to().trim().is_empty() { Some(to().trim().to_string()) } else { None },
+                            enabled: enabled(),
+                            is_default: is_default(),
+                            retry_count: seed.retry_count,
+                            retry_backoff_ms_start: seed.retry_backoff_ms_start,
+                            rate_limit_max: seed.rate_limit_max,
+                            rate_limit_window_secs: seed.rate_limit_window_secs,
+                        };
+                        on_save.call(entry);
+                    },
+                    "Save"
+                }
+                button { class: "btn btn-glass btn-xs", onclick: move |_| on_cancel.call(()), "Cancel" }
             }
         }
     }
@@ -8175,6 +8396,7 @@ async fn ws_task(
     gallery: Signal<GalleryState>,
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
+    notify_config_ui: Signal<NotifyConfigUi>,
     audit_page: Signal<AuditState>,
     sessions_page: Signal<SessionsState>,
     mut connected: Signal<bool>,
@@ -8217,7 +8439,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         ));
 
@@ -8317,6 +8539,7 @@ async fn read_task(
     mut gallery: Signal<GalleryState>,
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
+    mut notify_config_ui: Signal<NotifyConfigUi>,
     mut audit_page: Signal<AuditState>,
     mut sessions_page: Signal<SessionsState>,
     mut connected: Signal<bool>,
@@ -8741,6 +8964,23 @@ async fn read_task(
                     n.history = entries;
                     n.total_len = total_len;
                 }
+                // POLISH_WAVES.md sub-project 7 plan 2 — the editable
+                // notify-target list feeding the Notifications screen's
+                // "Configure targets" section, mirroring the MCP config
+                // list's own two handlers.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetNotifyTargetConfigs { targets },
+                    ..
+                } => {
+                    notifications.write().configs = targets;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::NotifyTargetsApplied { targets, .. },
+                    ..
+                } => {
+                    notifications.write().configs = targets;
+                    notify_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
                 DaemonEnvelope::ScheduleMutated { ok, schedule_id, error, .. } => {
                     let mut ui = schedules_ui.write();
                     ui.confirm_delete = None;
@@ -8930,6 +9170,19 @@ async fn read_task(
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-mcp") => {
                     mcp_config_ui.write().notice = Some((false, message));
+                }
+                // POLISH_WAVES.md sub-project 7 plan 2 — a notify-target
+                // config save/delete failure. Ids are prefixed `mc-notify`
+                // so it lands on the notify-target config banner (also
+                // covers the pre-existing `mc-notify-targets`/`mc-notify-
+                // history` poll ids, which are query-error-safe in
+                // practice — same tradeoff `mc-mcp` already makes for
+                // `mc-mcp-status`).
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-notify") => {
+                    notify_config_ui.write().notice = Some((false, message));
                 }
                 // Chapter Mission Control — an abort/pause/resume rejected by
                 // the daemon (e.g. resume on a mission that isn't paused).
