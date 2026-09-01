@@ -75,6 +75,29 @@ pub enum ConfigWriteError {
     /// refused before it corrupts the next daemon load, same principle as
     /// `InvalidNotifyTarget`.
     InvalidReflectionSchedule { reason: String },
+    /// `[memory] profile` is not one of the loader's recognized values.
+    /// The loader itself (`MemoryProfile::from_arg`) is permissive —
+    /// any unrecognized string silently falls back to `Off` rather than
+    /// erroring — but the Studio picker only ever offers 3 concrete
+    /// values, so a 4th string reaching this function means a
+    /// non-Studio caller sent something wrong; refuse it rather than
+    /// silently defaulting.
+    InvalidMemoryProfile { reason: String },
+    /// An `[embedding]` field is blank where a value was explicitly
+    /// supplied (an explicit-but-blank `base_url`/`model` would still
+    /// write an empty string, which the loader then treats differently
+    /// from "absent" — refused here instead).
+    InvalidEmbeddingConfig { reason: String },
+    /// The `[proactive]` section, after this write is merged onto
+    /// whatever's already on disk, would fail the loader's own
+    /// `enabled = true` requirements (`build_proactive_config`,
+    /// `aivyx-config/src/lib.rs:8689`): non-empty `target`,
+    /// `max_per_window >= 1`, `window_secs >= 1`. Also enforces one
+    /// check the loader itself does NOT make — that `target` names an
+    /// existing `[[notify_target]]` entry — deliberately stricter than
+    /// today's loader, not a mirror of an existing check (see this
+    /// plan's design spec, "Corrections" §2).
+    InvalidProactiveConfig { reason: String },
     /// The existing file did not parse as TOML.
     Parse { reason: String },
     /// The file could not be read or written.
@@ -99,6 +122,9 @@ impl std::fmt::Display for ConfigWriteError {
             ConfigWriteError::InvalidNotifyTarget { reason } => write!(f, "invalid notify target entry: {reason}"),
             ConfigWriteError::InvalidEmailConfig { reason } => write!(f, "invalid email config: {reason}"),
             ConfigWriteError::InvalidReflectionSchedule { reason } => write!(f, "invalid reflection schedule entry: {reason}"),
+            ConfigWriteError::InvalidMemoryProfile { reason } => write!(f, "invalid memory profile: {reason}"),
+            ConfigWriteError::InvalidEmbeddingConfig { reason } => write!(f, "invalid embedding config: {reason}"),
+            ConfigWriteError::InvalidProactiveConfig { reason } => write!(f, "invalid proactive config: {reason}"),
             ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx.toml: {reason}"),
             ConfigWriteError::Io { reason } => write!(f, "{reason}"),
         }
@@ -1501,6 +1527,214 @@ fn reflection_schedule_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::Array
         .expect("just ensured present")
 }
 
+/// `[memory]` is a shared table with fields this function does not touch
+/// (`max_per_topic`, `ttl_secs`, the `[[memory.retention]]` array-of-
+/// tables, `canonicalize_topics`) — only the `profile` key is
+/// added/updated; every sibling key and the retention sub-array stay
+/// byte-identical. `profile: None` leaves the on-disk value untouched
+/// (leave-on-`None`, plan 2's convention).
+pub fn write_memory_profile(path: &Path, profile: Option<&str>) -> Result<(), ConfigWriteError> {
+    let Some(p) = profile else { return Ok(()) };
+    let normalized = match p.trim().to_lowercase().as_str() {
+        "off" | "lite" | "smart" => p.trim().to_lowercase(),
+        other => {
+            return Err(ConfigWriteError::InvalidMemoryProfile {
+                reason: format!("{other:?} is not a valid profile — must be \"off\", \"lite\", or \"smart\""),
+            })
+        }
+    };
+    let mut doc = load_document(path)?;
+    doc["memory"]["profile"] = value(normalized);
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Raw read of `[memory] profile` — `None` when the section or key is
+/// absent (the Studio picker's caller defaults that to `"off"`).
+pub fn read_memory_profile(path: &Path) -> Result<Option<String>, ConfigWriteError> {
+    let doc = load_document(path)?;
+    Ok(doc
+        .get("memory")
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|t| t.get("profile"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()))
+}
+
+/// The `[embedding]` section as Studio's write form submits it. Every
+/// field `Option`, `None` meaning "leave this key untouched on disk" —
+/// same partial-update convention every singleton section in this file
+/// uses, applied uniformly here even though only `api_key` is a secret
+/// (plan 2's hardened precedent, not `write_profile_section`'s older
+/// clear-on-`None` convention). `dimensions`/`rag_top_k`/
+/// `rag_min_similarity`/`recall_window_turns`/`recall_gate_min_chars`
+/// and the Chapter Loom recall-fusion tuning fields stay TOML-only —
+/// not represented here at all.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EmbeddingEntryWrite {
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+}
+
+/// Patch the `[embedding]` section, touching only the `Some` fields. An
+/// explicit-but-blank `base_url`/`model` is refused (would write an
+/// empty string, which the loader's own defaulting treats differently
+/// from "key absent") rather than silently accepted.
+pub fn write_embedding_section(path: &Path, entry: &EmbeddingEntryWrite) -> Result<(), ConfigWriteError> {
+    if let Some(v) = &entry.base_url {
+        if v.trim().is_empty() {
+            return Err(ConfigWriteError::InvalidEmbeddingConfig {
+                reason: "base_url, if set, must not be blank".to_string(),
+            });
+        }
+    }
+    if let Some(v) = &entry.model {
+        if v.trim().is_empty() {
+            return Err(ConfigWriteError::InvalidEmbeddingConfig {
+                reason: "model, if set, must not be blank".to_string(),
+            });
+        }
+    }
+
+    let mut doc = load_document(path)?;
+    if let Some(v) = &entry.base_url {
+        doc["embedding"]["base_url"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.model {
+        doc["embedding"]["model"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.api_key {
+        doc["embedding"]["api_key"] = value(v.as_str());
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Read the `[embedding]` section as literally written on disk — no
+/// resolution of anything. Absent section (or absent key) reads as
+/// `None` for that field.
+pub fn read_embedding_section(path: &Path) -> Result<EmbeddingEntryWrite, ConfigWriteError> {
+    let doc = load_document(path)?;
+    let Some(table) = doc.get("embedding").and_then(toml_edit::Item::as_table_like) else {
+        return Ok(EmbeddingEntryWrite::default());
+    };
+    Ok(EmbeddingEntryWrite {
+        base_url: table.get("base_url").and_then(|v| v.as_str()).map(str::to_string),
+        model: table.get("model").and_then(|v| v.as_str()).map(str::to_string),
+        api_key: table.get("api_key").and_then(|v| v.as_str()).map(str::to_string),
+    })
+}
+
+/// The `[proactive]` section as Studio's write form submits it. Same
+/// leave-untouched-on-`None` convention as `EmbeddingEntryWrite`.
+/// `signals` (the 3 `signal_*` toggles) stays TOML-only — not
+/// represented here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProactiveEntryWrite {
+    pub enabled: Option<bool>,
+    pub target: Option<String>,
+    pub max_per_window: Option<u32>,
+    pub window_secs: Option<u64>,
+}
+
+/// Patch the `[proactive]` section, touching only the `Some` fields.
+///
+/// Validates the **merged** post-write state (existing on-disk values
+/// combined with this call's `Some` fields — a save that only flips
+/// `enabled` while `target` is already on disk from an earlier save
+/// must keep succeeding) against `build_proactive_config`'s
+/// (`aivyx-config/src/lib.rs:8689`) own `enabled = true` requirements:
+/// non-empty `target`, `max_per_window >= 1`, `window_secs >= 1`. Also
+/// checks that `target` names an existing `[[notify_target]]` entry —
+/// the loader itself does NOT make this check (it only checks
+/// non-empty), so this is deliberately stricter, not a mirror.
+pub fn write_proactive_section(path: &Path, entry: &ProactiveEntryWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+
+    let (merged_enabled, merged_target, merged_max_per_window, merged_window_secs) = {
+        let existing = doc.get("proactive").and_then(toml_edit::Item::as_table_like);
+        let existing_bool = |key: &str| existing.and_then(|t| t.get(key)).and_then(|v| v.as_bool());
+        let existing_str =
+            |key: &str| existing.and_then(|t| t.get(key)).and_then(|v| v.as_str()).map(str::to_string);
+        let existing_int = |key: &str| existing.and_then(|t| t.get(key)).and_then(|v| v.as_integer());
+
+        let merged_enabled = entry.enabled.or_else(|| existing_bool("enabled")).unwrap_or(false);
+        let merged_target = entry.target.clone().or_else(|| existing_str("target"));
+        let merged_max_per_window = entry
+            .max_per_window
+            .or_else(|| existing_int("max_per_window").map(|n| n as u32))
+            .unwrap_or(crate::DEFAULT_PROACTIVE_MAX_PER_WINDOW);
+        let merged_window_secs = entry
+            .window_secs
+            .or_else(|| existing_int("window_secs").map(|n| n as u64))
+            .unwrap_or(crate::DEFAULT_PROACTIVE_WINDOW_SECS);
+
+        (merged_enabled, merged_target, merged_max_per_window, merged_window_secs)
+    };
+
+    if merged_enabled {
+        let target = merged_target.as_deref().unwrap_or("").trim().to_string();
+        if target.is_empty() {
+            return Err(ConfigWriteError::InvalidProactiveConfig {
+                reason: "`target` is required when proactive is enabled (must name a [[notify_target]]) \
+                         — this would fail to boot the daemon on the next start"
+                    .to_string(),
+            });
+        }
+        let known_target = doc
+            .get("notify_target")
+            .and_then(toml_edit::Item::as_array_of_tables)
+            .is_some_and(|arr| {
+                arr.iter().any(|t| t.get("name").and_then(|v| v.as_str()) == Some(target.as_str()))
+            });
+        if !known_target {
+            return Err(ConfigWriteError::InvalidProactiveConfig {
+                reason: format!("target {target:?} does not name a configured [[notify_target]] entry"),
+            });
+        }
+        if merged_max_per_window == 0 {
+            return Err(ConfigWriteError::InvalidProactiveConfig {
+                reason: "`max_per_window` must be >= 1 when proactive is enabled".to_string(),
+            });
+        }
+        if merged_window_secs == 0 {
+            return Err(ConfigWriteError::InvalidProactiveConfig {
+                reason: "`window_secs` must be >= 1 when proactive is enabled".to_string(),
+            });
+        }
+    }
+
+    if let Some(v) = entry.enabled {
+        doc["proactive"]["enabled"] = value(v);
+    }
+    if let Some(v) = &entry.target {
+        doc["proactive"]["target"] = value(v.as_str());
+    }
+    if let Some(v) = entry.max_per_window {
+        doc["proactive"]["max_per_window"] = value(v as i64);
+    }
+    if let Some(v) = entry.window_secs {
+        doc["proactive"]["window_secs"] = value(v as i64);
+    }
+
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Read the `[proactive]` section as literally written on disk — no
+/// resolution of anything. Absent section (or absent key) reads as
+/// `None` for that field.
+pub fn read_proactive_section(path: &Path) -> Result<ProactiveEntryWrite, ConfigWriteError> {
+    let doc = load_document(path)?;
+    let Some(table) = doc.get("proactive").and_then(toml_edit::Item::as_table_like) else {
+        return Ok(ProactiveEntryWrite::default());
+    };
+    Ok(ProactiveEntryWrite {
+        enabled: table.get("enabled").and_then(|v| v.as_bool()),
+        target: table.get("target").and_then(|v| v.as_str()).map(str::to_string),
+        max_per_window: table.get("max_per_window").and_then(|v| v.as_integer()).map(|n| n as u32),
+        window_secs: table.get("window_secs").and_then(|v| v.as_integer()).map(|n| n as u64),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2782,5 +3016,199 @@ mod tests {
         let read = read_email_section(&path).unwrap();
         assert_eq!(read.host, None);
         assert_eq!(read.password, None);
+    }
+
+    #[test]
+    fn memory_profile_write_sets_the_key_and_preserves_siblings() {
+        let path = temp_toml("mem-profile-write");
+        std::fs::write(
+            &path,
+            "[memory]\nmax_per_topic = 200\nttl_secs = 86400\n\n[[memory.retention]]\ntopic_glob = \"daily-*\"\nretention = \"forever\"\n",
+        )
+        .unwrap();
+        write_memory_profile(&path, Some("smart")).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("profile = \"smart\""));
+        assert!(contents.contains("max_per_topic = 200"), "sibling key survives");
+        assert!(contents.contains("[[memory.retention]]"), "retention array survives");
+    }
+
+    #[test]
+    fn memory_profile_write_none_is_a_no_op() {
+        let path = temp_toml("mem-profile-noop");
+        std::fs::write(&path, "[memory]\nprofile = \"lite\"\n").unwrap();
+        write_memory_profile(&path, None).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("profile = \"lite\""));
+    }
+
+    #[test]
+    fn memory_profile_write_rejects_unknown_value() {
+        let path = temp_toml("mem-profile-bad");
+        std::fs::write(&path, "").unwrap();
+        let err = write_memory_profile(&path, Some("turbo")).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidMemoryProfile { .. }));
+    }
+
+    #[test]
+    fn read_memory_profile_round_trips() {
+        let path = temp_toml("mem-profile-read");
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(read_memory_profile(&path).unwrap(), None);
+        write_memory_profile(&path, Some("smart")).unwrap();
+        assert_eq!(read_memory_profile(&path).unwrap(), Some("smart".to_string()));
+    }
+
+    #[test]
+    fn embedding_write_touches_only_provided_fields() {
+        let path = temp_toml("embedding-partial");
+        std::fs::write(&path, "[embedding]\nbase_url = \"https://old.example\"\nmodel = \"old-model\"\napi_key = \"sk-existing\"\n").unwrap();
+        write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite { base_url: None, model: Some("new-model".to_string()), api_key: None },
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("base_url = \"https://old.example\""), "untouched field survives");
+        assert!(contents.contains("model = \"new-model\""), "the actual edit applied");
+        assert!(contents.contains("api_key = \"sk-existing\""), "secret untouched by None");
+    }
+
+    #[test]
+    fn embedding_write_rejects_blank_base_url() {
+        let path = temp_toml("embedding-blank-url");
+        std::fs::write(&path, "").unwrap();
+        let err = write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite { base_url: Some("  ".to_string()), model: None, api_key: None },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidEmbeddingConfig { .. }));
+    }
+
+    #[test]
+    fn read_embedding_section_round_trips_and_never_needed_for_the_secret_itself() {
+        let path = temp_toml("embedding-read");
+        std::fs::write(&path, "").unwrap();
+        write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite {
+                base_url: Some("https://api.openai.com".to_string()),
+                model: Some("text-embedding-3-small".to_string()),
+                api_key: Some("sk-real-secret".to_string()),
+            },
+        )
+        .unwrap();
+        let read = read_embedding_section(&path).unwrap();
+        assert_eq!(read.base_url.as_deref(), Some("https://api.openai.com"));
+        assert_eq!(read.model.as_deref(), Some("text-embedding-3-small"));
+        // read_embedding_section itself returns the raw value (Task 4's
+        // daemon handler is what redacts it before it reaches the wire) —
+        // this test only proves the round-trip is byte-correct.
+        assert_eq!(read.api_key.as_deref(), Some("sk-real-secret"));
+    }
+
+    #[test]
+    fn proactive_write_rejects_enabling_without_a_known_target() {
+        let path = temp_toml("proactive-no-target");
+        std::fs::write(&path, "").unwrap();
+        let err = write_proactive_section(
+            &path,
+            &ProactiveEntryWrite {
+                enabled: Some(true),
+                target: Some("nonexistent".to_string()),
+                max_per_window: None,
+                window_secs: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidProactiveConfig { .. }));
+    }
+
+    #[test]
+    fn proactive_write_allows_enabling_with_a_known_target() {
+        let path = temp_toml("proactive-known-target");
+        std::fs::write(
+            &path,
+            "[[notify_target]]\nname = \"ops\"\nkind = \"telegram\"\nchat_id = \"123\"\nenabled = true\ndefault = false\n",
+        )
+        .unwrap();
+        write_proactive_section(
+            &path,
+            &ProactiveEntryWrite {
+                enabled: Some(true),
+                target: Some("ops".to_string()),
+                max_per_window: None,
+                window_secs: None,
+            },
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("proactive") && contents.contains("enabled = true"), "proactive section missing or malformed: {}", contents);
+        assert!(contents.contains("target = \"ops\""));
+    }
+
+    #[test]
+    fn proactive_write_merged_state_keeps_succeeding_on_a_later_partial_save() {
+        let path = temp_toml("proactive-merged");
+        std::fs::write(
+            &path,
+            "[[notify_target]]\nname = \"ops\"\nkind = \"telegram\"\nchat_id = \"123\"\nenabled = true\ndefault = false\n",
+        )
+        .unwrap();
+        write_proactive_section(
+            &path,
+            &ProactiveEntryWrite {
+                enabled: Some(true),
+                target: Some("ops".to_string()),
+                max_per_window: Some(5),
+                window_secs: Some(3600),
+            },
+        )
+        .unwrap();
+        // A later save only touches max_per_window — enabled/target
+        // must be read from disk (merged), not treated as newly absent.
+        write_proactive_section(
+            &path,
+            &ProactiveEntryWrite { enabled: None, target: None, max_per_window: Some(9), window_secs: None },
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("max_per_window = 9"));
+        assert!(contents.contains("target = \"ops\""), "untouched field survives the merge");
+    }
+
+    #[test]
+    fn proactive_write_rejects_zero_max_per_window_when_enabled() {
+        let path = temp_toml("proactive-zero-max");
+        std::fs::write(
+            &path,
+            "[[notify_target]]\nname = \"ops\"\nkind = \"telegram\"\nchat_id = \"123\"\nenabled = true\ndefault = false\n",
+        )
+        .unwrap();
+        let err = write_proactive_section(
+            &path,
+            &ProactiveEntryWrite {
+                enabled: Some(true),
+                target: Some("ops".to_string()),
+                max_per_window: Some(0),
+                window_secs: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidProactiveConfig { .. }));
+    }
+
+    #[test]
+    fn proactive_write_allows_disabling_without_a_target() {
+        let path = temp_toml("proactive-disable");
+        std::fs::write(&path, "").unwrap();
+        write_proactive_section(
+            &path,
+            &ProactiveEntryWrite { enabled: Some(false), target: None, max_per_window: None, window_secs: None },
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("enabled = false"));
     }
 }
