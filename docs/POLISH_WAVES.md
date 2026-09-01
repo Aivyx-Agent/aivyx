@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), and 6 (2026-08-31) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 7 in progress (plan 1 of 3 shipped 2026-09-01, 2 items dropped as already-shipped, plans 2-3 not started).**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), and 6 (2026-08-31) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 7 in progress (plans 1-2 of 3 shipped 2026-09-01 and 2026-09-02, 2 items dropped as already-shipped, plan 3 not started).**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -48,7 +48,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
 | 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | ✅ done 2026-08-31 (all 4 items, 7 tasks — see below) |
-| 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ⏳ plan 1 of 3 shipped 2026-09-01 (architecture + MCP CRUD); 2 items dropped as already-shipped; plans 2-3 not started |
+| 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ⏳ plans 1-2 of 3 shipped 2026-09-01 and 2026-09-02 (architecture + MCP CRUD; notify-target + channel-adapter CRUD); 2 items dropped as already-shipped; plan 3 not started |
 | 8 | **Tool/server call-stat observability** | See below | Large | Not started |
 
 Each sub-project gets its own brainstorm → spec → plan cycle when its
@@ -489,12 +489,38 @@ tracking doc's own prose:
   Logged as a process gap (`cargo test` doesn't exercise `dist/`, so
   staleness there is invisible to normal verification), not a defect
   of either branch's real work.
-- **Plan 2 — Notify-target + channel-adapter CRUD** (Chapter Herald's
-  own explicit deferral) — not started. Creating/editing Telegram/
-  Discord/Slack bot tokens, `[[notify_target]]` entries (webhook URLs,
-  SMTP creds via the shared `[email]` block); today read-only. Reuses
-  plan 1's array-of-table primitive and the `RedactedSecret` wire type
-  it built ahead of need.
+- ✅ **Plan 2 — Notify-target + channel-adapter CRUD** (Chapter
+  Herald's own explicit deferral) — shipped 2026-09-02.
+  Creating/editing Telegram/Discord/Slack bot tokens, `[[notify_
+  target]]` entries (webhook URLs, SMTP creds via the shared `[email]`
+  block); previously read-only. Reused plan 1's array-of-table
+  primitive (`[[notify_target]]`, plus new per-kind validation and an
+  at-most-one-default rule) and shipped a new **partial-update**
+  pattern for the 4 singleton sections (`[email]`/`[telegram]`/
+  `[discord]`/`[slack]`) — every write field `Option<T>`, `None` means
+  leave that value untouched — the first real consumer of
+  `RedactedSecret` (built ahead of need in plan 1). **Final
+  whole-branch review found a real Critical, then two more rounds each
+  found one more adjacent gap in the same validation code — a pattern
+  worth naming plainly**: the Studio email card originally sent
+  password-only writes, and the loader's all-or-nothing `[email]`
+  rule then refused to boot the daemon at next restart with no error
+  and no in-Studio recovery (Studio itself served by the dead daemon).
+  Fixed by validating the *merged* post-write state and expanding the
+  card to expose `host`/`port`/`username`/`from`. The first re-review
+  then found two more reachable daemon-bricking gaps the first fix
+  left open in the same functions — an unvalidated `tls_mode` value,
+  and an `[email]`-presence check that tested the TOML header's mere
+  existence rather than whether any of its 6 fields were actually set
+  (a bare/commented-out `[email]` header — a normal hand-edit — passed
+  the check but still bricked the daemon). A second fix round closed
+  both, verified by a second independent re-review that read the
+  loader's entire validation function end-to-end specifically hunting
+  for a fourth gap and found none remaining in the email path (only
+  Minor doc-comment defects and one pre-existing, UI-unreachable gap:
+  `chat_id` validation not trimming whitespace, unlike the loader).
+  Full account: `docs/superpowers/plans/2026-09-01-notify-target-
+  channel-crud.md`.
 - **Plan 3 — Settings coverage expansion** (§9 P2, product) — not
   started. `[memory] profile`, `[embedding]`, `[proactive]` (whose
   `target` picker benefits from plan 2's notify-target list existing),
