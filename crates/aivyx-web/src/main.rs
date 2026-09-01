@@ -2466,10 +2466,84 @@ fn NotifyTargetForm(
 /// sends `None`, which the daemon treats as "don't change this token"
 /// rather than "clear it" (the same partial-update convention Tasks 1-2
 /// established server-side).
+/// The Email (SMTP) card, split out of [`ChannelAdaptersSection`] into its
+/// own component so its `host`/`username`/`from` `use_signal` seeds are
+/// correct on first mount without needing a `key`: the call site only
+/// mounts this component once `state.email` is `Some` (the `if let`
+/// guard), which by construction is exactly the moment the real on-disk
+/// values first became available — so there's no "mounted before the load
+/// finished, seed forever stuck on the pre-load default" race to guard
+/// against here (unlike `NotifyTargetForm`, which stays mounted across a
+/// change of *which* target it's editing and needs a `key` for that).
+///
+/// `host`/`port`/`username`/`from` are plain (non-secret) fields on
+/// `EmailConfigView`, so they're safe to pre-fill and edit as plain text —
+/// unlike `password`, which stays masked and always starts blank
+/// ("blank on Save" = "don't change this field", the established
+/// partial-update convention). `tls_mode` stays out of scope for this pass
+/// (final-review finding #1(b)) — the loader defaults it to `"starttls"`
+/// when absent, and exposing it isn't needed to fix the bricking bug.
+#[component]
+fn EmailAdapterCard(email: EmailConfigView) -> Element {
+    let ws = use_context::<Sender>();
+    let mut host = use_signal(|| email.host.clone().unwrap_or_default());
+    let mut port = use_signal(|| email.port.map(|p| p.to_string()).unwrap_or_default());
+    let mut username = use_signal(|| email.username.clone().unwrap_or_default());
+    let mut from = use_signal(|| email.from.clone().unwrap_or_default());
+    let mut password = use_signal(String::new);
+
+    rsx! {
+        div { class: "glass-card",
+            h4 { "Email (SMTP)" }
+            div { class: "field-row",
+                label { "Host" }
+                input { class: "input", value: "{host}", oninput: move |e| host.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Port" }
+                input { class: "input", value: "{port}", oninput: move |e| port.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Username" }
+                input { class: "input", value: "{username}", oninput: move |e| username.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "From" }
+                input { class: "input", value: "{from}", oninput: move |e| from.set(e.value()) }
+            }
+            p { class: "label-tech",
+                {if email.password.configured { "Password: configured" } else { "Password: not set" }}
+            }
+            input { class: "input", placeholder: "New password (leave blank to keep current)",
+                r#type: "password", value: "{password}",
+                oninput: move |e| password.set(e.value()) }
+            button {
+                class: "btn btn-primary btn-xs",
+                onclick: move |_| {
+                    let h = host();
+                    let p = port();
+                    let u = username();
+                    let f = from();
+                    let pw = password();
+                    ws.send(set_email_config_query(
+                        if h.trim().is_empty() { None } else { Some(h.trim().to_string()) },
+                        p.trim().parse::<u16>().ok(),
+                        None,
+                        if u.trim().is_empty() { None } else { Some(u.trim().to_string()) },
+                        if pw.trim().is_empty() { None } else { Some(pw.trim().to_string()) },
+                        if f.trim().is_empty() { None } else { Some(f.trim().to_string()) },
+                    ));
+                    password.set(String::new());
+                },
+                "Save"
+            }
+        }
+    }
+}
+
 #[component]
 fn ChannelAdaptersSection(state: NotificationsState) -> Element {
     let ws = use_context::<Sender>();
-    let mut email_password = use_signal(String::new);
     let mut telegram_token = use_signal(String::new);
     let mut discord_token = use_signal(String::new);
     let mut slack_bot_token = use_signal(String::new);
@@ -2479,28 +2553,7 @@ fn ChannelAdaptersSection(state: NotificationsState) -> Element {
         section { class: "panel",
             div { class: "panel-head", h3 { "Channel adapters" } }
             if let Some(email) = &state.email {
-                div { class: "glass-card",
-                    h4 { "Email (SMTP)" }
-                    p { class: "label-tech",
-                        {if email.password.configured { "Password: configured" } else { "Password: not set" }}
-                    }
-                    input { class: "input", placeholder: "New password (leave blank to keep current)",
-                        r#type: "password", value: "{email_password}",
-                        oninput: move |e| email_password.set(e.value()) }
-                    button {
-                        class: "btn btn-primary btn-xs",
-                        onclick: move |_| {
-                            let pw = email_password();
-                            ws.send(set_email_config_query(
-                                None, None, None, None,
-                                if pw.trim().is_empty() { None } else { Some(pw.trim().to_string()) },
-                                None,
-                            ));
-                            email_password.set(String::new());
-                        },
-                        "Save"
-                    }
-                }
+                EmailAdapterCard { email: email.clone() }
             }
             if let Some(tg) = &state.telegram {
                 div { class: "glass-card",
@@ -9196,24 +9249,38 @@ async fn read_task(
                 }
                 // POLISH_WAVES.md sub-project 7 plan 2 (Task 7) — the 4
                 // channel-adapter configs feeding the "Channel adapters"
-                // section. Get* (on screen mount) and *ConfigApplied (after
-                // a save) both carry the same redacted `config` shape, so
-                // one arm per channel handles both via an or-pattern.
-                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetEmailConfig { config }, .. }
-                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::EmailConfigApplied { config, .. }, .. } => {
+                // section. Get* (on screen mount) just seeds the panel
+                // silently; *ConfigApplied (after a Save) also sets the
+                // same restart-required notice the notify-target form uses
+                // (final-review finding #3 — Save used to give zero
+                // visible confirmation).
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetEmailConfig { config }, .. } => {
                     notifications.write().email = Some(config);
                 }
-                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetTelegramConfig { config }, .. }
-                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::TelegramConfigApplied { config, .. }, .. } => {
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::EmailConfigApplied { config, .. }, .. } => {
+                    notifications.write().email = Some(config);
+                    notify_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetTelegramConfig { config }, .. } => {
                     notifications.write().telegram = Some(config);
                 }
-                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetDiscordConfig { config }, .. }
-                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::DiscordConfigApplied { config, .. }, .. } => {
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::TelegramConfigApplied { config, .. }, .. } => {
+                    notifications.write().telegram = Some(config);
+                    notify_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetDiscordConfig { config }, .. } => {
                     notifications.write().discord = Some(config);
                 }
-                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetSlackConfig { config }, .. }
-                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::SlackConfigApplied { config, .. }, .. } => {
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::DiscordConfigApplied { config, .. }, .. } => {
+                    notifications.write().discord = Some(config);
+                    notify_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetSlackConfig { config }, .. } => {
                     notifications.write().slack = Some(config);
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::SlackConfigApplied { config, .. }, .. } => {
+                    notifications.write().slack = Some(config);
+                    notify_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
                 }
                 DaemonEnvelope::ScheduleMutated { ok, schedule_id, error, .. } => {
                     let mut ui = schedules_ui.write();
