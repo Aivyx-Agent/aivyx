@@ -2468,13 +2468,23 @@ fn NotifyTargetForm(
 /// established server-side).
 /// The Email (SMTP) card, split out of [`ChannelAdaptersSection`] into its
 /// own component so its `host`/`username`/`from` `use_signal` seeds are
-/// correct on first mount without needing a `key`: the call site only
-/// mounts this component once `state.email` is `Some` (the `if let`
-/// guard), which by construction is exactly the moment the real on-disk
-/// values first became available — so there's no "mounted before the load
-/// finished, seed forever stuck on the pre-load default" race to guard
-/// against here (unlike `NotifyTargetForm`, which stays mounted across a
-/// change of *which* target it's editing and needs a `key` for that).
+/// correct on first mount.
+///
+/// `NotificationsState` is App-level context, so it can survive a full
+/// navigation away from and back to the Notifications screen. On a
+/// *return* visit, `state.email` may already hold `Some` stale value left
+/// over from the prior visit at the instant this component (re)mounts —
+/// the fresh `GetEmailConfig` response for *this* visit hasn't landed yet.
+/// Without a `key`, Dioxus reuses the existing component instance across
+/// that later state update, so the `use_signal` seeds latch onto the stale
+/// value at mount and never re-seed once the fresh response arrives
+/// (final-review finding #3). The call site below keys this component on
+/// the `Debug` representation of `email` itself (there's no natural
+/// unique id on a singleton config the way `NotifyTargetForm` keys on the
+/// target's `name`) so a genuinely new value — including the very first
+/// fresh response replacing a stale one — forces a fresh mount and correct
+/// seeds, matching the same "key on what identifies this state" precedent
+/// `NotifyTargetForm` already establishes for the array-entry case.
 ///
 /// `host`/`port`/`username`/`from` are plain (non-secret) fields on
 /// `EmailConfigView`, so they're safe to pre-fill and edit as plain text —
@@ -2486,6 +2496,7 @@ fn NotifyTargetForm(
 #[component]
 fn EmailAdapterCard(email: EmailConfigView) -> Element {
     let ws = use_context::<Sender>();
+    let mut notify_config_ui = use_context::<Signal<NotifyConfigUi>>();
     let mut host = use_signal(|| email.host.clone().unwrap_or_default());
     let mut port = use_signal(|| email.port.map(|p| p.to_string()).unwrap_or_default());
     let mut username = use_signal(|| email.username.clone().unwrap_or_default());
@@ -2521,13 +2532,37 @@ fn EmailAdapterCard(email: EmailConfigView) -> Element {
                 class: "btn btn-primary btn-xs",
                 onclick: move |_| {
                     let h = host();
-                    let p = port();
+                    let p = port().trim().to_string();
                     let u = username();
                     let f = from();
                     let pw = password();
+                    // final-review finding #4: `.parse::<u16>().ok()` turns
+                    // an unparseable or out-of-range port (e.g. "5877x",
+                    // "99999") into `None`, which the write path reads as
+                    // "don't touch this field" — Save then reports success
+                    // while the port the operator actually typed was
+                    // silently dropped. A non-empty field that fails to
+                    // parse is refused client-side, before the query is
+                    // even sent, rather than being treated as "unchanged".
+                    let port_value = if p.is_empty() {
+                        None
+                    } else {
+                        match p.parse::<u16>() {
+                            Ok(n) => Some(n),
+                            Err(_) => {
+                                notify_config_ui.write().notice = Some((
+                                    false,
+                                    format!(
+                                        "Port {p:?} is not a valid port number (expected 1-65535) — Save was not sent."
+                                    ),
+                                ));
+                                return;
+                            }
+                        }
+                    };
                     ws.send(set_email_config_query(
                         if h.trim().is_empty() { None } else { Some(h.trim().to_string()) },
-                        p.trim().parse::<u16>().ok(),
+                        port_value,
                         None,
                         if u.trim().is_empty() { None } else { Some(u.trim().to_string()) },
                         if pw.trim().is_empty() { None } else { Some(pw.trim().to_string()) },
@@ -2553,7 +2588,7 @@ fn ChannelAdaptersSection(state: NotificationsState) -> Element {
         section { class: "panel",
             div { class: "panel-head", h3 { "Channel adapters" } }
             if let Some(email) = &state.email {
-                EmailAdapterCard { email: email.clone() }
+                EmailAdapterCard { key: "{email:?}", email: email.clone() }
             }
             if let Some(tg) = &state.telegram {
                 div { class: "glass-card",
