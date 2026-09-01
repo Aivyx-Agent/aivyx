@@ -54,6 +54,11 @@ pub enum ConfigWriteError {
     /// mcp_servers parsing) so a bad write is refused before it corrupts
     /// the next daemon load, same principle as `InvalidBudget`.
     InvalidMcpServer { reason: String },
+    /// A `[[notify_target]]` entry is structurally invalid — mirrors the
+    /// loader's own per-kind validation (`aivyx-config/src/lib.rs`'s
+    /// notify_targets parsing) so a bad write is refused before it
+    /// corrupts the next daemon load, same principle as `InvalidMcpServer`.
+    InvalidNotifyTarget { reason: String },
     /// The existing file did not parse as TOML.
     Parse { reason: String },
     /// The file could not be read or written.
@@ -75,6 +80,7 @@ impl std::fmt::Display for ConfigWriteError {
             ),
             ConfigWriteError::InvalidBudget { reason } => write!(f, "invalid budget: {reason}"),
             ConfigWriteError::InvalidMcpServer { reason } => write!(f, "invalid MCP server entry: {reason}"),
+            ConfigWriteError::InvalidNotifyTarget { reason } => write!(f, "invalid notify target entry: {reason}"),
             ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx.toml: {reason}"),
             ConfigWriteError::Io { reason } => write!(f, "{reason}"),
         }
@@ -583,6 +589,219 @@ fn mcp_server_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTables 
         doc["mcp_server"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
     }
     doc["mcp_server"]
+        .as_array_of_tables_mut()
+        .expect("just ensured present")
+}
+
+/// One `[[notify_target]]` entry as Studio's write form submits it. A
+/// plain (non-wire) struct — `aivyx-ipc` has its own serde-derived mirror;
+/// `aivyx-channel`'s daemon handler converts between them. `chat_id`/
+/// `url`/`to` are mutually exclusive per `kind` (mirrors
+/// `NotifyTargetKind`'s own shape) but all three are plain `Option<String>`
+/// here since only one is ever populated for a given `kind`.
+pub struct NotifyTargetEntryWrite {
+    pub name: String,
+    /// `"telegram"`, `"webhook"`, `"email"`, or `"web-ui"`.
+    pub kind: String,
+    pub chat_id: Option<String>,
+    pub url: Option<String>,
+    pub to: Option<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub retry_count: u32,
+    pub retry_backoff_ms_start: u64,
+    pub rate_limit_max: Option<u32>,
+    pub rate_limit_window_secs: Option<u64>,
+}
+
+/// Add or replace (by `name`) one `[[notify_target]]` entry, preserving
+/// every other entry, section, and the operator's comments. Validates the
+/// same per-kind requirements the loader does (`aivyx-config/src/lib.rs`'s
+/// notify_targets parsing: telegram needs a non-empty `chat_id`, webhook
+/// needs an `http(s)://` `url`, email needs an `@`-containing `to`) plus
+/// the at-most-one-default rule, refused here rather than failing the
+/// next daemon load.
+pub fn write_notify_target_section(
+    path: &Path,
+    target: &NotifyTargetEntryWrite,
+) -> Result<(), ConfigWriteError> {
+    if target.name.trim().is_empty() {
+        return Err(ConfigWriteError::InvalidNotifyTarget {
+            reason: "name must not be empty".to_string(),
+        });
+    }
+    match target.kind.as_str() {
+        "telegram" => {
+            if target.chat_id.as_deref().is_none_or(str::is_empty) {
+                return Err(ConfigWriteError::InvalidNotifyTarget {
+                    reason: format!(
+                        "target {:?}: kind \"telegram\" requires a non-empty `chat_id`",
+                        target.name
+                    ),
+                });
+            }
+        }
+        "webhook" => {
+            let url = target.url.as_deref().unwrap_or("");
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(ConfigWriteError::InvalidNotifyTarget {
+                    reason: format!(
+                        "target {:?}: kind \"webhook\" requires a `url` starting with http:// or https://",
+                        target.name
+                    ),
+                });
+            }
+        }
+        "email" => {
+            if !target.to.as_deref().unwrap_or("").contains('@') {
+                return Err(ConfigWriteError::InvalidNotifyTarget {
+                    reason: format!(
+                        "target {:?}: kind \"email\" requires a `to` address containing `@`",
+                        target.name
+                    ),
+                });
+            }
+        }
+        "web-ui" => {}
+        other => {
+            return Err(ConfigWriteError::InvalidNotifyTarget {
+                reason: format!(
+                    "target {:?}: unknown kind {:?} (expected \"telegram\", \"webhook\", \"email\", or \"web-ui\")",
+                    target.name, other
+                ),
+            });
+        }
+    }
+
+    let mut doc = load_document(path)?;
+    let arr = notify_target_array_mut(&mut doc);
+
+    if target.is_default {
+        let other_default = arr
+            .iter()
+            .any(|t| {
+                t.get("name").and_then(|v| v.as_str()) != Some(target.name.as_str())
+                    && t.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
+            });
+        if other_default {
+            return Err(ConfigWriteError::InvalidNotifyTarget {
+                reason: format!(
+                    "target {:?}: another notify_target is already the default — at most one is allowed",
+                    target.name
+                ),
+            });
+        }
+    }
+
+    let mut table = toml_edit::Table::new();
+    table["name"] = value(target.name.as_str());
+    table["kind"] = value(target.kind.as_str());
+    table["enabled"] = value(target.enabled);
+    table["default"] = value(target.is_default);
+    if let Some(chat_id) = &target.chat_id {
+        table["chat_id"] = value(chat_id.as_str());
+    }
+    if let Some(url) = &target.url {
+        table["url"] = value(url.as_str());
+    }
+    if let Some(to) = &target.to {
+        table["to"] = value(to.as_str());
+    }
+    if target.retry_count != 0 {
+        table["retry_count"] = value(target.retry_count as i64);
+    }
+    if target.retry_backoff_ms_start != 500 {
+        table["retry_backoff_ms_start"] = value(target.retry_backoff_ms_start as i64);
+    }
+    if let Some(max) = target.rate_limit_max {
+        table["rate_limit_max"] = value(max as i64);
+    }
+    if let Some(secs) = target.rate_limit_window_secs {
+        table["rate_limit_window_secs"] = value(secs as i64);
+    }
+
+    // Preserve any key this write schema doesn't know about, exactly
+    // mirroring `write_mcp_server_section`'s own defensive convention —
+    // no known unexposed field exists on `[[notify_target]]` today, but
+    // an upsert must never silently destroy one a future schema adds.
+    const KNOWN_KEYS: &[&str] = &[
+        "name", "kind", "enabled", "default", "chat_id", "url", "to",
+        "retry_count", "retry_backoff_ms_start", "rate_limit_max", "rate_limit_window_secs",
+    ];
+    let idx = arr.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(target.name.as_str()));
+    match idx {
+        Some(i) => {
+            if let Some(existing) = arr.get(i) {
+                for (k, v) in existing.iter() {
+                    if KNOWN_KEYS.contains(&k) {
+                        continue;
+                    }
+                    table.insert(k, v.clone());
+                }
+            }
+            *arr.get_mut(i).expect("index just found") = table;
+        }
+        None => arr.push(table),
+    }
+
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Remove one `[[notify_target]]` entry by `name`. A no-op (not an error)
+/// when no entry with that name exists.
+pub fn remove_notify_target_section(path: &Path, name: &str) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    let arr = notify_target_array_mut(&mut doc);
+    let idx = arr.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(name));
+    if let Some(i) = idx {
+        arr.remove(i);
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Read every `[[notify_target]]` entry as literally written on disk — no
+/// resolution of anything, matching [`read_mcp_server_entries`]'s own
+/// raw-TOML convention (this section carries no secrets of its own today,
+/// but reading it the same way as every other section here keeps one
+/// convention, not two, for future maintainers to reason about).
+pub fn read_notify_target_entries(path: &Path) -> Result<Vec<NotifyTargetEntryWrite>, ConfigWriteError> {
+    let doc = load_document(path)?;
+    let Some(arr) = doc.get("notify_target").and_then(toml_edit::Item::as_array_of_tables) else {
+        return Ok(Vec::new());
+    };
+    Ok(arr.iter().map(raw_table_to_notify_target).collect())
+}
+
+fn raw_table_to_notify_target(table: &toml_edit::Table) -> NotifyTargetEntryWrite {
+    let str_field = |key: &str| table.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    NotifyTargetEntryWrite {
+        name: str_field("name").unwrap_or_default(),
+        kind: str_field("kind").unwrap_or_default(),
+        chat_id: str_field("chat_id"),
+        url: str_field("url"),
+        to: str_field("to"),
+        enabled: table.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+        is_default: table.get("default").and_then(|v| v.as_bool()).unwrap_or(false),
+        retry_count: table.get("retry_count").and_then(|v| v.as_integer()).unwrap_or(0) as u32,
+        retry_backoff_ms_start: table
+            .get("retry_backoff_ms_start")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(500) as u64,
+        rate_limit_max: table.get("rate_limit_max").and_then(|v| v.as_integer()).map(|n| n as u32),
+        rate_limit_window_secs: table
+            .get("rate_limit_window_secs")
+            .and_then(|v| v.as_integer())
+            .map(|n| n as u64),
+    }
+}
+
+/// The `[[notify_target]]` array, creating an empty one if the section is
+/// absent from the document yet.
+fn notify_target_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTables {
+    if doc.get("notify_target").and_then(toml_edit::Item::as_array_of_tables).is_none() {
+        doc["notify_target"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    doc["notify_target"]
         .as_array_of_tables_mut()
         .expect("just ensured present")
 }
@@ -1284,5 +1503,149 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].headers.is_empty());
         std::fs::remove_file(&path).ok();
+    }
+
+    fn telegram_target(name: &str) -> NotifyTargetEntryWrite {
+        NotifyTargetEntryWrite {
+            name: name.to_string(),
+            kind: "telegram".to_string(),
+            chat_id: Some("123456".to_string()),
+            url: None,
+            to: None,
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        }
+    }
+
+    #[test]
+    fn notify_target_write_adds_a_new_entry() {
+        let path = temp_toml("notify-add");
+        std::fs::write(&path, "[access]\nlevel = \"sandbox\"\n").unwrap();
+        write_notify_target_section(&path, &telegram_target("ops")).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("[access]"), "unrelated section survives");
+        assert!(contents.contains("[[notify_target]]"));
+        assert!(contents.contains("name = \"ops\""));
+        assert!(contents.contains("chat_id = \"123456\""));
+    }
+
+    #[test]
+    fn notify_target_write_replaces_an_existing_entry_by_name() {
+        let path = temp_toml("notify-replace");
+        std::fs::write(&path, "").unwrap();
+        write_notify_target_section(&path, &telegram_target("ops")).unwrap();
+        let mut updated = telegram_target("ops");
+        updated.chat_id = Some("999".to_string());
+        write_notify_target_section(&path, &updated).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.matches("name = \"ops\"").count(), 1);
+        assert!(contents.contains("chat_id = \"999\""));
+        assert!(!contents.contains("chat_id = \"123456\""));
+    }
+
+    #[test]
+    fn notify_target_write_rejects_telegram_without_chat_id() {
+        let path = temp_toml("notify-tg-no-chat");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = telegram_target("ops");
+        entry.chat_id = None;
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }));
+    }
+
+    #[test]
+    fn notify_target_write_rejects_webhook_with_bad_url_scheme() {
+        let path = temp_toml("notify-webhook-bad-url");
+        std::fs::write(&path, "").unwrap();
+        let entry = NotifyTargetEntryWrite {
+            name: "alerts".to_string(),
+            kind: "webhook".to_string(),
+            chat_id: None,
+            url: Some("ftp://example.com".to_string()),
+            to: None,
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }));
+    }
+
+    #[test]
+    fn notify_target_write_rejects_email_with_no_at_sign() {
+        let path = temp_toml("notify-email-bad-to");
+        std::fs::write(&path, "").unwrap();
+        let entry = NotifyTargetEntryWrite {
+            name: "digest".to_string(),
+            kind: "email".to_string(),
+            chat_id: None,
+            url: None,
+            to: Some("not-an-email".to_string()),
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }));
+    }
+
+    #[test]
+    fn notify_target_write_rejects_a_second_default() {
+        let path = temp_toml("notify-two-defaults");
+        std::fs::write(&path, "").unwrap();
+        let mut first = telegram_target("ops");
+        first.is_default = true;
+        write_notify_target_section(&path, &first).unwrap();
+        let mut second = telegram_target("backup");
+        second.is_default = true;
+        let err = write_notify_target_section(&path, &second).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }));
+    }
+
+    #[test]
+    fn notify_target_write_allows_replacing_the_existing_default() {
+        let path = temp_toml("notify-replace-default");
+        std::fs::write(&path, "").unwrap();
+        let mut first = telegram_target("ops");
+        first.is_default = true;
+        write_notify_target_section(&path, &first).unwrap();
+        // Re-writing the SAME entry (still marked default) must not be
+        // rejected as "a second default" — it's the same target.
+        write_notify_target_section(&path, &first).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.matches("default = true").count(), 1);
+    }
+
+    #[test]
+    fn notify_target_remove_drops_the_named_entry_only() {
+        let path = temp_toml("notify-remove");
+        std::fs::write(&path, "").unwrap();
+        write_notify_target_section(&path, &telegram_target("ops")).unwrap();
+        write_notify_target_section(&path, &telegram_target("backup")).unwrap();
+        remove_notify_target_section(&path, "ops").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("name = \"ops\""));
+        assert!(contents.contains("name = \"backup\""));
+    }
+
+    #[test]
+    fn read_notify_target_entries_round_trips() {
+        let path = temp_toml("notify-read");
+        std::fs::write(&path, "").unwrap();
+        write_notify_target_section(&path, &telegram_target("ops")).unwrap();
+        let entries = read_notify_target_entries(&path).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "ops");
+        assert_eq!(entries[0].chat_id.as_deref(), Some("123456"));
     }
 }
