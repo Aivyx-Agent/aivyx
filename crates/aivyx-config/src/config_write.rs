@@ -59,6 +59,15 @@ pub enum ConfigWriteError {
     /// notify_targets parsing) so a bad write is refused before it
     /// corrupts the next daemon load, same principle as `InvalidMcpServer`.
     InvalidNotifyTarget { reason: String },
+    /// The `[email]` section, after this write is merged onto whatever's
+    /// already on disk, would leave the loader's all-or-nothing rule
+    /// broken — `aivyx-config/src/lib.rs`'s `build_email_config`: if ANY
+    /// of `host`/`port`/`tls_mode`/`username`/`password`/`from` is set,
+    /// `host`/`username`/`password`/`from` must ALL be present or the
+    /// loader hard-fails `ConfigError::Invalid` and the daemon refuses to
+    /// boot (final-review finding #1 — a password-only write on a fresh
+    /// install used to brick the next daemon start). Refused here instead.
+    InvalidEmailConfig { reason: String },
     /// The existing file did not parse as TOML.
     Parse { reason: String },
     /// The file could not be read or written.
@@ -81,6 +90,7 @@ impl std::fmt::Display for ConfigWriteError {
             ConfigWriteError::InvalidBudget { reason } => write!(f, "invalid budget: {reason}"),
             ConfigWriteError::InvalidMcpServer { reason } => write!(f, "invalid MCP server entry: {reason}"),
             ConfigWriteError::InvalidNotifyTarget { reason } => write!(f, "invalid notify target entry: {reason}"),
+            ConfigWriteError::InvalidEmailConfig { reason } => write!(f, "invalid email config: {reason}"),
             ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx.toml: {reason}"),
             ConfigWriteError::Io { reason } => write!(f, "{reason}"),
         }
@@ -630,6 +640,12 @@ pub fn write_notify_target_section(
             reason: "name must not be empty".to_string(),
         });
     }
+
+    // Loaded up front (rather than after the per-kind match, as before)
+    // because the "email" arm below needs to inspect the document for a
+    // top-level `[email]` section.
+    let mut doc = load_document(path)?;
+
     match target.kind.as_str() {
         "telegram" => {
             if target.chat_id.as_deref().is_none_or(str::is_empty) {
@@ -661,6 +677,21 @@ pub fn write_notify_target_section(
                     ),
                 });
             }
+            // Mirrors the loader's own check (`aivyx-config/src/lib.rs`'s
+            // notify_targets parsing, `email.is_none()`): an email-kind
+            // target with no `[email]` section at all fails the next
+            // daemon boot. `write_email_section`'s own all-or-nothing
+            // guard (see `InvalidEmailConfig`) means a `[email]` section
+            // that *does* exist on disk is always fully populated, so a
+            // presence check here is sufficient.
+            if doc.get("email").is_none() {
+                return Err(ConfigWriteError::InvalidNotifyTarget {
+                    reason: format!(
+                        "target {:?}: kind = \"email\" requires a top-level [email] section with SMTP credentials",
+                        target.name
+                    ),
+                });
+            }
         }
         "web-ui" => {}
         other => {
@@ -673,20 +704,80 @@ pub fn write_notify_target_section(
         }
     }
 
-    let mut doc = load_document(path)?;
+    // The following three checks mirror the loader's own validation
+    // (`aivyx-config/src/lib.rs`'s notify_targets parsing) exactly,
+    // constants and all. Not reachable from the shipped Studio form
+    // (which only round-trips existing values), but this function is a
+    // public IPC surface any future caller could hit, and its own doc
+    // comment claims to mirror the loader.
+    if target.retry_count > crate::MAX_RETRY_COUNT {
+        return Err(ConfigWriteError::InvalidNotifyTarget {
+            reason: format!(
+                "target {:?}: retry_count = {} exceeds the hard cap of {}",
+                target.name,
+                target.retry_count,
+                crate::MAX_RETRY_COUNT,
+            ),
+        });
+    }
+    if target.retry_backoff_ms_start < crate::MIN_RETRY_BACKOFF_MS_START {
+        return Err(ConfigWriteError::InvalidNotifyTarget {
+            reason: format!(
+                "target {:?}: retry_backoff_ms_start = {} ms is below the {} ms minimum",
+                target.name,
+                target.retry_backoff_ms_start,
+                crate::MIN_RETRY_BACKOFF_MS_START,
+            ),
+        });
+    }
+    match (target.rate_limit_max, target.rate_limit_window_secs) {
+        (Some(_), None) => {
+            return Err(ConfigWriteError::InvalidNotifyTarget {
+                reason: format!(
+                    "target {:?}: declares `rate_limit_max` without `rate_limit_window_secs`; both fields must be set together (or neither)",
+                    target.name
+                ),
+            });
+        }
+        (None, Some(_)) => {
+            return Err(ConfigWriteError::InvalidNotifyTarget {
+                reason: format!(
+                    "target {:?}: declares `rate_limit_window_secs` without `rate_limit_max`; both fields must be set together (or neither)",
+                    target.name
+                ),
+            });
+        }
+        (Some(0), _) => {
+            return Err(ConfigWriteError::InvalidNotifyTarget {
+                reason: format!(
+                    "target {:?}: rate_limit_max = 0 is meaningless (no dispatches would ever be allowed)",
+                    target.name
+                ),
+            });
+        }
+        (_, Some(0)) => {
+            return Err(ConfigWriteError::InvalidNotifyTarget {
+                reason: format!(
+                    "target {:?}: rate_limit_window_secs = 0 is meaningless",
+                    target.name
+                ),
+            });
+        }
+        _ => {}
+    }
+
     let arr = notify_target_array_mut(&mut doc);
 
     if target.is_default {
-        let other_default = arr
-            .iter()
-            .any(|t| {
-                t.get("name").and_then(|v| v.as_str()) != Some(target.name.as_str())
-                    && t.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
-            });
-        if other_default {
+        let other_default = arr.iter().find(|t| {
+            t.get("name").and_then(|v| v.as_str()) != Some(target.name.as_str())
+                && t.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
+        });
+        if let Some(other) = other_default {
+            let other_name = other.get("name").and_then(|v| v.as_str()).unwrap_or("?");
             return Err(ConfigWriteError::InvalidNotifyTarget {
                 reason: format!(
-                    "target {:?}: another notify_target is already the default — at most one is allowed",
+                    "target {:?}: another notify_target is already the default: {other_name} — at most one is allowed",
                     target.name
                 ),
             });
@@ -821,8 +912,76 @@ pub struct EmailEntryWrite {
 }
 
 /// Patch the `[email]` section, touching only the `Some` fields.
+///
+/// Before writing, validates the **post-write, merged** state against
+/// `build_email_config`'s (`aivyx-config/src/lib.rs`) all-or-nothing rule:
+/// if ANY of `host`/`port`/`tls_mode`/`username`/`password`/`from` ends up
+/// set, `host`/`username`/`password` must be non-empty and `from` must
+/// contain `@`, or this call is refused — mirroring the loader's own
+/// `ConfigError::Invalid` exactly, refused here instead of bricking the
+/// next daemon boot (final-review finding #1: a password-only write on a
+/// fresh install used to save successfully and then fail to boot).
+/// "Merged" means fields this call leaves `None` still count if they're
+/// already set on disk — a save that only rotates `password` while
+/// `host`/`username`/`from` are already on disk from an earlier save must
+/// keep succeeding.
 pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), ConfigWriteError> {
     let mut doc = load_document(path)?;
+
+    let (merged_host, merged_username, merged_password, merged_from, any_set) = {
+        let existing = doc.get("email").and_then(toml_edit::Item::as_table_like);
+        let existing_str =
+            |key: &str| existing.and_then(|t| t.get(key)).and_then(|v| v.as_str()).map(str::to_string);
+        let existing_has = |key: &str| existing.is_some_and(|t| t.contains_key(key));
+
+        let merged_host = entry.host.clone().or_else(|| existing_str("host"));
+        let merged_username = entry.username.clone().or_else(|| existing_str("username"));
+        let merged_password = entry.password.clone().or_else(|| existing_str("password"));
+        let merged_from = entry.from.clone().or_else(|| existing_str("from"));
+        let merged_port_set = entry.port.is_some() || existing_has("port");
+        let merged_tls_mode_set = entry.tls_mode.is_some() || existing_has("tls_mode");
+
+        let any_set = merged_host.is_some()
+            || merged_port_set
+            || merged_tls_mode_set
+            || merged_username.is_some()
+            || merged_password.is_some()
+            || merged_from.is_some();
+
+        (merged_host, merged_username, merged_password, merged_from, any_set)
+    };
+
+    if any_set {
+        if merged_host.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(ConfigWriteError::InvalidEmailConfig {
+                reason: "[email] section has a field set but `host` would be missing or empty \
+                         — this would fail to boot the daemon on the next start"
+                    .to_string(),
+            });
+        }
+        if merged_username.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(ConfigWriteError::InvalidEmailConfig {
+                reason: "[email] section has a field set but `username` would be missing or \
+                         empty — this would fail to boot the daemon on the next start"
+                    .to_string(),
+            });
+        }
+        if merged_password.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(ConfigWriteError::InvalidEmailConfig {
+                reason: "[email] section has a field set but `password` would be missing or \
+                         empty — this would fail to boot the daemon on the next start"
+                    .to_string(),
+            });
+        }
+        if !merged_from.as_deref().unwrap_or("").contains('@') {
+            return Err(ConfigWriteError::InvalidEmailConfig {
+                reason: "[email] section has a field set but `from` would be missing or not \
+                         contain `@` — this would fail to boot the daemon on the next start"
+                    .to_string(),
+            });
+        }
+    }
+
     if let Some(v) = &entry.host {
         doc["email"]["host"] = value(v.as_str());
     }
@@ -1863,6 +2022,62 @@ mod tests {
     }
 
     #[test]
+    fn notify_target_write_rejects_email_kind_without_an_email_section() {
+        // Same failure class as item 1, through a different door: an
+        // email-kind target with a valid `to` but no `[email]` section at
+        // all saves successfully today and bricks the next daemon boot
+        // (the loader's `email.is_none()` check, `aivyx-config/src/lib.rs`).
+        let path = temp_toml("notify-email-no-email-section");
+        std::fs::write(&path, "").unwrap();
+        let entry = NotifyTargetEntryWrite {
+            name: "digest".to_string(),
+            kind: "email".to_string(),
+            chat_id: None,
+            url: None,
+            to: Some("ops@example.com".to_string()),
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn notify_target_write_rejects_retry_count_over_max() {
+        let path = temp_toml("notify-retry-count-over-max");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = telegram_target("ops");
+        entry.retry_count = crate::MAX_RETRY_COUNT + 1;
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn notify_target_write_rejects_backoff_below_min() {
+        let path = temp_toml("notify-backoff-below-min");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = telegram_target("ops");
+        entry.retry_backoff_ms_start = crate::MIN_RETRY_BACKOFF_MS_START - 1;
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn notify_target_write_rejects_rate_limit_max_without_window() {
+        let path = temp_toml("notify-rate-limit-max-only");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = telegram_target("ops");
+        entry.rate_limit_max = Some(5);
+        entry.rate_limit_window_secs = None;
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }), "{err:?}");
+    }
+
+    #[test]
     fn notify_target_write_rejects_a_second_default() {
         let path = temp_toml("notify-two-defaults");
         std::fs::write(&path, "").unwrap();
@@ -1873,6 +2088,9 @@ mod tests {
         second.is_default = true;
         let err = write_notify_target_section(&path, &second).unwrap_err();
         assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }));
+        // The conflicting target's name must be in the message so the
+        // operator doesn't have to scan the list.
+        assert!(err.to_string().contains("ops"), "{err}");
     }
 
     #[test]
@@ -1934,15 +2152,20 @@ mod tests {
     fn email_write_with_none_password_leaves_existing_password_untouched() {
         let path = temp_toml("email-keep-password");
         std::fs::write(&path, "").unwrap();
+        // First write must be a *complete* [email] section — a partial one
+        // (e.g. host+password only) is now rejected by the all-or-nothing
+        // guard (see `email_write_rejects_password_only_on_fresh_file`).
         write_email_section(&path, &EmailEntryWrite {
             host: Some("smtp.example.com".to_string()),
             port: None,
             tls_mode: None,
-            username: None,
+            username: Some("bot@example.com".to_string()),
             password: Some("original-secret".to_string()),
-            from: None,
+            from: Some("bot@example.com".to_string()),
         }).unwrap();
         // Second write: change only the host, password is None ("don't touch").
+        // The merged-state guard must pull username/password/from from the
+        // existing on-disk section rather than treating them as absent.
         write_email_section(&path, &EmailEntryWrite {
             host: Some("smtp2.example.com".to_string()),
             port: None,
@@ -1954,6 +2177,52 @@ mod tests {
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("original-secret"), "password survives when not touched");
         assert!(contents.contains("smtp2.example.com"));
+    }
+
+    #[test]
+    fn email_write_rejects_password_only_on_fresh_file() {
+        // The exact bug final-review finding #1 describes: on a fresh
+        // install (no [email] section yet), Studio's email card used to
+        // send password-only, which saved successfully and then bricked
+        // the next daemon boot (`build_email_config`'s all-or-nothing
+        // rule). This write must now be refused instead.
+        let path = temp_toml("email-password-only-fresh");
+        std::fs::write(&path, "").unwrap();
+        let err = write_email_section(&path, &EmailEntryWrite {
+            host: None,
+            port: None,
+            tls_mode: None,
+            username: None,
+            password: Some("hunter2".to_string()),
+            from: None,
+        }).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidEmailConfig { .. }), "{err:?}");
+        // Refused before any write — the file must stay empty, not carry a
+        // half-written [email] section.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("[email]"), "{contents}");
+    }
+
+    #[test]
+    fn email_write_full_valid_config_still_succeeds() {
+        // Regression guard: the new all-or-nothing guard must not become
+        // overly strict — a write that sets every required field together
+        // must keep succeeding.
+        let path = temp_toml("email-full-valid");
+        std::fs::write(&path, "").unwrap();
+        write_email_section(&path, &EmailEntryWrite {
+            host: Some("smtp.example.com".to_string()),
+            port: Some(587),
+            tls_mode: Some("starttls".to_string()),
+            username: Some("bot@example.com".to_string()),
+            password: Some("hunter2".to_string()),
+            from: Some("bot@example.com".to_string()),
+        }).unwrap();
+        let read = read_email_section(&path).unwrap();
+        assert_eq!(read.host.as_deref(), Some("smtp.example.com"));
+        assert_eq!(read.username.as_deref(), Some("bot@example.com"));
+        assert_eq!(read.password.as_deref(), Some("hunter2"));
+        assert_eq!(read.from.as_deref(), Some("bot@example.com"));
     }
 
     #[test]
