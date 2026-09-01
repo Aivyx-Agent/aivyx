@@ -6369,6 +6369,7 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
         E::InvalidBudget { .. } => "invalid_budget",
         E::InvalidMcpServer { .. } => "invalid_mcp_server",
         E::InvalidNotifyTarget { .. } => "invalid_notify_target",
+        E::InvalidEmailConfig { .. } => "invalid_email_config",
         E::Parse { .. } => "config_parse_failed",
         E::Io { .. } => "config_write_failed",
     };
