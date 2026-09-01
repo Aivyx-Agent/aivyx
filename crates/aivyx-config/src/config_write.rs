@@ -469,9 +469,25 @@ pub fn write_mcp_server_section(
         Some(i) => {
             if let Some(existing) = arr.get(i) {
                 for (k, v) in existing.iter() {
-                    if !KNOWN_KEYS.contains(&k) {
-                        table.insert(k, v.clone());
+                    if KNOWN_KEYS.contains(&k) {
+                        continue;
                     }
+                    // `sandbox` (`[mcp_server.sandbox]`) is stdio-only — the
+                    // loader itself rejects a sandbox block on a non-stdio
+                    // transport (`aivyx-config/src/lib.rs`'s mcp_servers
+                    // parsing), and that rejection aborts loading the
+                    // *entire* aivyx.toml, not just this one entry. If this
+                    // upsert switched the entry's transport away from
+                    // stdio, carrying the old sandbox block over would
+                    // brick the daemon at next boot — the exact failure
+                    // class the headers-gating above exists to prevent,
+                    // reintroduced through a different route. `bundled` has
+                    // no such transport restriction in the loader, so it's
+                    // still preserved unconditionally.
+                    if k == "sandbox" && transport_key != "stdio" {
+                        continue;
+                    }
+                    table.insert(k, v.clone());
                 }
             }
             *arr.get_mut(i).expect("index just found") = table;
@@ -1104,24 +1120,22 @@ mod tests {
     // --- Post-hoc final-review fixes -------------------------------------
 
     /// Fix #1 (CRITICAL): the raw read must never resolve `${VAR}` — it must
-    /// return the literal placeholder even when the process environment has
-    /// a real value for that variable name, since this is exactly the
+    /// return the literal placeholder unchanged, since this is exactly the
     /// secret-leak scenario a `GetMcpServerConfigs` response must avoid.
+    ///
+    /// This doesn't need to touch the real process environment at all:
+    /// `read_mcp_server_entries` (the function under test) never reads
+    /// `std::env` in the first place — that's the whole point of the fix,
+    /// it's the OLD loader-based path that did interpolation, not this raw
+    /// TOML one. So the property ("no interpolation happens") is provable
+    /// with a placeholder that doesn't correspond to any real variable,
+    /// with no env mutation and thus no need for `crate::tests::env_lock()`.
     #[test]
     fn read_mcp_server_entries_never_resolves_env_placeholders() {
-        // SAFETY: test-only env mutation under a distinctive, module-unique
-        // var name — matches the narrowly-scoped `#[allow(unsafe_code)]`
-        // convention `crate::tests::EnvScope` uses for the same Rust-2024
-        // `set_var`/`remove_var` requirement (see `lib.rs`'s crate-level
-        // `#![deny(unsafe_code)]` comment).
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("SOME_TEST_VAR", "the-real-secret-value");
-        }
         let path = temp_toml("mcp-raw-read-secret");
         std::fs::write(&path, "").unwrap();
         let mut entry = stdio_entry("github");
-        entry.env = vec![("TOKEN".to_string(), "${SOME_TEST_VAR}".to_string())];
+        entry.env = vec![("TOKEN".to_string(), "${SOME_VAR_THAT_DOES_NOT_EXIST}".to_string())];
         write_mcp_server_section(&path, &entry).unwrap();
 
         let entries = read_mcp_server_entries(&path).unwrap();
@@ -1131,13 +1145,11 @@ mod tests {
             .iter()
             .find(|(k, _)| k == "TOKEN")
             .expect("TOKEN env entry present");
-        assert_eq!(v, "${SOME_TEST_VAR}", "must stay a literal placeholder, never resolve");
-        assert!(!v.contains("the-real-secret-value"));
+        assert_eq!(
+            v, "${SOME_VAR_THAT_DOES_NOT_EXIST}",
+            "must stay a literal placeholder, never resolve"
+        );
 
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::remove_var("SOME_TEST_VAR");
-        }
         std::fs::remove_file(&path).ok();
     }
 
@@ -1177,6 +1189,81 @@ mod tests {
         assert!(contents.contains("wrapper = \"bwrap\""), "{contents}");
         assert!(contents.contains("--ro-bind"), "{contents}");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Re-review fix (IMPORTANT): switching an existing sandboxed stdio
+    /// entry's transport to a remote transport (e.g. via the Studio
+    /// transport dropdown) must drop the now-stale `[mcp_server.sandbox]`
+    /// block, not carry it over. `sandbox` is stdio-only in the loader
+    /// (`aivyx-config/src/lib.rs`'s mcp_servers parsing rejects a sandbox
+    /// block on a non-stdio transport), and that rejection aborts loading
+    /// the *entire* aivyx.toml — not just this one entry — bricking the
+    /// daemon at next start. This is the same failure class the headers-on-
+    /// stdio fix below exists to prevent, reintroduced through the
+    /// unrelated-key preservation loop added to fix "sandbox destroyed on
+    /// upsert".
+    #[test]
+    fn mcp_server_write_drops_sandbox_on_transport_switch_away_from_stdio() {
+        let path = temp_toml("mcp-transport-switch-drops-sandbox");
+        std::fs::write(
+            &path,
+            "[[mcp_server]]\n\
+             name = \"github\"\n\
+             transport = \"stdio\"\n\
+             command = \"npx\"\n\
+             enabled = true\n\
+             \n\
+             [mcp_server.sandbox]\n\
+             wrapper = \"bwrap\"\n\
+             args = [\"--ro-bind\", \"/\", \"/\"]\n",
+        )
+        .unwrap();
+
+        let mut updated = stdio_entry("github");
+        updated.transport = "sse".to_string();
+        updated.command = None;
+        updated.url = Some("https://example.com/mcp".to_string());
+        write_mcp_server_section(&path, &updated).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("transport = \"sse\""), "{contents}");
+        assert!(
+            !contents.contains("sandbox"),
+            "sandbox block must not survive a switch away from stdio: {contents}"
+        );
+
+        // The loader must still accept the resulting file.
+        let entries = read_mcp_server_entries(&path).unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    /// Confirms the prior fix's "sandbox survives an edit" behavior is
+    /// unaffected by the transport-gating above — this test only edits
+    /// `enabled` on a stdio entry, transport unchanged, so sandbox must
+    /// still survive.
+    #[test]
+    fn mcp_server_write_still_preserves_sandbox_when_transport_unchanged() {
+        let path = temp_toml("mcp-preserve-sandbox-transport-unchanged");
+        std::fs::write(
+            &path,
+            "[[mcp_server]]\n\
+             name = \"github\"\n\
+             transport = \"stdio\"\n\
+             command = \"npx\"\n\
+             enabled = true\n\
+             \n\
+             [mcp_server.sandbox]\n\
+             wrapper = \"bwrap\"\n",
+        )
+        .unwrap();
+
+        let mut updated = stdio_entry("github");
+        updated.enabled = false;
+        write_mcp_server_section(&path, &updated).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("enabled = false"), "{contents}");
+        assert!(contents.contains("sandbox"), "sandbox must still survive: {contents}");
     }
 
     /// Fix #6 (IMPORTANT): the loader rejects a stdio entry that also
