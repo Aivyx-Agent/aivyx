@@ -4417,8 +4417,12 @@ async fn handle_query(
                 Some(p) => p,
                 None => return no_config_file_error(),
             };
-            QueryResponsePayload::GetMcpServerConfigs {
-                servers: read_mcp_server_configs(path, role_override),
+            match read_mcp_server_configs(path) {
+                Ok(servers) => QueryResponsePayload::GetMcpServerConfigs { servers },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "config_reload_failed".into(),
+                    message: format!("failed to read mcp server configs: {e}"),
+                },
             }
         }
         QueryPayload::GetSchedules => {
@@ -5453,10 +5457,7 @@ async fn handle_query(
             match aivyx_config::config_write::write_mcp_server_section(path, &entry) {
                 Ok(()) => {
                     audit_config_change(audit_log, "mcp_server", &format!("set {name}"));
-                    QueryResponsePayload::McpServersApplied {
-                        servers: read_mcp_server_configs(path, role_override),
-                        restart_required: true,
-                    }
+                    mcp_servers_applied_after_write(path, "set")
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5469,10 +5470,7 @@ async fn handle_query(
             match aivyx_config::config_write::remove_mcp_server_section(path, &name) {
                 Ok(()) => {
                     audit_config_change(audit_log, "mcp_server", &format!("delete {name}"));
-                    QueryResponsePayload::McpServersApplied {
-                        servers: read_mcp_server_configs(path, role_override),
-                        restart_required: true,
-                    }
+                    mcp_servers_applied_after_write(path, "delete")
                 }
                 Err(e) => map_config_write_error(e),
             }
@@ -5485,65 +5483,77 @@ async fn handle_query(
             headers,
             url,
         } => {
-            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-            let bridge_result = match transport.as_str() {
-                "stdio" => {
-                    let Some(cmd) = command.as_deref() else {
-                        return QueryResponsePayload::McpServerTestResult {
-                            ok: false,
-                            tool_count: 0,
-                            error: Some("stdio transport requires `command`".to_string()),
-                        };
-                    };
-                    aivyx_mcp::McpServerBridge::start_with_sandbox(
-                        cmd, &args_ref, &env, None, None, "test-connection",
-                    )
-                    .await
-                }
-                "sse" | "http" | "streamable-http" => {
-                    let Some(u) = url.as_deref() else {
-                        return QueryResponsePayload::McpServerTestResult {
-                            ok: false,
-                            tool_count: 0,
-                            error: Some("sse/http transport requires `url`".to_string()),
-                        };
-                    };
-                    let transport_result = if transport == "sse" {
-                        aivyx_mcp::SseTransport::connect(u, &headers)
+            // Final-review fix #4 — nothing in `aivyx-mcp` times out the
+            // connect/handshake calls on its own, and this handler is
+            // awaited inline in the per-connection frame loop: a stdio
+            // command that spawns but never speaks JSON-RPC, or an
+            // HTTP/SSE URL that accepts the TCP connection but never
+            // responds, would otherwise hang this entire Studio WebSocket
+            // connection forever. `tokio::time::timeout` drops (cancels)
+            // the inner future — and everything it owns (the child
+            // process, the socket) — the instant it fires, so no explicit
+            // cleanup path is needed on the timeout arm below.
+            let probe = async move {
+                let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+                let bridge_result: Result<aivyx_mcp::McpServerBridge, String> =
+                    match transport.as_str() {
+                        "stdio" => {
+                            let Some(cmd) = command.as_deref() else {
+                                return Err("stdio transport requires `command`".to_string());
+                            };
+                            aivyx_mcp::McpServerBridge::start_with_sandbox(
+                                cmd, &args_ref, &env, None, None, "test-connection",
+                            )
                             .await
-                            .map(|t| std::sync::Arc::new(t) as std::sync::Arc<dyn aivyx_mcp::McpTransport>)
-                    } else {
-                        aivyx_mcp::StreamableHttpTransport::connect(u, &headers)
-                            .await
-                            .map(|t| std::sync::Arc::new(t) as std::sync::Arc<dyn aivyx_mcp::McpTransport>)
+                        }
+                        "sse" | "http" | "streamable-http" => {
+                            let Some(u) = url.as_deref() else {
+                                return Err("sse/http transport requires `url`".to_string());
+                            };
+                            let transport_result = if transport == "sse" {
+                                aivyx_mcp::SseTransport::connect(u, &headers).await.map(|t| {
+                                    std::sync::Arc::new(t) as std::sync::Arc<dyn aivyx_mcp::McpTransport>
+                                })
+                            } else {
+                                aivyx_mcp::StreamableHttpTransport::connect(u, &headers).await.map(
+                                    |t| std::sync::Arc::new(t) as std::sync::Arc<dyn aivyx_mcp::McpTransport>,
+                                )
+                            };
+                            match transport_result {
+                                Ok(t) => {
+                                    aivyx_mcp::McpServerBridge::from_transport(t, "test-connection").await
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }
+                        other => {
+                            return Err(format!("unknown transport {other:?}"));
+                        }
                     };
-                    match transport_result {
-                        Ok(t) => aivyx_mcp::McpServerBridge::from_transport(t, "test-connection").await,
-                        Err(e) => Err(e),
+                match bridge_result {
+                    Ok(bridge) => {
+                        let tool_count = bridge.list_tools().await.map(|t| t.len()).unwrap_or(0);
+                        let _ = bridge.shutdown().await;
+                        Ok(tool_count)
                     }
-                }
-                other => {
-                    return QueryResponsePayload::McpServerTestResult {
-                        ok: false,
-                        tool_count: 0,
-                        error: Some(format!("unknown transport {other:?}")),
-                    };
+                    Err(e) => Err(e),
                 }
             };
-            match bridge_result {
-                Ok(bridge) => {
-                    let tool_count = bridge.list_tools().await.map(|t| t.len()).unwrap_or(0);
-                    let _ = bridge.shutdown().await;
-                    QueryResponsePayload::McpServerTestResult {
-                        ok: true,
-                        tool_count,
-                        error: None,
-                    }
-                }
-                Err(e) => QueryResponsePayload::McpServerTestResult {
+            match tokio::time::timeout(std::time::Duration::from_secs(15), probe).await {
+                Ok(Ok(tool_count)) => QueryResponsePayload::McpServerTestResult {
+                    ok: true,
+                    tool_count,
+                    error: None,
+                },
+                Ok(Err(e)) => QueryResponsePayload::McpServerTestResult {
                     ok: false,
                     tool_count: 0,
                     error: Some(e),
+                },
+                Err(_elapsed) => QueryResponsePayload::McpServerTestResult {
+                    ok: false,
+                    tool_count: 0,
+                    error: Some("connection timed out after 15s".to_string()),
                 },
             }
         }
@@ -6167,34 +6177,60 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
 
 /// Re-read `[[mcp_server]]` from disk into the wire view type — shared by
 /// `GetMcpServerConfigs`/`SetMcpServer`/`DeleteMcpServer`'s handlers so the
-/// response always reflects authoritative on-disk state, same principle as
-/// `settings_applied`'s own fresh re-read (and reusing the exact same
-/// `load_settings_config` helper it calls).
+/// response always reflects authoritative on-disk state.
+///
+/// Deliberately does **not** go through `load_settings_config` (the full,
+/// fully-resolving `AivyxConfig` loader) the way `settings_applied` does:
+/// that loader interpolates `${VAR}` in `env`/`headers` against the
+/// daemon's real environment, so a `GetX` response built from it would hand
+/// the browser a resolved secret value — and `McpServerForm` seeds its edit
+/// form straight from that response, so a save-without-editing would then
+/// bake the resolved secret into `aivyx.toml` as a literal, permanently
+/// destroying the `${VAR}` placeholder it replaced (final-review fix #1).
+/// `aivyx_config::config_write::read_mcp_server_entries` reads the TOML
+/// literally instead — no interpolation, and (as a side effect) it also
+/// surfaces `enabled = false` entries, which the full loader silently
+/// skips.
 fn read_mcp_server_configs(
     path: &std::path::Path,
-    role_override: Option<&str>,
-) -> Vec<aivyx_ipc::protocol::McpServerConfigView> {
-    let Ok(cfg) = load_settings_config(path, role_override) else {
-        return Vec::new();
-    };
-    cfg.mcp_servers
-        .iter()
+) -> Result<Vec<aivyx_ipc::protocol::McpServerConfigView>, String> {
+    let entries =
+        aivyx_config::config_write::read_mcp_server_entries(path).map_err(|e| e.to_string())?;
+    Ok(entries
+        .into_iter()
         .map(|s| aivyx_ipc::protocol::McpServerConfigView {
-            name: s.name.clone(),
-            transport: match s.transport {
-                aivyx_config::McpTransportKind::Stdio => "stdio",
-                aivyx_config::McpTransportKind::Sse => "sse",
-                aivyx_config::McpTransportKind::Http => "http",
-            }
-            .to_string(),
-            command: s.command.clone(),
-            args: s.args.clone(),
-            env: s.env.clone(),
-            headers: s.headers.clone(),
-            url: s.url.clone(),
+            name: s.name,
+            transport: s.transport,
+            command: s.command,
+            args: s.args,
+            env: s.env,
+            headers: s.headers,
+            url: s.url,
             enabled: s.enabled,
         })
-        .collect()
+        .collect())
+}
+
+/// Chapter U-mirroring convention (`settings_applied`'s own re-read): after
+/// a successful `SetMcpServer`/`DeleteMcpServer` write, re-read the fresh
+/// on-disk state for the response. If the re-read itself fails (final-review
+/// fix #5 — e.g. the file was concurrently replaced with something that no
+/// longer parses as TOML between the write and this read), surface it as a
+/// `QueryError` rather than silently claim the operator now has zero
+/// configured servers: a bare `McpServersApplied { servers: vec![], .. }`
+/// would be indistinguishable from "you deleted everything", masking a
+/// daemon that may now fail to boot.
+fn mcp_servers_applied_after_write(path: &std::path::Path, verb: &str) -> QueryResponsePayload {
+    match read_mcp_server_configs(path) {
+        Ok(servers) => QueryResponsePayload::McpServersApplied {
+            servers,
+            restart_required: true,
+        },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("mcp server {verb} succeeded, but reloading the list failed: {e}"),
+        },
+    }
 }
 
 /// Chapter U — display label for a provider in the read-only Settings card.
