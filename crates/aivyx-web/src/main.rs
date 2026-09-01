@@ -17,13 +17,15 @@
 //! (`aivyx-brand/design-tokens.md`); see `docs/FRONTEND.md`.
 
 use aivyx_ipc::protocol::{
-    AuditEntrySummary, DaemonEnvelope, DocEntry, DocFile, EffectivePersonaSummary, FrontendMessage,
+    AuditEntrySummary, DaemonEnvelope, DiscordConfigView, DocEntry, DocFile, EffectivePersonaSummary,
+    EmailConfigView, FrontendMessage,
     GalleryImage, McpServerConfigView, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode,
     NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
-    SkillAuthorOp, SkillView, StreamEventPayload, ToolCatalogEntry, VoiceSettingsSnapshot,
+    SkillAuthorOp, SkillView, SlackConfigView, StreamEventPayload, TelegramConfigView,
+    ToolCatalogEntry, VoiceSettingsSnapshot,
     turn_outcome_correction,
 };
 use aivyx_ipc::{
@@ -492,6 +494,14 @@ struct NotificationsState {
     /// list (distinct from `targets`, the read-only status view above),
     /// mirroring how `McpState` carries both `servers` and `configs`.
     configs: Vec<NotifyTargetConfigView>,
+    /// POLISH_WAVES.md sub-project 7 plan 2 (Task 7) — the 4 channel-
+    /// adapter singleton configs feeding the "Channel adapters" section.
+    /// Each carries only `RedactedSecret`s for its token/password fields —
+    /// never a real value — so this state is safe to hold in the client.
+    email: Option<EmailConfigView>,
+    telegram: Option<TelegramConfigView>,
+    discord: Option<DiscordConfigView>,
+    slack: Option<SlackConfigView>,
 }
 
 /// `/classic` retirement — the dedicated Audit screen's state (distinct
@@ -2113,6 +2123,10 @@ fn NotificationsPanel() -> Element {
             payload: QueryPayload::GetNotifyTargets,
         });
         ws.send(notify_target_configs_query());
+        ws.send(get_email_config_query());
+        ws.send(get_telegram_config_query());
+        ws.send(get_discord_config_query());
+        ws.send(get_slack_config_query());
     });
 
     rsx! {
@@ -2202,6 +2216,7 @@ fn NotificationsPanel() -> Element {
                         }
                     }
                 }
+                ChannelAdaptersSection { state: n() }
             }
             aside { class: "dash-rail",
                 section { class: "panel",
@@ -2273,6 +2288,78 @@ fn delete_notify_target_query(name: String) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-notify-delete".to_string(),
         payload: QueryPayload::DeleteNotifyTarget { name },
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 2 (Task 7) — the 4 channel-adapter
+/// query builders. All share the `"mc-notify-channels"` id, which the
+/// `id.starts_with("mc-notify")` `QueryError` routing arm already catches
+/// by prefix — a rejected save on any of these lands on the same
+/// `notify_config_ui` notice banner the notify-target form uses. These
+/// builders only expose the fields the Task 7 forms edit —
+/// `team_run_channel`/`team_trigger_rate_limit`/`team_command_allowed_
+/// senders` stay TOML-only for this pass; a future pass can extend the
+/// forms without changing the wire types, which already carry them.
+fn get_email_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-notify-channels".to_string(), payload: QueryPayload::GetEmailConfig }
+}
+fn set_email_config_query(
+    host: Option<String>,
+    port: Option<u16>,
+    tls_mode: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    from: Option<String>,
+) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-channels".to_string(),
+        payload: QueryPayload::SetEmailConfig { host, port, tls_mode, username, password, from },
+    }
+}
+fn get_telegram_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-notify-channels".to_string(), payload: QueryPayload::GetTelegramConfig }
+}
+fn set_telegram_config_query(token: Option<String>, chat_id: Option<i64>) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-channels".to_string(),
+        payload: QueryPayload::SetTelegramConfig {
+            token,
+            chat_id,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        },
+    }
+}
+fn get_discord_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-notify-channels".to_string(), payload: QueryPayload::GetDiscordConfig }
+}
+fn set_discord_config_query(token: Option<String>, application_id: Option<u64>) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-channels".to_string(),
+        payload: QueryPayload::SetDiscordConfig {
+            token,
+            application_id,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        },
+    }
+}
+fn get_slack_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-notify-channels".to_string(), payload: QueryPayload::GetSlackConfig }
+}
+fn set_slack_config_query(bot_token: Option<String>, app_token: Option<String>, team_id: Option<String>) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-notify-channels".to_string(),
+        payload: QueryPayload::SetSlackConfig {
+            bot_token,
+            app_token,
+            team_id,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        },
     }
 }
 
@@ -2366,6 +2453,132 @@ fn NotifyTargetForm(
                     "Save"
                 }
                 button { class: "btn btn-glass btn-xs", onclick: move |_| on_cancel.call(()), "Cancel" }
+            }
+        }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 2 (Task 7) — the "Channel adapters"
+/// section: one card per channel (email/telegram/discord/slack), each with
+/// a masked-secret field pattern. Every secret field shows only a
+/// "configured"/"not set" label sourced from `RedactedSecret.configured` —
+/// never a pre-filled or echoed real value — and a blank input on Save
+/// sends `None`, which the daemon treats as "don't change this token"
+/// rather than "clear it" (the same partial-update convention Tasks 1-2
+/// established server-side).
+#[component]
+fn ChannelAdaptersSection(state: NotificationsState) -> Element {
+    let ws = use_context::<Sender>();
+    let mut email_password = use_signal(String::new);
+    let mut telegram_token = use_signal(String::new);
+    let mut discord_token = use_signal(String::new);
+    let mut slack_bot_token = use_signal(String::new);
+    let mut slack_app_token = use_signal(String::new);
+
+    rsx! {
+        section { class: "panel",
+            div { class: "panel-head", h3 { "Channel adapters" } }
+            if let Some(email) = &state.email {
+                div { class: "glass-card",
+                    h4 { "Email (SMTP)" }
+                    p { class: "label-tech",
+                        {if email.password.configured { "Password: configured" } else { "Password: not set" }}
+                    }
+                    input { class: "input", placeholder: "New password (leave blank to keep current)",
+                        r#type: "password", value: "{email_password}",
+                        oninput: move |e| email_password.set(e.value()) }
+                    button {
+                        class: "btn btn-primary btn-xs",
+                        onclick: move |_| {
+                            let pw = email_password();
+                            ws.send(set_email_config_query(
+                                None, None, None, None,
+                                if pw.trim().is_empty() { None } else { Some(pw.trim().to_string()) },
+                                None,
+                            ));
+                            email_password.set(String::new());
+                        },
+                        "Save"
+                    }
+                }
+            }
+            if let Some(tg) = &state.telegram {
+                div { class: "glass-card",
+                    h4 { "Telegram" }
+                    p { class: "label-tech",
+                        {if tg.token.configured { "Token: configured" } else { "Token: not set" }}
+                    }
+                    input { class: "input", placeholder: "New bot token (leave blank to keep current)",
+                        r#type: "password", value: "{telegram_token}",
+                        oninput: move |e| telegram_token.set(e.value()) }
+                    button {
+                        class: "btn btn-primary btn-xs",
+                        onclick: move |_| {
+                            let t = telegram_token();
+                            ws.send(set_telegram_config_query(
+                                if t.trim().is_empty() { None } else { Some(t.trim().to_string()) },
+                                None,
+                            ));
+                            telegram_token.set(String::new());
+                        },
+                        "Save"
+                    }
+                }
+            }
+            if let Some(d) = &state.discord {
+                div { class: "glass-card",
+                    h4 { "Discord" }
+                    p { class: "label-tech",
+                        {if d.token.configured { "Token: configured" } else { "Token: not set" }}
+                    }
+                    input { class: "input", placeholder: "New bot token (leave blank to keep current)",
+                        r#type: "password", value: "{discord_token}",
+                        oninput: move |e| discord_token.set(e.value()) }
+                    button {
+                        class: "btn btn-primary btn-xs",
+                        onclick: move |_| {
+                            let t = discord_token();
+                            ws.send(set_discord_config_query(
+                                if t.trim().is_empty() { None } else { Some(t.trim().to_string()) },
+                                None,
+                            ));
+                            discord_token.set(String::new());
+                        },
+                        "Save"
+                    }
+                }
+            }
+            if let Some(s) = &state.slack {
+                div { class: "glass-card",
+                    h4 { "Slack" }
+                    p { class: "label-tech",
+                        {if s.bot_token.configured { "Bot token: configured" } else { "Bot token: not set" }}
+                    }
+                    input { class: "input", placeholder: "New bot token (leave blank to keep current)",
+                        r#type: "password", value: "{slack_bot_token}",
+                        oninput: move |e| slack_bot_token.set(e.value()) }
+                    p { class: "label-tech",
+                        {if s.app_token.configured { "App token: configured" } else { "App token: not set" }}
+                    }
+                    input { class: "input", placeholder: "New app token (leave blank to keep current)",
+                        r#type: "password", value: "{slack_app_token}",
+                        oninput: move |e| slack_app_token.set(e.value()) }
+                    button {
+                        class: "btn btn-primary btn-xs",
+                        onclick: move |_| {
+                            let bt = slack_bot_token();
+                            let at = slack_app_token();
+                            ws.send(set_slack_config_query(
+                                if bt.trim().is_empty() { None } else { Some(bt.trim().to_string()) },
+                                if at.trim().is_empty() { None } else { Some(at.trim().to_string()) },
+                                None,
+                            ));
+                            slack_bot_token.set(String::new());
+                            slack_app_token.set(String::new());
+                        },
+                        "Save"
+                    }
+                }
             }
         }
     }
@@ -8980,6 +9193,27 @@ async fn read_task(
                 } => {
                     notifications.write().configs = targets;
                     notify_config_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                // POLISH_WAVES.md sub-project 7 plan 2 (Task 7) — the 4
+                // channel-adapter configs feeding the "Channel adapters"
+                // section. Get* (on screen mount) and *ConfigApplied (after
+                // a save) both carry the same redacted `config` shape, so
+                // one arm per channel handles both via an or-pattern.
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetEmailConfig { config }, .. }
+                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::EmailConfigApplied { config, .. }, .. } => {
+                    notifications.write().email = Some(config);
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetTelegramConfig { config }, .. }
+                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::TelegramConfigApplied { config, .. }, .. } => {
+                    notifications.write().telegram = Some(config);
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetDiscordConfig { config }, .. }
+                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::DiscordConfigApplied { config, .. }, .. } => {
+                    notifications.write().discord = Some(config);
+                }
+                DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::GetSlackConfig { config }, .. }
+                | DaemonEnvelope::QueryResponse { payload: QueryResponsePayload::SlackConfigApplied { config, .. }, .. } => {
+                    notifications.write().slack = Some(config);
                 }
                 DaemonEnvelope::ScheduleMutated { ok, schedule_id, error, .. } => {
                     let mut ui = schedules_ui.write();
