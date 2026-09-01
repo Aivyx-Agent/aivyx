@@ -5539,6 +5539,144 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::GetEmailConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_email_section(path) {
+                Ok(e) => QueryResponsePayload::GetEmailConfig { config: email_config_view(&e) },
+                Err(err) => map_config_write_error(err),
+            }
+        }
+        QueryPayload::SetEmailConfig { host, port, tls_mode, username, password, from } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::EmailEntryWrite { host, port, tls_mode, username, password, from };
+            match aivyx_config::config_write::write_email_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "email", "updated");
+                    match aivyx_config::config_write::read_email_section(path) {
+                        Ok(e) => QueryResponsePayload::EmailConfigApplied {
+                            config: email_config_view(&e),
+                            restart_required: true,
+                        },
+                        Err(err) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("email config saved, but reloading it failed: {err}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::GetTelegramConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_telegram_section(path) {
+                Ok(t) => QueryResponsePayload::GetTelegramConfig { config: telegram_config_view(&t) },
+                Err(err) => map_config_write_error(err),
+            }
+        }
+        QueryPayload::SetTelegramConfig { token, chat_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::TelegramEntryWrite {
+                token, chat_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
+            };
+            match aivyx_config::config_write::write_telegram_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "telegram", "updated");
+                    match aivyx_config::config_write::read_telegram_section(path) {
+                        Ok(t) => QueryResponsePayload::TelegramConfigApplied {
+                            config: telegram_config_view(&t),
+                            restart_required: true,
+                        },
+                        Err(err) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("telegram config saved, but reloading it failed: {err}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::GetDiscordConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_discord_section(path) {
+                Ok(d) => QueryResponsePayload::GetDiscordConfig { config: discord_config_view(&d) },
+                Err(err) => map_config_write_error(err),
+            }
+        }
+        QueryPayload::SetDiscordConfig { token, application_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::DiscordEntryWrite {
+                token, application_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
+            };
+            match aivyx_config::config_write::write_discord_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "discord", "updated");
+                    match aivyx_config::config_write::read_discord_section(path) {
+                        Ok(d) => QueryResponsePayload::DiscordConfigApplied {
+                            config: discord_config_view(&d),
+                            restart_required: true,
+                        },
+                        Err(err) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("discord config saved, but reloading it failed: {err}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::GetSlackConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_slack_section(path) {
+                Ok(s) => QueryResponsePayload::GetSlackConfig { config: slack_config_view(&s) },
+                Err(err) => map_config_write_error(err),
+            }
+        }
+        QueryPayload::SetSlackConfig { bot_token, app_token, team_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::SlackEntryWrite {
+                bot_token, app_token, team_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
+            };
+            match aivyx_config::config_write::write_slack_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "slack", "updated");
+                    match aivyx_config::config_write::read_slack_section(path) {
+                        Ok(s) => QueryResponsePayload::SlackConfigApplied {
+                            config: slack_config_view(&s),
+                            restart_required: true,
+                        },
+                        Err(err) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("slack config saved, but reloading it failed: {err}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::TestMcpServerConnection {
             transport,
             command,
@@ -6337,6 +6475,60 @@ fn notify_targets_applied_after_write(path: &std::path::Path, verb: &str) -> Que
             code: "config_reload_failed".into(),
             message: format!("notify target {verb} succeeded, but reloading the list failed: {e}"),
         },
+    }
+}
+
+/// Build a `RedactedSecret` from a raw value read straight off disk (never
+/// through the interpolating loader — see `read_mcp_server_entries`'s own
+/// doc comment for why that distinction matters). `source` is always
+/// `"toml"`: this read path never resolves an env-var fallback, so `"toml"`
+/// is the only value it could ever truthfully report.
+fn redact(raw: Option<&str>) -> aivyx_ipc::protocol::RedactedSecret {
+    aivyx_ipc::protocol::RedactedSecret {
+        configured: raw.is_some_and(|s| !s.is_empty()),
+        source: "toml".to_string(),
+    }
+}
+
+fn email_config_view(e: &aivyx_config::config_write::EmailEntryWrite) -> aivyx_ipc::protocol::EmailConfigView {
+    aivyx_ipc::protocol::EmailConfigView {
+        host: e.host.clone(),
+        port: e.port,
+        tls_mode: e.tls_mode.clone(),
+        username: e.username.clone(),
+        password: redact(e.password.as_deref()),
+        from: e.from.clone(),
+    }
+}
+
+fn telegram_config_view(t: &aivyx_config::config_write::TelegramEntryWrite) -> aivyx_ipc::protocol::TelegramConfigView {
+    aivyx_ipc::protocol::TelegramConfigView {
+        token: redact(t.token.as_deref()),
+        chat_id: t.chat_id,
+        team_run_channel: t.team_run_channel.unwrap_or(false),
+        team_trigger_rate_limit: t.team_trigger_rate_limit,
+        team_command_allowed_senders: t.team_command_allowed_senders.clone().unwrap_or_default(),
+    }
+}
+
+fn discord_config_view(d: &aivyx_config::config_write::DiscordEntryWrite) -> aivyx_ipc::protocol::DiscordConfigView {
+    aivyx_ipc::protocol::DiscordConfigView {
+        token: redact(d.token.as_deref()),
+        application_id: d.application_id,
+        team_run_channel: d.team_run_channel.unwrap_or(false),
+        team_trigger_rate_limit: d.team_trigger_rate_limit,
+        team_command_allowed_senders: d.team_command_allowed_senders.clone().unwrap_or_default(),
+    }
+}
+
+fn slack_config_view(s: &aivyx_config::config_write::SlackEntryWrite) -> aivyx_ipc::protocol::SlackConfigView {
+    aivyx_ipc::protocol::SlackConfigView {
+        bot_token: redact(s.bot_token.as_deref()),
+        app_token: redact(s.app_token.as_deref()),
+        team_id: s.team_id.clone(),
+        team_run_channel: s.team_run_channel.unwrap_or(false),
+        team_trigger_rate_limit: s.team_trigger_rate_limit,
+        team_command_allowed_senders: s.team_command_allowed_senders.clone().unwrap_or_default(),
     }
 }
 
