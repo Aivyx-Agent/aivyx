@@ -3796,6 +3796,16 @@ fn McpPanel() -> Element {
             }
             if adding() || editing().is_some() {
                 McpServerForm {
+                    // Final-review fix #3 — `key` forces Dioxus to remount a
+                    // fresh `McpServerForm` instance (rather than diffing
+                    // props onto the live one) whenever which server is
+                    // being edited changes, including the "editing X" →
+                    // "adding new" transition. Without this, the form's
+                    // `use_signal` seed initializers (which only run on
+                    // first mount) would keep showing the previous server's
+                    // stale field values with Save now creating/overwriting
+                    // the wrong entry.
+                    key: "{editing().map(|e| e.name.clone()).unwrap_or_else(|| \"new\".to_string())}",
                     initial: editing(),
                     on_cancel: move |_| { adding.set(false); editing.set(None); },
                     on_save: move |entry: McpServerConfigView| {
