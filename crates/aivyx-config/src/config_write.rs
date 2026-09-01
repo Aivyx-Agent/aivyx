@@ -806,6 +806,269 @@ fn notify_target_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTabl
         .expect("just ensured present")
 }
 
+/// The `[email]` section as Studio's write form submits it — every field
+/// `Option`, `None` meaning "leave this key untouched on disk" (the
+/// partial-update convention every singleton section in this file uses).
+pub struct EmailEntryWrite {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    /// `"starttls"`, `"implicit"`, or `"none"` — matches the loader's own
+    /// accepted strings.
+    pub tls_mode: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub from: Option<String>,
+}
+
+/// Patch the `[email]` section, touching only the `Some` fields.
+pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    if let Some(v) = &entry.host {
+        doc["email"]["host"] = value(v.as_str());
+    }
+    if let Some(v) = entry.port {
+        doc["email"]["port"] = value(v as i64);
+    }
+    if let Some(v) = &entry.tls_mode {
+        doc["email"]["tls_mode"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.username {
+        doc["email"]["username"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.password {
+        doc["email"]["password"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.from {
+        doc["email"]["from"] = value(v.as_str());
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Read the `[email]` section as literally written on disk — no
+/// resolution of anything. Absent section (or absent key) reads as `None`.
+pub fn read_email_section(path: &Path) -> Result<EmailEntryWrite, ConfigWriteError> {
+    let doc = load_document(path)?;
+    if let Some(email_item) = doc.get("email") {
+        if let Some(table) = email_item.as_table_like() {
+            let str_field = |key: &str| table.get(key).and_then(|v| v.as_str()).map(str::to_string);
+            return Ok(EmailEntryWrite {
+                host: str_field("host"),
+                port: table.get("port").and_then(|v| v.as_integer()).map(|n| n as u16),
+                tls_mode: str_field("tls_mode"),
+                username: str_field("username"),
+                password: str_field("password"),
+                from: str_field("from"),
+            });
+        }
+    }
+    // If the section doesn't exist, return all None fields
+    Ok(EmailEntryWrite {
+        host: None,
+        port: None,
+        tls_mode: None,
+        username: None,
+        password: None,
+        from: None,
+    })
+}
+
+/// The `[telegram]` section as Studio's write form submits it. Partial
+/// update, same convention as [`EmailEntryWrite`].
+pub struct TelegramEntryWrite {
+    pub token: Option<String>,
+    pub chat_id: Option<i64>,
+    pub team_run_channel: Option<bool>,
+    pub team_trigger_rate_limit: Option<u32>,
+    pub team_command_allowed_senders: Option<Vec<i64>>,
+}
+
+pub fn write_telegram_section(path: &Path, entry: &TelegramEntryWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    if let Some(v) = &entry.token {
+        doc["telegram"]["token"] = value(v.as_str());
+    }
+    if let Some(v) = entry.chat_id {
+        doc["telegram"]["chat_id"] = value(v);
+    }
+    if let Some(v) = entry.team_run_channel {
+        doc["telegram"]["team_run_channel"] = value(v);
+    }
+    if let Some(v) = entry.team_trigger_rate_limit {
+        doc["telegram"]["team_trigger_rate_limit"] = value(v as i64);
+    }
+    if let Some(ids) = &entry.team_command_allowed_senders {
+        let mut arr = toml_edit::Array::new();
+        for id in ids {
+            arr.push(*id);
+        }
+        doc["telegram"]["team_command_allowed_senders"] = toml_edit::Item::Value(arr.into());
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+pub fn read_telegram_section(path: &Path) -> Result<TelegramEntryWrite, ConfigWriteError> {
+    let doc = load_document(path)?;
+    if let Some(item) = doc.get("telegram") {
+        if let Some(table) = item.as_table_like() {
+            return Ok(TelegramEntryWrite {
+                token: table.get("token").and_then(|v| v.as_str()).map(str::to_string),
+                chat_id: table.get("chat_id").and_then(|v| v.as_integer()),
+                team_run_channel: table.get("team_run_channel").and_then(|v| v.as_bool()),
+                team_trigger_rate_limit: table
+                    .get("team_trigger_rate_limit")
+                    .and_then(|v| v.as_integer())
+                    .map(|n| n as u32),
+                team_command_allowed_senders: table
+                    .get("team_command_allowed_senders")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_integer()).collect()),
+            });
+        }
+    }
+    Ok(TelegramEntryWrite {
+        token: None,
+        chat_id: None,
+        team_run_channel: None,
+        team_trigger_rate_limit: None,
+        team_command_allowed_senders: None,
+    })
+}
+
+/// The `[discord]` section as Studio's write form submits it. Partial
+/// update, same convention as [`EmailEntryWrite`].
+pub struct DiscordEntryWrite {
+    pub token: Option<String>,
+    pub application_id: Option<u64>,
+    pub team_run_channel: Option<bool>,
+    pub team_trigger_rate_limit: Option<u32>,
+    pub team_command_allowed_senders: Option<Vec<u64>>,
+}
+
+pub fn write_discord_section(path: &Path, entry: &DiscordEntryWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    if let Some(v) = &entry.token {
+        doc["discord"]["token"] = value(v.as_str());
+    }
+    if let Some(v) = entry.application_id {
+        doc["discord"]["application_id"] = value(v as i64);
+    }
+    if let Some(v) = entry.team_run_channel {
+        doc["discord"]["team_run_channel"] = value(v);
+    }
+    if let Some(v) = entry.team_trigger_rate_limit {
+        doc["discord"]["team_trigger_rate_limit"] = value(v as i64);
+    }
+    if let Some(ids) = &entry.team_command_allowed_senders {
+        let mut arr = toml_edit::Array::new();
+        for id in ids {
+            arr.push(*id as i64);
+        }
+        doc["discord"]["team_command_allowed_senders"] = toml_edit::Item::Value(arr.into());
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+pub fn read_discord_section(path: &Path) -> Result<DiscordEntryWrite, ConfigWriteError> {
+    let doc = load_document(path)?;
+    if let Some(item) = doc.get("discord") {
+        if let Some(table) = item.as_table_like() {
+            return Ok(DiscordEntryWrite {
+                token: table.get("token").and_then(|v| v.as_str()).map(str::to_string),
+                application_id: table
+                    .get("application_id")
+                    .and_then(|v| v.as_integer())
+                    .map(|n| n as u64),
+                team_run_channel: table.get("team_run_channel").and_then(|v| v.as_bool()),
+                team_trigger_rate_limit: table
+                    .get("team_trigger_rate_limit")
+                    .and_then(|v| v.as_integer())
+                    .map(|n| n as u32),
+                team_command_allowed_senders: table
+                    .get("team_command_allowed_senders")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_integer()).map(|n| n as u64).collect()),
+            });
+        }
+    }
+    Ok(DiscordEntryWrite {
+        token: None,
+        application_id: None,
+        team_run_channel: None,
+        team_trigger_rate_limit: None,
+        team_command_allowed_senders: None,
+    })
+}
+
+/// The `[slack]` section as Studio's write form submits it. Partial
+/// update, same convention as [`EmailEntryWrite`] — two independent
+/// secrets (`bot_token`/`app_token`), each individually optional so one
+/// can be rotated without touching the other.
+pub struct SlackEntryWrite {
+    pub bot_token: Option<String>,
+    pub app_token: Option<String>,
+    pub team_id: Option<String>,
+    pub team_run_channel: Option<bool>,
+    pub team_trigger_rate_limit: Option<u32>,
+    pub team_command_allowed_senders: Option<Vec<String>>,
+}
+
+pub fn write_slack_section(path: &Path, entry: &SlackEntryWrite) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    if let Some(v) = &entry.bot_token {
+        doc["slack"]["bot_token"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.app_token {
+        doc["slack"]["app_token"] = value(v.as_str());
+    }
+    if let Some(v) = &entry.team_id {
+        doc["slack"]["team_id"] = value(v.as_str());
+    }
+    if let Some(v) = entry.team_run_channel {
+        doc["slack"]["team_run_channel"] = value(v);
+    }
+    if let Some(v) = entry.team_trigger_rate_limit {
+        doc["slack"]["team_trigger_rate_limit"] = value(v as i64);
+    }
+    if let Some(ids) = &entry.team_command_allowed_senders {
+        let mut arr = toml_edit::Array::new();
+        for id in ids {
+            arr.push(id.as_str());
+        }
+        doc["slack"]["team_command_allowed_senders"] = toml_edit::Item::Value(arr.into());
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+pub fn read_slack_section(path: &Path) -> Result<SlackEntryWrite, ConfigWriteError> {
+    let doc = load_document(path)?;
+    if let Some(item) = doc.get("slack") {
+        if let Some(table) = item.as_table_like() {
+            return Ok(SlackEntryWrite {
+                bot_token: table.get("bot_token").and_then(|v| v.as_str()).map(str::to_string),
+                app_token: table.get("app_token").and_then(|v| v.as_str()).map(str::to_string),
+                team_id: table.get("team_id").and_then(|v| v.as_str()).map(str::to_string),
+                team_run_channel: table.get("team_run_channel").and_then(|v| v.as_bool()),
+                team_trigger_rate_limit: table
+                    .get("team_trigger_rate_limit")
+                    .and_then(|v| v.as_integer())
+                    .map(|n| n as u32),
+                team_command_allowed_senders: table
+                    .get("team_command_allowed_senders")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_string).collect()),
+            });
+        }
+    }
+    Ok(SlackEntryWrite {
+        bot_token: None,
+        app_token: None,
+        team_id: None,
+        team_run_channel: None,
+        team_trigger_rate_limit: None,
+        team_command_allowed_senders: None,
+    })
+}
+
 /// Stable `[budget] on_exceeded` token — matches `BudgetAction`'s
 /// `#[serde(rename_all = "snake_case")]` repr so a written file round-trips
 /// through the loader unchanged.
@@ -1647,5 +1910,157 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "ops");
         assert_eq!(entries[0].chat_id.as_deref(), Some("123456"));
+    }
+
+    #[test]
+    fn email_write_then_read_round_trips_all_fields() {
+        let path = temp_toml("email-round-trip");
+        std::fs::write(&path, "").unwrap();
+        write_email_section(&path, &EmailEntryWrite {
+            host: Some("smtp.example.com".to_string()),
+            port: Some(587),
+            tls_mode: Some("starttls".to_string()),
+            username: Some("bot@example.com".to_string()),
+            password: Some("hunter2".to_string()),
+            from: Some("bot@example.com".to_string()),
+        }).unwrap();
+        let read = read_email_section(&path).unwrap();
+        assert_eq!(read.host.as_deref(), Some("smtp.example.com"));
+        assert_eq!(read.port, Some(587));
+        assert_eq!(read.password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn email_write_with_none_password_leaves_existing_password_untouched() {
+        let path = temp_toml("email-keep-password");
+        std::fs::write(&path, "").unwrap();
+        write_email_section(&path, &EmailEntryWrite {
+            host: Some("smtp.example.com".to_string()),
+            port: None,
+            tls_mode: None,
+            username: None,
+            password: Some("original-secret".to_string()),
+            from: None,
+        }).unwrap();
+        // Second write: change only the host, password is None ("don't touch").
+        write_email_section(&path, &EmailEntryWrite {
+            host: Some("smtp2.example.com".to_string()),
+            port: None,
+            tls_mode: None,
+            username: None,
+            password: None,
+            from: None,
+        }).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("original-secret"), "password survives when not touched");
+        assert!(contents.contains("smtp2.example.com"));
+    }
+
+    #[test]
+    fn telegram_write_then_read_round_trips() {
+        let path = temp_toml("telegram-round-trip");
+        std::fs::write(&path, "").unwrap();
+        write_telegram_section(&path, &TelegramEntryWrite {
+            token: Some("123:ABC".to_string()),
+            chat_id: Some(42),
+            team_run_channel: Some(true),
+            team_trigger_rate_limit: Some(5),
+            team_command_allowed_senders: Some(vec![111, 222]),
+        }).unwrap();
+        let read = read_telegram_section(&path).unwrap();
+        assert_eq!(read.token.as_deref(), Some("123:ABC"));
+        assert_eq!(read.chat_id, Some(42));
+        assert_eq!(read.team_command_allowed_senders, Some(vec![111, 222]));
+    }
+
+    #[test]
+    fn telegram_write_with_none_token_leaves_existing_token_untouched() {
+        let path = temp_toml("telegram-keep-token");
+        std::fs::write(&path, "").unwrap();
+        write_telegram_section(&path, &TelegramEntryWrite {
+            token: Some("original-token".to_string()),
+            chat_id: None,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        }).unwrap();
+        write_telegram_section(&path, &TelegramEntryWrite {
+            token: None,
+            chat_id: Some(99),
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        }).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("original-token"));
+        assert!(contents.contains("chat_id = 99"));
+    }
+
+    #[test]
+    fn discord_write_then_read_round_trips() {
+        let path = temp_toml("discord-round-trip");
+        std::fs::write(&path, "").unwrap();
+        write_discord_section(&path, &DiscordEntryWrite {
+            token: Some("discord-token".to_string()),
+            application_id: Some(555),
+            team_run_channel: Some(false),
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: Some(vec![1, 2, 3]),
+        }).unwrap();
+        let read = read_discord_section(&path).unwrap();
+        assert_eq!(read.token.as_deref(), Some("discord-token"));
+        assert_eq!(read.application_id, Some(555));
+    }
+
+    #[test]
+    fn slack_write_then_read_round_trips_both_tokens() {
+        let path = temp_toml("slack-round-trip");
+        std::fs::write(&path, "").unwrap();
+        write_slack_section(&path, &SlackEntryWrite {
+            bot_token: Some("xoxb-1".to_string()),
+            app_token: Some("xapp-1".to_string()),
+            team_id: Some("T123".to_string()),
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: Some(vec!["U1".to_string()]),
+        }).unwrap();
+        let read = read_slack_section(&path).unwrap();
+        assert_eq!(read.bot_token.as_deref(), Some("xoxb-1"));
+        assert_eq!(read.app_token.as_deref(), Some("xapp-1"));
+    }
+
+    #[test]
+    fn slack_write_with_none_app_token_leaves_it_untouched_while_updating_bot_token() {
+        let path = temp_toml("slack-partial-update");
+        std::fs::write(&path, "").unwrap();
+        write_slack_section(&path, &SlackEntryWrite {
+            bot_token: Some("xoxb-old".to_string()),
+            app_token: Some("xapp-keep-me".to_string()),
+            team_id: None,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        }).unwrap();
+        write_slack_section(&path, &SlackEntryWrite {
+            bot_token: Some("xoxb-new".to_string()),
+            app_token: None,
+            team_id: None,
+            team_run_channel: None,
+            team_trigger_rate_limit: None,
+            team_command_allowed_senders: None,
+        }).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("xoxb-new"));
+        assert!(!contents.contains("xoxb-old"));
+        assert!(contents.contains("xapp-keep-me"), "untouched field survives");
+    }
+
+    #[test]
+    fn email_read_of_missing_section_returns_all_none() {
+        let path = temp_toml("email-missing");
+        std::fs::write(&path, "[access]\nlevel = \"sandbox\"\n").unwrap();
+        let read = read_email_section(&path).unwrap();
+        assert_eq!(read.host, None);
+        assert_eq!(read.password, None);
     }
 }
