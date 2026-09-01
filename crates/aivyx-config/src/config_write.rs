@@ -679,12 +679,18 @@ pub fn write_notify_target_section(
             }
             // Mirrors the loader's own check (`aivyx-config/src/lib.rs`'s
             // notify_targets parsing, `email.is_none()`): an email-kind
-            // target with no `[email]` section at all fails the next
-            // daemon boot. `write_email_section`'s own all-or-nothing
-            // guard (see `InvalidEmailConfig`) means a `[email]` section
-            // that *does* exist on disk is always fully populated, so a
-            // presence check here is sufficient.
-            if doc.get("email").is_none() {
+            // target requires `build_email_config` to actually return
+            // `Some`, which happens only when at least one of the six real
+            // `[email]` fields is set. A bare `[email]` header with every
+            // key commented out — a normal operator hand-edit — has NO
+            // fields set, so the loader treats it exactly like "no [email]
+            // section at all" and the daemon refuses to boot next start
+            // (final-review finding #2: the earlier `doc.get("email").is_none()`
+            // check only tested for the TOML header, not for any field
+            // being set, so it passed this case through). Checking the
+            // header's mere presence is therefore not sufficient — check
+            // for an actual field.
+            if !email_section_has_any_field(&doc) {
                 return Err(ConfigWriteError::InvalidNotifyTarget {
                     reason: format!(
                         "target {:?}: kind = \"email\" requires a top-level [email] section with SMTP credentials",
@@ -925,10 +931,32 @@ pub struct EmailEntryWrite {
 /// already set on disk — a save that only rotates `password` while
 /// `host`/`username`/`from` are already on disk from an earlier save must
 /// keep succeeding.
+/// The six real `[email]` fields the loader's `build_email_config`
+/// (`aivyx-config/src/lib.rs`) checks for its own `any_set` gate — kept as
+/// one constant so [`write_email_section`]'s merge logic and
+/// [`email_section_has_any_field`] can never drift apart on what
+/// "configured" means.
+const EMAIL_FIELD_KEYS: &[&str] = &["host", "port", "tls_mode", "username", "password", "from"];
+
+/// True if the on-disk `[email]` table (if present at all) has at least one
+/// of its six real fields set — mirrors `build_email_config`'s own
+/// `any_set` check exactly. A bare `[email]` header with every key absent
+/// (all commented out, or simply never written) is, to the loader,
+/// indistinguishable from no `[email]` section at all: `build_email_config`
+/// returns `Ok(None)` either way. Used by [`write_notify_target_section`]'s
+/// email-kind guard so it tests the same thing the loader tests, not merely
+/// whether the `[email]` TOML header exists.
+fn email_section_has_any_field(doc: &DocumentMut) -> bool {
+    let Some(existing) = doc.get("email").and_then(toml_edit::Item::as_table_like) else {
+        return false;
+    };
+    EMAIL_FIELD_KEYS.iter().any(|k| existing.contains_key(k))
+}
+
 pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), ConfigWriteError> {
     let mut doc = load_document(path)?;
 
-    let (merged_host, merged_username, merged_password, merged_from, any_set) = {
+    let (merged_host, merged_username, merged_password, merged_from, merged_tls_mode, any_set) = {
         let existing = doc.get("email").and_then(toml_edit::Item::as_table_like);
         let existing_str =
             |key: &str| existing.and_then(|t| t.get(key)).and_then(|v| v.as_str()).map(str::to_string);
@@ -938,6 +966,7 @@ pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), C
         let merged_username = entry.username.clone().or_else(|| existing_str("username"));
         let merged_password = entry.password.clone().or_else(|| existing_str("password"));
         let merged_from = entry.from.clone().or_else(|| existing_str("from"));
+        let merged_tls_mode = entry.tls_mode.clone().or_else(|| existing_str("tls_mode"));
         let merged_port_set = entry.port.is_some() || existing_has("port");
         let merged_tls_mode_set = entry.tls_mode.is_some() || existing_has("tls_mode");
 
@@ -948,7 +977,7 @@ pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), C
             || merged_password.is_some()
             || merged_from.is_some();
 
-        (merged_host, merged_username, merged_password, merged_from, any_set)
+        (merged_host, merged_username, merged_password, merged_from, merged_tls_mode, any_set)
     };
 
     if any_set {
@@ -979,6 +1008,25 @@ pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), C
                          contain `@` — this would fail to boot the daemon on the next start"
                     .to_string(),
             });
+        }
+        // Mirrors the loader's own accepted set exactly
+        // (`build_email_config`, `aivyx-config/src/lib.rs`): a missing
+        // `tls_mode` defaults to `starttls`, but an explicit value must be
+        // `"starttls"` or `"implicit"` — `"none"` is hard-rejected (Aivyx
+        // requires TLS for PLAIN/LOGIN auth) and any other string is
+        // unrecognized. Writing either currently succeeds here without this
+        // check and then bricks the next daemon boot (final-review finding
+        // #2, same failure class as the all-or-nothing checks above).
+        if let Some(mode) = merged_tls_mode.as_deref() {
+            if mode != "starttls" && mode != "implicit" {
+                return Err(ConfigWriteError::InvalidEmailConfig {
+                    reason: format!(
+                        "[email] tls_mode = {mode:?} is not accepted by the loader — \
+                         supported: \"starttls\" (default), \"implicit\" — this would fail \
+                         to boot the daemon on the next start"
+                    ),
+                });
+            }
         }
     }
 
@@ -2197,10 +2245,20 @@ mod tests {
             from: None,
         }).unwrap_err();
         assert!(matches!(err, ConfigWriteError::InvalidEmailConfig { .. }), "{err:?}");
-        // Refused before any write — the file must stay empty, not carry a
-        // half-written [email] section.
-        let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(!contents.contains("[email]"), "{contents}");
+        // Refused before any write — the file must genuinely be untouched,
+        // not just missing the literal substring "[email]" (a FRESH
+        // section always writes as an inline table via toml_edit's
+        // auto-vivification, `email = { host = "…", … }`, which never
+        // contains that substring regardless of whether the guard even
+        // ran — so checking for real emptiness via the read-side function
+        // is the only assertion that actually proves nothing was written).
+        let read = read_email_section(&path).unwrap();
+        assert_eq!(read.host, None);
+        assert_eq!(read.port, None);
+        assert_eq!(read.tls_mode, None);
+        assert_eq!(read.username, None);
+        assert_eq!(read.password, None);
+        assert_eq!(read.from, None);
     }
 
     #[test]
@@ -2223,6 +2281,108 @@ mod tests {
         assert_eq!(read.username.as_deref(), Some("bot@example.com"));
         assert_eq!(read.password.as_deref(), Some("hunter2"));
         assert_eq!(read.from.as_deref(), Some("bot@example.com"));
+    }
+
+    /// A complete `[email]` entry except `tls_mode`, which the caller fills
+    /// in per-case — shared by the tls_mode-value tests below so each one
+    /// only varies the one field under test.
+    fn complete_email_entry(tls_mode: Option<&str>) -> EmailEntryWrite {
+        EmailEntryWrite {
+            host: Some("smtp.example.com".to_string()),
+            port: Some(587),
+            tls_mode: tls_mode.map(str::to_string),
+            username: Some("bot@example.com".to_string()),
+            password: Some("hunter2".to_string()),
+            from: Some("bot@example.com".to_string()),
+        }
+    }
+
+    #[test]
+    fn email_write_rejects_tls_mode_none() {
+        // final-review finding #1: `build_email_config`
+        // (`aivyx-config/src/lib.rs`) explicitly hard-rejects
+        // `tls_mode = "none"` (Aivyx requires TLS for PLAIN/LOGIN auth) —
+        // an otherwise-complete [email] write with this value used to save
+        // successfully and then brick the next daemon boot.
+        let path = temp_toml("email-tls-mode-none");
+        std::fs::write(&path, "").unwrap();
+        let err = write_email_section(&path, &complete_email_entry(Some("none"))).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidEmailConfig { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn email_write_rejects_unrecognized_tls_mode() {
+        let path = temp_toml("email-tls-mode-unknown");
+        std::fs::write(&path, "").unwrap();
+        let err = write_email_section(&path, &complete_email_entry(Some("wat"))).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidEmailConfig { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn email_write_accepts_every_loader_accepted_tls_mode() {
+        // Mirrors `build_email_config`'s accepted set exactly: an explicit
+        // `tls_mode` must be "starttls" or "implicit" to succeed (a missing
+        // `tls_mode` also defaults to "starttls" in the loader, but this
+        // writer always sends an explicit value here).
+        for mode in ["starttls", "implicit"] {
+            let path = temp_toml(&format!("email-tls-mode-ok-{mode}"));
+            std::fs::write(&path, "").unwrap();
+            write_email_section(&path, &complete_email_entry(Some(mode)))
+                .unwrap_or_else(|e| panic!("tls_mode = {mode:?} should be accepted: {e:?}"));
+            let read = read_email_section(&path).unwrap();
+            assert_eq!(read.tls_mode.as_deref(), Some(mode));
+        }
+    }
+
+    #[test]
+    fn notify_target_write_rejects_email_kind_with_bare_email_header() {
+        // final-review finding #2: a `[email]` header with every key
+        // commented out (a normal operator hand-edit) has NO fields set,
+        // so `build_email_config` treats it exactly like "no [email]
+        // section at all" and the daemon refuses to boot next start. The
+        // old `doc.get("email").is_none()` check only tested for the TOML
+        // header's presence and let this case through.
+        let path = temp_toml("notify-email-bare-header");
+        std::fs::write(&path, "[email]\n").unwrap();
+        let entry = NotifyTargetEntryWrite {
+            name: "digest".to_string(),
+            kind: "email".to_string(),
+            chat_id: None,
+            url: None,
+            to: Some("ops@example.com".to_string()),
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        let err = write_notify_target_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidNotifyTarget { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn notify_target_write_allows_email_kind_with_fully_configured_email() {
+        // Regression guard: the bare-header fix above must not become
+        // overly strict — a genuinely configured [email] section must
+        // keep allowing an email-kind notify_target.
+        let path = temp_toml("notify-email-configured");
+        std::fs::write(&path, "").unwrap();
+        write_email_section(&path, &complete_email_entry(Some("starttls"))).unwrap();
+        let entry = NotifyTargetEntryWrite {
+            name: "digest".to_string(),
+            kind: "email".to_string(),
+            chat_id: None,
+            url: None,
+            to: Some("ops@example.com".to_string()),
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        write_notify_target_section(&path, &entry).unwrap();
     }
 
     #[test]
