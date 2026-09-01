@@ -68,6 +68,13 @@ pub enum ConfigWriteError {
     /// boot (final-review finding #1 — a password-only write on a fresh
     /// install used to brick the next daemon start). Refused here instead.
     InvalidEmailConfig { reason: String },
+    /// A `[[reflection_schedule]]` entry is structurally invalid — mirrors
+    /// the loader's own validation (`aivyx-config/src/lib.rs:7251`-7301:
+    /// non-empty name/cron, lookback bounds, name uniqueness against both
+    /// `[[reflection_schedule]]` and `[[schedule]]`) so a bad write is
+    /// refused before it corrupts the next daemon load, same principle as
+    /// `InvalidNotifyTarget`.
+    InvalidReflectionSchedule { reason: String },
     /// The existing file did not parse as TOML.
     Parse { reason: String },
     /// The file could not be read or written.
@@ -91,6 +98,7 @@ impl std::fmt::Display for ConfigWriteError {
             ConfigWriteError::InvalidMcpServer { reason } => write!(f, "invalid MCP server entry: {reason}"),
             ConfigWriteError::InvalidNotifyTarget { reason } => write!(f, "invalid notify target entry: {reason}"),
             ConfigWriteError::InvalidEmailConfig { reason } => write!(f, "invalid email config: {reason}"),
+            ConfigWriteError::InvalidReflectionSchedule { reason } => write!(f, "invalid reflection schedule entry: {reason}"),
             ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx.toml: {reason}"),
             ConfigWriteError::Io { reason } => write!(f, "{reason}"),
         }
@@ -1335,6 +1343,164 @@ pub fn write_toml_0600(path: &Path, contents: &str) -> Result<(), ConfigWriteErr
     Ok(())
 }
 
+/// The `[[reflection_schedule]]` array, as Studio's write form submits
+/// it. `role_override`/`skip_when_idle`/`min_audit_entries_to_fire` stay
+/// TOML-only — an upsert must preserve them via the `KNOWN_KEYS`
+/// mechanism below, never silently drop them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectionScheduleEntryWrite {
+    pub name: String,
+    pub cron: String,
+    pub lookback_window_secs: u64,
+    pub enabled: bool,
+}
+
+/// Add or replace (by `name`) one `[[reflection_schedule]]` entry,
+/// preserving every other entry, section, and the operator's comments.
+/// Validates the same rules the loader does
+/// (`aivyx-config/src/lib.rs:7251`-7301): non-empty `name`/`cron`,
+/// `lookback_window_secs` within `[MIN_REFLECTION_LOOKBACK_SECS,
+/// MAX_REFLECTION_LOOKBACK_SECS]` (60s – 30 days), and name uniqueness
+/// against `[[schedule]]` too — the loader rejects a reflection-schedule
+/// name that collides with a regular schedule name (shared namespace).
+/// Uniqueness *within* `[[reflection_schedule]]` itself needs no explicit
+/// check: this function always upserts by name, so a matching existing
+/// name is a replace, never a collision.
+pub fn write_reflection_schedule_section(
+    path: &Path,
+    entry: &ReflectionScheduleEntryWrite,
+) -> Result<(), ConfigWriteError> {
+    if entry.name.trim().is_empty() {
+        return Err(ConfigWriteError::InvalidReflectionSchedule {
+            reason: "name must not be empty".to_string(),
+        });
+    }
+    if entry.cron.trim().is_empty() {
+        return Err(ConfigWriteError::InvalidReflectionSchedule {
+            reason: format!("entry {:?}: cron must not be empty", entry.name),
+        });
+    }
+    if entry.lookback_window_secs < crate::MIN_REFLECTION_LOOKBACK_SECS
+        || entry.lookback_window_secs > crate::MAX_REFLECTION_LOOKBACK_SECS
+    {
+        return Err(ConfigWriteError::InvalidReflectionSchedule {
+            reason: format!(
+                "entry {:?}: lookback_window_secs = {} is outside the allowed range [{}, {}] (60s to 30 days)",
+                entry.name,
+                entry.lookback_window_secs,
+                crate::MIN_REFLECTION_LOOKBACK_SECS,
+                crate::MAX_REFLECTION_LOOKBACK_SECS,
+            ),
+        });
+    }
+
+    let mut doc = load_document(path)?;
+
+    // Cross-array uniqueness against [[schedule]] — the loader's own
+    // check, mirrored here (aivyx-config/src/lib.rs:7292-7300).
+    if let Some(sched_arr) = doc.get("schedule").and_then(toml_edit::Item::as_array_of_tables) {
+        if sched_arr
+            .iter()
+            .any(|t| t.get("name").and_then(|v| v.as_str()) == Some(entry.name.as_str()))
+        {
+            return Err(ConfigWriteError::InvalidReflectionSchedule {
+                reason: format!(
+                    "entry {:?}: collides with a [[schedule]] entry of the same name — names share a namespace",
+                    entry.name
+                ),
+            });
+        }
+    }
+
+    let arr = reflection_schedule_array_mut(&mut doc);
+
+    let mut table = toml_edit::Table::new();
+    table["name"] = value(entry.name.as_str());
+    table["cron"] = value(entry.cron.as_str());
+    table["lookback_window_secs"] = value(entry.lookback_window_secs as i64);
+    table["enabled"] = value(entry.enabled);
+
+    // Preserve any key this write schema doesn't know about —
+    // role_override/skip_when_idle/min_audit_entries_to_fire — mirroring
+    // write_mcp_server_section's/write_notify_target_section's own
+    // defensive convention (plan 1's [mcp_server.sandbox] incident is
+    // exactly the failure class this guards against).
+    const KNOWN_KEYS: &[&str] = &["name", "cron", "lookback_window_secs", "enabled"];
+    let idx = arr
+        .iter()
+        .position(|t| t.get("name").and_then(|v| v.as_str()) == Some(entry.name.as_str()));
+    match idx {
+        Some(i) => {
+            if let Some(existing) = arr.get(i) {
+                for (k, v) in existing.iter() {
+                    if KNOWN_KEYS.contains(&k) {
+                        continue;
+                    }
+                    table.insert(k, v.clone());
+                }
+            }
+            *arr.get_mut(i).expect("index just found") = table;
+        }
+        None => arr.push(table),
+    }
+
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Remove one `[[reflection_schedule]]` entry by `name`. A no-op (not an
+/// error) when no entry with that name exists.
+pub fn remove_reflection_schedule_section(path: &Path, name: &str) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    let arr = reflection_schedule_array_mut(&mut doc);
+    let idx = arr.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(name));
+    if let Some(i) = idx {
+        arr.remove(i);
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Read every `[[reflection_schedule]]` entry as literally written on
+/// disk — no resolution, and critically NOT the resolving loader's
+/// `reflection_schedules: Vec<ReflectionScheduleConfig>`, which silently
+/// drops any entry with `enabled = false` entirely (see this plan's
+/// design spec, "Corrections" §3). The Studio list view must show
+/// disabled entries too, so an operator can re-enable one.
+pub fn read_reflection_schedule_entries(path: &Path) -> Result<Vec<ReflectionScheduleEntryWrite>, ConfigWriteError> {
+    let doc = load_document(path)?;
+    let Some(arr) = doc.get("reflection_schedule").and_then(toml_edit::Item::as_array_of_tables) else {
+        return Ok(Vec::new());
+    };
+    Ok(arr.iter().map(raw_table_to_reflection_schedule).collect())
+}
+
+fn raw_table_to_reflection_schedule(table: &toml_edit::Table) -> ReflectionScheduleEntryWrite {
+    let str_field = |key: &str| table.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    ReflectionScheduleEntryWrite {
+        name: str_field("name").unwrap_or_default(),
+        cron: str_field("cron").unwrap_or_default(),
+        lookback_window_secs: table
+            .get("lookback_window_secs")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(86_400) as u64,
+        enabled: table.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+    }
+}
+
+/// The `[[reflection_schedule]]` array, creating an empty one if the
+/// section is absent from the document yet.
+fn reflection_schedule_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTables {
+    if doc
+        .get("reflection_schedule")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .is_none()
+    {
+        doc["reflection_schedule"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    doc["reflection_schedule"]
+        .as_array_of_tables_mut()
+        .expect("just ensured present")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2176,6 +2342,131 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "ops");
         assert_eq!(entries[0].chat_id.as_deref(), Some("123456"));
+    }
+
+    fn refl_entry(name: &str) -> ReflectionScheduleEntryWrite {
+        ReflectionScheduleEntryWrite {
+            name: name.to_string(),
+            cron: "0 0 9 * * * *".to_string(),
+            lookback_window_secs: 86_400,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn reflection_schedule_write_adds_a_new_entry() {
+        let path = temp_toml("refl-add");
+        std::fs::write(&path, "[access]\nlevel = \"sandbox\"\n").unwrap();
+        write_reflection_schedule_section(&path, &refl_entry("nightly")).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("[access]"), "unrelated section survives");
+        assert!(contents.contains("[[reflection_schedule]]"));
+        assert!(contents.contains("name = \"nightly\""));
+        assert!(contents.contains("cron = \"0 0 9 * * * *\""));
+    }
+
+    #[test]
+    fn reflection_schedule_write_replaces_an_existing_entry_by_name() {
+        let path = temp_toml("refl-replace");
+        std::fs::write(&path, "").unwrap();
+        write_reflection_schedule_section(&path, &refl_entry("nightly")).unwrap();
+        let mut updated = refl_entry("nightly");
+        updated.lookback_window_secs = 3600;
+        write_reflection_schedule_section(&path, &updated).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.matches("name = \"nightly\"").count(), 1);
+        assert!(contents.contains("lookback_window_secs = 3600"));
+    }
+
+    #[test]
+    fn reflection_schedule_write_preserves_unknown_keys_on_replace() {
+        let path = temp_toml("refl-preserve");
+        std::fs::write(
+            &path,
+            "[[reflection_schedule]]\nname = \"nightly\"\ncron = \"0 0 9 * * * *\"\n\
+             lookback_window_secs = 86400\nenabled = true\nrole_override = \"night-owl\"\n\
+             skip_when_idle = true\nmin_audit_entries_to_fire = 3\n",
+        )
+        .unwrap();
+        let mut updated = refl_entry("nightly");
+        updated.lookback_window_secs = 7200;
+        write_reflection_schedule_section(&path, &updated).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("role_override = \"night-owl\""), "role_override survives");
+        assert!(contents.contains("skip_when_idle = true"), "skip_when_idle survives");
+        assert!(contents.contains("min_audit_entries_to_fire = 3"), "min_audit_entries_to_fire survives");
+        assert!(contents.contains("lookback_window_secs = 7200"), "the actual edit applied");
+    }
+
+    #[test]
+    fn reflection_schedule_write_rejects_empty_name() {
+        let path = temp_toml("refl-empty-name");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = refl_entry("nightly");
+        entry.name = "  ".to_string();
+        let err = write_reflection_schedule_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidReflectionSchedule { .. }));
+    }
+
+    #[test]
+    fn reflection_schedule_write_rejects_empty_cron() {
+        let path = temp_toml("refl-empty-cron");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = refl_entry("nightly");
+        entry.cron = String::new();
+        let err = write_reflection_schedule_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidReflectionSchedule { .. }));
+    }
+
+    #[test]
+    fn reflection_schedule_write_rejects_lookback_out_of_range() {
+        let path = temp_toml("refl-bad-lookback");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = refl_entry("nightly");
+        entry.lookback_window_secs = 30; // below the 60s floor
+        let err = write_reflection_schedule_section(&path, &entry).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidReflectionSchedule { .. }));
+    }
+
+    #[test]
+    fn reflection_schedule_write_rejects_name_colliding_with_a_regular_schedule() {
+        let path = temp_toml("refl-collide-schedule");
+        std::fs::write(
+            &path,
+            "[[schedule]]\nname = \"nightly\"\ncron = \"0 0 9 * * * *\"\nprompt = \"check things\"\n",
+        )
+        .unwrap();
+        let err = write_reflection_schedule_section(&path, &refl_entry("nightly")).unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidReflectionSchedule { .. }));
+    }
+
+    #[test]
+    fn reflection_schedule_remove_drops_the_named_entry_only() {
+        let path = temp_toml("refl-remove");
+        std::fs::write(&path, "").unwrap();
+        write_reflection_schedule_section(&path, &refl_entry("nightly")).unwrap();
+        write_reflection_schedule_section(&path, &refl_entry("weekly-digest")).unwrap();
+        remove_reflection_schedule_section(&path, "nightly").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("nightly"));
+        assert!(contents.contains("weekly-digest"));
+    }
+
+    #[test]
+    fn read_reflection_schedule_entries_round_trips_and_includes_disabled() {
+        let path = temp_toml("refl-round-trip");
+        std::fs::write(&path, "").unwrap();
+        write_reflection_schedule_section(&path, &refl_entry("nightly")).unwrap();
+        let mut disabled = refl_entry("paused-one");
+        disabled.enabled = false;
+        write_reflection_schedule_section(&path, &disabled).unwrap();
+        let entries = read_reflection_schedule_entries(&path).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.name == "nightly" && e.enabled));
+        assert!(
+            entries.iter().any(|e| e.name == "paused-one" && !e.enabled),
+            "a disabled entry must still be readable — the resolving loader drops these entirely"
+        );
     }
 
     #[test]
