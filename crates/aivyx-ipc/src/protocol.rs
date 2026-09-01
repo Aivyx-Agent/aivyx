@@ -203,6 +203,43 @@ pub enum QueryPayload {
     /// surface — creating/editing a target still means editing
     /// `aivyx.toml`.
     GetNotifyTargets,
+    /// POLISH_WAVES.md sub-project 7 plan 2 — the editable notify-target
+    /// list (distinct from `GetNotifyTargets`'s read-only status view).
+    /// Responds with [`QueryResponsePayload::GetNotifyTargetConfigs`].
+    GetNotifyTargetConfigs,
+    /// Add or replace (by `name`) one `[[notify_target]]` entry. Takes
+    /// effect on the next daemon start. Responds with
+    /// [`QueryResponsePayload::NotifyTargetsApplied`] (or `QueryError`).
+    SetNotifyTarget {
+        name: String,
+        // `kind` alone collides with this enum's own `#[serde(tag =
+        // "kind")]` internal tag (same reason `trigger_kind`/
+        // `outcome_kind`/`surface_kind` elsewhere in this file avoid the
+        // bare word) — keep the Rust field name `kind` for parity with
+        // `NotifyTargetEntryWrite`/`NotifyTargetConfigView`, but rename
+        // its wire key so it doesn't shadow the tag.
+        #[serde(rename = "target_kind")]
+        kind: String,
+        #[serde(default)]
+        chat_id: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        to: Option<String>,
+        enabled: bool,
+        is_default: bool,
+        #[serde(default)]
+        retry_count: u32,
+        #[serde(default)]
+        retry_backoff_ms_start: u64,
+        #[serde(default)]
+        rate_limit_max: Option<u32>,
+        #[serde(default)]
+        rate_limit_window_secs: Option<u64>,
+    },
+    /// Remove one `[[notify_target]]` entry by name (a no-op if absent).
+    /// Responds with [`QueryResponsePayload::NotifyTargetsApplied`].
+    DeleteNotifyTarget { name: String },
     /// Phase 74 — list every distinct memory topic. Drives the
     /// Web UI Memory pane's left-column topic list + the
     /// `aivyx memory list` CLI render.
@@ -900,6 +937,15 @@ pub enum QueryResponsePayload {
     GetNotifyTargets {
         targets: Vec<NotifyTargetView>,
     },
+    /// Response to [`QueryPayload::GetNotifyTargetConfigs`].
+    GetNotifyTargetConfigs { targets: Vec<NotifyTargetConfigView> },
+    /// Response to [`QueryPayload::SetNotifyTarget`] / [`QueryPayload::
+    /// DeleteNotifyTarget`]. Carries the fresh list and `restart_required`
+    /// (always `true` — notify targets are boot-constructed).
+    NotifyTargetsApplied {
+        targets: Vec<NotifyTargetConfigView>,
+        restart_required: bool,
+    },
     /// Phase 74 — response to [`QueryPayload::ListMemoryTopics`].
     /// Distinct topic names sorted ascending.
     ListMemoryTopics {
@@ -1533,6 +1579,27 @@ pub struct NotifyTargetView {
     pub name: String,
     pub kind: String,
     pub is_default: bool,
+}
+
+/// The **editable configuration** of one `[[notify_target]]` entry —
+/// distinct from `NotifyTargetView` (the read-only status type shown in
+/// the Notifications screen's "Targets" rail). No secret fields — the
+/// actual credentials for an email-kind target live in the separate
+/// `[email]` section (see `EmailConfigView`), and telegram/webhook/email
+/// targets here only carry routing data (`chat_id`/`url`/`to`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NotifyTargetConfigView {
+    pub name: String,
+    pub kind: String,
+    pub chat_id: Option<String>,
+    pub url: Option<String>,
+    pub to: Option<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub retry_count: u32,
+    pub retry_backoff_ms_start: u64,
+    pub rate_limit_max: Option<u32>,
+    pub rate_limit_window_secs: Option<u64>,
 }
 
 /// Wire-safe mirror of `aivyx_core::ChannelPlatform` (Chapter Postern).
@@ -5198,6 +5265,46 @@ mod tests {
         };
         let json = serde_json::to_string(&view).unwrap();
         let back: McpServerConfigView = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, view);
+    }
+
+    #[test]
+    fn set_notify_target_round_trips() {
+        let msg = QueryPayload::SetNotifyTarget {
+            name: "ops".to_string(),
+            kind: "telegram".to_string(),
+            chat_id: Some("123456".to_string()),
+            url: None,
+            to: None,
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: QueryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn notify_target_config_view_round_trips() {
+        let view = NotifyTargetConfigView {
+            name: "ops".to_string(),
+            kind: "telegram".to_string(),
+            chat_id: Some("123456".to_string()),
+            url: None,
+            to: None,
+            enabled: true,
+            is_default: false,
+            retry_count: 0,
+            retry_backoff_ms_start: 500,
+            rate_limit_max: None,
+            rate_limit_window_secs: None,
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        let back: NotifyTargetConfigView = serde_json::from_str(&json).unwrap();
         assert_eq!(back, view);
     }
 

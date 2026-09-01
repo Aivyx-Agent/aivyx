@@ -4425,6 +4425,19 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::GetNotifyTargetConfigs => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match read_notify_target_configs(path) {
+                Ok(targets) => QueryResponsePayload::GetNotifyTargetConfigs { targets },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "config_reload_failed".into(),
+                    message: format!("failed to read notify target configs: {e}"),
+                },
+            }
+        }
         QueryPayload::GetSchedules => {
             // Command Center — the agent's scheduled background routines.
             // Read-only: list the schedule store, map each record to a wasm-clean
@@ -5475,6 +5488,57 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::SetNotifyTarget {
+            name,
+            kind,
+            chat_id,
+            url,
+            to,
+            enabled,
+            is_default,
+            retry_count,
+            retry_backoff_ms_start,
+            rate_limit_max,
+            rate_limit_window_secs,
+        } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::NotifyTargetEntryWrite {
+                name: name.clone(),
+                kind,
+                chat_id,
+                url,
+                to,
+                enabled,
+                is_default,
+                retry_count,
+                retry_backoff_ms_start,
+                rate_limit_max,
+                rate_limit_window_secs,
+            };
+            match aivyx_config::config_write::write_notify_target_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "notify_target", &format!("set {name}"));
+                    notify_targets_applied_after_write(path, "set")
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::DeleteNotifyTarget { name } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::remove_notify_target_section(path, &name) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "notify_target", &format!("delete {name}"));
+                    notify_targets_applied_after_write(path, "delete")
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::TestMcpServerConnection {
             transport,
             command,
@@ -6166,6 +6230,7 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
         E::RootNotAllowed { .. } => "root_not_allowed",
         E::InvalidBudget { .. } => "invalid_budget",
         E::InvalidMcpServer { .. } => "invalid_mcp_server",
+        E::InvalidNotifyTarget { .. } => "invalid_notify_target",
         E::Parse { .. } => "config_parse_failed",
         E::Io { .. } => "config_write_failed",
     };
@@ -6229,6 +6294,48 @@ fn mcp_servers_applied_after_write(path: &std::path::Path, verb: &str) -> QueryR
         Err(e) => QueryResponsePayload::QueryError {
             code: "config_reload_failed".into(),
             message: format!("mcp server {verb} succeeded, but reloading the list failed: {e}"),
+        },
+    }
+}
+
+/// Re-read `[[notify_target]]` from disk into the wire view type — shared
+/// by `GetNotifyTargetConfigs`/`SetNotifyTarget`/`DeleteNotifyTarget`'s
+/// handlers, mirroring `read_mcp_server_configs`'s own convention exactly.
+fn read_notify_target_configs(
+    path: &std::path::Path,
+) -> Result<Vec<aivyx_ipc::protocol::NotifyTargetConfigView>, String> {
+    let entries = aivyx_config::config_write::read_notify_target_entries(path)
+        .map_err(|e| e.to_string())?;
+    Ok(entries
+        .into_iter()
+        .map(|t| aivyx_ipc::protocol::NotifyTargetConfigView {
+            name: t.name,
+            kind: t.kind,
+            chat_id: t.chat_id,
+            url: t.url,
+            to: t.to,
+            enabled: t.enabled,
+            is_default: t.is_default,
+            retry_count: t.retry_count,
+            retry_backoff_ms_start: t.retry_backoff_ms_start,
+            rate_limit_max: t.rate_limit_max,
+            rate_limit_window_secs: t.rate_limit_window_secs,
+        })
+        .collect())
+}
+
+/// Mirrors `mcp_servers_applied_after_write`'s own convention exactly,
+/// including surfacing a re-read failure as a `QueryError` rather than
+/// silently claiming zero targets (plan 1's final-review finding #5).
+fn notify_targets_applied_after_write(path: &std::path::Path, verb: &str) -> QueryResponsePayload {
+    match read_notify_target_configs(path) {
+        Ok(targets) => QueryResponsePayload::NotifyTargetsApplied {
+            targets,
+            restart_required: true,
+        },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "config_reload_failed".into(),
+            message: format!("notify target {verb} succeeded, but reloading the list failed: {e}"),
         },
     }
 }
