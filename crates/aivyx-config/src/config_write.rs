@@ -357,6 +357,7 @@ fn remove_voice_key(doc: &mut DocumentMut, key: &str) {
 /// for the wire; `aivyx-channel`'s daemon handler converts between them,
 /// matching how `write_budget_section` takes `&aivyx_cost::BudgetConfig`
 /// rather than a wire type directly.
+#[derive(Debug, Clone, PartialEq)]
 pub struct McpServerEntryWrite {
     pub name: String,
     /// `"stdio"`, `"sse"`, or `"http"` — matches the loader's own accepted
@@ -434,7 +435,13 @@ pub fn write_mcp_server_section(
         }
         table["env"] = toml_edit::Item::Value(env_table.into());
     }
-    if !server.headers.is_empty() {
+    // `headers` is for the remote transports only — the loader itself
+    // rejects a stdio entry that declares `headers` (`aivyx-config/src/lib.rs`'s
+    // mcp_servers parsing). Rather than erroring here (the Studio form never
+    // sends headers for a stdio entry, but this primitive is called by other
+    // callers too), just drop them so a stdio write can never produce a file
+    // the loader then refuses at next boot.
+    if transport_key != "stdio" && !server.headers.is_empty() {
         let mut headers_table = toml_edit::InlineTable::new();
         for (k, v) in &server.headers {
             headers_table.insert(k, v.as_str().into());
@@ -445,9 +452,28 @@ pub fn write_mcp_server_section(
         table["url"] = value(url.as_str());
     }
 
+    // Fields this write schema doesn't know about — `sandbox`
+    // (`[mcp_server.sandbox]`) and `bundled` — are deliberately not exposed
+    // to Studio (POLISH_WAVES.md sub-project 7 scope), but an upsert must
+    // never destroy them on an existing entry: sandboxing is the documented
+    // default posture (`docs/MCP_RECIPES.md`), and silently stripping it on
+    // an unrelated field edit would drop a THREAT_MODEL.md security control.
+    // Preserve every key the existing table has that isn't one of the 8
+    // fields this function itself writes, defensively covering any future
+    // schema growth too.
+    const KNOWN_KEYS: &[&str] =
+        &["name", "transport", "command", "args", "env", "headers", "url", "enabled"];
+
     let idx = arr.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(server.name.as_str()));
     match idx {
         Some(i) => {
+            if let Some(existing) = arr.get(i) {
+                for (k, v) in existing.iter() {
+                    if !KNOWN_KEYS.contains(&k) {
+                        table.insert(k, v.clone());
+                    }
+                }
+            }
             *arr.get_mut(i).expect("index just found") = table;
         }
         None => {
@@ -469,6 +495,69 @@ pub fn remove_mcp_server_section(path: &Path, name: &str) -> Result<(), ConfigWr
         arr.remove(i);
     }
     write_toml_0600(path, &doc.to_string())
+}
+
+/// Read every `[[mcp_server]]` entry **as literally written on disk** —
+/// `${VAR}` placeholders and all, no `${VAR}` interpolation, no environment
+/// lookups. This is the read-side counterpart to [`write_mcp_server_section`]
+/// and deliberately does *not* go through `AivyxConfig::load_from_env_and_toml`
+/// (the full loader): that loader resolves `env`/`headers` against the
+/// daemon's real environment, and a `GetX` response must never carry a
+/// resolved secret value (see the design spec's binding secret-field
+/// convention) — the second-order failure mode is worse than the leak
+/// itself, since a naive edit-and-save round-trip would bake the resolved
+/// secret back into `aivyx.toml` as a literal, permanently destroying the
+/// `${VAR}` placeholder. A missing file reads as an empty list (mirrors
+/// [`load_document`]'s missing-file-is-empty posture); a malformed file
+/// (bad TOML syntax) is a real error the caller should surface rather than
+/// silently claim "zero servers".
+///
+/// Deliberately loose about anything beyond `${VAR}`-literal extraction: no
+/// transport/command/url validation (that's [`write_mcp_server_section`]'s
+/// job on the way *in*) — a disabled or even structurally incomplete entry
+/// still round-trips here so the operator can see and fix it in Studio,
+/// unlike the full loader which validates strictly and skips
+/// `enabled = false` entries entirely.
+pub fn read_mcp_server_entries(path: &Path) -> Result<Vec<McpServerEntryWrite>, ConfigWriteError> {
+    let doc = load_document(path)?;
+    let Some(arr) = doc.get("mcp_server").and_then(toml_edit::Item::as_array_of_tables) else {
+        return Ok(Vec::new());
+    };
+    Ok(arr.iter().map(raw_table_to_entry).collect())
+}
+
+/// One `[[mcp_server]]` TOML table → its literal-value `McpServerEntryWrite`
+/// mirror. Every field is read as a plain string/bool/array — no
+/// interpolation, no defaulting beyond what makes an incomplete entry
+/// displayable (e.g. a missing `enabled` reads as `true`, matching the
+/// loader's own `default_true`).
+fn raw_table_to_entry(table: &toml_edit::Table) -> McpServerEntryWrite {
+    let str_field = |key: &str| table.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let pairs_field = |key: &str| -> Vec<(String, String)> {
+        table
+            .get(key)
+            .and_then(toml_edit::Item::as_table_like)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    McpServerEntryWrite {
+        name: str_field("name").unwrap_or_default(),
+        transport: str_field("transport").unwrap_or_else(|| "stdio".to_string()),
+        command: str_field("command"),
+        args: table
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_string).collect())
+            .unwrap_or_default(),
+        env: pairs_field("env"),
+        headers: pairs_field("headers"),
+        url: str_field("url"),
+        enabled: table.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+    }
 }
 
 /// The `[[mcp_server]]` array, creating an empty one if the section is
@@ -1010,5 +1099,103 @@ mod tests {
         remove_mcp_server_section(&path, "does-not-exist").unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("name = \"github\""));
+    }
+
+    // --- Post-hoc final-review fixes -------------------------------------
+
+    /// Fix #1 (CRITICAL): the raw read must never resolve `${VAR}` — it must
+    /// return the literal placeholder even when the process environment has
+    /// a real value for that variable name, since this is exactly the
+    /// secret-leak scenario a `GetMcpServerConfigs` response must avoid.
+    #[test]
+    fn read_mcp_server_entries_never_resolves_env_placeholders() {
+        // SAFETY: test-only env mutation under a distinctive, module-unique
+        // var name — matches the narrowly-scoped `#[allow(unsafe_code)]`
+        // convention `crate::tests::EnvScope` uses for the same Rust-2024
+        // `set_var`/`remove_var` requirement (see `lib.rs`'s crate-level
+        // `#![deny(unsafe_code)]` comment).
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("SOME_TEST_VAR", "the-real-secret-value");
+        }
+        let path = temp_toml("mcp-raw-read-secret");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = stdio_entry("github");
+        entry.env = vec![("TOKEN".to_string(), "${SOME_TEST_VAR}".to_string())];
+        write_mcp_server_section(&path, &entry).unwrap();
+
+        let entries = read_mcp_server_entries(&path).unwrap();
+        assert_eq!(entries.len(), 1);
+        let (_, v) = entries[0]
+            .env
+            .iter()
+            .find(|(k, _)| k == "TOKEN")
+            .expect("TOKEN env entry present");
+        assert_eq!(v, "${SOME_TEST_VAR}", "must stay a literal placeholder, never resolve");
+        assert!(!v.contains("the-real-secret-value"));
+
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var("SOME_TEST_VAR");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Fix #2 (CRITICAL): an upsert through this primitive must never
+    /// destroy `[mcp_server.sandbox]` or `bundled` — both are TOML-only
+    /// fields this write schema doesn't carry, and sandboxing is the
+    /// documented default security posture.
+    #[test]
+    fn mcp_server_write_preserves_sandbox_and_bundled_on_update() {
+        let path = temp_toml("mcp-preserve-sandbox");
+        std::fs::write(
+            &path,
+            "[[mcp_server]]\n\
+             name = \"github\"\n\
+             transport = \"stdio\"\n\
+             command = \"npx\"\n\
+             enabled = true\n\
+             bundled = true\n\
+             \n\
+             [mcp_server.sandbox]\n\
+             wrapper = \"bwrap\"\n\
+             args = [\"--ro-bind\", \"/\", \"/\"]\n",
+        )
+        .unwrap();
+
+        let mut updated = stdio_entry("github");
+        updated.enabled = false;
+        write_mcp_server_section(&path, &updated).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("enabled = false"), "the actual edit applied: {contents}");
+        assert!(contents.contains("bundled = true"), "bundled must survive: {contents}");
+        assert!(
+            contents.contains("[mcp_server.sandbox]") || contents.contains("sandbox"),
+            "sandbox block must survive: {contents}"
+        );
+        assert!(contents.contains("wrapper = \"bwrap\""), "{contents}");
+        assert!(contents.contains("--ro-bind"), "{contents}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Fix #6 (IMPORTANT): the loader rejects a stdio entry that also
+    /// declares `headers` — rather than let a bad write through, this
+    /// primitive silently drops `headers` for a stdio transport so the
+    /// written file always loads cleanly regardless of caller.
+    #[test]
+    fn mcp_server_write_drops_headers_on_stdio_transport() {
+        let path = temp_toml("mcp-stdio-drops-headers");
+        std::fs::write(&path, "").unwrap();
+        let mut entry = stdio_entry("github");
+        entry.headers = vec![("Authorization".to_string(), "Bearer x".to_string())];
+        write_mcp_server_section(&path, &entry).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("headers"), "{contents}");
+
+        let entries = read_mcp_server_entries(&path).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].headers.is_empty());
+        std::fs::remove_file(&path).ok();
     }
 }
