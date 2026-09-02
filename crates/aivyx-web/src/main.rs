@@ -19,7 +19,7 @@
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DiscordConfigView, DocEntry, DocFile, EffectivePersonaSummary,
     EmailConfigView, EmbeddingConfigView, FrontendMessage,
-    GalleryImage, McpServerConfigView, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode,
+    GalleryImage, McpServerCallStats, McpServerConfigView, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode,
     MemoryProfileConfigView,
     NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
@@ -310,6 +310,11 @@ struct McpState {
     captured_unix: u64,
     loaded: bool,
     configs: Vec<McpServerConfigView>,
+    /// POLISH_WAVES.md sub-project 8 item C — per-server call stats
+    /// from `GetMcpServerCallStats`, distinct from `servers` above
+    /// (`GetMcpStatus`'s boot-time snapshot). Joined against `servers`
+    /// by `server_name == name` when rendering `McpServerCard`.
+    call_stats: Vec<McpServerCallStats>,
 }
 
 /// Chapter Almanac — Tools screen state: the daemon's registered tool
@@ -4702,6 +4707,21 @@ fn mcp_query() -> FrontendMessage {
     }
 }
 
+/// POLISH_WAVES.md sub-project 8 item C — the rolling per-server
+/// health query, fixed to a 24h window (matching `[proactive]`'s own
+/// `DEFAULT_PROACTIVE_WINDOW_SECS` — no operator-configurable picker,
+/// YAGNI). Shares the `"mc-mcp-status"` id with `mcp_query()` — both
+/// are read-only status fetches for the same panel, and neither is
+/// expected to error under normal operation (only `GetMcpServerCall
+/// Stats`'s "no_audit_log" case would, which is as rare as `GetMcpStatus`
+/// itself failing).
+fn mcp_server_call_stats_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-mcp-status".to_string(),
+        payload: QueryPayload::GetMcpServerCallStats { window_secs: Some(86_400) },
+    }
+}
+
 fn mcp_server_configs_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-mcp-configs".to_string(),
@@ -4745,6 +4765,7 @@ fn McpPanel() -> Element {
     use_future(move || async move {
         ws.send(mcp_query());
         ws.send(mcp_server_configs_query());
+        ws.send(mcp_server_call_stats_query());
     });
 
     let m = mcp();
@@ -4758,7 +4779,11 @@ fn McpPanel() -> Element {
                 }
                 button {
                     class: "btn-ghost",
-                    onclick: move |_| { ws.send(mcp_query()); ws.send(mcp_server_configs_query()); },
+                    onclick: move |_| {
+                        ws.send(mcp_query());
+                        ws.send(mcp_server_configs_query());
+                        ws.send(mcp_server_call_stats_query());
+                    },
                     "Refresh"
                 }
             }
@@ -4773,7 +4798,10 @@ fn McpPanel() -> Element {
             } else {
                 div { class: "mcp-grid",
                     for sv in m.servers.iter() {
-                        { rsx! { McpServerCard { key: "{sv.name}", view: sv.clone() } } }
+                        {
+                            let stats = m.call_stats.iter().find(|s| s.server_name == sv.name).cloned();
+                            rsx! { McpServerCard { key: "{sv.name}", view: sv.clone(), call_stats: stats } }
+                        }
                     }
                 }
             }
@@ -4834,19 +4862,52 @@ fn McpPanel() -> Element {
     }
 }
 
+/// POLISH_WAVES.md sub-project 8 item C — the health-chip class + label
+/// for one server's rolling call stats. A pure function (no `Element`,
+/// no context) so it's directly unit-testable, mirroring this file's
+/// existing `phase_class`/`eff_class`-style small helpers.
+///
+/// `stats: None` means no `mcp.call` audit entries for this server in
+/// the window — a configured-but-unused server is not itself unhealthy,
+/// so this renders neutral, not amber/red. `"failed"` and `"denied"`
+/// outcomes both count toward the unhealthy tally: a denial is still a
+/// call that didn't do what the operator configured it to do.
+fn mcp_health_chip(stats: Option<&McpServerCallStats>) -> (&'static str, String) {
+    let Some(s) = stats else {
+        return ("chip", "no recent activity".to_string());
+    };
+    let bad = s.outcomes.get("failed").copied().unwrap_or(0)
+        + s.outcomes.get("denied").copied().unwrap_or(0);
+    let ok = s.calls.saturating_sub(bad);
+    if bad == 0 {
+        ("chip sage", format!("{ok} ok"))
+    } else if bad.saturating_mul(2) > s.calls {
+        ("chip error", format!("{ok} ok / {bad} failed"))
+    } else {
+        ("chip amber", format!("{ok} ok / {bad} failed"))
+    }
+}
+
 #[component]
-fn McpServerCard(view: McpServerStatusView) -> Element {
+fn McpServerCard(view: McpServerStatusView, call_stats: Option<McpServerCallStats>) -> Element {
     let (pill_class, pill_label) = if view.connected {
         ("chip sage", "connected")
     } else {
         ("chip error", "failed")
     };
+    // POLISH_WAVES.md sub-project 8 item C — additive to the boot-time
+    // pill above, not a replacement: a server can be `connected` (it
+    // answered the startup handshake) while this chip is red (its
+    // tools have been failing since) -- that combination is the exact
+    // finding this item exists to surface.
+    let (health_class, health_label) = mcp_health_chip(call_stats.as_ref());
     rsx! {
         div { class: "glass-card mcp-card",
             div { class: "mcp-card-head",
                 span { class: "mcp-name", "{view.name}" }
                 span { class: "label-tech", "{view.transport}" }
                 span { class: pill_class, "{pill_label}" }
+                span { class: health_class, title: "last 24h", "{health_label}" }
             }
             if view.connected {
                 p { class: "label-tech", "{view.tool_count} tool(s) registered" }
@@ -4866,6 +4927,81 @@ fn McpServerCard(view: McpServerStatusView) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_health_chip_tests {
+    use super::*;
+
+    #[test]
+    fn mcp_health_chip_no_stats_is_neutral() {
+        let (class, label) = mcp_health_chip(None);
+        assert_eq!(class, "chip");
+        assert_eq!(label, "no recent activity");
+    }
+
+    #[test]
+    fn mcp_health_chip_all_ok_is_sage() {
+        let mut outcomes = std::collections::BTreeMap::new();
+        outcomes.insert("completed".to_string(), 5u64);
+        let stats = McpServerCallStats {
+            server_name: "comfyui".to_string(),
+            calls: 5,
+            outcomes,
+            total_duration_ms: 500,
+        };
+        let (class, label) = mcp_health_chip(Some(&stats));
+        assert_eq!(class, "chip sage");
+        assert_eq!(label, "5 ok");
+    }
+
+    #[test]
+    fn mcp_health_chip_minority_failures_is_amber() {
+        let mut outcomes = std::collections::BTreeMap::new();
+        outcomes.insert("completed".to_string(), 8u64);
+        outcomes.insert("failed".to_string(), 2u64);
+        let stats = McpServerCallStats {
+            server_name: "duckduckgo-search".to_string(),
+            calls: 10,
+            outcomes,
+            total_duration_ms: 1000,
+        };
+        let (class, label) = mcp_health_chip(Some(&stats));
+        assert_eq!(class, "chip amber");
+        assert_eq!(label, "8 ok / 2 failed");
+    }
+
+    #[test]
+    fn mcp_health_chip_majority_failures_is_error() {
+        let mut outcomes = std::collections::BTreeMap::new();
+        outcomes.insert("completed".to_string(), 2u64);
+        outcomes.insert("failed".to_string(), 8u64);
+        let stats = McpServerCallStats {
+            server_name: "duckduckgo-search".to_string(),
+            calls: 10,
+            outcomes,
+            total_duration_ms: 1000,
+        };
+        let (class, label) = mcp_health_chip(Some(&stats));
+        assert_eq!(class, "chip error");
+        assert_eq!(label, "2 ok / 8 failed");
+    }
+
+    #[test]
+    fn mcp_health_chip_counts_denied_as_unhealthy_too() {
+        let mut outcomes = std::collections::BTreeMap::new();
+        outcomes.insert("completed".to_string(), 3u64);
+        outcomes.insert("denied".to_string(), 1u64);
+        let stats = McpServerCallStats {
+            server_name: "comfyui".to_string(),
+            calls: 4,
+            outcomes,
+            total_duration_ms: 400,
+        };
+        let (class, label) = mcp_health_chip(Some(&stats));
+        assert_eq!(class, "chip amber");
+        assert_eq!(label, "3 ok / 1 failed");
     }
 }
 
@@ -9669,6 +9805,13 @@ async fn read_task(
                     m.servers = servers;
                     m.captured_unix = captured_unix;
                     m.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::McpServerCallStats { servers },
+                    ..
+                } => {
+                    // POLISH_WAVES.md sub-project 8 item C.
+                    mcp.write().call_stats = servers;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetMcpServerConfigs { servers },
