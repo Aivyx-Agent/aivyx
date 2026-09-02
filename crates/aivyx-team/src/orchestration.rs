@@ -124,7 +124,7 @@ impl DecomposeTaskTool {
                     "goal": { "type": "string" },
                     "steps": {
                         "type": "array",
-                        "description": "DAG steps. A delegate step has {specialist, prompt}; a gate step has {reviewer, criteria}. `deps` lists step ids that must finish first.",
+                        "description": "DAG steps. A delegate step has {specialist, prompt, memory_topic?}; a gate step has {reviewer, criteria}. `deps` lists step ids that must finish first.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -163,7 +163,12 @@ impl Tool for DecomposeTaskTool {
          memory about the same logical subject (e.g. both refine a shared summary), give them \
          the SAME memory_topic so their writes land under one consistent name instead of each \
          specialist inventing its own. Leave unset when a step's memory writes don't need to \
-         share a name with any other step. Returns each step's output."
+         share a name with any other step. Only set memory_topic on a step whose memory writes \
+         are all about that ONE shared subject: every memory.write the step makes is forced to \
+         this exact topic, and entries under one topic that are near-identical to each other get \
+         superseded (the older one is deleted) — sharing a topic across genuinely distinct \
+         subjects (e.g. per-item reports that happen to be textually similar, like several \
+         airports' weather reports) can silently delete one of them. Returns each step's output."
     }
     fn input_schema(&self) -> &Value {
         &self.schema

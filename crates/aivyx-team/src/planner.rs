@@ -146,7 +146,11 @@ Rules:\n\
 logical subject (e.g. both steps refine one shared summary), give them the SAME `memory_topic` \
 so their writes land under one consistent name — do not let each specialist invent its own name \
 for the same thing. Leave `memory_topic` unset when a step's memory writes are their own \
-distinct subject.\n\
+distinct subject. Only set `memory_topic` on a step whose OWN memory writes are all about that \
+one shared subject: every write the step makes is forced to this exact topic, and near-identical \
+entries under one topic get superseded (the older is deleted) — sharing a topic across genuinely \
+distinct items (e.g. one step producing several similar per-item reports) can silently delete \
+one of them.\n\
 {gate_rule}\
   - CAPABILITY MATCH: a step that must CREATE or SAVE a file (or write a note to \
 memory) MUST be delegated to a specialist tagged `[writes files]` (or `[writes \

@@ -39,6 +39,10 @@ async fn run(
             detail: format!("`specialist` and `{prompt_key}` (strings) are required"),
         });
     };
+    // Sub-project 5 — this ad-hoc delegate/query path has no mission Step
+    // in scope (it's not driven by TeamRuntime's DAG), so there is no
+    // LEAD-assigned memory_topic to thread through here. `None` is the
+    // only correct value, not a placeholder for future work.
     match pool.run(specialist, prompt, None, ctx.channel).await {
         Ok(result) => ToolOutcome::Completed {
             output: json!({ "specialist": specialist, "result": result }),

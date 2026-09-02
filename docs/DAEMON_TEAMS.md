@@ -25,7 +25,7 @@
   the end**. `MissionStatus::{Completed, GateRejected{step,verdict}}`. There is
   **no step-level progress** — the caller is blind until completion.
 - **Mission DAG.** `mission.rs`: `Step { id, kind, deps }`,
-  `StepKind::{Delegate{specialist,prompt}, Gate{reviewer,criteria}}`,
+  `StepKind::{Delegate{specialist,prompt,memory_topic?}, Gate{reviewer,criteria}}`,
   `plan.ready(&completed)`, Kahn cycle detection, `validate()`. Gates are
   judged by `gate_passed()` (a verdict passes unless it begins with `FAIL`).
 - **In-process driver.** `aivyx-cli/.../team.rs::run_mission` builds the team
