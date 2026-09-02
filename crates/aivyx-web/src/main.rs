@@ -23,7 +23,7 @@ use aivyx_ipc::protocol::{
     NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
+    QueryResponsePayload, ReflectionScheduleConfigView, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
     SkillAuthorOp, SkillView, SlackConfigView, StreamEventPayload, TelegramConfigView,
     ToolCatalogEntry, VoiceSettingsSnapshot,
     turn_outcome_correction,
@@ -469,6 +469,11 @@ struct Dashboard {
     /// The agent's scheduled background routines (`GetSchedules`) — drives the
     /// Routines panel + stat card, the "live agent working on its own" signal.
     schedules: Vec<ScheduleView>,
+    /// POLISH_WAVES.md sub-project 7 plan 3 — the editable
+    /// `[[reflection_schedule]]` list, distinct from `schedules` above
+    /// (regular `[[schedule]]` entries). Populated by
+    /// `GetReflectionScheduleConfigs`/`ReflectionScheduleConfigApplied`.
+    reflection_schedules: Vec<ReflectionScheduleConfigView>,
     /// `/classic` retirement — the self-learning digest (VITRINE.md's
     /// Learning pane, folded in here rather than a dedicated screen).
     /// `None` until the first response arrives.
@@ -1750,6 +1755,30 @@ fn schedules_refresh_query() -> FrontendMessage {
     }
 }
 
+fn reflection_schedule_configs_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-reflection-configs".to_string(),
+        payload: QueryPayload::GetReflectionScheduleConfigs,
+    }
+}
+fn set_reflection_schedule_query(entry: ReflectionScheduleConfigView) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-reflection-set".to_string(),
+        payload: QueryPayload::SetReflectionSchedule {
+            name: entry.name,
+            cron: entry.cron,
+            lookback_window_secs: entry.lookback_window_secs,
+            enabled: entry.enabled,
+        },
+    }
+}
+fn delete_reflection_schedule_query(name: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-reflection-delete".to_string(),
+        payload: QueryPayload::DeleteReflectionSchedule { name },
+    }
+}
+
 /// Sort key: agent proposals awaiting approval first, then enabled
 /// routines, then the rest, each bucket alphabetical.
 fn schedule_sort_key(v: &ScheduleView) -> (u8, String) {
@@ -1773,6 +1802,7 @@ fn SchedulesPanel() -> Element {
     // Fresh list on open (the 5 s poll keeps it live afterwards).
     use_future(move || async move {
         ws.send(schedules_refresh_query());
+        ws.send(reflection_schedule_configs_query());
     });
 
     let mut name = use_signal(String::new);
@@ -1786,6 +1816,11 @@ fn SchedulesPanel() -> Element {
     let mut cron = use_signal(String::new);
     let mut prompt = use_signal(String::new);
     let mut start_enabled = use_signal(|| true);
+    // POLISH_WAVES.md sub-project 7 plan 3 — the reflection-schedules
+    // section's own add/edit state, separate from the regular-schedule
+    // form above.
+    let mut refl_editing = use_signal(|| None::<ReflectionScheduleConfigView>);
+    let mut refl_adding = use_signal(|| false);
 
     // The generated cron + a human sentence, from the builder state.
     let built = use_memo(move || {
@@ -1878,6 +1913,59 @@ fn SchedulesPanel() -> Element {
                         div { class: "feed",
                             for r in rows.iter() {
                                 ScheduleAdminRow { schedule: r.clone() }
+                            }
+                        }
+                    }
+                }
+                section { class: "panel",
+                    div { class: "panel-head",
+                        h3 { "Reflection schedules" }
+                        button {
+                            class: "btn btn-primary btn-xs",
+                            onclick: move |_| { refl_editing.set(None); refl_adding.set(true); },
+                            "Add reflection schedule"
+                        }
+                    }
+                    p { class: "label-tech",
+                        "Distinct from regular schedules above — each entry fires a canonical \
+                         reflection turn (outcome-summary input, persistent proposal store) on \
+                         its own cron. role_override/skip_when_idle/min_audit_entries_to_fire \
+                         stay TOML-only for now."
+                    }
+                    if refl_adding() || refl_editing().is_some() {
+                        ReflectionScheduleForm {
+                            key: "{refl_editing().map(|e| e.name.clone()).unwrap_or_else(|| \"new\".to_string())}",
+                            initial: refl_editing(),
+                            on_cancel: move |_| { refl_adding.set(false); refl_editing.set(None); },
+                            on_save: move |entry: ReflectionScheduleConfigView| {
+                                ws.send(set_reflection_schedule_query(entry));
+                                refl_adding.set(false);
+                                refl_editing.set(None);
+                            },
+                        }
+                    } else if dashboard().reflection_schedules.is_empty() {
+                        div { class: "glass-card empty", p { class: "label-tech", "No `[[reflection_schedule]]` entries configured yet." } }
+                    } else {
+                        div { class: "feed",
+                            for r in dashboard().reflection_schedules.iter() {
+                                {
+                                    let r2 = r.clone();
+                                    let rname = r.name.clone();
+                                    rsx! {
+                                        div { key: "{r.name}", class: "glass-card routine-row",
+                                            div { class: "row1",
+                                                span { class: "dot live" }
+                                                span { class: "name", "{r.name}" }
+                                                span { class: "label-tech", style: "opacity:0.7;", "{r.cron}" }
+                                                span { class: if r.enabled { "chip sage" } else { "chip" }, if r.enabled { "enabled" } else { "disabled" } }
+                                            }
+                                            div { style: "display:flex; gap:8px; margin-top:8px;",
+                                                button { class: "btn btn-glass btn-xs", onclick: move |_| { refl_adding.set(false); refl_editing.set(Some(r2.clone())); }, "Edit" }
+                                                button { class: "btn btn-glass btn-xs", onclick: move |_| ws.send(delete_reflection_schedule_query(rname.clone())), "Delete" }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2449,6 +2537,143 @@ fn NotifyTargetForm(
                             rate_limit_window_secs: seed.rate_limit_window_secs,
                         };
                         on_save.call(entry);
+                    },
+                    "Save"
+                }
+                button { class: "btn btn-glass btn-xs", onclick: move |_| on_cancel.call(()), "Cancel" }
+            }
+        }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 3 — add/edit form for one
+/// `[[reflection_schedule]]` entry. Duplicates (rather than extracting
+/// into a shared component) the freq/time/day cron builder
+/// `SchedulesPanel`'s own regular-schedule create form already has —
+/// that builder is inline in `SchedulesPanel`, not its own component,
+/// and this is the only other cron-shaped form in the codebase.
+#[component]
+fn ReflectionScheduleForm(
+    initial: Option<ReflectionScheduleConfigView>,
+    on_cancel: EventHandler<()>,
+    on_save: EventHandler<ReflectionScheduleConfigView>,
+) -> Element {
+    let seed = initial.clone().unwrap_or(ReflectionScheduleConfigView {
+        name: String::new(),
+        cron: String::new(),
+        lookback_window_secs: 86_400,
+        enabled: true,
+    });
+    let editing_existing = initial.is_some();
+    let mut ui = use_context::<Signal<SchedulesUi>>();
+    let mut name = use_signal(|| seed.name.clone());
+    let mut freq = use_signal(|| "daily".to_string());
+    let mut at_time = use_signal(|| "09:00".to_string());
+    let mut weekday = use_signal(|| "Mon".to_string());
+    let mut every_hours = use_signal(|| "6".to_string());
+    let mut cron = use_signal(|| seed.cron.clone());
+    let mut lookback_hours = use_signal(|| (seed.lookback_window_secs / 3600).max(1).to_string());
+    let mut enabled = use_signal(|| seed.enabled);
+
+    let built = use_memo(move || {
+        let (h, m) = {
+            let t = at_time();
+            let mut it = t.splitn(2, ':');
+            let h = it.next().unwrap_or("9").trim_start_matches('0');
+            let m = it.next().unwrap_or("0").trim_start_matches('0');
+            (
+                if h.is_empty() { "0".to_string() } else { h.to_string() },
+                if m.is_empty() { "0".to_string() } else { m.to_string() },
+            )
+        };
+        match freq().as_str() {
+            "daily" => format!("0 {m} {h} * * * *"),
+            "weekly" => format!("0 {m} {h} * * {} *", weekday()),
+            "hourly" => format!("0 0 */{} * * * *", every_hours()),
+            _ => cron().trim().to_string(),
+        }
+    });
+
+    rsx! {
+        div { class: "glass-card",
+            div { class: "field-row",
+                label { "Name" }
+                input { class: "input", value: "{name}", disabled: editing_existing, oninput: move |e| name.set(e.value()) }
+            }
+            label { class: "label-tech", "When" }
+            select {
+                class: "input",
+                value: "{freq}",
+                onchange: move |e| freq.set(e.value()),
+                option { value: "daily", "Every day" }
+                option { value: "weekly", "Once a week" }
+                option { value: "hourly", "Every few hours" }
+                option { value: "custom", "Custom (advanced)" }
+            }
+            if freq() == "daily" || freq() == "weekly" {
+                div { style: "display:flex; gap:8px; align-items:center; margin:6px 0;",
+                    if freq() == "weekly" {
+                        select {
+                            class: "input", style: "flex:1;", value: "{weekday}",
+                            onchange: move |e| weekday.set(e.value()),
+                            option { value: "Mon", "Monday" }
+                            option { value: "Tue", "Tuesday" }
+                            option { value: "Wed", "Wednesday" }
+                            option { value: "Thu", "Thursday" }
+                            option { value: "Fri", "Friday" }
+                            option { value: "Sat", "Saturday" }
+                            option { value: "Sun", "Sunday" }
+                        }
+                    }
+                    span { class: "label-tech", "at" }
+                    input { class: "input", style: "flex:1;", r#type: "time", value: "{at_time}", oninput: move |e| at_time.set(e.value()) }
+                }
+            }
+            if freq() == "hourly" {
+                div { style: "display:flex; gap:8px; align-items:center; margin:6px 0;",
+                    span { class: "label-tech", "every" }
+                    select {
+                        class: "input", style: "flex:1;", value: "{every_hours}",
+                        onchange: move |e| every_hours.set(e.value()),
+                        option { value: "1", "1 hour" }
+                        option { value: "2", "2 hours" }
+                        option { value: "3", "3 hours" }
+                        option { value: "4", "4 hours" }
+                        option { value: "6", "6 hours" }
+                        option { value: "12", "12 hours" }
+                    }
+                }
+            }
+            if freq() == "custom" {
+                label { class: "label-tech", "Cron (sec min hour dom month dow year — local time)" }
+                input { class: "input", placeholder: "0 0 9 * * * *", value: "{cron}", oninput: move |e| cron.set(e.value()) }
+            }
+            p { class: "label-tech", style: "opacity:0.7; margin:4px 0;", "cron: {built()}" }
+            div { class: "field-row",
+                label { "Lookback (hours)" }
+                input { class: "input", value: "{lookback_hours}", oninput: move |e| lookback_hours.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Enabled" }
+                input { r#type: "checkbox", checked: enabled(), onchange: move |e| enabled.set(e.checked()) }
+            }
+            div { style: "display:flex; gap:8px; margin-top:12px;",
+                button {
+                    class: "btn btn-primary btn-xs",
+                    onclick: move |_| {
+                        let n = name().trim().to_string();
+                        let c = built();
+                        if n.is_empty() || c.is_empty() {
+                            ui.write().notice = Some((false, "name and cron are both required".into()));
+                            return;
+                        }
+                        let hours = lookback_hours().trim().parse::<u64>().unwrap_or(24).max(1);
+                        on_save.call(ReflectionScheduleConfigView {
+                            name: n,
+                            cron: c,
+                            lookback_window_secs: hours * 3600,
+                            enabled: enabled(),
+                        });
                     },
                     "Save"
                 }
@@ -9235,6 +9460,22 @@ async fn read_task(
                 } => {
                     dashboard.write().schedules = schedules;
                 }
+                // POLISH_WAVES.md sub-project 7 plan 3 — the editable
+                // reflection-schedule list, mirroring the notify-target
+                // list's own two handlers.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetReflectionScheduleConfigs { schedules },
+                    ..
+                } => {
+                    dashboard.write().reflection_schedules = schedules;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ReflectionScheduleConfigApplied { schedules, .. },
+                    ..
+                } => {
+                    dashboard.write().reflection_schedules = schedules;
+                    schedules_ui.write().notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
                 // `/classic` retirement — the self-learning digest. `proposals`
                 // and `persona_selection` are intentionally dropped here: this
                 // panel surfaces the digest only, matching the legacy pane's
@@ -9519,6 +9760,17 @@ async fn read_task(
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("mc-notify") => {
                     notify_config_ui.write().notice = Some((false, message));
+                }
+                // POLISH_WAVES.md sub-project 7 plan 3 — a reflection-
+                // schedule config save/delete failure. Ids are prefixed
+                // `mc-reflection` so it lands on the Schedules screen's
+                // banner (shared with the regular-schedule mutations'
+                // own `ScheduleMutated` notice).
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("mc-reflection") => {
+                    schedules_ui.write().notice = Some((false, message));
                 }
                 // Chapter Mission Control — an abort/pause/resume rejected by
                 // the daemon (e.g. resume on a mission that isn't paused).
