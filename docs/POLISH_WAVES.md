@@ -359,8 +359,18 @@ it; no 6th item was hiding there.
   test genuinely fails). Also confirmed this attempt doesn't repeat
   take 1's second harm: opt-in, per-step, exact-name assignment can
   only ever *increase* entries-per-topic-name versus today, never
-  fragment. Full account: `docs/superpowers/plans/2026-09-02-mission-
-  topic-naming-discipline.md`.
+  fragment. **2 Minor findings logged, not fixed**: a member narrowed
+  to a topic-qualified scope (`memory.write:topic:X`) would be
+  silently `Denied` if the LEAD overrides that step to a different
+  topic, with the mission still reporting success overall — correct
+  security-wise (no escalation path; scope derives from the
+  post-rewrite topic) but confusing, and latent rather than live since
+  no in-repo roster uses topic-qualified scopes today; and
+  `overnight_close_mission` (`crates/verticals/aivyx-kitchen/src/
+  lib.rs`), the only hand-authored production mission plan in the
+  repo, doesn't use the new `.with_memory_topic()` builder yet. Full
+  account: `docs/superpowers/plans/2026-09-02-mission-topic-naming-
+  discipline.md`.
 
   **Take-1 account (reverted, preserved for context):** attempted via
   a mission-scoped memory-topic prefix (reusing the
