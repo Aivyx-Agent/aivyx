@@ -131,6 +131,9 @@ async fn run_loop(
                 // no background refresh, so this is the only fetch until
                 // the operator pages (Action::AuditPage, below).
                 let switching_to_audit = matches!(msg, Msg::SwitchView(View::Audit));
+                // POLISH_WAVES.md sub-project 8 item B — same posture for
+                // the Tools view: seed on switch, no background refresh.
+                let switching_to_tools = matches!(msg, Msg::SwitchView(View::Tools));
                 apply(state, msg);
                 if switching_to_audit {
                     // The `from_seq` here is a *guess* — `state.audit_total`
@@ -154,6 +157,9 @@ async fn run_loop(
                     ) {
                         fetch_audit_page(socket_path, state, corrected_from_seq).await;
                     }
+                }
+                if switching_to_tools {
+                    fetch_tool_stats(socket_path, state).await;
                 }
             }
             Action::Quit => apply(state, Msg::Quit),
@@ -241,6 +247,18 @@ async fn fetch_audit_page(socket_path: &Path, state: &mut AppState, from_seq: u6
         list_audit_entries(socket_path, from_seq, AUDIT_PAGE_SIZE).await
     {
         apply(state, Msg::AuditUpdated { entries, total_len });
+    }
+}
+
+/// POLISH_WAVES.md sub-project 8 item B — fetch a fresh `GetToolStats`
+/// snapshot and push it into the Tools view. Called once on switching
+/// into the view, mirroring `fetch_audit_page`'s own "no background
+/// refresh" posture — `window_secs: None` (whole audit chain), matching
+/// the `aivyx tools` CLI's own default. Best-effort: a fetch error
+/// (e.g. no audit log configured) leaves the panel as-is.
+async fn fetch_tool_stats(socket_path: &Path, state: &mut AppState) {
+    if let Ok(tools) = aivyx_channel::daemon_client::get_tool_stats(socket_path, None).await {
+        apply(state, Msg::ToolStatsUpdated(tools));
     }
 }
 

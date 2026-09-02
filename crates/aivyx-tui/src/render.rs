@@ -194,16 +194,42 @@ fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             ("AUDIT", lines)
         }
-        View::Tools => (
-            "TOOLS",
-            placeholder_lines("the registered tools — provenance, capability scope, and call stats"),
-        ),
+        View::Tools => {
+            let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+                format!("{} tool(s) — whole audit chain", state.tool_stats.len()),
+                fg(palette::DIMMER),
+            ))];
+            if state.tool_stats.is_empty() {
+                lines.push(Line::from(Span::styled("No tools loaded.", fg(palette::DIM))));
+            } else {
+                for t in state.tool_stats.iter() {
+                    let avg_ms = t.total_duration_ms.checked_div(t.calls).unwrap_or(0);
+                    let marker = if t.registered { "" } else { " [unregistered]" };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}{marker} ", t.name), fg(palette::AMBER)),
+                        Span::styled(format!("calls={} avg={avg_ms}ms", t.calls), fg(palette::DIMMER)),
+                    ]));
+                    if t.calls > 0 {
+                        let parts: Vec<String> = t
+                            .outcomes
+                            .iter()
+                            .map(|(label, count)| format!("{label}={count}"))
+                            .collect();
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", parts.join(" ")),
+                            fg(palette::DIM),
+                        )));
+                    }
+                }
+            }
+            ("TOOLS", lines)
+        }
         View::Chat | View::Missions => return,
     };
 
     let line_count = lines.len();
     let mut para = Paragraph::new(lines).block(panel_block(title));
-    if state.view == View::Audit {
+    if state.view == View::Audit || state.view == View::Tools {
         // `panel_block` draws a top+bottom border (and no vertical
         // padding), so the visible text viewport is 2 rows shorter than
         // `area` — the same `chat_scroll_offset` math `render_chat` uses
@@ -379,19 +405,6 @@ fn dashboard_lines(state: &AppState) -> Vec<Line<'_>> {
         )),
         Line::from(Span::styled(
             "wired to the live daemon state the IPC already serves.",
-            fg(palette::DIMMER),
-        )),
-    ]
-}
-
-fn placeholder_lines(desc: &str) -> Vec<Line<'_>> {
-    vec![
-        Line::from(""),
-        Line::from(Span::styled("— not yet wired to the daemon —", fg(palette::DIM))),
-        Line::from(Span::styled(desc.to_string(), fg(palette::DIMMER))),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Phase 186: this panel reads live state over the IPC.",
             fg(palette::DIMMER),
         )),
     ]
@@ -875,6 +888,70 @@ mod tests {
         let pos_1 = text.find("TurnEnded").unwrap();
         let pos_0 = text.find("TurnStarted").unwrap();
         assert!(pos_1 < pos_0, "newest entry (seq 1) renders above seq 0");
+    }
+
+    #[test]
+    fn tools_view_renders_placeholder_copy_is_gone() {
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Tools;
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("No tools loaded"), "empty state shown");
+        assert!(!text.contains("capability scope"), "placeholder copy is gone");
+    }
+
+    #[test]
+    fn tools_view_renders_call_stats() {
+        use aivyx_channel::daemon_ipc::ToolStat;
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Tools;
+        let mut outcomes = std::collections::BTreeMap::new();
+        outcomes.insert("completed".to_string(), 3u64);
+        state.tool_stats = vec![ToolStat {
+            name: "fs.read".to_string(),
+            description: "read a file".to_string(),
+            scope_base: "fs.read".to_string(),
+            registered: true,
+            calls: 3,
+            outcomes,
+            total_duration_ms: 30,
+        }];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("fs.read"), "tool name rendered");
+        assert!(text.contains("calls=3"), "call count rendered");
+        assert!(text.contains("completed=3"), "outcome breakdown rendered");
+    }
+
+    #[test]
+    fn tools_view_marks_unregistered_tools() {
+        use aivyx_channel::daemon_ipc::ToolStat;
+        let backend = TestBackend::new(72, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Tools;
+        state.tool_stats = vec![ToolStat {
+            name: "old.removed.tool".to_string(),
+            description: "(no registered tool)".to_string(),
+            scope_base: "old.removed.tool".to_string(),
+            registered: false,
+            calls: 1,
+            outcomes: std::collections::BTreeMap::new(),
+            total_duration_ms: 5,
+        }];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("[unregistered]"), "unregistered marker rendered");
     }
 
     #[test]

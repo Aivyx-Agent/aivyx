@@ -326,6 +326,10 @@ pub struct AppState {
     /// `/classic` retirement — the Audit view's current page.
     pub audit_entries: Vec<AuditEntrySummary>,
     pub audit_total: u64,
+    /// POLISH_WAVES.md sub-project 8 item B — the Tools view's data,
+    /// fetched once on switching into the view (no background poll,
+    /// same posture as `audit_entries` before pagination).
+    pub tool_stats: Vec<aivyx_channel::daemon_ipc::ToolStat>,
 }
 
 /// A message into the reducer. Key events become editing / scroll /
@@ -415,6 +419,9 @@ pub enum Msg {
         entries: Vec<AuditEntrySummary>,
         total_len: u64,
     },
+    /// POLISH_WAVES.md sub-project 8 item B — a fresh `GetToolStats`
+    /// snapshot, pushed on switching into `View::Tools`.
+    ToolStatsUpdated(Vec<aivyx_channel::daemon_ipc::ToolStat>),
 }
 
 impl AppState {
@@ -539,6 +546,7 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
             // its own top row.
             let max = match state.view {
                 View::Audit => state.audit_entries.len(),
+                View::Tools => state.tool_stats.len(),
                 _ => state.history.len(),
             };
             state.scroll = (state.scroll + n).min(max);
@@ -624,6 +632,10 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         Msg::AuditUpdated { entries, total_len } => {
             state.audit_entries = entries;
             state.audit_total = total_len;
+        }
+
+        Msg::ToolStatsUpdated(tools) => {
+            state.tool_stats = tools;
         }
     }
     state
@@ -1300,6 +1312,52 @@ mod tests {
         // A second update fully replaces, it doesn't append.
         let s = update(s, Msg::AuditUpdated { entries: vec![], total_len: 42 });
         assert!(s.audit_entries.is_empty());
+    }
+
+    #[test]
+    fn tool_stats_updated_replaces_state() {
+        use aivyx_channel::daemon_ipc::ToolStat;
+        let s = AppState::new();
+        let tools = vec![ToolStat {
+            name: "fs.read".to_string(),
+            description: "read a file".to_string(),
+            scope_base: "fs.read".to_string(),
+            registered: true,
+            calls: 1,
+            outcomes: std::collections::BTreeMap::new(),
+            total_duration_ms: 10,
+        }];
+        let s = update(s, Msg::ToolStatsUpdated(tools.clone()));
+        assert_eq!(s.tool_stats, tools);
+    }
+
+    #[test]
+    fn scroll_up_clamps_to_tool_stats_length_in_tools_view() {
+        use aivyx_channel::daemon_ipc::ToolStat;
+        let mut s = AppState::new();
+        s.view = View::Tools;
+        s.tool_stats = vec![
+            ToolStat {
+                name: "a".to_string(),
+                description: String::new(),
+                scope_base: "a".to_string(),
+                registered: true,
+                calls: 0,
+                outcomes: std::collections::BTreeMap::new(),
+                total_duration_ms: 0,
+            },
+            ToolStat {
+                name: "b".to_string(),
+                description: String::new(),
+                scope_base: "b".to_string(),
+                registered: true,
+                calls: 0,
+                outcomes: std::collections::BTreeMap::new(),
+                total_duration_ms: 0,
+            },
+        ];
+        s = update(s, Msg::ScrollUp(10));
+        assert_eq!(s.scroll, 2, "clamps to tool_stats length, not history length");
     }
 
     // ---- Audit pagination arithmetic (`/classic` retirement, Task E) ----
