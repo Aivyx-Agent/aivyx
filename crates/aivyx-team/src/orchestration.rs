@@ -70,9 +70,11 @@ fn parse_step(v: &Value) -> Result<Step, String> {
             .get("prompt")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("delegate step {id:?} needs a `prompt` (string)"))?;
+        let memory_topic = v.get("memory_topic").and_then(Value::as_str).map(str::to_string);
         StepKind::Delegate {
             specialist: specialist.to_string(),
             prompt: prompt.to_string(),
+            memory_topic,
         }
     } else {
         return Err(format!(
@@ -129,6 +131,7 @@ impl DecomposeTaskTool {
                                 "id": { "type": "string" },
                                 "specialist": { "type": "string" },
                                 "prompt": { "type": "string" },
+                                "memory_topic": { "type": "string" },
                                 "reviewer": { "type": "string" },
                                 "criteria": { "type": "string" },
                                 "deps": { "type": "array", "items": { "type": "string" } }
@@ -155,8 +158,12 @@ impl Tool for DecomposeTaskTool {
     fn description(&self) -> &str {
         "Decompose a mission into a DAG of steps and run it. Steps run concurrently where their \
          dependencies allow. Input: { \"goal\": string, \"steps\": [{ \"id\": string, \
-         \"specialist\"+\"prompt\" (delegate) | \"reviewer\"+\"criteria\" (gate), \"deps\"?: [id] }] }. \
-         Returns each step's output."
+         \"specialist\"+\"prompt\"+\"memory_topic\"? (delegate) | \"reviewer\"+\"criteria\" (gate), \
+         \"deps\"?: [id] }] }. Optional `memory_topic` (string): when two or more steps write \
+         memory about the same logical subject (e.g. both refine a shared summary), give them \
+         the SAME memory_topic so their writes land under one consistent name instead of each \
+         specialist inventing its own. Leave unset when a step's memory writes don't need to \
+         share a name with any other step. Returns each step's output."
     }
     fn input_schema(&self) -> &Value {
         &self.schema
@@ -408,6 +415,29 @@ mod tests {
         // A delegate step missing its prompt, and a step naming neither role.
         assert!(parse_step(&json!({ "id": "a", "specialist": "coder" })).is_err());
         assert!(parse_step(&json!({ "id": "a" })).is_err());
+    }
+
+    #[test]
+    fn parse_step_reads_memory_topic_when_present() {
+        let v = serde_json::json!({
+            "id": "a",
+            "specialist": "worker",
+            "prompt": "do it",
+            "memory_topic": "overall_conditions"
+        });
+        let step = parse_step(&v).unwrap();
+        assert_eq!(step.kind.memory_topic(), Some("overall_conditions"));
+    }
+
+    #[test]
+    fn parse_step_leaves_memory_topic_none_when_absent() {
+        let v = serde_json::json!({
+            "id": "a",
+            "specialist": "worker",
+            "prompt": "do it"
+        });
+        let step = parse_step(&v).unwrap();
+        assert_eq!(step.kind.memory_topic(), None);
     }
 
     #[tokio::test]

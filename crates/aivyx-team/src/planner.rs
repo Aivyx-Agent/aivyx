@@ -135,12 +135,18 @@ Delegate work only to these specialists (refer to each by its name or role, \
 exactly as listed):\n{roster}\n\
 JSON shape: {{\"goal\": string, \"steps\": [step, ...]}}\n\
 Each step is one of:\n\
-  - delegate: {{\"id\": string, \"specialist\": <name>, \"prompt\": string, \"deps\": [id, ...]}}\n\
+  - delegate: {{\"id\": string, \"specialist\": <name>, \"prompt\": string, \"memory_topic\": \
+string (optional), \"deps\": [id, ...]}}\n\
   - gate:     {{\"id\": string, \"reviewer\": <name>, \"criteria\": string, \"mode\": \"auto\" | \"human\", \"deps\": [id, ...]}}\n\n\
 Rules:\n\
   - ids are unique and match [a-zA-Z0-9_-].\n\
   - `deps` lists step ids that must finish first; omit or use [] for none.\n\
   - Steps with disjoint deps run concurrently — exploit that.\n\
+  - MEMORY TOPIC AGREEMENT: when two or more delegate steps will write memory about the same \
+logical subject (e.g. both steps refine one shared summary), give them the SAME `memory_topic` \
+so their writes land under one consistent name — do not let each specialist invent its own name \
+for the same thing. Leave `memory_topic` unset when a step's memory writes are their own \
+distinct subject.\n\
 {gate_rule}\
   - CAPABILITY MATCH: a step that must CREATE or SAVE a file (or write a note to \
 memory) MUST be delegated to a specialist tagged `[writes files]` (or `[writes \

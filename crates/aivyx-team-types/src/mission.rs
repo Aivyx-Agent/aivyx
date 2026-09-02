@@ -38,7 +38,23 @@ pub enum GateMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepKind {
     /// Run the named specialist on `prompt` (the doc's Execute/Delegate).
-    Delegate { specialist: String, prompt: String },
+    Delegate {
+        specialist: String,
+        prompt: String,
+        /// POLISH_WAVES.md sub-project 5 — the LEAD's canonical memory-
+        /// topic assignment for this step's `memory.write` calls, if
+        /// any. `None` (the default, and every pre-existing plan's
+        /// implicit value via `#[serde(default)]`) means the specialist
+        /// chooses its own topic — today's behavior. When `Some`, every
+        /// `memory.write` call this step's specialist makes has its
+        /// topic REPLACED with this exact value — not merely namespaced
+        /// — so steps the LEAD assigns the same topic produce entries
+        /// under one real, consistent name (see
+        /// `ConcreteAgent::with_memory_topic_override` in
+        /// `aivyx-core/src/agent.rs` for the enforcement).
+        #[serde(default)]
+        memory_topic: Option<String>,
+    },
     /// A quality gate: `reviewer` checks the upstream step outputs against
     /// `criteria`; a failing verdict aborts the mission so the gate's
     /// dependents never run (the doc's Reflect/Gate). `mode` selects automatic
@@ -61,6 +77,16 @@ impl StepKind {
             StepKind::Gate { reviewer, .. } => reviewer,
         }
     }
+
+    /// The LEAD-assigned canonical memory topic for a `Delegate` step, if
+    /// any. `Gate` steps never write memory as part of judging, so this
+    /// is always `None` for them.
+    pub fn memory_topic(&self) -> Option<&str> {
+        match self {
+            StepKind::Delegate { memory_topic, .. } => memory_topic.as_deref(),
+            StepKind::Gate { .. } => None,
+        }
+    }
 }
 
 /// One node in the mission DAG.
@@ -81,6 +107,7 @@ impl Step {
             kind: StepKind::Delegate {
                 specialist: specialist.into(),
                 prompt: prompt.into(),
+                memory_topic: None,
             },
             deps: Vec::new(),
         }
@@ -132,6 +159,19 @@ impl Step {
     /// Builder: set this step's dependencies.
     pub fn after(mut self, deps: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.deps = deps.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sub-project 5 — assign this `Delegate` step's canonical memory
+    /// topic (see `StepKind::Delegate`'s own doc comment). A no-op on a
+    /// `Gate` step (there is no `memory_topic` field to set), matching
+    /// `after`'s own unconditional-builder shape — callers only use this
+    /// on delegate steps in practice, and a `Gate` step silently ignoring
+    /// it is harmless (it never reads the field).
+    pub fn with_memory_topic(mut self, topic: impl Into<String>) -> Self {
+        if let StepKind::Delegate { memory_topic, .. } = &mut self.kind {
+            *memory_topic = Some(topic.into());
+        }
         self
     }
 }
@@ -420,5 +460,34 @@ mod tests {
         let plan = MissionPlan::new("g", vec![Step::delegate("a", "x", "p")]);
         assert!(plan.step("a").is_some());
         assert!(plan.step("missing").is_none());
+    }
+
+    #[test]
+    fn memory_topic_defaults_to_none_and_round_trips_when_set() {
+        let s = Step::delegate("a", "worker", "do work");
+        assert_eq!(s.kind.memory_topic(), None);
+        let s2 = Step::delegate("b", "worker", "do work").with_memory_topic("overall_conditions");
+        assert_eq!(s2.kind.memory_topic(), Some("overall_conditions"));
+    }
+
+    #[test]
+    fn gate_step_memory_topic_is_always_none() {
+        let s = Step::gate("g", "reviewer", "good?");
+        assert_eq!(s.kind.memory_topic(), None);
+    }
+
+    #[test]
+    fn with_memory_topic_is_a_no_op_on_a_gate_step() {
+        let s = Step::gate("g", "reviewer", "good?").with_memory_topic("x");
+        assert_eq!(s.kind.memory_topic(), None, "a gate step has no memory_topic field to set");
+    }
+
+    #[test]
+    fn old_plan_json_without_memory_topic_still_decodes() {
+        // A pre-sub-project-5 persisted plan has no `memory_topic` key at
+        // all — #[serde(default)] must still decode it as None.
+        let json = r#"{"id":"a","kind":{"Delegate":{"specialist":"worker","prompt":"do it"}},"deps":[]}"#;
+        let step: Step = serde_json::from_str(json).unwrap();
+        assert_eq!(step.kind.memory_topic(), None);
     }
 }

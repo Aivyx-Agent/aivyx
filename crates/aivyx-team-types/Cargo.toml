@@ -18,3 +18,10 @@ serde = { workspace = true }
 # TeamConfig::{from_toml,to_toml,load} — toml is a pure parser (wasm-clean).
 toml = "0.8"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Test-only: old_plan_json_without_memory_topic_still_decodes exercises a
+# raw JSON literal against Step's serde impl. Dev-only so the wasm32 lib
+# target itself stays free of it (serde_json is itself wasm-clean anyway —
+# aivyx-ipc depends on it directly for the same reason).
+serde_json = { workspace = true }
