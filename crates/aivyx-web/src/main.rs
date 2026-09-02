@@ -18,11 +18,12 @@
 
 use aivyx_ipc::protocol::{
     AuditEntrySummary, DaemonEnvelope, DiscordConfigView, DocEntry, DocFile, EffectivePersonaSummary,
-    EmailConfigView, FrontendMessage,
+    EmailConfigView, EmbeddingConfigView, FrontendMessage,
     GalleryImage, McpServerConfigView, McpServerStatusView, MemoryEntrySummary, MemoryGraphNode,
+    MemoryProfileConfigView,
     NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
-    PersonaProposalSummary, PersonaSeedWire, ProfileDraftWire, ProfileSummary, QueryPayload,
+    PersonaProposalSummary, PersonaSeedWire, ProactiveConfigView, ProfileDraftWire, ProfileSummary, QueryPayload,
     QueryResponsePayload, ReflectionScheduleConfigView, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
     SkillAuthorOp, SkillView, SlackConfigView, StreamEventPayload, TelegramConfigView,
     ToolCatalogEntry, VoiceSettingsSnapshot,
@@ -345,6 +346,12 @@ struct SettingsState {
     /// True after a successful write — a write updates aivyx.toml but the
     /// running daemon won't pick it up until it restarts.
     restart_required: bool,
+    /// POLISH_WAVES.md sub-project 7 plan 3 — `[memory] profile`.
+    memory_profile: Option<MemoryProfileConfigView>,
+    /// `[embedding]`'s primary fields.
+    embedding: Option<EmbeddingConfigView>,
+    /// `[proactive]`'s primary fields.
+    proactive: Option<ProactiveConfigView>,
 }
 
 /// Chapter Mission Control — the abort/pause/resume control surface's own
@@ -2794,6 +2801,189 @@ fn EmailAdapterCard(email: EmailConfigView) -> Element {
                         if f.trim().is_empty() { None } else { Some(f.trim().to_string()) },
                     ));
                     password.set(String::new());
+                },
+                "Save"
+            }
+        }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 3 — `[memory] profile` picker.
+/// Keyed on the seed data by its caller (like `EmailAdapterCard`), so a
+/// changed on-disk value re-seeds the form instead of leaving stale
+/// local state.
+#[component]
+fn MemoryProfileCard(config: MemoryProfileConfigView) -> Element {
+    let ws = use_context::<Sender>();
+    let mut profile = use_signal(|| config.profile.clone());
+
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head", h3 { "Memory profile" } span { class: "chip", "{config.profile}" } }
+            p { class: "label-tech",
+                "Off: today's behavior. Lite: recall fusion over existing memory, no paid \
+                 generation. Smart: adds the wiki/graph extraction sweeps. Takes effect on \
+                 the next daemon restart."
+            }
+            div { class: "field-row",
+                label { "Profile" }
+                select {
+                    class: "input",
+                    value: "{profile}",
+                    onchange: move |e| profile.set(e.value()),
+                    option { value: "off", "off" }
+                    option { value: "lite", "lite" }
+                    option { value: "smart", "smart" }
+                }
+            }
+            button {
+                class: "btn btn-primary btn-xs",
+                onclick: move |_| ws.send(set_memory_profile_query(profile())),
+                "Save"
+            }
+        }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 3 — `[embedding]`'s primary
+/// fields. `api_key`'s masked "configured"/"not set" + blank-input UX
+/// mirrors `EmailAdapterCard`'s password field exactly.
+#[component]
+fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
+    let ws = use_context::<Sender>();
+    let mut base_url = use_signal(|| config.base_url.clone().unwrap_or_default());
+    let mut model = use_signal(|| config.model.clone().unwrap_or_default());
+    let mut api_key = use_signal(String::new);
+
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head", h3 { "Embedding" } }
+            p { class: "label-tech",
+                "Configures the OpenAI-compatible embedding backend that powers semantic memory \
+                 search. Point base_url at a local server to keep memory content on this box. \
+                 Takes effect on the next daemon restart."
+            }
+            div { class: "field-row",
+                label { "Base URL" }
+                input { class: "input", placeholder: "https://api.openai.com", value: "{base_url}", oninput: move |e| base_url.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Model" }
+                input { class: "input", placeholder: "text-embedding-3-small", value: "{model}", oninput: move |e| model.set(e.value()) }
+            }
+            p { class: "label-tech",
+                {if config.api_key.configured { "API key: configured" } else { "API key: not set" }}
+            }
+            input { class: "input", placeholder: "New API key (leave blank to keep current)",
+                r#type: "password", value: "{api_key}",
+                oninput: move |e| api_key.set(e.value()) }
+            button {
+                class: "btn btn-primary btn-xs",
+                onclick: move |_| {
+                    let b = base_url();
+                    let m = model();
+                    let k = api_key();
+                    ws.send(set_embedding_config_query(
+                        if b.trim().is_empty() { None } else { Some(b.trim().to_string()) },
+                        if m.trim().is_empty() { None } else { Some(m.trim().to_string()) },
+                        if k.trim().is_empty() { None } else { Some(k.trim().to_string()) },
+                    ));
+                    api_key.set(String::new());
+                },
+                "Save"
+            }
+        }
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 3 — `[proactive]`'s primary
+/// fields. `targets` is the live `[[notify_target]]` list (plan 2),
+/// rendered as a `<select>` so an invalid target is unreachable through
+/// this form — the write path (`write_proactive_section`) still checks
+/// independently, per this sub-project's defense-in-depth precedent.
+#[component]
+fn ProactiveConfigCard(config: ProactiveConfigView, targets: Vec<NotifyTargetConfigView>) -> Element {
+    let ws = use_context::<Sender>();
+    let mut settings = use_context::<Signal<SettingsState>>();
+    let mut enabled = use_signal(|| config.enabled);
+    let mut target = use_signal(|| config.target.clone().unwrap_or_default());
+    let mut max_per_window = use_signal(|| config.max_per_window.to_string());
+    let mut window_secs = use_signal(|| config.window_secs.to_string());
+
+    rsx! {
+        div { class: "glass-card settings-section",
+            div { class: "panel-head", h3 { "Proactive surfacing" } span { class: "chip", if config.enabled { "on" } else { "off" } } }
+            p { class: "label-tech",
+                "The assistant reaching out unprompted (e.g. a due reminder). Off unless enabled \
+                 and a target is picked. Hard-capped by max sends per window. Takes effect on \
+                 the next daemon restart."
+            }
+            div { class: "field-row",
+                label { "Enabled" }
+                input { r#type: "checkbox", checked: enabled(), onchange: move |e| enabled.set(e.checked()) }
+            }
+            div { class: "field-row",
+                label { "Target" }
+                select {
+                    class: "input",
+                    value: "{target}",
+                    onchange: move |e| target.set(e.value()),
+                    option { value: "", "— choose a notify target —" }
+                    for t in targets.iter() {
+                        option { value: "{t.name}", "{t.name}" }
+                    }
+                }
+            }
+            div { class: "field-row",
+                label { "Max sends per window" }
+                input { class: "input", value: "{max_per_window}", oninput: move |e| max_per_window.set(e.value()) }
+            }
+            div { class: "field-row",
+                label { "Window (seconds)" }
+                input { class: "input", value: "{window_secs}", oninput: move |e| window_secs.set(e.value()) }
+            }
+            button {
+                class: "btn btn-primary btn-xs",
+                onclick: move |_| {
+                    let t = target();
+                    let mpw_raw = max_per_window().trim().to_string();
+                    let secs_raw = window_secs().trim().to_string();
+                    // Mirrors EmailAdapterCard's port-parsing guard
+                    // (plan 2 final-review finding #4): a non-empty
+                    // field that fails to parse must block Save, not be
+                    // silently treated as "leave unchanged."
+                    let mpw = if mpw_raw.is_empty() {
+                        None
+                    } else {
+                        match mpw_raw.parse::<u32>() {
+                            Ok(n) => Some(n),
+                            Err(_) => {
+                                settings.write().notice =
+                                    Some((false, format!("{mpw_raw:?} is not a valid whole number — Save was not sent.")));
+                                return;
+                            }
+                        }
+                    };
+                    let ws_secs = if secs_raw.is_empty() {
+                        None
+                    } else {
+                        match secs_raw.parse::<u64>() {
+                            Ok(n) => Some(n),
+                            Err(_) => {
+                                settings.write().notice = Some((
+                                    false,
+                                    format!("{secs_raw:?} is not a valid whole number of seconds — Save was not sent."),
+                                ));
+                                return;
+                            }
+                        }
+                    };
+                    ws.send(set_proactive_config_query(
+                        Some(enabled()),
+                        if t.trim().is_empty() { None } else { Some(t.trim().to_string()) },
+                        mpw,
+                        ws_secs,
+                    ));
                 },
                 "Save"
             }
@@ -5550,6 +5740,9 @@ fn until_time(ms: u64) -> String {
 fn SettingsPanel() -> Element {
     let ws = use_context::<Sender>();
     let settings = use_context::<Signal<SettingsState>>();
+    // POLISH_WAVES.md sub-project 7 plan 3 — the notify-target list
+    // (plan 2) feeds the "Proactive surfacing" target picker below.
+    let notifications = use_context::<Signal<NotificationsState>>();
 
     // Editable form state, seeded from the on-disk snapshot.
     let mut level = use_signal(String::new);
@@ -5569,6 +5762,10 @@ fn SettingsPanel() -> Element {
     // Load the current settings when the view opens.
     use_future(move || async move {
         ws.send(get_settings_query());
+        ws.send(memory_profile_config_query());
+        ws.send(embedding_config_query());
+        ws.send(proactive_config_query());
+        ws.send(notify_target_configs_query());
     });
 
     // Seed the form whenever the snapshot content changes (first load + after a
@@ -5814,6 +6011,16 @@ fn SettingsPanel() -> Element {
                 }
                 p { class: "label-tech sub", "Change the provider, model, or keys with  " code { "aivyx init" } }
             }
+
+            if let Some(cfg) = settings().memory_profile.clone() {
+                MemoryProfileCard { key: "{cfg:?}", config: cfg }
+            }
+            if let Some(cfg) = settings().embedding.clone() {
+                EmbeddingConfigCard { key: "{cfg:?}", config: cfg }
+            }
+            if let Some(cfg) = settings().proactive.clone() {
+                ProactiveConfigCard { key: "{cfg:?}", config: cfg, targets: notifications().configs.clone() }
+            }
         }
 
         // Confirm-first modal for expanded access levels (Chapter N posture).
@@ -5865,6 +6072,44 @@ fn get_settings_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-settings-get".to_string(),
         payload: QueryPayload::GetSettings,
+    }
+}
+
+/// POLISH_WAVES.md sub-project 7 plan 3 — the Settings-coverage query
+/// builders. All 3 sections share the "mc-settings" id prefix, which
+/// the existing `id.starts_with("mc-settings")` `QueryError` routing
+/// arm already catches (same tradeoff `mc-mcp`/`mc-notify` already
+/// make for their own status/poll ids).
+fn memory_profile_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-settings-memory".to_string(), payload: QueryPayload::GetMemoryProfileConfig }
+}
+fn set_memory_profile_query(profile: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-memory".to_string(),
+        payload: QueryPayload::SetMemoryProfile { profile },
+    }
+}
+fn embedding_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-settings-embedding".to_string(), payload: QueryPayload::GetEmbeddingConfig }
+}
+fn set_embedding_config_query(base_url: Option<String>, model: Option<String>, api_key: Option<String>) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-embedding".to_string(),
+        payload: QueryPayload::SetEmbeddingConfig { base_url, model, api_key },
+    }
+}
+fn proactive_config_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "mc-settings-proactive".to_string(), payload: QueryPayload::GetProactiveConfig }
+}
+fn set_proactive_config_query(
+    enabled: Option<bool>,
+    target: Option<String>,
+    max_per_window: Option<u32>,
+    window_secs: Option<u64>,
+) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "mc-settings-proactive".to_string(),
+        payload: QueryPayload::SetProactiveConfig { enabled, target, max_per_window, window_secs },
     }
 }
 
@@ -9575,6 +9820,56 @@ async fn read_task(
                     s.snapshot = Some(snap);
                     s.restart_required = restart_required;
                     s.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                }
+                // POLISH_WAVES.md sub-project 7 plan 3 — the 3
+                // Settings-coverage sections. Get* (on screen mount)
+                // seeds the panel silently; *ConfigApplied (after a
+                // Save) also sets the restart-required notice, matching
+                // the channel-adapter cards' own convention.
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetMemoryProfileConfig { config },
+                    ..
+                } => {
+                    settings.write().memory_profile = Some(config);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::MemoryProfileConfigApplied { config, .. },
+                    ..
+                } => {
+                    let mut s = settings.write();
+                    s.memory_profile = Some(config);
+                    s.restart_required = true;
+                    s.notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetEmbeddingConfig { config },
+                    ..
+                } => {
+                    settings.write().embedding = Some(config);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::EmbeddingConfigApplied { config, .. },
+                    ..
+                } => {
+                    let mut s = settings.write();
+                    s.embedding = Some(config);
+                    s.restart_required = true;
+                    s.notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::GetProactiveConfig { config },
+                    ..
+                } => {
+                    settings.write().proactive = Some(config);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ProactiveConfigApplied { config, .. },
+                    ..
+                } => {
+                    let mut s = settings.write();
+                    s.proactive = Some(config);
+                    s.restart_required = true;
+                    s.notice = Some((true, "Saved — restart the daemon to apply.".to_string()));
                 }
                 // Chapter Voice — the [voice] config + readiness.
                 DaemonEnvelope::QueryResponse {
