@@ -292,10 +292,12 @@ fixed before merge, then closed with a second follow-up plan:
   variants drop the turn's own guidance text (`looping_message`/
   `cycle_message`) in favor of a generic reason string, which is now
   the visible ceiling on what the 6 corrected surfaces can show;
-  third-party channel-adapter docs (`docs/CHANNEL_SDK.md`,
+  ~~third-party channel-adapter docs (`docs/CHANNEL_SDK.md`,
   `docs/DAEMON_IPC.md`) still describe collapsing everything to `Text`
   without mentioning `outcome` is authoritative, so a new adapter could
-  reintroduce this exact gap; Telegram/Discord/Slack replies have no
+  reintroduce this exact gap~~ **fixed 2026-09-03** — both docs now
+  warn explicitly, pointing at `turn_outcome_correction`/
+  `concat_text_events`; Telegram/Discord/Slack replies have no
   length cap (pre-existing, mildly amplified by the correction line);
   and a handful of Minor code-quality notes from the review rounds
   (test-placement cosmetics, a dead post-construction guard, a stale
@@ -461,10 +463,12 @@ underlying data changed. Both fixed and re-verified before merge.
 
 **Known remaining Minor gaps, not fixed in this branch** (all
 confirmed non-blocking, logged here rather than silently dropped):
-the reload-hint banner's copy ("new version available") slightly
+~~the reload-hint banner's copy ("new version available") slightly
 overstates what `boot_id` actually detects (a daemon restart, which
-usually but not always means a new bundle); mermaid's `securityLevel`
-relies on the vendored library's own default (`'strict'`) rather than
+usually but not always means a new bundle)~~ **fixed 2026-09-03** —
+copy now says "the daemon has restarted... reload to make sure you're
+running its current version," matching what's actually known; mermaid's
+`securityLevel` relies on the vendored library's own default (`'strict'`) rather than
 being pinned explicitly at the call site; the mermaid-fence detection
 heuristic can false-positive on literal text mentioning the class
 name (wasted local fetch only, no security impact); graph pan/zoom
@@ -560,8 +564,12 @@ tracking doc's own prose:
   both, verified by a second independent re-review that read the
   loader's entire validation function end-to-end specifically hunting
   for a fourth gap and found none remaining in the email path (only
-  Minor doc-comment defects and one pre-existing, UI-unreachable gap:
-  `chat_id` validation not trimming whitespace, unlike the loader).
+  ~~Minor doc-comment defects~~ — **fixed 2026-09-03**: an orphaned
+  doc comment reattached to the right item, `EmailEntryWrite.tls_mode`'s
+  doc corrected to drop the now-rejected `"none"`, and the crossed
+  finding-number labels across two comments corrected — and one
+  pre-existing, UI-unreachable gap, still open: `chat_id` validation
+  not trimming whitespace, unlike the loader).
   Full account: `docs/superpowers/plans/2026-09-01-notify-target-
   channel-crud.md`.
 - ✅ **Plan 3 — Settings coverage expansion** (§9 P2, product) —
