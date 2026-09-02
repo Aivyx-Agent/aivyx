@@ -156,6 +156,17 @@ pub struct ConcreteAgent {
     /// behavior byte-for-byte: a bare topic name hits the substrate
     /// unchanged.
     memory_topic_prefix: Option<String>,
+    /// POLISH_WAVES.md sub-project 5 — the LEAD's canonical memory-topic
+    /// assignment for the mission step this agent instance is running,
+    /// if any. Separate from `memory_topic_prefix` above: that field
+    /// PREPENDS a namespace and stays invisible to the audit chain (the
+    /// interactive/operator-role path); this field REPLACES the topic
+    /// entirely and is deliberately audit-visible — the whole point is
+    /// making the audit chain, Concord's conflict-detector, and the
+    /// Memory screen's topic rail all see ONE name across every step
+    /// the LEAD assigned it to, not each specialist's own guess. `None`
+    /// (the default) preserves pre-sub-project-5 behavior byte-for-byte.
+    memory_topic_override: Option<String>,
     /// Phase 11 Task 4 — role-derived tool allowlist gate (the
     /// belt-and-suspenders dispatch-layer check). When `Some`, the
     /// turn loop rejects any tool call whose name is not in the
@@ -233,6 +244,7 @@ impl ConcreteAgent {
             audit,
             planner_factory: Box::new(planner_factory),
             memory_topic_prefix: None,
+            memory_topic_override: None,
             tool_allowlist: None,
             budget_gate: None,
             rate_gate: None,
@@ -276,6 +288,16 @@ impl ConcreteAgent {
     /// construction time.
     pub fn with_memory_topic_prefix(mut self, prefix: Option<String>) -> Self {
         self.memory_topic_prefix = prefix;
+        self
+    }
+
+    /// Sub-project 5 — attach the LEAD's canonical memory-topic
+    /// assignment for this agent's mission step. Builder-style, mirroring
+    /// `with_memory_topic_prefix`. `None` preserves pre-sub-project-5
+    /// behavior byte-for-byte: the specialist's own chosen topic reaches
+    /// `memory.write` unmodified, same as today.
+    pub fn with_memory_topic_override(mut self, topic: Option<String>) -> Self {
+        self.memory_topic_override = topic;
         self
     }
 
@@ -1217,6 +1239,24 @@ impl ConcreteAgent {
             );
         }
 
+        // Sub-project 5 — LEAD-assigned canonical memory topic. Unlike
+        // the role_prefix injection just above (invisible to the model,
+        // preserved in the audit chain as the logical topic the agent
+        // actually typed), this REWRITES the topic itself: the whole
+        // point is that Concord's conflict-detector and the Memory
+        // screen's topic rail see ONE name across every step the LEAD
+        // assigned it to, not each specialist's own guess. Gated on the
+        // tool's own name, not merely "has a topic field" —
+        // memory.read/memory.forget also use `topic`, and rewriting
+        // theirs would be a correctness bug (a read/forget under a
+        // topic the operator or a different tool call didn't ask for).
+        if tool.name() == "memory.write"
+            && let Some(topic) = self.memory_topic_override.as_ref()
+            && let Some(obj) = input.as_object_mut()
+        {
+            obj.insert("topic".to_string(), serde_json::Value::String(topic.clone()));
+        }
+
         let needed: Scope = tool.required_scope(&input);
 
         if !effective.grants(&needed) {
@@ -1686,6 +1726,12 @@ mod tests {
         name: &'static str,
         schema: Value,
         scope_fn: Box<dyn Fn(&Value) -> Scope + Send + Sync>,
+        /// Sub-project 5 — when set, `execute` records the exact input
+        /// it received here, so a test can assert what actually reached
+        /// the tool after any dispatch-layer rewrite (role_prefix
+        /// injection, the new memory_topic_override rewrite, etc.) —
+        /// not just what the planner originally emitted.
+        captured: Option<std::sync::Arc<std::sync::Mutex<Vec<Value>>>>,
     }
 
     impl FakeTool {
@@ -1696,6 +1742,7 @@ mod tests {
                 name,
                 schema: json!({}),
                 scope_fn: Box::new(move |_| s.clone()),
+                captured: None,
             }
         }
         fn new_r1(
@@ -1707,6 +1754,7 @@ mod tests {
                 name,
                 schema: json!({}),
                 scope_fn: Box::new(f),
+                captured: None,
             }
         }
 
@@ -1725,6 +1773,24 @@ mod tests {
                 name,
                 schema,
                 scope_fn: Box::new(f),
+                captured: None,
+            }
+        }
+
+        /// Sub-project 5 helper — like `new_with_schema`, but also
+        /// records every `execute` input into `captured` for later
+        /// assertion.
+        fn new_capturing(
+            name: &'static str,
+            schema: Value,
+            captured: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+        ) -> Self {
+            FakeTool {
+                id: ToolId::new(),
+                name,
+                schema,
+                scope_fn: Box::new(|_| Scope::parse("memory.write").unwrap()),
+                captured: Some(captured),
             }
         }
     }
@@ -1746,7 +1812,10 @@ mod tests {
         fn required_scope(&self, input: &Value) -> Scope {
             (self.scope_fn)(input)
         }
-        async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+            if let Some(captured) = &self.captured {
+                captured.lock().unwrap().push(input);
+            }
             ToolOutcome::Completed {
                 output: json!({"ok": true}),
                 verified: Verification::NotApplicable,
@@ -3637,6 +3706,151 @@ mod tests {
             "throttling is distinct from ScopeDenied"
         );
         assert_eq!(begins.load(Ordering::SeqCst), 1, "begin_turn fired once");
+    }
+
+    #[tokio::test]
+    async fn memory_topic_override_rewrites_the_topic_before_execute() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let write_tool: Arc<dyn Tool> = Arc::new(FakeTool::new_capturing(
+            "memory.write",
+            json!({
+                "type": "object",
+                "properties": { "topic": { "type": "string" }, "body": { "type": "string" } },
+                "required": ["topic", "body"]
+            }),
+            captured.clone(),
+        ));
+        let write_id = write_tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![write_tool]));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let audit = RecordingAudit::new();
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: write_id,
+                input: json!({ "topic": "specialist-chosen-name", "body": "hello" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_memory_topic_override(Some("overall_conditions".to_string()));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "write a note");
+        let _ = agent.turn(message, &channel).await;
+
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls.len(), 1, "the memory.write call executed");
+        assert_eq!(
+            calls[0]["topic"], "overall_conditions",
+            "the override REPLACED the specialist's own topic choice, not merely prefixed it"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_topic_override_does_not_touch_other_tools() {
+        // memory.read also has a `topic` field -- the rewrite must be
+        // gated on the tool's NAME, not on "has a topic key".
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read_tool: Arc<dyn Tool> = Arc::new(FakeTool::new_capturing(
+            "memory.read",
+            json!({
+                "type": "object",
+                "properties": { "topic": { "type": "string" } },
+                "required": ["topic"]
+            }),
+            captured.clone(),
+        ));
+        let read_id = read_tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![read_tool]));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let audit = RecordingAudit::new();
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: read_id,
+                input: json!({ "topic": "specialist-chosen-name" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        )
+        .with_memory_topic_override(Some("overall_conditions".to_string()));
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "read a note");
+        let _ = agent.turn(message, &channel).await;
+
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls.len(), 1, "the memory.read call executed");
+        assert_eq!(
+            calls[0]["topic"], "specialist-chosen-name",
+            "memory.read must NOT be rewritten -- only memory.write is gated"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_memory_topic_override_preserves_pre_sub_project_5_behavior() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let write_tool: Arc<dyn Tool> = Arc::new(FakeTool::new_capturing(
+            "memory.write",
+            json!({
+                "type": "object",
+                "properties": { "topic": { "type": "string" }, "body": { "type": "string" } },
+                "required": ["topic", "body"]
+            }),
+            captured.clone(),
+        ));
+        let write_id = write_tool.id();
+        let registry = Arc::new(ToolRegistry::new(vec![write_tool]));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let audit = RecordingAudit::new();
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id: write_id,
+                input: json!({ "topic": "specialist-chosen-name", "body": "hello" }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let plan_arc = Arc::new(plan);
+
+        // No .with_memory_topic_override(...) call at all.
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            registry,
+            audit.clone(),
+            move || Box::new(crate::planner::VecPlanner::new((*plan_arc).clone())),
+        );
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "write a note");
+        let _ = agent.turn(message, &channel).await;
+
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls[0]["topic"], "specialist-chosen-name", "unmodified when no override is set");
     }
 
     #[tokio::test]
