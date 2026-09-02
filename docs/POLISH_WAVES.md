@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), and 6 (2026-08-31) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open); 7 in progress (plans 1-2 of 3 shipped 2026-09-01 and 2026-09-02, 2 items dropped as already-shipped, plan 3 not started).**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), 6 (2026-08-31), and 7 (2026-09-02) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open). Sub-project 8 not started.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -48,7 +48,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
 | 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | ✅ done 2026-08-31 (all 4 items, 7 tasks — see below) |
-| 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ⏳ plans 1-2 of 3 shipped 2026-09-01 and 2026-09-02 (architecture + MCP CRUD; notify-target + channel-adapter CRUD); 2 items dropped as already-shipped; plan 3 not started |
+| 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ✅ all 3 plans shipped 2026-09-01/02 (architecture + MCP CRUD; notify-target + channel-adapter CRUD; Settings coverage expansion); 2 items dropped as already-shipped |
 | 8 | **Tool/server call-stat observability** | See below | Large | Not started |
 
 Each sub-project gets its own brainstorm → spec → plan cycle when its
@@ -521,12 +521,41 @@ tracking doc's own prose:
   `chat_id` validation not trimming whitespace, unlike the loader).
   Full account: `docs/superpowers/plans/2026-09-01-notify-target-
   channel-crud.md`.
-- **Plan 3 — Settings coverage expansion** (§9 P2, product) — not
-  started. `[memory] profile`, `[embedding]`, `[proactive]` (whose
-  `target` picker benefits from plan 2's notify-target list existing),
-  `[[reflection_schedule]]` (another array-of-table consumer of plan
-  1's primitive) — primary fields only, not an inventory of every
-  `aivyx.toml` section.
+- ✅ **Plan 3 — Settings coverage expansion** (§9 P2, product) —
+  shipped 2026-09-02. `[memory] profile` (a 3-way `off`/`lite`/`smart`
+  picker — the earlier spec's "lite/smart" shorthand undercounted it),
+  `[embedding]` (`base_url`/`model`/`api_key`), `[proactive]`
+  (`enabled`/`target`/`max_per_window`/`window_secs`, target picker
+  sourced from plan 2's notify-target list), and `[[reflection_
+  schedule]]` CRUD (a new "Reflection schedules" section in the
+  Schedules screen — another array-of-table consumer of plan 1's
+  primitive, first Studio surface these have ever had, not even
+  read-only before). **Final whole-branch review found 2 Critical +
+  2 Important, all in the same intersection-of-correct-pieces shape
+  this sub-project keeps producing**: (1) the new `[proactive]
+  target`-exists check (deliberate defense-in-depth beyond the loader)
+  tested presence, not usability — a target disabled via the
+  already-shipped Notify-targets screen still passed the check, then
+  silently failed at dispatch forever, and the picker itself offered
+  disabled targets as if they were fine; (2) the new reflection-
+  schedule edit form opened in "daily" builder mode unconditionally,
+  so editing ANY existing entry (even just to toggle `enabled`)
+  silently rewrote its cron to `0 0 9 * * * *` on Save, regardless of
+  what was actually stored; (3) the lookback-hours field truncated
+  sub-hour precision on load and silently substituted 24h on invalid
+  input, regressing a rule plan 2 established for exactly this class
+  of bug; (4) same bug family as (1) — nothing re-validates
+  `[proactive].target` if its referent is later disabled or deleted
+  through the Notify-targets screen. Fixed (1)-(3); (4) documented as
+  a deliberate, out-of-scope deferral (would need a boot-time or
+  delete-time cross-check touching plan 2's already-shipped code, not
+  a gap this fix wave silently ignored). Independent re-review
+  confirmed all 4 genuinely fixed — including checking the loader's
+  real `enabled`-default semantics directly rather than assuming the
+  fix's `unwrap_or(true)` was right — with no adjacent gap in any of
+  the three hunted failure classes, the first time in this sub-project
+  a fix wave closed clean on the first re-review. Full account:
+  `docs/superpowers/plans/2026-09-02-settings-coverage-expansion.md`.
 - **MCP tool-level health signal** (§10) — moved to **sub-project 8**
   2026-08-27 (originally landed here from sub-project 1's small-backlog
   sweep, then moved again once sub-project 2's own TUI Tools scoping
