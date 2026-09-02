@@ -1097,7 +1097,17 @@ fn App() -> Element {
                 }
                 if server_info().update_available {
                     div { class: "notice info reload-hint", role: "status",
-                        "A new version of Aivyx Studio is available. "
+                        // POLISH_WAVES.md sub-project 6 Minor follow-up:
+                        // `boot_id` (a fresh random value minted once per
+                        // daemon process, compared across reconnects — see
+                        // `apply_server_info`'s own doc comment above)
+                        // detects "the daemon restarted," not "a new bundle
+                        // shipped" — a plain `aivyx daemon stop && aivyx
+                        // daemon run` with no code change still changes
+                        // `boot_id`. The copy below says what's actually
+                        // known, not what's merely likely.
+                        "The daemon has restarted since this page loaded — reload to make sure \
+                         you're running its current version. "
                         button {
                             class: "btn btn-primary btn-xs",
                             onclick: move |_| {

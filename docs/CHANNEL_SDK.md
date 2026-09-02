@@ -193,6 +193,19 @@ Carried inside `StreamEvent`. Your adapter renders these:
 A minimal adapter can collapse everything to `Text` — the other
 variants are advisory richness that GUI / TUI adapters use.
 
+**But don't stop there without also handling `TurnComplete`'s `outcome`.**
+POLISH_WAVES.md sub-project 4 found that 6 first-party surfaces (Studio,
+the TUI, Telegram, Discord, Slack, and the daemon-backed CLI REPL) had
+exactly this gap: they rendered the raw streamed `Text` chunks directly
+and never looked at `outcome`, so the turn loop's own post-processing (a
+final-message floor, Candor's claim-check, an identifier-fidelity check —
+all of which only ever touch `outcome`'s `final_message`, never the raw
+stream) silently never reached the operator. If your adapter buffers or
+displays the streamed text as the shown answer, reconcile it against
+`outcome` before the turn is done — `turn_outcome_correction`/
+`concat_text_events` (`aivyx-ipc`'s `protocol.rs`) is the pure-function
+seam every first-party frontend now uses for this.
+
 ---
 
 ## 5. What you get for free

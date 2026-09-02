@@ -83,7 +83,7 @@ JSON object with a `"type"` discriminator field.
 |-------------------|---------------------------------------|--------------------------------------------------------------|
 | `SessionStarted`  | `session_id: String`                  | Acknowledges `StartSession`; the session is ready for input. |
 | `StreamEvent`     | `session_id: String`, `event: StreamEventPayload` | One streamed event from the turn loop.          |
-| `TurnComplete`    | `session_id: String`, `outcome: String` | Terminal frame for a turn. `outcome` is human-readable.    |
+| `TurnComplete`    | `session_id: String`, `outcome: String` | Terminal frame for a turn. `outcome` is human-readable, and is **authoritative** — the turn loop's own post-processing (a final-message floor, Candor's claim-check, an identifier-fidelity check) only ever touches `outcome`'s underlying `final_message`, never the raw `StreamEvent::Text` chunks a frontend may have already displayed. An adapter that renders the streamed text directly (POLISH_WAVES.md sub-project 4's own finding — 6 first-party surfaces did exactly this) can silently show a *pre-correction* answer. Reconcile the two with `turn_outcome_correction`/`concat_text_events` in `aivyx-ipc`'s `protocol.rs` — every first-party frontend now does. |
 | `Error`           | `code: String`, `message: String`     | Protocol-level or session-level error.                       |
 | `MissionCreated`  | `mission_id: String`                  | Acknowledges mission creation.                               |
 | `MissionStateChanged` | `mission_id: String`, `state: String` | Mission transitioned to a new state.                      |

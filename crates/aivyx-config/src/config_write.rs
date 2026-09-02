@@ -943,28 +943,16 @@ fn notify_target_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTabl
 pub struct EmailEntryWrite {
     pub host: Option<String>,
     pub port: Option<u16>,
-    /// `"starttls"`, `"implicit"`, or `"none"` — matches the loader's own
-    /// accepted strings.
+    /// `"starttls"` or `"implicit"` (absent defaults to `"starttls"`) —
+    /// matches the loader's own accepted strings. `"none"` is NOT
+    /// accepted: `build_email_config` (`aivyx-config/src/lib.rs`) hard-
+    /// rejects it, since Aivyx requires TLS for PLAIN/LOGIN auth.
     pub tls_mode: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
     pub from: Option<String>,
 }
 
-/// Patch the `[email]` section, touching only the `Some` fields.
-///
-/// Before writing, validates the **post-write, merged** state against
-/// `build_email_config`'s (`aivyx-config/src/lib.rs`) all-or-nothing rule:
-/// if ANY of `host`/`port`/`tls_mode`/`username`/`password`/`from` ends up
-/// set, `host`/`username`/`password` must be non-empty and `from` must
-/// contain `@`, or this call is refused — mirroring the loader's own
-/// `ConfigError::Invalid` exactly, refused here instead of bricking the
-/// next daemon boot (final-review finding #1: a password-only write on a
-/// fresh install used to save successfully and then fail to boot).
-/// "Merged" means fields this call leaves `None` still count if they're
-/// already set on disk — a save that only rotates `password` while
-/// `host`/`username`/`from` are already on disk from an earlier save must
-/// keep succeeding.
 /// The six real `[email]` fields the loader's `build_email_config`
 /// (`aivyx-config/src/lib.rs`) checks for its own `any_set` gate — kept as
 /// one constant so [`write_email_section`]'s merge logic and
@@ -987,6 +975,20 @@ fn email_section_has_any_field(doc: &DocumentMut) -> bool {
     EMAIL_FIELD_KEYS.iter().any(|k| existing.contains_key(k))
 }
 
+/// Patch the `[email]` section, touching only the `Some` fields.
+///
+/// Before writing, validates the **post-write, merged** state against
+/// `build_email_config`'s (`aivyx-config/src/lib.rs`) all-or-nothing rule:
+/// if ANY of `host`/`port`/`tls_mode`/`username`/`password`/`from` ends up
+/// set, `host`/`username`/`password` must be non-empty and `from` must
+/// contain `@`, or this call is refused — mirroring the loader's own
+/// `ConfigError::Invalid` exactly, refused here instead of bricking the
+/// next daemon boot (final-review finding #1: a password-only write on a
+/// fresh install used to save successfully and then fail to boot).
+/// "Merged" means fields this call leaves `None` still count if they're
+/// already set on disk — a save that only rotates `password` while
+/// `host`/`username`/`from` are already on disk from an earlier save must
+/// keep succeeding.
 pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), ConfigWriteError> {
     let mut doc = load_document(path)?;
 
@@ -1049,8 +1051,10 @@ pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), C
         // `"starttls"` or `"implicit"` — `"none"` is hard-rejected (Aivyx
         // requires TLS for PLAIN/LOGIN auth) and any other string is
         // unrecognized. Writing either currently succeeds here without this
-        // check and then bricks the next daemon boot (final-review finding
-        // #2, same failure class as the all-or-nothing checks above).
+        // check and then bricks the next daemon boot — found during this
+        // section's first re-review (a distinct issue from the original
+        // final review's #1 password-only bug and #2 [email]-presence gap
+        // above; same failure class as both, discovered one round later).
         if let Some(mode) = merged_tls_mode.as_deref() {
             if mode != "starttls" && mode != "implicit" {
                 return Err(ConfigWriteError::InvalidEmailConfig {
@@ -2852,11 +2856,14 @@ mod tests {
 
     #[test]
     fn email_write_rejects_tls_mode_none() {
-        // final-review finding #1: `build_email_config`
-        // (`aivyx-config/src/lib.rs`) explicitly hard-rejects
-        // `tls_mode = "none"` (Aivyx requires TLS for PLAIN/LOGIN auth) —
-        // an otherwise-complete [email] write with this value used to save
-        // successfully and then brick the next daemon boot.
+        // Found during this section's first re-review (not the original
+        // final review's #1 password-only bug or #2 [email]-presence gap
+        // — both already spoken for, see write_email_section's own doc
+        // comment): `build_email_config` (`aivyx-config/src/lib.rs`)
+        // explicitly hard-rejects `tls_mode = "none"` (Aivyx requires TLS
+        // for PLAIN/LOGIN auth) — an otherwise-complete [email] write with
+        // this value used to save successfully and then brick the next
+        // daemon boot.
         let path = temp_toml("email-tls-mode-none");
         std::fs::write(&path, "").unwrap();
         let err = write_email_section(&path, &complete_email_entry(Some("none"))).unwrap_err();
