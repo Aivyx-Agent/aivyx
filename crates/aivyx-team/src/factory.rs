@@ -149,6 +149,7 @@ impl SpecialistFactory {
         &self,
         member: &TeamMember,
         ceiling: &CapabilitySet,
+        memory_topic: Option<&str>,
     ) -> Result<ConcreteAgent, TeamError> {
         let caps = attenuate_for_member(ceiling, &member.parsed_scopes()?);
         let registry = Arc::new(ToolRegistry::new(self.member_tools(member)));
@@ -203,7 +204,8 @@ impl SpecialistFactory {
                 Box::new(planner)
             },
         )
-        .with_checkpointer(self.checkpointer.clone());
+        .with_checkpointer(self.checkpointer.clone())
+        .with_memory_topic_override(memory_topic.map(String::from));
         // Team specialists run autonomously inside a mission — no human watches
         // each turn to `/cancel` a runaway — so they take the autonomous safety
         // posture: the small-cycle breaker as a built-in floor (always on, like
@@ -403,7 +405,7 @@ mod tests {
             Scope::parse("fs.write").unwrap(),
         ]);
         let agent = f
-            .build(&member("spec", &["fs.read", "memory.write"], &[]), &lead)
+            .build(&member("spec", &["fs.read", "memory.write"], &[]), &lead, None)
             .unwrap();
 
         let caps = agent.capabilities();
@@ -444,7 +446,7 @@ mod tests {
         );
         let m = member("writer", &["fs.write:/root/**"], &["a"]);
 
-        let agent = factory.build(&m, &ceiling).unwrap();
+        let agent = factory.build(&m, &ceiling, None).unwrap();
 
         assert!(
             agent.capabilities().grants(&Scope::parse("fs.write:/root/**").unwrap()),
@@ -486,7 +488,7 @@ mod tests {
 
         // Correct: the ceiling is the raw floor -- the specialist's
         // declared fs.write base is covered.
-        let agent_correct = factory.build(&writer, &raw_floor).unwrap();
+        let agent_correct = factory.build(&writer, &raw_floor, None).unwrap();
         assert!(
             agent_correct.capabilities().grants(&Scope::parse("fs.write:/root/**").unwrap()),
             "against the real floor, the specialist must retain fs.write"
@@ -496,7 +498,7 @@ mod tests {
         // lead's own narrowed field as the ceiling instead, the
         // specialist's effective capabilities collapse -- reproducing
         // the exact regression the final review found.
-        let agent_buggy = factory.build(&writer, &lead_narrowed).unwrap();
+        let agent_buggy = factory.build(&writer, &lead_narrowed, None).unwrap();
         assert!(
             !agent_buggy.capabilities().grants(&Scope::parse("fs.write:/root/**").unwrap()),
             "this assertion documents the bug's own shape: an \
@@ -514,7 +516,7 @@ mod tests {
         // build succeeds and (by construction) the registry is the filtered
         // set — proven directly via filter_tools so we don't need to crack
         // open the agent's private registry.
-        f.build(&member("spec", &["fs.read"], &["beta"]), &lead)
+        f.build(&member("spec", &["fs.read"], &["beta"]), &lead, None)
             .expect("build");
         let filtered = filter_tools(
             &[fake("alpha"), fake("beta"), fake("gamma")],
@@ -598,7 +600,7 @@ mod tests {
         let f = SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), vec![write_tool])
             .with_checkpointer(Some(checkpointer));
 
-        let specialist = f.build(&m, &lead).expect("build");
+        let specialist = f.build(&m, &lead, None).expect("build");
 
         let channel = FakeLeadChannel::at(TrustTier::Trusted);
         let message = Message::text(channel.session_id(), "write a file");
@@ -703,7 +705,7 @@ mod tests {
         )
         .with_kv_cache(Some((pool, store, "build-hash".to_string())));
 
-        let specialist = f.build(&member("spec", &["fs.read"], &[]), &lead).expect("build");
+        let specialist = f.build(&member("spec", &["fs.read"], &[]), &lead, None).expect("build");
 
         let channel = FakeLeadChannel::at(TrustTier::Trusted);
         let _ = specialist
@@ -753,8 +755,8 @@ mod tests {
         .with_kv_cache(Some((Arc::clone(&pool), store, "build-hash".to_string())));
 
         // Two independent specialists, both built from the SAME factory.
-        let specialist_a = f.build(&member("spec-a", &["fs.read"], &[]), &lead).expect("build a");
-        let specialist_b = f.build(&member("spec-b", &["fs.read"], &[]), &lead).expect("build b");
+        let specialist_a = f.build(&member("spec-a", &["fs.read"], &[]), &lead, None).expect("build a");
+        let specialist_b = f.build(&member("spec-b", &["fs.read"], &[]), &lead, None).expect("build b");
 
         let channel = FakeLeadChannel::at(TrustTier::Trusted);
 
@@ -798,7 +800,7 @@ mod tests {
         let f = factory(vec![]);
         let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
         let err = f
-            .build(&member("spec", &["not.a.base"], &[]), &lead)
+            .build(&member("spec", &["not.a.base"], &[]), &lead, None)
             .err()
             .expect("build should reject the unknown scope");
         assert!(matches!(err, TeamError::Scope(s) if s == "not.a.base"));
@@ -859,7 +861,7 @@ mod tests {
             SpecialistFactory::new(provider, "test-model", 4096, Arc::new(NullAuditHook), base);
         let lead_caps = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
         let specialist = factory
-            .build(&member("spec", &["fs.read"], &["a", "b"]), &lead_caps)
+            .build(&member("spec", &["fs.read"], &["a", "b"]), &lead_caps, None)
             .expect("specialist builds");
 
         let channel = FakeLeadChannel::at(TrustTier::Trusted);

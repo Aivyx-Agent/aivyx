@@ -350,7 +350,7 @@ impl Tool for VerifyOutputTool {
             "Review the work below against the criteria. Begin your reply with PASS or FAIL, \
              then explain.\n\nCriteria: {criteria}\n\nWork:\n{output}"
         );
-        match self.pool.run(reviewer, &prompt, ctx.channel).await {
+        match self.pool.run(reviewer, &prompt, None, ctx.channel).await {
             Ok(verdict) => {
                 let passed = gate_passed(&verdict);
                 ToolOutcome::Completed {

@@ -244,10 +244,11 @@ impl TeamRuntime {
             let futures = runnable.iter().map(|step| {
                 let id = step.id.clone();
                 let member = step.kind.member().to_string();
+                let memory_topic = step.kind.memory_topic().map(str::to_string);
                 let input = self.build_input(step, &outputs);
                 async move {
                     observer.on_step_started(&id, &member);
-                    let res = self.pool.run(&member, &input, lead_channel).await;
+                    let res = self.pool.run(&member, &input, memory_topic.as_deref(), lead_channel).await;
                     (id, res)
                 }
             });
@@ -421,6 +422,141 @@ mod tests {
                 "finished:true",
             ],
             "delegate steps report done, the gate reports its verdict, finished fires once"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_steps_sharing_a_memory_topic_both_get_the_override() {
+        use crate::factory::{SpecialistBackend, SpecialistFactory};
+        use crate::pool::SpecialistPool;
+        use aivyx_capability::{CapabilitySet, Scope};
+        use aivyx_core::{NullAuditHook, Tool, ToolId, ToolOutcome, Verification};
+        use async_trait::async_trait;
+        use serde_json::{json, Value};
+
+        struct CapturingWriteTool {
+            id: ToolId,
+            schema: Value,
+            captured: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+        }
+        #[async_trait]
+        impl Tool for CapturingWriteTool {
+            fn id(&self) -> ToolId {
+                self.id
+            }
+            fn name(&self) -> &str {
+                "memory.write"
+            }
+            fn description(&self) -> &str {
+                "fake memory.write"
+            }
+            fn input_schema(&self) -> &Value {
+                &self.schema
+            }
+            fn required_scope(&self, _input: &Value) -> Scope {
+                Scope::parse("memory.write").unwrap()
+            }
+            async fn execute(&self, input: Value, _ctx: &aivyx_core::ToolContext<'_>) -> ToolOutcome {
+                self.captured.lock().unwrap().push(input);
+                ToolOutcome::Completed {
+                    output: json!({"ok": true}),
+                    verified: Verification::NotApplicable,
+                }
+            }
+        }
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let write_tool: Arc<dyn Tool> = Arc::new(CapturingWriteTool {
+            id: ToolId::new(),
+            schema: json!({
+                "type": "object",
+                "properties": { "topic": { "type": "string" }, "body": { "type": "string" } },
+                "required": ["topic", "body"]
+            }),
+            captured: captured.clone(),
+        });
+
+        // Each specialist call writes memory under its OWN topic guess
+        // (mirroring the original finding: different steps disagree).
+        // `tool_call_then_done` scripts exactly ONE turn (2 pops from a
+        // shared VecDeque) — sharing a single provider instance between two
+        // CONCURRENTLY-run specialists (steps "a" and "b" have no `.after()`
+        // between them, so they land in the same DAG wave and race on the
+        // same Mutex<VecDeque>) would let one specialist's turn steal the
+        // other's scripted step, silently skipping its tool call. Each
+        // member gets its own provider instance via `with_member_backends`
+        // to avoid that race.
+        let mut backends = std::collections::HashMap::new();
+        backends.insert(
+            "a".to_string(),
+            SpecialistBackend {
+                provider: FakeProvider::tool_call_then_done(
+                    "memory.write",
+                    json!({ "topic": "specialist-own-guess", "body": "note" }),
+                ),
+                model: "test-model".to_string(),
+            },
+        );
+        backends.insert(
+            "b".to_string(),
+            SpecialistBackend {
+                provider: FakeProvider::tool_call_then_done(
+                    "memory.write",
+                    json!({ "topic": "specialist-own-guess", "body": "note" }),
+                ),
+                model: "test-model".to_string(),
+            },
+        );
+
+        // `member()` (crate::testutil) only fills `capability_scopes` from its
+        // second argument — `tool_allowlist` (which `filter_tools` actually
+        // gates on) must be set separately, or an empty allowlist gives the
+        // specialist zero tools (least privilege) and the write never fires.
+        let mut a = member("a", &["memory.write"], TrustTier::Trusted);
+        a.tool_allowlist = vec!["memory.write".to_string()];
+        let mut b = member("b", &["memory.write"], TrustTier::Trusted);
+        b.tool_allowlist = vec!["memory.write".to_string()];
+        let members = vec![member("lead", &[], TrustTier::Trusted), a, b];
+        let config = crate::config::TeamConfig {
+            name: "t".into(),
+            description: String::new(),
+            lead: "lead".into(),
+            members,
+            dialogue: Default::default(),
+        };
+        let factory = SpecialistFactory::new(
+            FakeProvider::says("unused: both members override via with_member_backends"),
+            "test-model",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![write_tool],
+        )
+        .with_member_backends(backends);
+        // NT-02: attenuate_for_member only keeps scopes the LEAD ceiling
+        // grants, so this must include memory.write or both specialists'
+        // declared memory.write scope is stripped and the tool call is denied
+        // before it ever reaches CapturingWriteTool::execute.
+        let lead_caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let pool = SpecialistPool::new(factory, config, lead_caps, aivyx_core::MessageOrigin::Operator);
+        let rt = TeamRuntime::new(Arc::new(pool));
+
+        let plan = MissionPlan::new(
+            "shared summary",
+            vec![
+                Step::delegate("a", "a", "write the summary").with_memory_topic("overall_conditions"),
+                Step::delegate("b", "b", "refine the summary").with_memory_topic("overall_conditions"),
+            ],
+        );
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let report = rt.run(&plan, &lead).await.unwrap();
+        assert!(report.succeeded());
+
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls.len(), 2, "both steps' memory.write calls executed");
+        assert!(
+            calls.iter().all(|c| c["topic"] == "overall_conditions"),
+            "both steps' writes must land under the LEAD-assigned canonical topic, \
+             not each specialist's own guess: {calls:?}"
         );
     }
 

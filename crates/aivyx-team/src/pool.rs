@@ -278,10 +278,11 @@ impl SpecialistPool {
         &self,
         specialist: &str,
         task: &str,
+        memory_topic: Option<&str>,
         lead_channel: &dyn ChannelContext,
     ) -> Result<String, TeamError> {
         let member = self.resolve(specialist)?;
-        let agent = self.factory.build(member, &self.ceiling)?;
+        let agent = self.factory.build(member, &self.ceiling, memory_topic)?;
         let channel = self.specialist_channel(member, lead_channel);
         let mut msg = Message::text(channel.session_id(), task);
         if self.message_origin == aivyx_core::MessageOrigin::System {
@@ -674,7 +675,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
-        let out = p.run("inventory", "check stock", &lead_ch).await.unwrap();
+        let out = p.run("inventory", "check stock", None, &lead_ch).await.unwrap();
         assert_eq!(out, "inventory looks healthy");
     }
 
@@ -688,7 +689,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
-        assert!(p.run("lead", "task", &lead_ch).await.is_err());
+        assert!(p.run("lead", "task", None, &lead_ch).await.is_err());
     }
 
     #[test]
@@ -751,7 +752,7 @@ mod tests {
             aivyx_core::MessageOrigin::System,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
-        p.run("worker", "capture your origin", &lead_ch)
+        p.run("worker", "capture your origin", None, &lead_ch)
             .await
             .expect("specialist turn completes");
         assert_eq!(*observed.lock().unwrap(), Some(aivyx_core::MessageOrigin::System));
@@ -775,7 +776,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
         );
         let lead_ch = FakeLeadChannel::at(TrustTier::Trusted);
-        p.run("worker", "capture your origin", &lead_ch)
+        p.run("worker", "capture your origin", None, &lead_ch)
             .await
             .expect("specialist turn completes");
         assert_eq!(*observed.lock().unwrap(), Some(aivyx_core::MessageOrigin::Operator));

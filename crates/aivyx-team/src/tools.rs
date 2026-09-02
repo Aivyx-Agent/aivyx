@@ -39,7 +39,7 @@ async fn run(
             detail: format!("`specialist` and `{prompt_key}` (strings) are required"),
         });
     };
-    match pool.run(specialist, prompt, ctx.channel).await {
+    match pool.run(specialist, prompt, None, ctx.channel).await {
         Ok(result) => ToolOutcome::Completed {
             output: json!({ "specialist": specialist, "result": result }),
             verified: Verification::Unverified,
