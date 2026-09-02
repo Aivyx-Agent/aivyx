@@ -3680,10 +3680,11 @@ systemd/launchd wiring.
   (role / daemon / in-flight), clean keybindings. The agent's
   data already flows over IPC — this is the render + interaction
   layer. The new deps live in a dedicated frontend crate.
-- **Phase 186 — TUI state panels.** Side/overlay views the IPC
-  already serves — mission, loop status, reminders, recent audit
-  — so the agent's state is visible in-terminal, not just chat.
-  (May fold into 185 if scoped tightly.)
+- **Phase 186 — TUI state panels.** Active — see
+  [PHASE_186.md](archive/phases/PHASE_186.md). Didn't fold into
+  185: that phase shipped Missions/Audit/Tools as their own tabs,
+  narrowing 186 to the Dashboard tab's still-stubbed loop-status
+  and reminders panels.
 - **Phase 187 — Service install + first-run launch.** `aivyx
   service install` generates a systemd/launchd unit (run at
   login/boot); the `init` wizard ends by offering to install +
