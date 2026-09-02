@@ -6013,13 +6013,13 @@ fn SettingsPanel() -> Element {
             }
 
             if let Some(cfg) = settings().memory_profile.clone() {
-                MemoryProfileCard { key: "{cfg:?}", config: cfg }
+                MemoryProfileCard { key: "{cfg:?}", config: cfg.clone() }
             }
             if let Some(cfg) = settings().embedding.clone() {
-                EmbeddingConfigCard { key: "{cfg:?}", config: cfg }
+                EmbeddingConfigCard { key: "{cfg:?}", config: cfg.clone() }
             }
             if let Some(cfg) = settings().proactive.clone() {
-                ProactiveConfigCard { key: "{cfg:?}", config: cfg, targets: notifications().configs.clone() }
+                ProactiveConfigCard { key: "{cfg:?}", config: cfg.clone(), targets: notifications().configs.clone() }
             }
         }
 
