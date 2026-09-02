@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), 6 (2026-08-31), 7 (2026-09-02), and 8 (2026-09-02) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open). All sub-projects now started; only 5's one reverted item remains open.**
+> **Status: all 8 sub-projects done. 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), 6 (2026-08-31), 7 (2026-09-02), 8 (2026-09-02); 5 done 2026-09-03 (4 of 5 items 2026-08-31, the reverted-then-retried topic-naming item shipped on its 2nd attempt). The entire v0.9 polish backlog is closed.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -46,7 +46,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 2 | **`/classic` retirement** | See below | Medium | ✅ done 2026-08-28 (all 5 pieces A–E shipped — see below) |
 | 3 | **Repertoire / governed-write completions** (V09_PLAN row 6) | See below | Small | ✅ done 2026-08-29 |
 | 4 | **Agent turn-quality fixes** | See below | Medium–large | ✅ done 2026-08-30 |
-| 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
+| 5 | **Missions polish** | See below | Medium | ✅ done 2026-09-03 (4 of 5 done 2026-08-31; topic-naming discipline shipped 2026-09-03 on its 2nd attempt) |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | ✅ done 2026-08-31 (all 4 items, 7 tasks — see below) |
 | 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ✅ all 3 plans shipped 2026-09-01/02 (architecture + MCP CRUD; notify-target + channel-adapter CRUD; Settings coverage expansion); 2 items dropped as already-shipped |
 | 8 | **Tool/server call-stat observability** | See below | Large | ✅ shipped 2026-09-02 |
@@ -303,7 +303,7 @@ fixed before merge, then closed with a second follow-up plan:
   selection when multiple pool tokens tie, capping the number of
   identifier-drift notes per turn) — none blocking, all small.
 
-## 5 · Missions polish — ✅ 4 of 5 done 2026-08-31, 1 still open
+## 5 · Missions polish — ✅ done 2026-09-03 (4 of 5 items 2026-08-31, topic-naming discipline 2026-09-03 on the 2nd attempt)
 
 Full account: `docs/superpowers/specs/2026-08-30-missions-polish-design.md`,
 `docs/superpowers/plans/2026-08-30-missions-polish.md`. Verified against
@@ -329,8 +329,41 @@ it; no 6th item was hiding there.
   `aivyx-team`'s shared `build_input` (used by both the CLI's `aivyx
   team run` and Mission-Control-driven missions) now states plainly
   that upstream context IS the specialist's real input.
-- ⏳ **Mission topic-naming discipline** (§4 P2) — **still open.**
-  Attempted via a mission-scoped memory-topic prefix (reusing the
+- ✅ **Mission topic-naming discipline** (§4 P2) — shipped 2026-09-03,
+  take 2. The first attempt (a mission-scoped memory-topic prefix) was
+  reverted at final review — see the take-1 account preserved below —
+  for a reason its own lesson named plainly: *prepending* a namespace
+  can never make two different specialists *agree* on one name within
+  a mission, and it fragmented Concord's own topic space besides. This
+  attempt follows that lesson literally: the LEAD's own decomposition
+  (`decompose_task`'s schema and `decompose_goal`'s prompt) can now
+  assign a step an exact canonical `memory_topic`, enforced by
+  **replacing** (not prefixing) the specialist's own topic choice at
+  the same turn-loop dispatch point the existing `role_prefix`
+  mechanism already uses — confirmed architecturally sound before
+  building it: a fresh specialist agent is built per step execution,
+  so a genuinely per-step assignment needed no restructuring, just
+  parameter threading through 3 call sites. **Final review found 1
+  Important finding this plan's own design pass missed**: because the
+  override forces *every* `memory.write` a step makes onto one topic,
+  and `MemoryWriteTool`'s existing near-duplicate supersede check
+  (Jaccard ≥ 0.85) operates per-topic, a step producing several
+  genuinely-distinct but textually-similar entries (the reviewer
+  reproduced this on the ORIGINAL finding's own data shape — three
+  templated per-airport weather reports differing only by ICAO code
+  measure at Jaccard 0.90) could have one silently deleted if the LEAD
+  mis-assigned them a shared topic. Fixed with a guidance-only caveat
+  in both LEAD-facing surfaces (no code change — the dispatch mechanism
+  itself was independently confirmed correct via mutation testing:
+  the reviewer no-op'd the rewrite and confirmed the new end-to-end
+  test genuinely fails). Also confirmed this attempt doesn't repeat
+  take 1's second harm: opt-in, per-step, exact-name assignment can
+  only ever *increase* entries-per-topic-name versus today, never
+  fragment. Full account: `docs/superpowers/plans/2026-09-02-mission-
+  topic-naming-discipline.md`.
+
+  **Take-1 account (reverted, preserved for context):** attempted via
+  a mission-scoped memory-topic prefix (reusing the
   pre-existing, already-enforced `ConcreteAgent::with_memory_topic_
   prefix` mechanism) — implemented, then **reverted at final review**
   once two real problems surfaced: (1) it doesn't actually fix the
