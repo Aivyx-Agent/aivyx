@@ -766,6 +766,38 @@ pub enum QueryPayload {
     /// absent). Responds with
     /// [`QueryResponsePayload::ReflectionScheduleConfigApplied`].
     DeleteReflectionSchedule { name: String },
+    /// Response: [`QueryResponsePayload::GetMemoryProfileConfig`].
+    GetMemoryProfileConfig,
+    /// `profile`: `"off" | "lite" | "smart"`. Always sent — the Studio
+    /// picker has no blank state (unlike every other `SetX` in this
+    /// sub-project, this field is a plain `String`, not `Option`).
+    /// Responds with [`QueryResponsePayload::MemoryProfileConfigApplied`].
+    SetMemoryProfile { profile: String },
+    /// Response: [`QueryResponsePayload::GetEmbeddingConfig`].
+    GetEmbeddingConfig,
+    /// `api_key: None` means leave the existing key untouched. Responds
+    /// with [`QueryResponsePayload::EmbeddingConfigApplied`].
+    SetEmbeddingConfig {
+        #[serde(default)]
+        base_url: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        api_key: Option<String>,
+    },
+    /// Response: [`QueryResponsePayload::GetProactiveConfig`].
+    GetProactiveConfig,
+    /// Responds with [`QueryResponsePayload::ProactiveConfigApplied`].
+    SetProactiveConfig {
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        max_per_window: Option<u32>,
+        #[serde(default)]
+        window_secs: Option<u64>,
+    },
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1472,6 +1504,12 @@ pub enum QueryResponsePayload {
     /// list and `restart_required` (config is load-time), mirroring
     /// `NotifyTargetsApplied`'s own shape.
     ReflectionScheduleConfigApplied { schedules: Vec<ReflectionScheduleConfigView>, restart_required: bool },
+    GetMemoryProfileConfig { config: MemoryProfileConfigView },
+    MemoryProfileConfigApplied { config: MemoryProfileConfigView, restart_required: bool },
+    GetEmbeddingConfig { config: EmbeddingConfigView },
+    EmbeddingConfigApplied { config: EmbeddingConfigView, restart_required: bool },
+    GetProactiveConfig { config: ProactiveConfigView },
+    ProactiveConfigApplied { config: ProactiveConfigView, restart_required: bool },
 }
 
 /// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean
@@ -1760,6 +1798,38 @@ pub struct ReflectionScheduleConfigView {
     pub cron: String,
     pub lookback_window_secs: u64,
     pub enabled: bool,
+}
+
+/// The **editable configuration** of `[memory] profile` — a 3-way
+/// switch (`"off" | "lite" | "smart"`), not the 2-way lite/smart
+/// picker an earlier design pass assumed (`MemoryProfile` has 3
+/// variants — see `aivyx-config/src/lib.rs:2706`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryProfileConfigView {
+    pub profile: String,
+}
+
+/// The **editable configuration** of the `[embedding]` section's
+/// primary fields. `api_key` never carries the real value (see
+/// [`RedactedSecret`]). `dimensions`/`rag_top_k`/`rag_min_similarity`/
+/// `recall_window_turns`/`recall_gate_min_chars` and the Chapter Loom
+/// recall-fusion tuning fields stay TOML-only — not represented here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingConfigView {
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub api_key: RedactedSecret,
+}
+
+/// The **editable configuration** of the `[proactive]` section's
+/// primary fields. `signals` (the 3 `signal_*` toggles) stays
+/// TOML-only — not represented here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProactiveConfigView {
+    pub enabled: bool,
+    pub target: Option<String>,
+    pub max_per_window: u32,
+    pub window_secs: u64,
 }
 
 /// Wire-safe mirror of `aivyx_core::ChannelPlatform` (Chapter Postern).

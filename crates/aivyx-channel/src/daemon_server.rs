@@ -5584,6 +5584,111 @@ async fn handle_query(
                 Err(e) => map_config_write_error(e),
             }
         }
+        QueryPayload::GetMemoryProfileConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_memory_profile(path) {
+                Ok(profile) => QueryResponsePayload::GetMemoryProfileConfig {
+                    config: aivyx_ipc::protocol::MemoryProfileConfigView {
+                        profile: profile.unwrap_or_else(|| "off".to_string()),
+                    },
+                },
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::SetMemoryProfile { profile } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::write_memory_profile(path, Some(&profile)) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "memory", &format!("profile = {profile}"));
+                    match aivyx_config::config_write::read_memory_profile(path) {
+                        Ok(p) => QueryResponsePayload::MemoryProfileConfigApplied {
+                            config: aivyx_ipc::protocol::MemoryProfileConfigView {
+                                profile: p.unwrap_or_else(|| "off".to_string()),
+                            },
+                            restart_required: true,
+                        },
+                        Err(e) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("memory profile saved, but reloading it failed: {e}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::GetEmbeddingConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_embedding_section(path) {
+                Ok(e) => QueryResponsePayload::GetEmbeddingConfig { config: embedding_config_view(&e) },
+                Err(err) => map_config_write_error(err),
+            }
+        }
+        QueryPayload::SetEmbeddingConfig { base_url, model, api_key } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry = aivyx_config::config_write::EmbeddingEntryWrite { base_url, model, api_key };
+            match aivyx_config::config_write::write_embedding_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "embedding", "updated");
+                    match aivyx_config::config_write::read_embedding_section(path) {
+                        Ok(e) => QueryResponsePayload::EmbeddingConfigApplied {
+                            config: embedding_config_view(&e),
+                            restart_required: true,
+                        },
+                        Err(err) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("embedding config saved, but reloading it failed: {err}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
+        QueryPayload::GetProactiveConfig => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            match aivyx_config::config_write::read_proactive_section(path) {
+                Ok(p) => QueryResponsePayload::GetProactiveConfig { config: proactive_config_view(&p) },
+                Err(err) => map_config_write_error(err),
+            }
+        }
+        QueryPayload::SetProactiveConfig { enabled, target, max_per_window, window_secs } => {
+            let path = match config_toml_path {
+                Some(p) => p,
+                None => return no_config_file_error(),
+            };
+            let entry =
+                aivyx_config::config_write::ProactiveEntryWrite { enabled, target, max_per_window, window_secs };
+            match aivyx_config::config_write::write_proactive_section(path, &entry) {
+                Ok(()) => {
+                    audit_config_change(audit_log, "proactive", "updated");
+                    match aivyx_config::config_write::read_proactive_section(path) {
+                        Ok(p) => QueryResponsePayload::ProactiveConfigApplied {
+                            config: proactive_config_view(&p),
+                            restart_required: true,
+                        },
+                        Err(err) => QueryResponsePayload::QueryError {
+                            code: "config_reload_failed".into(),
+                            message: format!("proactive config saved, but reloading it failed: {err}"),
+                        },
+                    }
+                }
+                Err(e) => map_config_write_error(e),
+            }
+        }
         QueryPayload::GetEmailConfig => {
             let path = match config_toml_path {
                 Some(p) => p,
@@ -6584,6 +6689,23 @@ fn email_config_view(e: &aivyx_config::config_write::EmailEntryWrite) -> aivyx_i
         username: e.username.clone(),
         password: redact(e.password.as_deref()),
         from: e.from.clone(),
+    }
+}
+
+fn embedding_config_view(e: &aivyx_config::config_write::EmbeddingEntryWrite) -> aivyx_ipc::protocol::EmbeddingConfigView {
+    aivyx_ipc::protocol::EmbeddingConfigView {
+        base_url: e.base_url.clone(),
+        model: e.model.clone(),
+        api_key: redact(e.api_key.as_deref()),
+    }
+}
+
+fn proactive_config_view(p: &aivyx_config::config_write::ProactiveEntryWrite) -> aivyx_ipc::protocol::ProactiveConfigView {
+    aivyx_ipc::protocol::ProactiveConfigView {
+        enabled: p.enabled.unwrap_or(false),
+        target: p.target.clone(),
+        max_per_window: p.max_per_window.unwrap_or(aivyx_config::DEFAULT_PROACTIVE_MAX_PER_WINDOW),
+        window_secs: p.window_secs.unwrap_or(aivyx_config::DEFAULT_PROACTIVE_WINDOW_SECS),
     }
 }
 
@@ -9474,6 +9596,58 @@ system_prompt = "You are a custom role."
 
         assert!(!json.contains(LEAKED_SECRET), "raw password leaked into wire response: {json}");
         assert!(json.contains("\"configured\":true"), "expected configured:true in {json}");
+    }
+
+    #[test]
+    fn embedding_config_view_never_leaks_the_raw_api_key() {
+        let entry = aivyx_config::config_write::EmbeddingEntryWrite {
+            base_url: Some("https://api.openai.com".to_string()),
+            model: Some("text-embedding-3-small".to_string()),
+            api_key: Some("sk-super-secret-value".to_string()),
+        };
+        let view = embedding_config_view(&entry);
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(!json.contains("sk-super-secret-value"), "the real key must never reach the wire");
+        assert!(view.api_key.configured);
+        assert_eq!(view.api_key.source, "toml");
+    }
+
+    #[test]
+    fn embedding_write_with_none_api_key_leaves_the_existing_secret_on_disk() {
+        let path = secret_leak_temp_toml("embedding-rotate");
+        std::fs::write(&path, "").unwrap();
+        aivyx_config::config_write::write_embedding_section(
+            &path,
+            &aivyx_config::config_write::EmbeddingEntryWrite {
+                base_url: Some("https://api.openai.com".to_string()),
+                model: None,
+                api_key: Some("sk-original-secret".to_string()),
+            },
+        )
+        .unwrap();
+        // A later save rotates only the model, api_key: None.
+        aivyx_config::config_write::write_embedding_section(
+            &path,
+            &aivyx_config::config_write::EmbeddingEntryWrite {
+                base_url: None,
+                model: Some("text-embedding-3-large".to_string()),
+                api_key: None,
+            },
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(contents.contains("sk-original-secret"), "None must not clear the existing secret");
+        assert!(contents.contains("text-embedding-3-large"));
+    }
+
+    #[test]
+    fn proactive_config_view_defaults_match_the_loader_when_section_absent() {
+        let entry = aivyx_config::config_write::ProactiveEntryWrite::default();
+        let view = proactive_config_view(&entry);
+        assert!(!view.enabled);
+        assert_eq!(view.max_per_window, aivyx_config::DEFAULT_PROACTIVE_MAX_PER_WINDOW);
+        assert_eq!(view.window_secs, aivyx_config::DEFAULT_PROACTIVE_WINDOW_SECS);
     }
 
     #[test]
