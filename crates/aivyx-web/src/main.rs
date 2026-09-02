@@ -2574,12 +2574,25 @@ fn ReflectionScheduleForm(
     let editing_existing = initial.is_some();
     let mut ui = use_context::<Signal<SchedulesUi>>();
     let mut name = use_signal(|| seed.name.clone());
-    let mut freq = use_signal(|| "daily".to_string());
+    // Editing an existing entry must open in "custom" mode so `built()`'s
+    // fallback arm (`_ => cron().trim().to_string()`) reads the real seeded
+    // cron instead of silently recomputing a fresh daily/09:00 cron and
+    // overwriting whatever was actually stored (weekly/hourly/hand-written)
+    // on the next Save.
+    let mut freq = use_signal(|| if editing_existing { "custom".to_string() } else { "daily".to_string() });
     let mut at_time = use_signal(|| "09:00".to_string());
     let mut weekday = use_signal(|| "Mon".to_string());
     let mut every_hours = use_signal(|| "6".to_string());
     let mut cron = use_signal(|| seed.cron.clone());
     let mut lookback_hours = use_signal(|| (seed.lookback_window_secs / 3600).max(1).to_string());
+    // Source of truth for the actual value that will be saved — seeded to the
+    // entry's EXACT on-disk value (not the truncated hours display), and only
+    // overwritten when the hours field parses to a valid `>= 1` whole number.
+    // This means an entry whose lookback_window_secs isn't an exact multiple
+    // of 3600 (e.g. hand-edited to 5400) round-trips unchanged if the operator
+    // never touches this field, instead of silently rounding down to 3600 on
+    // every save.
+    let mut lookback_secs = use_signal(|| seed.lookback_window_secs.max(60));
     let mut enabled = use_signal(|| seed.enabled);
 
     let built = use_memo(move || {
@@ -2658,7 +2671,23 @@ fn ReflectionScheduleForm(
             p { class: "label-tech", style: "opacity:0.7; margin:4px 0;", "cron: {built()}" }
             div { class: "field-row",
                 label { "Lookback (hours)" }
-                input { class: "input", value: "{lookback_hours}", oninput: move |e| lookback_hours.set(e.value()) }
+                input {
+                    class: "input",
+                    value: "{lookback_hours}",
+                    oninput: move |e| {
+                        let v = e.value();
+                        lookback_hours.set(v.clone());
+                        if let Ok(h) = v.trim().parse::<u64>() {
+                            if h >= 1 {
+                                lookback_secs.set(h.saturating_mul(3600));
+                            }
+                        }
+                        // Invalid/empty input: lookback_secs deliberately keeps
+                        // its last valid value (or the untouched seed) until a
+                        // valid one is typed — Save below re-validates the
+                        // currently-displayed text and blocks if it's invalid.
+                    },
+                }
             }
             div { class: "field-row",
                 label { "Enabled" }
@@ -2674,11 +2703,21 @@ fn ReflectionScheduleForm(
                             ui.write().notice = Some((false, "name and cron are both required".into()));
                             return;
                         }
-                        let hours = lookback_hours().trim().parse::<u64>().unwrap_or(24).max(1);
+                        let hours_raw = lookback_hours().trim().to_string();
+                        let valid = matches!(hours_raw.parse::<u64>(), Ok(h) if h >= 1);
+                        if !valid {
+                            ui.write().notice = Some((
+                                false,
+                                format!(
+                                    "{hours_raw:?} is not a valid whole number of hours (>= 1) — Save was not sent."
+                                ),
+                            ));
+                            return;
+                        }
                         on_save.call(ReflectionScheduleConfigView {
                             name: n,
                             cron: c,
-                            lookback_window_secs: hours * 3600,
+                            lookback_window_secs: lookback_secs(),
                             enabled: enabled(),
                         });
                     },
@@ -2901,6 +2940,17 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
 /// rendered as a `<select>` so an invalid target is unreachable through
 /// this form — the write path (`write_proactive_section`) still checks
 /// independently, per this sub-project's defense-in-depth precedent.
+/// The picker also filters out disabled targets (falling back to showing
+/// the currently-saved one, greyed, if it happens to be disabled) so a
+/// target that would be rejected at write time can't be picked here.
+///
+/// Known limitation: `targets` only reflects target state as of page
+/// load / last refresh. If a `[[notify_target]]` is disabled or deleted
+/// through the Notifications screen in another tab/session, this card
+/// does not retroactively invalidate an already-saved `[proactive].target`
+/// — that only gets caught the next time the operator revisits and
+/// re-saves this card (see `write_proactive_section`'s own doc comment
+/// for the matching server-side deferral).
 #[component]
 fn ProactiveConfigCard(config: ProactiveConfigView, targets: Vec<NotifyTargetConfigView>) -> Element {
     let ws = use_context::<Sender>();
@@ -2929,8 +2979,12 @@ fn ProactiveConfigCard(config: ProactiveConfigView, targets: Vec<NotifyTargetCon
                     value: "{target}",
                     onchange: move |e| target.set(e.value()),
                     option { value: "", "— choose a notify target —" }
-                    for t in targets.iter() {
-                        option { value: "{t.name}", "{t.name}" }
+                    for t in targets.iter().filter(|t| t.enabled || t.name == target()) {
+                        option {
+                            value: "{t.name}",
+                            disabled: !t.enabled,
+                            if t.enabled { "{t.name}" } else { "{t.name} (disabled)" }
+                        }
                     }
                 }
             }

@@ -1644,9 +1644,24 @@ pub struct ProactiveEntryWrite {
 /// must keep succeeding) against `build_proactive_config`'s
 /// (`aivyx-config/src/lib.rs:8689`) own `enabled = true` requirements:
 /// non-empty `target`, `max_per_window >= 1`, `window_secs >= 1`. Also
-/// checks that `target` names an existing `[[notify_target]]` entry —
-/// the loader itself does NOT make this check (it only checks
-/// non-empty), so this is deliberately stricter, not a mirror.
+/// checks that `target` names an existing, *enabled* `[[notify_target]]`
+/// entry — the loader itself does NOT make this check (it only checks
+/// non-empty), so this is deliberately stricter, not a mirror. It must
+/// check `enabled` too: the loader silently drops disabled
+/// `[[notify_target]]` entries from its resolved list, so a target that
+/// merely exists by name but is disabled would load fine and then fail
+/// at dispatch time forever, silently (see `NotifyDispatcher::dispatch`
+/// / `NotifyError::UnknownTarget`, which today only reaches an
+/// `eprintln!` in `reflection_scheduler.rs`, never the operator).
+///
+/// Known limitation: this check only runs at WRITE time. If the referenced
+/// [[notify_target]] is later disabled or deleted through the separate
+/// notify-target CRUD surface, [proactive].target is not re-validated —
+/// it silently goes stale until the operator next saves this section.
+/// Fixing this would need either a boot-time cross-validation pass or a
+/// delete-time cross-check in the notify-target write path; out of scope
+/// here (POLISH_WAVES.md sub-project 7 plan 3's final review flagged this
+/// explicitly as a documented deferral, not an oversight).
 pub fn write_proactive_section(path: &Path, entry: &ProactiveEntryWrite) -> Result<(), ConfigWriteError> {
     let mut doc = load_document(path)?;
 
@@ -1680,16 +1695,29 @@ pub fn write_proactive_section(path: &Path, entry: &ProactiveEntryWrite) -> Resu
                     .to_string(),
             });
         }
-        let known_target = doc
+        let matched_target = doc
             .get("notify_target")
             .and_then(toml_edit::Item::as_array_of_tables)
-            .is_some_and(|arr| {
-                arr.iter().any(|t| t.get("name").and_then(|v| v.as_str()) == Some(target.as_str()))
+            .and_then(|arr| {
+                arr.iter().find(|t| t.get("name").and_then(|v| v.as_str()) == Some(target.as_str()))
             });
-        if !known_target {
-            return Err(ConfigWriteError::InvalidProactiveConfig {
-                reason: format!("target {target:?} does not name a configured [[notify_target]] entry"),
-            });
+        match matched_target {
+            None => {
+                return Err(ConfigWriteError::InvalidProactiveConfig {
+                    reason: format!("target {target:?} does not name a configured [[notify_target]] entry"),
+                });
+            }
+            Some(t) => {
+                let target_enabled = t.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                if !target_enabled {
+                    return Err(ConfigWriteError::InvalidProactiveConfig {
+                        reason: format!(
+                            "target {target:?} is a configured [[notify_target]] but is disabled — \
+                             enable it on the Notifications screen first, or choose a different target"
+                        ),
+                    });
+                }
+            }
         }
         if merged_max_per_window == 0 {
             return Err(ConfigWriteError::InvalidProactiveConfig {
@@ -3117,6 +3145,27 @@ mod tests {
             &ProactiveEntryWrite {
                 enabled: Some(true),
                 target: Some("nonexistent".to_string()),
+                max_per_window: None,
+                window_secs: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidProactiveConfig { .. }));
+    }
+
+    #[test]
+    fn proactive_write_rejects_enabling_with_a_disabled_target() {
+        let path = temp_toml("proactive-disabled-target");
+        std::fs::write(
+            &path,
+            "[[notify_target]]\nname = \"ops\"\nkind = \"telegram\"\nchat_id = \"123\"\nenabled = false\ndefault = false\n",
+        )
+        .unwrap();
+        let err = write_proactive_section(
+            &path,
+            &ProactiveEntryWrite {
+                enabled: Some(true),
+                target: Some("ops".to_string()),
                 max_per_window: None,
                 window_secs: None,
             },
