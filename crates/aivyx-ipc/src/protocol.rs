@@ -798,6 +798,18 @@ pub enum QueryPayload {
         #[serde(default)]
         window_secs: Option<u64>,
     },
+    /// POLISH_WAVES.md sub-project 8 item C — read-only per-MCP-server
+    /// observability query, closing the gap [`QueryPayload::
+    /// GetToolStats`] leaves for MCP-bridged tools (which all share
+    /// the single `"mcp.call"` scope base). `window_secs = None`
+    /// scopes the answer to the whole audit chain, matching
+    /// `GetToolStats`'s own convention. Distinct from [`QueryPayload::
+    /// GetMcpStatus`], which is a boot-time file snapshot, not live
+    /// audit-derived data — do not merge these two queries.
+    GetMcpServerCallStats {
+        #[serde(default)]
+        window_secs: Option<u64>,
+    },
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1510,6 +1522,8 @@ pub enum QueryResponsePayload {
     EmbeddingConfigApplied { config: EmbeddingConfigView, restart_required: bool },
     GetProactiveConfig { config: ProactiveConfigView },
     ProactiveConfigApplied { config: ProactiveConfigView, restart_required: bool },
+    /// Response to [`QueryPayload::GetMcpServerCallStats`].
+    McpServerCallStats { servers: Vec<McpServerCallStats> },
 }
 
 /// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean
@@ -1705,6 +1719,29 @@ pub struct ToolStat {
     /// Total wall-clock duration across all `calls`, in
     /// milliseconds. The average is `total_duration_ms / calls`,
     /// derived client-side.
+    pub total_duration_ms: u64,
+}
+
+/// POLISH_WAVES.md sub-project 8 item C — per-MCP-server call
+/// statistics, derived from the audit chain the same way [`ToolStat`]
+/// is, but grouped by MCP server name (recovered from the `mcp.call`
+/// scope's qualifier, `<server>:<tool>`) instead of by capability
+/// base. Closes the gap where `ToolStat`'s aggregation — keyed on
+/// `Scope::base()` — collapses every configured `[[mcp_server]]`'s
+/// tool calls into one shared `"mcp.call"` row, making it impossible
+/// to tell which server is actually failing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerCallStats {
+    pub server_name: String,
+    /// Total `AuditEvent::ToolCall` events for this server within the
+    /// requested window.
+    pub calls: u64,
+    /// Per-outcome counts, keyed by the same stable outcome labels
+    /// `ToolStat::outcomes` uses (`completed`, `failed`, `denied`,
+    /// `not_in_role`, `requires_escalation`, `rate_limited`). A key is
+    /// absent when its count is zero.
+    pub outcomes: std::collections::BTreeMap<String, u64>,
+    /// Total wall-clock duration across all `calls`, in milliseconds.
     pub total_duration_ms: u64,
 }
 
@@ -5636,5 +5673,29 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let back: QueryPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn mcp_server_call_stats_round_trips_over_json() {
+        let mut outcomes = std::collections::BTreeMap::new();
+        outcomes.insert("completed".to_string(), 3u64);
+        outcomes.insert("failed".to_string(), 1u64);
+        let stats = McpServerCallStats {
+            server_name: "comfyui".to_string(),
+            calls: 4,
+            outcomes,
+            total_duration_ms: 400,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        let back: McpServerCallStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(stats, back);
+    }
+
+    #[test]
+    fn get_mcp_server_call_stats_round_trips_over_json() {
+        let msg = QueryPayload::GetMcpServerCallStats { window_secs: Some(86_400) };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: QueryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, back);
     }
 }

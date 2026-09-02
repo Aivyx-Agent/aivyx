@@ -4128,6 +4128,26 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::GetMcpServerCallStats { window_secs } => {
+            let Some(log) = audit_log else {
+                return QueryResponsePayload::QueryError {
+                    code: "no_audit_log".into(),
+                    message: "daemon has no audit log configured".into(),
+                };
+            };
+            let cutoff = window_secs.and_then(|secs| {
+                std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(secs))
+            });
+            match log.entries_range(0, log.len()) {
+                Ok(rows) => QueryResponsePayload::McpServerCallStats {
+                    servers: fold_mcp_server_stats(&rows, cutoff),
+                },
+                Err(e) => QueryResponsePayload::QueryError {
+                    code: "mcp_server_call_stats_failed".into(),
+                    message: e.to_string(),
+                },
+            }
+        }
         QueryPayload::DumpToolRelevance { keyword_key_filter } => {
             let Some(ledger) = tool_relevance_ledger else {
                 return QueryResponsePayload::QueryError {
@@ -7487,6 +7507,90 @@ fn fold_tool_stats(
     tools
 }
 
+/// POLISH_WAVES.md sub-project 8 item C — fold `mcp.call`-scoped audit
+/// `ToolCall` events into per-MCP-server statistics. Shares
+/// `fold_tool_stats`'s own audit-walking/cutoff-window shape, but
+/// groups by the server name recovered from the scope's qualifier
+/// (`mcp.call:<server>:<tool>`) instead of by `scope_used.base()`
+/// (which is the literal string `"mcp.call"` for every MCP-bridged
+/// tool call, regardless of server — the exact gap this function
+/// closes). No registry join (unlike `fold_tool_stats`, which joins
+/// against `tool_descriptors`): a server with zero calls in the
+/// window simply has no row here, and the caller (the Studio's
+/// `McpPanel`) joins this list against its own already-fetched
+/// `GetMcpStatus` server list client-side to render a "no recent
+/// activity" state for a configured-but-unused server.
+fn fold_mcp_server_stats(
+    entries: &[aivyx_audit::SignedEntry],
+    cutoff: Option<std::time::SystemTime>,
+) -> Vec<crate::daemon_ipc::McpServerCallStats> {
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct Acc {
+        calls: u64,
+        outcomes: BTreeMap<String, u64>,
+        total_duration_ms: u64,
+    }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+
+    for entry in entries {
+        if let Some(cut) = cutoff {
+            if entry.appended_at < cut {
+                continue;
+            }
+        }
+        let aivyx_audit::AuditEvent::ToolCall {
+            scope_used,
+            outcome,
+            duration,
+            ..
+        } = &entry.event
+        else {
+            continue;
+        };
+        if scope_used.base() != "mcp.call" {
+            continue;
+        }
+        let Some(qualifier) = scope_used.qualifier() else {
+            continue;
+        };
+        // The qualifier is "<server>:<tool>" (proxy.rs's own
+        // construction: `format!("mcp.call:{server_name}:{tool_name}")`).
+        // Split from the RIGHT so a server name that itself contains a
+        // colon (no validation forbids this today) still recovers
+        // correctly, as long as the tool name segment (the last one)
+        // has no colon of its own — guaranteed by that construction site.
+        let Some((server_name, _tool_name)) = qualifier.rsplit_once(':') else {
+            continue;
+        };
+        let a = acc.entry(server_name.to_string()).or_default();
+        a.calls += 1;
+        a.total_duration_ms += duration.as_millis() as u64;
+        let label = match outcome {
+            aivyx_core::ToolOutcomeSummary::Completed { .. } => "completed",
+            aivyx_core::ToolOutcomeSummary::Denied => "denied",
+            aivyx_core::ToolOutcomeSummary::NotInRole => "not_in_role",
+            aivyx_core::ToolOutcomeSummary::RateLimited => "rate_limited",
+            aivyx_core::ToolOutcomeSummary::RequiresEscalation => "requires_escalation",
+            aivyx_core::ToolOutcomeSummary::Failed => "failed",
+        };
+        *a.outcomes.entry(label.to_string()).or_insert(0) += 1;
+    }
+
+    let mut servers: Vec<crate::daemon_ipc::McpServerCallStats> = acc
+        .into_iter()
+        .map(|(server_name, a)| crate::daemon_ipc::McpServerCallStats {
+            server_name,
+            calls: a.calls,
+            outcomes: a.outcomes,
+            total_duration_ms: a.total_duration_ms,
+        })
+        .collect();
+    servers.sort_by(|x, y| y.calls.cmp(&x.calls).then_with(|| x.server_name.cmp(&y.server_name)));
+    servers
+}
+
 /// Chapter Almanac — build the `GetToolCatalog` response rows from the
 /// registered-tool snapshot: no audit-chain read, unlike `fold_tool_stats`
 /// above (this is a pure registry catalog, not observability). `min_tier`
@@ -9032,6 +9136,71 @@ system_prompt = "You are a custom role."
             .expect("a called base with no descriptor must still get a row");
         assert!(!shell.registered);
         assert_eq!(shell.calls, 1);
+    }
+
+    #[test]
+    fn fold_mcp_server_stats_buckets_by_server_not_by_shared_base() {
+        let now = std::time::SystemTime::now();
+        let entries = vec![
+            tc_entry(0, "mcp.call:comfyui:generate_image", completed_outcome(), 10, now),
+            tc_entry(
+                1,
+                "mcp.call:duckduckgo-search:search",
+                aivyx_core::ToolOutcomeSummary::Failed,
+                10,
+                now,
+            ),
+            tc_entry(
+                2,
+                "mcp.call:duckduckgo-search:search",
+                aivyx_core::ToolOutcomeSummary::Failed,
+                10,
+                now,
+            ),
+        ];
+        let servers = fold_mcp_server_stats(&entries, None);
+        assert_eq!(servers.len(), 2, "two distinct servers, not one shared mcp.call bucket");
+        let ddg = servers.iter().find(|s| s.server_name == "duckduckgo-search").unwrap();
+        assert_eq!(ddg.calls, 2);
+        assert_eq!(ddg.outcomes.get("failed"), Some(&2));
+        let comfy = servers.iter().find(|s| s.server_name == "comfyui").unwrap();
+        assert_eq!(comfy.calls, 1);
+        assert_eq!(comfy.outcomes.get("completed"), Some(&1));
+    }
+
+    #[test]
+    fn fold_mcp_server_stats_ignores_non_mcp_tool_calls() {
+        let now = std::time::SystemTime::now();
+        let entries = vec![tc_entry(0, "fs.read", completed_outcome(), 5, now)];
+        let servers = fold_mcp_server_stats(&entries, None);
+        assert!(servers.is_empty(), "a non-mcp.call entry must not produce a row");
+    }
+
+    #[test]
+    fn fold_mcp_server_stats_respects_the_cutoff() {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let recent = std::time::SystemTime::now();
+        let entries = vec![
+            tc_entry(0, "mcp.call:comfyui:generate_image", completed_outcome(), 10, old),
+            tc_entry(1, "mcp.call:comfyui:generate_image", completed_outcome(), 10, recent),
+        ];
+        let cutoff = recent - std::time::Duration::from_secs(60);
+        let servers = fold_mcp_server_stats(&entries, Some(cutoff));
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].calls, 1, "the entry before cutoff must be excluded");
+    }
+
+    #[test]
+    fn fold_mcp_server_stats_splits_a_colon_containing_server_name_from_the_right() {
+        let now = std::time::SystemTime::now();
+        // A server name with a colon in it (no validation forbids this
+        // today) — the tool name is guaranteed colon-free by the
+        // qualifier's own construction site, so splitting from the
+        // right must still recover the full server name correctly.
+        let entries = vec![tc_entry(0, "mcp.call:my:weird:server:generate", completed_outcome(), 1, now)];
+        let servers = fold_mcp_server_stats(&entries, None);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].server_name, "my:weird:server");
     }
 
     // -- Chapter U Settings handlers --------------------------------------
