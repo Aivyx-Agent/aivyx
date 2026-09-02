@@ -1,6 +1,6 @@
 # Polish Waves — the decomposed v0.9 backlog (Chapter Vitrine's real output)
 
-> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), 6 (2026-08-31), and 7 (2026-09-02) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open). Sub-project 8 not started.**
+> **Status: sub-projects 1 (2026-08-27), 2 (2026-08-29), 3 (2026-08-29), 4 (2026-08-30), 6 (2026-08-31), 7 (2026-09-02), and 8 (2026-09-02) done; 5 mostly done 2026-08-31 (4 of 5 items — one reverted at final review, still open). All sub-projects now started; only 5's one reverted item remains open.**
 > `V09_PLAN.md` row 4 ("Polish waves —
 > fix the Vitrine backlog, batched by screen family") was a one-line
 > placeholder that never got its own doc, the way the phase-planning
@@ -49,7 +49,7 @@ set once rather than restyling twice), the biggest/riskiest piece last
 | 5 | **Missions polish** | See below | Medium | ⏳ 4 of 5 done 2026-08-31 (topic-naming discipline still open) |
 | 6 | **UI Modernization pass** | See below | Large, design-heavy | ✅ done 2026-08-31 (all 4 items, 7 tasks — see below) |
 | 7 | **Config-write surface area** ("credentials in Studio") | See below (incl. V09_PLAN row 8) | Largest | ✅ all 3 plans shipped 2026-09-01/02 (architecture + MCP CRUD; notify-target + channel-adapter CRUD; Settings coverage expansion); 2 items dropped as already-shipped |
-| 8 | **Tool/server call-stat observability** | See below | Large | Not started |
+| 8 | **Tool/server call-stat observability** | See below | Large | ✅ shipped 2026-09-02 |
 
 Each sub-project gets its own brainstorm → spec → plan cycle when its
 turn comes, per the workspace's usual SDD process — items 1's small
@@ -569,32 +569,72 @@ tracking doc's own prose:
   language sub-project 6 establishes (new screens here are built in it
   directly).
 
-## 8 · Tool/server call-stat observability
+## 8 · Tool/server call-stat observability — ✅ done 2026-09-02
 
 New sub-project, split out of sub-project 2's scoping 2026-08-27. Two
 findings that turned out to be the same underlying problem: "is this
 tool/server actually working," derived from the audit chain rather
 than trusted from connection-time status alone.
 
-- **A shared audit-chain call-stat aggregator** — the piece neither
-  finding below has today: recent per-tool (or per-MCP-server) success/
-  failure counts derived from real audit entries, not just "did it
-  connect at daemon start." Design once, use twice.
-- **TUI Tools view** (`VITRINE.md` §12, `aivyx-tui`'s `View::Tools`) —
-  currently a hardcoded placeholder ("the registered tools —
-  provenance, capability scope, and call stats"); needs a brand-new
-  IPC query enumerating the registered `Tool` trait objects
-  (`id()`/`name()`/`required_scope()`) plus the shared aggregator's
-  call-stat data, rendered in ratatui.
-- **MCP tool-level health signal** (`VITRINE.md` §10) — the Lantern
-  screen's connection status is connection-level from the last daemon
-  start; `web-search` showed green all day while DuckDuckGo silently
-  refused its queries. The shared aggregator, surfaced per-server
-  instead of per-tool, closes this — natural to land alongside
-  sub-project 7's MCP CRUD screen.
-- Not yet scoped in detail (found, not designed) — this doc records
-  that it exists and why the two findings are joined; a real
-  brainstorm/design pass is its own future session.
+**Grounding against real code before designing found the tracking
+doc's own framing half-stale**: item A ("a shared audit-chain
+call-stat aggregator") turned out to already be fully shipped — Phase
+102's `GetToolStats`/`fold_tool_stats`, already backing a working
+`aivyx tools` CLI command — nobody had cross-referenced it when this
+sub-project was split out. But it has a real, unaddressed gap for MCP
+specifically: it groups by `Scope::base()`, which collapses every
+`[[mcp_server]]`'s tool calls into the single literal bucket
+`"mcp.call"` (the server name lives entirely in the scope's
+*qualifier*, which the existing aggregator never inspects) — so the
+original `web-search`-showed-green-while-DuckDuckGo-silently-failed
+finding was still real. Remaining scope, corrected: B (TUI Tools view)
+needed no new backend at all, just a ratatui consumer of the
+already-shipped query; C (MCP per-server health) needed a genuinely
+new aggregation dimension.
+
+- ✅ **B — TUI Tools view** (`VITRINE.md` §12) — `aivyx-tui`'s
+  placeholder `View::Tools` now renders real `GetToolStats` data
+  (tool name, `[unregistered]` marker, call count, outcome breakdown,
+  avg duration — mirroring the `aivyx tools` CLI's own text layout),
+  fetched once on switching into the view, following `View::Audit`'s
+  own established "no background poll" posture exactly.
+- ✅ **C — MCP per-server health signal** (`VITRINE.md` §10) — a new
+  `fold_mcp_server_stats` aggregation (sibling to the untouched
+  `fold_tool_stats`), grouping by the MCP server name recovered from
+  the `mcp.call:<server>:<tool>` qualifier, behind a new
+  `GetMcpServerCallStats` query (deliberately separate from
+  `GetMcpStatus`, which documents itself as a boot-time file snapshot,
+  not live data). Surfaces as a new rolling health chip on
+  `McpServerCard`, additive to the existing `connected`/`failed` pill
+  — a server can show `connected` (it answered the boot handshake)
+  alongside a red health chip (its tools have been failing since),
+  which is the exact finding this item exists to surface.
+- **Final whole-branch review found 1 Critical + 1 Important, both in
+  this sub-project's own now-familiar shape** (a check or a value that
+  looked right in isolation, wrong once traced against real behavior):
+  the TUI's new scroll-clamp used the tool *count* as its ceiling, but
+  the Tools view renders 2 lines per tool with any calls (name +
+  outcome breakdown) — so on any terminal short enough (a standard
+  80×24 is typical), the bottom rows of a real tool list were
+  permanently unreachable by any key sequence, reproduced with a real
+  failing test. Separately, the MCP qualifier-splitting logic split
+  from the right (`rsplit_once`), which protects the *operator-typed*
+  server-name segment from an embedded colon — but the segment that's
+  actually untrusted is the *tool* name, deserialized verbatim from
+  the remote MCP server's own `tools/list` response with no
+  sanitization anywhere in this codebase; a misbehaving server could
+  hide its own failures behind a garbage split, reintroducing this
+  sub-project's own motivating failure mode through a different door.
+  Both fixed (clamp now accounts for the real rendered line count;
+  split now goes left, confirmed by re-review to match an existing,
+  independent convention already used elsewhere in this codebase for
+  the same qualifier shape — `aivyx-cli`'s own capability-grant
+  derivation). Re-review found both genuinely fixed and logged one
+  further non-blocking follow-up (an operator could still self-inflict
+  the equivalent gap by naming an `[[mcp_server]]` entry with a colon
+  in it — closing this fully would mean rejecting colons in
+  `write_mcp_server_section`, not done here). Full account:
+  `docs/superpowers/plans/2026-09-02-tool-server-observability.md`.
 
 ---
 
