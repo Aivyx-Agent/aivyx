@@ -5,6 +5,32 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-09-03
+
+**Milestone: the Interface Polish phase is complete — v0.9.0 cuts as
+the capstone.** `docs/V09_PLAN.md`'s own stated rule ("v0.9.0 cuts as
+the capstone when the polish backlog is empty") is now satisfied: all
+8 rows of that plan are done. This release folds in the two months of
+continuous work since `v0.8.3` that shipped without its own version
+cut — **Gatehouse** (Studio remote auth: the refuse-to-bind interlock,
+the `web_ui_insecure_no_auth` escape hatch, first-boot token
+generation; `docs/GATEHOUSE.md`), **Freight** (signed pack bundles —
+format core, the `aivyx pack` CLI, the Kitchen worked example;
+`docs/FREIGHT.md`), the full **Vitrine** operator walkthrough across
+all 15 Studio screens + the TUI + the desktop shell
+(`docs/VITRINE.md`), and the resulting 8-sub-project polish backlog
+(`docs/POLISH_WAVES.md`): a small backlog sweep, `/classic` retirement,
+Repertoire completions, agent turn-quality fixes, Missions polish, a
+UI modernization pass, config-write surface-area completions (memory
+profile / embedding / proactive settings, reflection-schedule CRUD),
+and tool/server call-stat observability. Also ships as part of this
+release: **Chapter Mission Control** (live LEAD/specialist mission
+graph, click-to-drill-in, gate approve/reject, abort, pause/resume —
+see Added below) and **Phase 185's Terminal TUI foundation**
+(`ratatui`/`crossterm` replacing the line-based REPL, plus Missions /
+Dashboard / Audit / Tools panels; `docs/ROADMAP.md`'s Chapter I). Full
+phase-by-phase detail lives in those docs, not reconstructed here.
+
 ### Added
 
 - **KV-cache persistence for `llama-server` users (`provider =
