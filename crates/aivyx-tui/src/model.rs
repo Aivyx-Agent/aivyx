@@ -546,7 +546,10 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
             // its own top row.
             let max = match state.view {
                 View::Audit => state.audit_entries.len(),
-                View::Tools => state.tool_stats.len(),
+                View::Tools => {
+                    1 + state.tool_stats.len()
+                        + state.tool_stats.iter().filter(|t| t.calls > 0).count()
+                }
                 _ => state.history.len(),
             };
             state.scroll = (state.scroll + n).min(max);
@@ -1332,7 +1335,13 @@ mod tests {
     }
 
     #[test]
-    fn scroll_up_clamps_to_tool_stats_length_in_tools_view() {
+    fn scroll_up_clamps_to_rendered_tools_line_count_in_tools_view() {
+        // Final-review Critical finding — render_panel emits 1 header line
+        // + 1 name line per tool + 1 extra outcome-breakdown line for every
+        // tool with calls > 0, so the clamp must be
+        // `1 + tool_stats.len() + (tools with calls > 0)`, not just
+        // `tool_stats.len()` (the old, buggy clamp), or the bottom rows
+        // become permanently unreachable once tools have nonzero calls.
         use aivyx_channel::daemon_ipc::ToolStat;
         let mut s = AppState::new();
         s.view = View::Tools;
@@ -1351,13 +1360,16 @@ mod tests {
                 description: String::new(),
                 scope_base: "b".to_string(),
                 registered: true,
-                calls: 0,
-                outcomes: std::collections::BTreeMap::new(),
-                total_duration_ms: 0,
+                calls: 1,
+                outcomes: std::collections::BTreeMap::from([("completed".to_string(), 1u64)]),
+                total_duration_ms: 5,
             },
         ];
         s = update(s, Msg::ScrollUp(10));
-        assert_eq!(s.scroll, 2, "clamps to tool_stats length, not history length");
+        assert_eq!(
+            s.scroll, 4,
+            "clamps to 1 (header) + 2 (tools) + 1 (b's outcome line), not tool_stats length"
+        );
     }
 
     // ---- Audit pagination arithmetic (`/classic` retirement, Task E) ----

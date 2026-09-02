@@ -7519,7 +7519,14 @@ fn fold_tool_stats(
 /// window simply has no row here, and the caller (the Studio's
 /// `McpPanel`) joins this list against its own already-fetched
 /// `GetMcpStatus` server list client-side to render a "no recent
-/// activity" state for a configured-but-unused server.
+/// activity" state for a configured-but-unused server. Accepted
+/// limitation: this groups purely by name-as-written against the
+/// (immutable, historical) audit chain, so if an operator renames server
+/// `A` to `B` and later configures a *new*, different server also named
+/// `A` within the same rolling window, that new `A`'s health chip will
+/// include the old `A`'s audit history — there is no way to distinguish
+/// "the same server renamed" from "a different server reusing an old
+/// name" from a rolling audit-derived signal alone.
 fn fold_mcp_server_stats(
     entries: &[aivyx_audit::SignedEntry],
     cutoff: Option<std::time::SystemTime>,
@@ -7557,11 +7564,18 @@ fn fold_mcp_server_stats(
         };
         // The qualifier is "<server>:<tool>" (proxy.rs's own
         // construction: `format!("mcp.call:{server_name}:{tool_name}")`).
-        // Split from the RIGHT so a server name that itself contains a
-        // colon (no validation forbids this today) still recovers
-        // correctly, as long as the tool name segment (the last one)
-        // has no colon of its own — guaranteed by that construction site.
-        let Some((server_name, _tool_name)) = qualifier.rsplit_once(':') else {
+        // Split from the LEFT: the server name comes from the operator's
+        // own [[mcp_server]] config (the operator controls it and can
+        // avoid a colon), but the tool name is deserialized verbatim
+        // from the remote MCP server's own tools/list response with no
+        // sanitization anywhere in crates/aivyx-mcp — an untrusted,
+        // remote-controlled string that could contain a colon. Splitting
+        // from the right would let a misbehaving server hide its own
+        // failures behind a garbage server-name split, silently showing
+        // "no recent activity" for a server that's actually broken —
+        // exactly the failure class this whole aggregation exists to
+        // surface.
+        let Some((server_name, _tool_name)) = qualifier.split_once(':') else {
             continue;
         };
         let a = acc.entry(server_name.to_string()).or_default();
@@ -9191,16 +9205,18 @@ system_prompt = "You are a custom role."
     }
 
     #[test]
-    fn fold_mcp_server_stats_splits_a_colon_containing_server_name_from_the_right() {
+    fn fold_mcp_server_stats_splits_a_colon_containing_tool_name_from_the_left() {
         let now = std::time::SystemTime::now();
-        // A server name with a colon in it (no validation forbids this
-        // today) — the tool name is guaranteed colon-free by the
-        // qualifier's own construction site, so splitting from the
-        // right must still recover the full server name correctly.
-        let entries = vec![tc_entry(0, "mcp.call:my:weird:server:generate", completed_outcome(), 1, now)];
+        // The tool name (last segment) is remote-controlled -- an MCP
+        // server's own tools/list response, not sanitized anywhere in
+        // this codebase -- so it could contain a colon. The server name
+        // (first segment) is what this function must recover correctly;
+        // splitting from the left does that regardless of what the tool
+        // name contains.
+        let entries = vec![tc_entry(0, "mcp.call:web-search:ns:search", completed_outcome(), 1, now)];
         let servers = fold_mcp_server_stats(&entries, None);
         assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].server_name, "my:weird:server");
+        assert_eq!(servers[0].server_name, "web-search");
     }
 
     // -- Chapter U Settings handlers --------------------------------------

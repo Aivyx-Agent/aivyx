@@ -998,6 +998,52 @@ mod tests {
     }
 
     #[test]
+    fn tools_view_scrolls_to_reveal_entries_below_the_fold() {
+        // Final-review Critical finding — render_panel emits 2 lines per
+        // tool with calls > 0 (a name line + an outcome-breakdown line),
+        // but the old ScrollUp clamp used `tool_stats.len()` (the item
+        // count, not the rendered line count), so the bottom rows were
+        // permanently unreachable once enough tools had nonzero calls.
+        use aivyx_channel::daemon_ipc::ToolStat;
+        let backend = TestBackend::new(40, 8); // ~6 text rows inside the border
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Tools;
+        state.tool_stats = (0..20u64)
+            .map(|i| {
+                let mut outcomes = std::collections::BTreeMap::new();
+                outcomes.insert("completed".to_string(), 1u64);
+                ToolStat {
+                    name: format!("tool.number.{i}"),
+                    description: String::new(),
+                    scope_base: format!("tool.number.{i}"),
+                    registered: true,
+                    calls: 1,
+                    outcomes,
+                    total_duration_ms: 5,
+                }
+            })
+            .collect();
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let unscrolled = buffer_text(&terminal);
+        assert!(unscrolled.contains("tool.number.0 "), "first tool visible by default");
+        assert!(
+            !unscrolled.contains("tool.number.19"),
+            "the last tool doesn't fit before scrolling"
+        );
+
+        state = crate::model::update(state, crate::model::Msg::ScrollUp(1_000));
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let scrolled = buffer_text(&terminal);
+        assert!(
+            scrolled.contains("tool.number.19"),
+            "scrolling to the bottom of the page must reach the last tool: {scrolled}"
+        );
+        assert_ne!(scrolled, unscrolled, "scrolling must actually change what's rendered");
+    }
+
+    #[test]
     fn renders_gate_prompt_when_pending() {
         let backend = TestBackend::new(60, 8);
         let mut terminal = Terminal::new(backend).unwrap();

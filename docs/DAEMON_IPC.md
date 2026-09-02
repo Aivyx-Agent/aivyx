@@ -313,3 +313,30 @@ descending, then name ascending.
 The query returns `QueryError { code: "no_audit_log" }` on a
 daemon with no audit log configured — the same posture as the
 audit-entry queries.
+
+## Sub-project 8 addendum — `GetMcpServerCallStats` per-MCP-server query
+
+`QueryPayload::GetMcpServerCallStats { window_secs: Option<u64> }` is a
+read-only query backing the Studio MCP panel's rolling health chip.
+`window_secs = None` scopes the answer to the whole audit chain;
+`Some(n)` to `ToolCall` events from the last `n` seconds — same
+convention as `GetToolStats`.
+
+The daemon answers with `QueryResponsePayload::McpServerCallStats {
+servers: Vec<McpServerCallStats> }`. Unlike `GetToolStats` (which
+groups by `scope_used.base()`, the stable capability base — `"mcp.call"`
+for every MCP-bridged tool call regardless of server), this query
+groups by the MCP server name recovered from the scope's qualifier
+(`mcp.call:<server>:<tool>`, split from the left) — closing the gap
+where `GetToolStats` alone can't distinguish one configured
+`[[mcp_server]]`'s health from another's. Each `McpServerCallStats` row
+carries `server_name`, `calls`, a per-outcome `outcomes` map (only
+`completed`/`failed` are reachable for `mcp.call`-scoped entries — see
+`McpServerCallStats`'s own doc comment in `aivyx-ipc`), and
+`total_duration_ms`. No registry join: a server with zero calls in the
+window has no row at all — the caller (Studio's `McpPanel`) joins this
+against its own `GetMcpStatus` server list client-side to render a
+"no recent activity" state for a configured-but-unused server.
+
+The query returns `QueryError { code: "no_audit_log" }` on a daemon
+with no audit log configured — the same posture as `GetToolStats`.

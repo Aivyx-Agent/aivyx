@@ -1736,10 +1736,16 @@ pub struct McpServerCallStats {
     /// Total `AuditEvent::ToolCall` events for this server within the
     /// requested window.
     pub calls: u64,
-    /// Per-outcome counts, keyed by the same stable outcome labels
-    /// `ToolStat::outcomes` uses (`completed`, `failed`, `denied`,
-    /// `not_in_role`, `requires_escalation`, `rate_limited`). A key is
-    /// absent when its count is zero.
+    /// Per-outcome counts, keyed by the same stable outcome label
+    /// strings `ToolStat::outcomes` uses -- but unlike `ToolStat`
+    /// (which covers all tools and so can carry any of those labels),
+    /// only `completed` and `failed` are actually reachable here:
+    /// every row is folded from `mcp.call`-scoped `AuditEvent::ToolCall`
+    /// events, `ScopeDenied`/`NotInRole`/`RateLimited` are separate
+    /// `AuditTag` variants that return early and never produce a
+    /// `ToolCall` event at all, and `McpToolProxy::execute`
+    /// (`crates/aivyx-mcp/src/proxy.rs`) only ever resolves to
+    /// `Completed` or `Failed`. A key is absent when its count is zero.
     pub outcomes: std::collections::BTreeMap<String, u64>,
     /// Total wall-clock duration across all `calls`, in milliseconds.
     pub total_duration_ms: u64,
