@@ -29,12 +29,22 @@ maintenance convention ("if an entry grows task lists or open
 questions, it has outgrown the roadmap and belongs in its own doc"),
 their prose is no longer duplicated here.
 
+**All 8 rows done as of 2026-09-03 — this file's own stated capstone
+rule ("v0.9.0 cuts as the capstone when the polish backlog is empty")
+is now satisfied.** Row 4 (`docs/POLISH_WAVES.md`'s 8 sub-projects) was
+the last to close. Cutting the actual `v0.9.0` release (bumping the
+workspace version from `0.8.3`, converting `CHANGELOG.md`'s
+`[Unreleased]` section into a dated `[0.9.0]` entry, tagging) is a
+separate, deliberate release-engineering step this plan doesn't
+prescribe the timing of — not done automatically just because the
+backlog emptied.
+
 | # | Chapter | Scope | Status |
 |---|---|---|---|
 | 1 | **Gatehouse** | Studio remote auth. Found on scoping: Chapter Postern had already built the auth *mechanism* (`web_ui_auth_token`: Bearer/Basic/cookie, constant-time, `/ws`-gated) — Gatehouse added the refuse-to-bind interlock at config load, the `web_ui_insecure_no_auth` escape hatch, and first-boot token generation in the Harbor appliance. See docs/GATEHOUSE.md. | ✅ done (7ba97b2) |
 | 2 | **Freight** | Signed pack bundles, complete: format core (aivyx-pack), the `aivyx pack` CLI, Kitchen worked example live-proven on the rig, operator+publisher docs. `pack update` deferred to the v1.0 web presence. See docs/FREIGHT.md. | ✅ done (53f5e3a) |
 | 3 | **Vitrine** | The operator walkthrough: all 15 Studio screens + TUI + desktop, friction notes → the polish backlog; inventory which `/classic` panes lack Studio equivalents. | ✅ done — walked live 2026-07-05 to 07-07, all 14 sections (0–13). See `docs/VITRINE.md` for the full, dated, severity-tagged finding list — it is the real backlog row 4 decomposes. |
-| 4 | Polish waves | Fix the Vitrine backlog, batched by screen family. | **Scoped 2026-08-27 — see [`docs/POLISH_WAVES.md`](POLISH_WAVES.md).** Decomposed into 7 sequenced sub-projects (small backlog sweep → `/classic` retirement → Repertoire completions → agent turn-quality fixes → Missions polish → UI modernization → config-write surface area); none started yet. Nonagon role-based team templates was scoped out of v0.9 entirely (new product feature, not polish) — logged there as a v1.0-or-later candidate. |
+| 4 | Polish waves | Fix the Vitrine backlog, batched by screen family. | ✅ done 2026-09-03 — see [`docs/POLISH_WAVES.md`](POLISH_WAVES.md). All 8 sequenced sub-projects shipped (small backlog sweep → `/classic` retirement → Repertoire completions → agent turn-quality fixes → Missions polish → UI modernization → config-write surface area → tool/server call-stat observability, the last split out of sub-project 2's own scoping). Nonagon role-based team templates was scoped out of v0.9 entirely (new product feature, not polish) — logged there as a v1.0-or-later candidate. |
 | 5 | **Fleet panel** | Live specialist/mission feed: new streaming IPC over the Spyglass journal traces + the Studio screen (F3's deferred half). | ✅ done — shipped under the name **Chapter Mission Control** instead (2026-08-22/23; live LEAD/specialist graph, click-to-drill-in, gate approve/reject, abort, pause/resume). Currently in `CHANGELOG.md`'s `[Unreleased]`, not yet cut into a numbered release. |
 | 6 | Governed-write completions | Studio "Add skill" (Tutor TU.3) + Repertoire approve-in-place / invocation history. | Folded into row 4's decomposition as sub-project 3 — see `docs/POLISH_WAVES.md`. |
 | 7 | `/classic` retirement | Port the panes with no Studio equivalent (expect: sessions, notifications, full-audit browsing — read-only screen recipe), keep a minimal no-bundle fallback page, delete the rest. NOT a blind delete: `/classic` is also the no-bundle fallback today. | Folded into row 4's decomposition as sub-project 2 — see `docs/POLISH_WAVES.md` (real inventory is 4 panes, not 3; one already shipped). |
