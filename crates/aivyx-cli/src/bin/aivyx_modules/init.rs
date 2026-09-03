@@ -520,7 +520,6 @@ fn prompt_yes_no(
 /// call `daemon_service::run_install`/`installed_unit_path`/`is_active`,
 /// so it's testable with a scripted reader/writer like every other
 /// `prompt_yes_no`-driven decision in this file.
-#[allow(dead_code)]
 enum ServiceInstallDecision {
     /// Already installed -- nothing to ask. `active` mirrors
     /// `daemon_service::is_active()`'s own `None` = "couldn't
@@ -532,7 +531,6 @@ enum ServiceInstallDecision {
     Install { web_ui: bool },
 }
 
-#[allow(dead_code)]
 fn decide_service_install(
     already_installed: bool,
     active: Option<bool>,
@@ -567,7 +565,6 @@ fn decide_service_install(
 /// separate, later concern, not a wizard failure. Only genuinely
 /// propagates `Err` if writing the prompt/output itself fails (matches
 /// `prompt_yes_no`'s own convention elsewhere in this file).
-#[allow(dead_code)]
 fn offer_service_install(
     already_installed: bool,
     active: Option<bool>,
@@ -596,19 +593,32 @@ fn offer_service_install(
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
         }
-        ServiceInstallDecision::Install { web_ui } => match run_install(web_ui, true) {
-            Ok(()) => {
-                writeln!(
-                    writer,
-                    "  Installed as a background service — `aivyx doctor` has details"
-                )
-                .map_err(|write_err| format!("write error: {write_err}"))?;
-            }
-            Err(e) => {
-                writeln!(writer, "  Couldn't install as a background service: {e}")
+        ServiceInstallDecision::Install { web_ui } => {
+            writeln!(
+                writer,
+                "  (this sets a new passphrase for the unattended service — set \
+                 AIVYX_PASSPHRASE beforehand to skip the prompt)"
+            )
+            .map_err(|write_err| format!("write error: {write_err}"))?;
+            match run_install(web_ui, true) {
+                Ok(()) => {
+                    writeln!(
+                        writer,
+                        "  Installed as a background service — `aivyx doctor` has details"
+                    )
                     .map_err(|write_err| format!("write error: {write_err}"))?;
+                }
+                Err(e) => {
+                    writeln!(
+                        writer,
+                        "  Couldn't install as a background service: {e}\n  \
+                         (if this left a partial install behind, `aivyx daemon uninstall` \
+                         cleans it up)"
+                    )
+                    .map_err(|write_err| format!("write error: {write_err}"))?;
+                }
             }
-        },
+        }
     }
     Ok(())
 }
@@ -2884,6 +2894,19 @@ mod tests {
         let out = String::from_utf8(output).unwrap();
         assert!(out.contains("already installed"));
         assert!(out.contains("not currently running"));
+    }
+
+    #[test]
+    fn offer_service_install_prints_status_unknown_when_active_state_undetermined() {
+        let mut input = Cursor::new(b"" as &[u8]);
+        let mut output = Vec::new();
+        offer_service_install(true, None, &mut input, &mut output, |_, _| {
+            panic!("run_install must not be called when already installed")
+        })
+        .unwrap();
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("already installed"));
+        assert!(out.contains("status unknown"));
     }
 
     #[test]
