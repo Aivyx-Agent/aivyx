@@ -5103,7 +5103,10 @@ fn RemindersPanel() -> Element {
                     rsx! {
                         div { class: "mcp-grid",
                             for reminder in sorted.iter() {
-                                div { key: "{reminder.id}", class: "glass-card",
+                                div {
+                                    key: "{reminder.id}",
+                                    class: "glass-card",
+                                    style: "display:flex; flex-direction:column; gap:6px;",
                                     span { class: "label-tech", "{format_due_offset(reminder.due_unix, now_unix)}" }
                                     span { "{reminder.message}" }
                                 }
