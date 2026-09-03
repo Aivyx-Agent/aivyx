@@ -2318,10 +2318,25 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     );
     // Chapter Anchor — the runs-for-days path: a real service so the agent keeps
     // running (and its scheduled routines keep firing) across logout + reboot.
-    if matches!(crate::daemon_service::Platform::detect(), crate::daemon_service::Platform::Linux | crate::daemon_service::Platform::MacOs) {
-        eprintln!(
-            "  aivyx daemon install       — run it as a background service (survives logout/reboot)"
-        );
+    // Phase 187 — offer to install it right here instead of just printing the
+    // command, so first-run can genuinely end with a running service.
+    if matches!(
+        crate::daemon_service::Platform::detect(),
+        crate::daemon_service::Platform::Linux | crate::daemon_service::Platform::MacOs
+    ) {
+        let already_installed = crate::daemon_service::installed_unit_path().is_some();
+        let active = if already_installed {
+            crate::daemon_service::is_active()
+        } else {
+            None
+        };
+        offer_service_install(
+            already_installed,
+            active,
+            &mut reader,
+            &mut writer,
+            crate::daemon_service::run_install,
+        )?;
     }
     eprintln!("  aivyx doctor               — re-check your setup any time");
     if cfg.provider == Provider::Ollama {
