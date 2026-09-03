@@ -102,10 +102,27 @@ full lists; the underlying detail stays on each feature's own tab:
   Dashboard-triggered page-0 fetch, plus up to 3 most recent entries'
   `event_type` (same fields the Audit tab itself already renders).
 
-Each section renders `"—"` / a neutral empty state when its data hasn't
-loaded yet or the daemon has none (e.g. no loop configured, zero
-reminders) — never a blank gap or an error, matching `dashboard_lines`'s
-existing degrade-gracefully style for `role`/`daemon`.
+Each section renders `"—"` / a neutral empty state — never a blank gap or
+an error, matching `dashboard_lines`'s existing degrade-gracefully style
+for `role`/`daemon`. Critically, "hasn't loaded yet" and "the daemon has
+none" are **not** the same state and must render distinctly wherever a
+section's data can be fetched independently of whether it's actually
+empty (final-review finding: the Reminders panel originally collapsed
+both into `Vec::is_empty()`, so a never-fetched or errored-fetch state
+was indistinguishable from a genuinely empty one):
+
+- **Loop** already gets this right — `loop_status: Option<LoopStatusView>`
+  renders `"idle — not yet fetched"` for `None`, distinct from a `Some`
+  reporting an actually-idle loop.
+- **Reminders** — `reminders: Option<Vec<ReminderView>>` renders
+  `"not yet fetched"` for `None` (never fetched, or the last fetch
+  errored), `"none pending"` for `Some(vec![])` (fetched, genuinely no
+  pending reminders), and the count + soonest-3 rendering for
+  `Some(non-empty)`.
+- **Missions** and **Audit** don't need this distinction today: Missions
+  is always live-fed (no fetch-pending window to represent), and Audit's
+  `audit_total`/`audit_entries` are seeded synchronously before the first
+  Dashboard draw is possible.
 
 ## D. Refresh mechanism
 

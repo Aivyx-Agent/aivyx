@@ -124,7 +124,7 @@ async fn run_loop(
                 // iteration count climb without a second timer, and
                 // nothing is queried while Dashboard isn't on screen.
                 // Audit deliberately does not ride this tick — see
-                // `switching_to_dashboard`'s own comment above.
+                // `switching_to_dashboard`'s own comment below.
                 if should_poll_dashboard(state.view) {
                     fetch_loop_status(socket_path, state).await;
                     fetch_reminders(socket_path, state).await;
@@ -325,9 +325,10 @@ async fn fetch_reminders(socket_path: &Path, state: &mut AppState) {
     }
 }
 
-/// Phase 186 — pure gate for the Missions-poll-tick branch below:
+/// Phase 186 — pure gate for the Missions-poll-tick branch above:
 /// loop-status/reminders only re-fetch while Dashboard is the active
-/// view. See the Step 9 test above for why this is its own function.
+/// view. See the `should_poll_dashboard_only_when_dashboard_is_active`
+/// test below for why this is its own function.
 fn should_poll_dashboard(view: View) -> bool {
     matches!(view, View::Dashboard)
 }

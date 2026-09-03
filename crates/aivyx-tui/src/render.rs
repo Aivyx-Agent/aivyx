@@ -384,7 +384,7 @@ fn kv<'a>(k: &'a str, v: Span<'a>) -> Line<'a> {
 /// integer-second arithmetic (no date/time crate, matching this crate's
 /// existing style — see the Global Constraints in this phase's plan).
 fn format_due_offset(due_unix: i64, now_unix: i64) -> String {
-    let delta = due_unix - now_unix;
+    let delta = due_unix.saturating_sub(now_unix);
     let abs = delta.unsigned_abs();
     let (value, unit) = if abs < 60 {
         (abs, "s")
@@ -457,27 +457,34 @@ fn dashboard_lines(state: &AppState) -> Vec<Line<'_>> {
 
     // --- Reminders ---
     lines.push(Line::from(Span::styled("REMINDERS", bold(palette::AMBER))));
-    if state.reminders.is_empty() {
-        lines.push(Line::from(Span::styled("none pending", fg(palette::DIM))));
-    } else {
-        lines.push(Line::from(Span::styled(
-            format!("{} pending", state.reminders.len()),
-            fg(palette::FG),
-        )));
-        let now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        // Soonest-due-first. `ReminderStore::list` already returns entries
-        // in this order, but sort defensively here so the panel's display
-        // order doesn't silently depend on the caller's fetch order.
-        let mut sorted: Vec<&aivyx_channel::daemon_ipc::ReminderView> = state.reminders.iter().collect();
-        sorted.sort_by_key(|r| r.due_unix);
-        for r in sorted.into_iter().take(3) {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<12}", format_due_offset(r.due_unix, now_unix)), fg(palette::DIMMER)),
-                Span::styled(r.message.clone(), fg(palette::FG)),
-            ]));
+    match &state.reminders {
+        None => lines.push(Line::from(Span::styled("not yet fetched", fg(palette::DIM)))),
+        Some(reminders) if reminders.is_empty() => {
+            lines.push(Line::from(Span::styled("none pending", fg(palette::DIM))));
+        }
+        Some(reminders) => {
+            lines.push(Line::from(Span::styled(
+                format!("{} pending", reminders.len()),
+                fg(palette::FG),
+            )));
+            let now_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            // Soonest-due-first. `ReminderStore::list` already returns
+            // entries in this order (sorted by `(due_unix, id)`), but
+            // sort defensively here so the panel's display order doesn't
+            // silently depend on the caller's fetch order — using the
+            // same full tiebreaker so ties resolve identically to the
+            // store's own order.
+            let mut sorted: Vec<&aivyx_channel::daemon_ipc::ReminderView> = reminders.iter().collect();
+            sorted.sort_by_key(|r| (r.due_unix, r.id.clone()));
+            for r in sorted.into_iter().take(3) {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{:<12}", format_due_offset(r.due_unix, now_unix)), fg(palette::DIMMER)),
+                    Span::styled(r.message.clone(), fg(palette::FG)),
+                ]));
+            }
         }
     }
     lines.push(Line::from(""));
@@ -616,7 +623,7 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
         )]
     } else if state.view != View::Chat {
         vec![Span::styled(
-            "Tab views · 1-4 jump · ↑↓ scroll · Esc chat · ^Q quit ",
+            "Tab views · 1-5 jump · ↑↓ scroll · Esc chat · ^Q quit ",
             fg(palette::DIM),
         )]
     } else {
@@ -821,7 +828,28 @@ mod tests {
         let text = buffer_text(&terminal);
 
         assert!(text.contains("idle"), "no loop_status fetched yet reads as idle/unknown");
-        assert!(text.contains("none pending"), "no reminders fetched yet");
+        assert!(
+            text.contains("not yet fetched"),
+            "no reminders fetched yet reads distinctly from a genuinely empty list"
+        );
+    }
+
+    #[test]
+    fn dashboard_shows_none_pending_once_fetched_empty() {
+        // Distinct from `dashboard_shows_idle_loop_and_no_reminders_by_default`
+        // above: `Some(vec![])` (a successful fetch that found nothing) must
+        // render differently from `None` (never fetched / fetch errored) —
+        // this is the Important final-review finding this diff fixes.
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.reminders = Some(vec![]);
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("none pending"), "fetched successfully, genuinely empty");
     }
 
     #[test]
@@ -853,6 +881,89 @@ mod tests {
 
         assert!(text.contains("3/10"), "iteration/max shown");
         assert!(text.contains("running"), "active loop reads as running");
+    }
+
+    #[test]
+    fn loop_status_formats_integer_division_edge_cases_exactly() {
+        // Finding 6 — direct exact-string check on the LOOP formatter's
+        // integer-division edges: `tokens_used / 1_000` truncates (not
+        // rounds), and `spent_cents as f64 / 100.0` formats as `$X.XX`.
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.loop_status = Some(crate::model::LoopStatusView {
+            state: aivyx_channel::loop_driver::LoopRunState {
+                active: true,
+                iteration: 1,
+                max_iterations: 1,
+                spent_cents: 250,
+                tokens_used: 999, // just under 1_000 -> truncates to 0k
+                ..Default::default()
+            },
+            remaining: 0,
+            armed: true,
+            gate_enabled: false,
+            max_run_secs: None,
+            max_run_tokens: None,
+            max_run_usd: None,
+            max_idle_iterations: 0,
+        });
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("$2.50"), "250 cents formats as $2.50");
+        assert!(text.contains("0k tokens"), "999 tokens truncates to 0k, not 1k");
+
+        // A second fixture: 4_999 tokens truncates to 4k, not 5k.
+        let backend2 = TestBackend::new(72, 20);
+        let mut terminal2 = Terminal::new(backend2).unwrap();
+        let mut state2 = AppState::new();
+        state2.view = View::Dashboard;
+        state2.loop_status = Some(crate::model::LoopStatusView {
+            state: aivyx_channel::loop_driver::LoopRunState {
+                active: true,
+                iteration: 1,
+                max_iterations: 1,
+                spent_cents: 250,
+                tokens_used: 4_999,
+                ..Default::default()
+            },
+            remaining: 0,
+            armed: true,
+            gate_enabled: false,
+            max_run_secs: None,
+            max_run_tokens: None,
+            max_run_usd: None,
+            max_idle_iterations: 0,
+        });
+
+        terminal2.draw(|f| render(f, &state2)).unwrap();
+        let text2 = buffer_text(&terminal2);
+
+        assert!(text2.contains("4k tokens"), "4_999 tokens truncates to 4k, not 5k");
+    }
+
+    #[test]
+    fn format_due_offset_exact_strings() {
+        // Finding 6 — direct exact-output checks, one per bucket plus the
+        // zero-delta and overdue edges.
+        assert_eq!(format_due_offset(1_000, 1_000), "in 0s", "delta exactly 0");
+        assert_eq!(format_due_offset(1_030, 1_000), "in 30s", "seconds bucket");
+        assert_eq!(format_due_offset(1_000 + 5 * 60, 1_000), "in 5m", "minutes bucket");
+        assert_eq!(format_due_offset(1_000 + 3 * 3_600, 1_000), "in 3h", "hours bucket");
+        assert_eq!(format_due_offset(1_000 + 2 * 86_400, 1_000), "in 2d", "days bucket");
+        assert_eq!(format_due_offset(940, 1_000), "1m overdue", "past/overdue value");
+    }
+
+    #[test]
+    fn format_due_offset_saturates_instead_of_overflowing() {
+        // Finding 5 — an out-of-range `due_unix` must not panic.
+        let text = format_due_offset(i64::MIN, i64::MAX);
+        assert!(text.ends_with("overdue"), "still produces a sane overdue string: {text}");
+        let text = format_due_offset(i64::MAX, i64::MIN);
+        assert!(text.starts_with("in "), "still produces a sane future string: {text}");
     }
 
     #[test]
@@ -888,7 +999,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
         state.view = View::Dashboard;
-        state.reminders = vec![
+        state.reminders = Some(vec![
             aivyx_channel::daemon_ipc::ReminderView {
                 id: "r1".into(),
                 due_unix: 300,
@@ -903,7 +1014,7 @@ mod tests {
                 notify_targets: vec![],
                 created_unix: 0,
             },
-        ];
+        ]);
 
         terminal.draw(|f| render(f, &state)).unwrap();
         let text = buffer_text(&terminal);
@@ -1020,7 +1131,7 @@ mod tests {
 
         // (b) 1 reminder + 1 audit entry — under the 3-item truncation caps.
         let mut under_cap = AppState::new();
-        under_cap.reminders = vec![reminder(0)];
+        under_cap.reminders = Some(vec![reminder(0)]);
         under_cap.audit_entries = vec![audit_entry(0)];
         assert_eq!(
             dashboard_scroll_max(&under_cap),
@@ -1031,12 +1142,67 @@ mod tests {
         // (c) 5 reminders + 5 audit entries — over the 3-item truncation
         // caps, so this actually exercises the `.min(3)` branches.
         let mut over_cap = AppState::new();
-        over_cap.reminders = (0u64..5).map(reminder).collect();
+        over_cap.reminders = Some((0u64..5).map(reminder).collect());
         over_cap.audit_entries = (0u64..5).map(audit_entry).collect();
         assert_eq!(
             dashboard_scroll_max(&over_cap),
             dashboard_lines(&over_cap).len(),
             "5 reminders + 5 audit entries"
+        );
+
+        // (d) a Some(...) loop_status — previously `loop_status` stayed
+        // `None` in every case above, leaving the LOOP section's `Some`
+        // branch (and the None-reminders "not yet fetched" branch, which
+        // every prior case above also left untouched via `AppState::new()`'s
+        // default `None`) unverified by this cross-check. Traced against
+        // `dashboard_lines`: the LOOP section always pushes exactly one
+        // status line whether `loop_status` is `None` or `Some(..)` (the
+        // `match` on `state.loop_status`'s three arms each push exactly one
+        // `Line`), so the fixed "3 fixed lines" (header + 1 status + blank)
+        // baked into `dashboard_scroll_max`'s `15` constant should not need
+        // to change here — confirmed rather than assumed by this case.
+        let mut with_loop_status = AppState::new();
+        with_loop_status.loop_status = Some(crate::model::LoopStatusView {
+            state: aivyx_channel::loop_driver::LoopRunState {
+                active: true,
+                iteration: 3,
+                max_iterations: 10,
+                ..Default::default()
+            },
+            remaining: 2,
+            armed: true,
+            gate_enabled: false,
+            max_run_secs: None,
+            max_run_tokens: None,
+            max_run_usd: None,
+            max_idle_iterations: 0,
+        });
+        assert_eq!(
+            dashboard_scroll_max(&with_loop_status),
+            dashboard_lines(&with_loop_status).len(),
+            "Some(loop_status)"
+        );
+
+        // (e) non-empty `missions.rows` — likewise previously unverified.
+        // Traced against `dashboard_lines`: the MISSIONS section always
+        // pushes exactly one summary line whether `missions.rows` is empty
+        // ("none") or not ("N active, M done"), so this too should leave
+        // the `15` constant unchanged — confirmed here rather than assumed.
+        use crate::model::{MissionPhase, MissionRow};
+        let mut with_missions = AppState::new();
+        with_missions.missions.rows = vec![MissionRow {
+            id: "m1".into(),
+            title: "t1".into(),
+            lead: "aria".into(),
+            phase: MissionPhase::Executing,
+            progress: 40,
+            steps: vec![],
+            pending_gate: None,
+        }];
+        assert_eq!(
+            dashboard_scroll_max(&with_missions),
+            dashboard_lines(&with_missions).len(),
+            "non-empty missions.rows"
         );
     }
 
@@ -1054,15 +1220,17 @@ mod tests {
         let mut state = AppState::new();
         state.view = View::Dashboard;
         state.status.role = Some("researcher".into());
-        state.reminders = (0u64..5)
-            .map(|n| ReminderView {
-                id: format!("r{n}"),
-                due_unix: n as i64,
-                message: format!("reminder {n}"),
-                notify_targets: vec![],
-                created_unix: 0,
-            })
-            .collect();
+        state.reminders = Some(
+            (0u64..5)
+                .map(|n| ReminderView {
+                    id: format!("r{n}"),
+                    due_unix: n as i64,
+                    message: format!("reminder {n}"),
+                    notify_targets: vec![],
+                    created_unix: 0,
+                })
+                .collect(),
+        );
         state.audit_total = 5;
         state.audit_entries = (0u64..5)
             .map(|seq| AuditEntrySummary {

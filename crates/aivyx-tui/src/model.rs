@@ -340,8 +340,15 @@ pub struct AppState {
     pub loop_status: Option<LoopStatusView>,
     /// Phase 186 — the Dashboard's reminders panel, soonest-due-first
     /// (matches `ReminderStore::list`'s own order). Same fetch posture
-    /// as `loop_status`.
-    pub reminders: Vec<aivyx_channel::daemon_ipc::ReminderView>,
+    /// as `loop_status`: `None` until the first fetch (switching onto
+    /// Dashboard) resolves, or if the last fetch attempt errored —
+    /// distinct from `Some(vec![])`, which means a fetch succeeded and
+    /// the daemon genuinely has no pending reminders. Collapsing these
+    /// two states into a bare `Vec` was a final-review finding (both
+    /// rendered as "none pending", so an operator couldn't tell a dead
+    /// daemon connection from an empty reminder list) — keep them
+    /// distinct.
+    pub reminders: Option<Vec<aivyx_channel::daemon_ipc::ReminderView>>,
 }
 
 /// Phase 186 — a named-field wrapper around `daemon_client::
@@ -516,10 +523,10 @@ impl AppState {
 /// of sync with `dashboard_lines`, the exact bug class POLISH_WAVES.md
 /// sub-project 8 found in the Tools view's own scroll clamp.
 pub(crate) fn dashboard_scroll_max(state: &AppState) -> usize {
-    let reminder_lines = if state.reminders.is_empty() {
-        1
-    } else {
-        1 + state.reminders.len().min(3)
+    let reminder_lines = match &state.reminders {
+        None => 1,
+        Some(reminders) if reminders.is_empty() => 1,
+        Some(reminders) => 1 + reminders.len().min(3),
     };
     let audit_lines = state.audit_entries.len().min(3);
     15 + reminder_lines + audit_lines
@@ -709,7 +716,7 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         }
 
         Msg::RemindersUpdated(reminders) => {
-            state.reminders = reminders;
+            state.reminders = Some(reminders);
         }
     }
     state
@@ -1604,7 +1611,7 @@ mod tests {
     #[test]
     fn reminders_updated_replaces_list() {
         let s = AppState::new();
-        assert!(s.reminders.is_empty());
+        assert!(s.reminders.is_none(), "not yet fetched");
         let reminders = vec![aivyx_channel::daemon_ipc::ReminderView {
             id: "r1".into(),
             due_unix: 100,
@@ -1613,7 +1620,7 @@ mod tests {
             created_unix: 0,
         }];
         let s = update(s, Msg::RemindersUpdated(reminders.clone()));
-        assert_eq!(s.reminders, reminders);
+        assert_eq!(s.reminders, Some(reminders));
     }
 
     #[test]
