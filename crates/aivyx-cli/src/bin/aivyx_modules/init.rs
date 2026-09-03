@@ -514,6 +514,105 @@ fn prompt_yes_no(
     }
 }
 
+/// What the wizard should do about installing a background service,
+/// decided from whether one's already installed and (if not) the
+/// operator's answers. Pure with respect to OS calls -- doesn't itself
+/// call `daemon_service::run_install`/`installed_unit_path`/`is_active`,
+/// so it's testable with a scripted reader/writer like every other
+/// `prompt_yes_no`-driven decision in this file.
+#[allow(dead_code)]
+enum ServiceInstallDecision {
+    /// Already installed -- nothing to ask. `active` mirrors
+    /// `daemon_service::is_active()`'s own `None` = "couldn't
+    /// determine" convention.
+    AlreadyInstalled { active: Option<bool> },
+    /// Operator declined -- fall back to the existing passive hint.
+    Declined,
+    /// Operator wants it installed, with or without the Studio.
+    Install { web_ui: bool },
+}
+
+#[allow(dead_code)]
+fn decide_service_install(
+    already_installed: bool,
+    active: Option<bool>,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<ServiceInstallDecision, String> {
+    if already_installed {
+        return Ok(ServiceInstallDecision::AlreadyInstalled { active });
+    }
+    let install_now = prompt_yes_no(
+        "Install as a background service now? (survives logout/reboot)",
+        true,
+        reader,
+        writer,
+    )?;
+    if !install_now {
+        return Ok(ServiceInstallDecision::Declined);
+    }
+    let web_ui = prompt_yes_no("Also serve the Studio web UI?", false, reader, writer)?;
+    Ok(ServiceInstallDecision::Install { web_ui })
+}
+
+/// Runs the full service-install offer: decide, then (if the operator
+/// said yes) actually install via `run_install`. `run_install` is
+/// injected so tests can exercise the success/failure print paths
+/// without a real systemd/launchd call -- production passes
+/// `crate::daemon_service::run_install` itself, whose `fn(bool, bool)
+/// -> Result<(), String>` signature matches this parameter directly.
+///
+/// Never returns `Err` for an install failure -- by the time this runs,
+/// `aivyx.toml` is already written; a failed service install is a
+/// separate, later concern, not a wizard failure. Only genuinely
+/// propagates `Err` if writing the prompt/output itself fails (matches
+/// `prompt_yes_no`'s own convention elsewhere in this file).
+#[allow(dead_code)]
+fn offer_service_install(
+    already_installed: bool,
+    active: Option<bool>,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    run_install: impl FnOnce(bool, bool) -> Result<(), String>,
+) -> Result<(), String> {
+    match decide_service_install(already_installed, active, reader, writer)? {
+        ServiceInstallDecision::AlreadyInstalled { active } => {
+            let status = match active {
+                Some(true) => "running",
+                Some(false) => "not currently running",
+                None => "status unknown",
+            };
+            writeln!(
+                writer,
+                "  (background service already installed — {status}; \
+                 `aivyx doctor` has details)"
+            )
+            .map_err(|write_err| format!("write error: {write_err}"))?;
+        }
+        ServiceInstallDecision::Declined => {
+            writeln!(
+                writer,
+                "  aivyx daemon install       — run it as a background service (survives logout/reboot)"
+            )
+            .map_err(|write_err| format!("write error: {write_err}"))?;
+        }
+        ServiceInstallDecision::Install { web_ui } => match run_install(web_ui, true) {
+            Ok(()) => {
+                writeln!(
+                    writer,
+                    "  Installed as a background service — `aivyx doctor` has details"
+                )
+                .map_err(|write_err| format!("write error: {write_err}"))?;
+            }
+            Err(e) => {
+                writeln!(writer, "  Couldn't install as a background service: {e}")
+                    .map_err(|write_err| format!("write error: {write_err}"))?;
+            }
+        },
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // TOML generation
 // ---------------------------------------------------------------------------
@@ -2695,6 +2794,123 @@ mod tests {
         let mut output = Vec::new();
         let result = prompt_yes_no("Continue?", false, &mut input, &mut output).unwrap();
         assert!(result);
+    }
+
+    #[test]
+    fn decide_service_install_skips_the_offer_when_already_installed() {
+        let mut input = Cursor::new(b"" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_service_install(true, Some(true), &mut input, &mut output).unwrap();
+        assert!(matches!(
+            decision,
+            ServiceInstallDecision::AlreadyInstalled { active: Some(true) }
+        ));
+        // No prompt was printed -- nothing was asked.
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn decide_service_install_declined_falls_back() {
+        let mut input = Cursor::new(b"n\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        assert!(matches!(decision, ServiceInstallDecision::Declined));
+    }
+
+    #[test]
+    fn decide_service_install_yes_then_no_web_ui() {
+        let mut input = Cursor::new(b"y\nn\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        assert!(matches!(
+            decision,
+            ServiceInstallDecision::Install { web_ui: false }
+        ));
+    }
+
+    #[test]
+    fn decide_service_install_yes_then_yes_web_ui() {
+        let mut input = Cursor::new(b"y\ny\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        assert!(matches!(
+            decision,
+            ServiceInstallDecision::Install { web_ui: true }
+        ));
+    }
+
+    #[test]
+    fn decide_service_install_defaults_to_yes_on_bare_enter() {
+        // Confirms the "install now?" prompt defaults true (bare Enter =
+        // yes) -- the second bare Enter then hits the web-ui follow-up,
+        // which defaults false.
+        let mut input = Cursor::new(b"\n\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        assert!(matches!(
+            decision,
+            ServiceInstallDecision::Install { web_ui: false }
+        ));
+    }
+
+    #[test]
+    fn offer_service_install_prints_status_when_already_installed() {
+        let mut input = Cursor::new(b"" as &[u8]);
+        let mut output = Vec::new();
+        offer_service_install(true, Some(false), &mut input, &mut output, |_, _| {
+            panic!("run_install must not be called when already installed")
+        })
+        .unwrap();
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("already installed"));
+        assert!(out.contains("not currently running"));
+    }
+
+    #[test]
+    fn offer_service_install_prints_todays_hint_when_declined() {
+        let mut input = Cursor::new(b"n\n" as &[u8]);
+        let mut output = Vec::new();
+        offer_service_install(false, None, &mut input, &mut output, |_, _| {
+            panic!("run_install must not be called when declined")
+        })
+        .unwrap();
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("aivyx daemon install"));
+        assert!(out.contains("survives logout/reboot"));
+    }
+
+    #[test]
+    fn offer_service_install_calls_run_install_with_the_right_args_on_yes() {
+        let mut input = Cursor::new(b"y\ny\n" as &[u8]);
+        let mut output = Vec::new();
+        let mut captured: Option<(bool, bool)> = None;
+        offer_service_install(false, None, &mut input, &mut output, |web_ui, start| {
+            captured = Some((web_ui, start));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(captured, Some((true, true)));
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("Installed as a background service"));
+    }
+
+    #[test]
+    fn offer_service_install_prints_the_error_and_does_not_fail_on_install_failure() {
+        let mut input = Cursor::new(b"y\nn\n" as &[u8]);
+        let mut output = Vec::new();
+        let result = offer_service_install(false, None, &mut input, &mut output, |_, _| {
+            Err("no supported service manager on this platform".to_string())
+        });
+        // Must return Ok -- a failed install must never fail the wizard.
+        assert!(result.is_ok());
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("Couldn't install"));
+        assert!(out.contains("no supported service manager on this platform"));
     }
 
     // -- TOML generation -------------------------------------------------
