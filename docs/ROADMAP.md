@@ -3688,11 +3688,13 @@ systemd/launchd wiring.
   anticipated. Reminders gained their first frontend IPC surface
   anywhere in the product (`GetReminders`) — previously agent-tool-
   only since Phase 183.
-- **Phase 187 — Service install + first-run launch.** `aivyx
-  service install` generates a systemd/launchd unit (run at
-  login/boot); the `init` wizard ends by offering to install +
-  launch. Turnkey "install once, always there." No new
-  dependency.
+- **Phase 187 — Service install + first-run launch.** Shipped
+  2026-09-03 — see [PHASE_187.md](archive/phases/PHASE_187.md). The
+  unit-generation half was already shipped (Chapter Anchor,
+  `v0.7.6`, 2026-06-28) before this roadmap entry even existed —
+  real remaining scope was wiring an interactive offer into the
+  `init` wizard's ending, which now calls that existing machinery
+  directly instead of only printing the command.
 - **Phase 188+ — Web UI feature-parity refresh.** Dependency-free:
   bring the localhost SPA up to Chapter F–H (loop, reminders,
   skills, connect, identity) + polish + mobile-responsive.
