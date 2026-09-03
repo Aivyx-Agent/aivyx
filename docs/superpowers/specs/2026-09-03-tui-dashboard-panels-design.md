@@ -91,11 +91,12 @@ full lists; the underlying detail stays on each feature's own tab:
   `stalled (N consecutive idle)` (derived from `LoopRunState.active` +
   `consecutive_idle > 0`), plus `last_stop_reason` shown only when not
   currently active.
-- **Reminders** — `"N pending"` (or `"none pending"`), then up to 3 next
-  by `due_unix`, each as `due offset + truncated message` (e.g. `in 2h —
-  call mom`). Time offset is plain integer-second arithmetic against the
-  daemon's reported clock — no new date/time dependency, consistent with
-  this crate not using one today.
+- **Reminders** — `"not yet fetched"`, `"N pending"`, or `"none pending"`
+  (see the three-state breakdown below), then up to 3 next by `due_unix`,
+  each as `due offset + truncated message` (e.g. `in 2h — call mom`). Time
+  offset is plain integer-second arithmetic against the daemon's reported
+  clock — no new date/time dependency, consistent with this crate not
+  using one today.
 - **Missions** — one line, counted by phase from `state.missions.rows`
   (e.g. `"2 active, 1 gated, 5 done"`).
 - **Audit** — `state.audit_total` (if already known) or a value from a
