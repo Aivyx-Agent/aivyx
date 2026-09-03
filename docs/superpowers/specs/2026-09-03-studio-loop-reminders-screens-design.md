@@ -52,9 +52,14 @@ scoping pass.
 
 ## A. Loop screen
 
-New `View::Loop`, placed in the sidebar's existing generic "screens"
-group (alongside `Schedules`/`Notifications` — its closest existing
-analogs).
+New `View::Loop`, placed in the sidebar's existing "System" group
+(alongside `Schedules`/`Notifications` — its closest existing
+analogs). **Correction from an earlier draft of this spec**: this
+group is a hardcoded `groups: Vec<NavGroup>` local variable in the
+sidebar component, not a match on `View::ALL` with a "screens"
+catch-all as first assumed — that catch-all turned out to belong to a
+different, unrelated mechanism (the topbar help button's
+`guide_page_for` lookup). Found and fixed during plan-writing.
 
 **Status section** — one query, already shipped:
 
