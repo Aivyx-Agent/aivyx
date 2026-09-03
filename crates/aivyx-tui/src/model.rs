@@ -494,6 +494,37 @@ impl AppState {
     }
 }
 
+/// The `Msg::ScrollUp` clamp ceiling for [`View::Dashboard`] — the
+/// exact total line count `render.rs`'s `dashboard_lines` produces for
+/// this state, so `audit_scroll_offset`'s pin-to-top math (reused for
+/// Dashboard in `render_panel`) can always reach the panel's true
+/// bottom row. Hand-derived from `dashboard_lines`' fixed structure:
+///
+/// - header block (role/daemon/status/session/blank): 5 fixed lines
+/// - LOOP (header/one status line/blank): 3 fixed lines
+/// - REMINDERS (header/blank, fixed) + content: 2 fixed + 1 line if
+///   empty, else 1 "N pending" line + up to 3 reminder rows
+/// - MISSIONS (header/one summary line/blank): 3 fixed lines — the
+///   summary line is always exactly 1 line whether rows are empty or not
+/// - AUDIT (header/total line, fixed) + up to 3 recent-entry rows, no
+///   trailing blank (it's the last section)
+///
+/// 5 + 3 + 2 + 3 + 2 = 15 fixed lines, plus the two variable pieces
+/// below. Cross-checked against `dashboard_lines`' real output length
+/// by `render.rs`'s `dashboard_scroll_max_matches_dashboard_lines`
+/// test — this is what keeps this formula from silently drifting out
+/// of sync with `dashboard_lines`, the exact bug class POLISH_WAVES.md
+/// sub-project 8 found in the Tools view's own scroll clamp.
+pub(crate) fn dashboard_scroll_max(state: &AppState) -> usize {
+    let reminder_lines = if state.reminders.is_empty() {
+        1
+    } else {
+        1 + state.reminders.len().min(3)
+    };
+    let audit_lines = state.audit_entries.len().min(3);
+    15 + reminder_lines + audit_lines
+}
+
 /// The reducer. Pure: `(state, msg) -> state`. Owns the editing,
 /// submission, scroll, and daemon-result transitions.
 pub fn update(mut state: AppState, msg: Msg) -> AppState {
@@ -581,6 +612,7 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
                     1 + state.tool_stats.len()
                         + state.tool_stats.iter().filter(|t| t.calls > 0).count()
                 }
+                View::Dashboard => dashboard_scroll_max(&state),
                 _ => state.history.len(),
             };
             state.scroll = (state.scroll + n).min(max);

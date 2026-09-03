@@ -231,7 +231,7 @@ fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let line_count = lines.len();
     let mut para = Paragraph::new(lines).block(panel_block(title));
-    if state.view == View::Audit || state.view == View::Tools {
+    if state.view == View::Audit || state.view == View::Tools || state.view == View::Dashboard {
         // `panel_block` draws a top+bottom border (and no vertical
         // padding), so the visible text viewport is 2 rows shorter than
         // `area` — the same `chat_scroll_offset` math `render_chat` uses
@@ -976,6 +976,120 @@ mod tests {
 
         assert!(text.contains("42"), "audit total shown");
         assert!(text.contains("ToolCall"), "most recent event type shown");
+    }
+
+    #[test]
+    fn dashboard_scroll_max_matches_dashboard_lines() {
+        // Task 3 review finding — `dashboard_scroll_max` (model.rs) is a
+        // hand-derived formula for `dashboard_lines`' real line count.
+        // POLISH_WAVES.md sub-project 8 hit exactly this bug class in the
+        // Tools view: a hand-derived clamp formula that looked right but
+        // drifted from the real render output, permanently hiding the
+        // bottom rows on short terminals. This test ties the two together
+        // so they can never silently drift apart again.
+        use aivyx_channel::daemon_ipc::{AuditEntrySummary, ReminderView};
+        use crate::model::dashboard_scroll_max;
+
+        fn reminder(n: u64) -> ReminderView {
+            ReminderView {
+                id: format!("r{n}"),
+                due_unix: n as i64,
+                message: format!("reminder {n}"),
+                notify_targets: vec![],
+                created_unix: 0,
+            }
+        }
+        fn audit_entry(seq: u64) -> AuditEntrySummary {
+            AuditEntrySummary {
+                seq,
+                appended_at_unix_ms: seq * 1_000,
+                event_type: format!("Event{seq}"),
+                event: serde_json::json!({}),
+                mac_hex: "aaa".into(),
+            }
+        }
+
+        // (a) fresh/empty AppState: no loop_status, no reminders, no
+        // missions, no audit entries.
+        let empty = AppState::new();
+        assert_eq!(
+            dashboard_scroll_max(&empty),
+            dashboard_lines(&empty).len(),
+            "fresh AppState"
+        );
+
+        // (b) 1 reminder + 1 audit entry — under the 3-item truncation caps.
+        let mut under_cap = AppState::new();
+        under_cap.reminders = vec![reminder(0)];
+        under_cap.audit_entries = vec![audit_entry(0)];
+        assert_eq!(
+            dashboard_scroll_max(&under_cap),
+            dashboard_lines(&under_cap).len(),
+            "1 reminder + 1 audit entry"
+        );
+
+        // (c) 5 reminders + 5 audit entries — over the 3-item truncation
+        // caps, so this actually exercises the `.min(3)` branches.
+        let mut over_cap = AppState::new();
+        over_cap.reminders = (0u64..5).map(reminder).collect();
+        over_cap.audit_entries = (0u64..5).map(audit_entry).collect();
+        assert_eq!(
+            dashboard_scroll_max(&over_cap),
+            dashboard_lines(&over_cap).len(),
+            "5 reminders + 5 audit entries"
+        );
+    }
+
+    #[test]
+    fn dashboard_view_scrolls_to_reveal_entries_below_the_fold() {
+        // Task 3 review finding — Dashboard had no scroll mechanism at
+        // all (unlike Audit/Tools), so on a short terminal its LOOP/
+        // REMINDERS/MISSIONS/AUDIT content silently truncated with no
+        // indicator and no way to see the rest. This proves the fix
+        // works end-to-end: content clipped before scrolling becomes
+        // visible after `Msg::ScrollUp`.
+        use aivyx_channel::daemon_ipc::{AuditEntrySummary, ReminderView};
+        let backend = TestBackend::new(40, 10); // small panel viewport
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.status.role = Some("researcher".into());
+        state.reminders = (0u64..5)
+            .map(|n| ReminderView {
+                id: format!("r{n}"),
+                due_unix: n as i64,
+                message: format!("reminder {n}"),
+                notify_targets: vec![],
+                created_unix: 0,
+            })
+            .collect();
+        state.audit_total = 5;
+        state.audit_entries = (0u64..5)
+            .map(|seq| AuditEntrySummary {
+                seq,
+                appended_at_unix_ms: seq * 1_000,
+                event_type: format!("Event{seq}"),
+                event: serde_json::json!({}),
+                mac_hex: "aaa".into(),
+            })
+            .collect();
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let unscrolled = buffer_text(&terminal);
+        assert!(unscrolled.contains("researcher"), "top-of-panel content visible by default");
+        assert!(
+            !unscrolled.contains("Event4"),
+            "the bottom AUDIT section doesn't fit before scrolling"
+        );
+
+        state = crate::model::update(state, crate::model::Msg::ScrollUp(1_000));
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let scrolled = buffer_text(&terminal);
+        assert!(
+            scrolled.contains("Event4"),
+            "scrolling down must reach the bottom AUDIT section: {scrolled}"
+        );
+        assert_ne!(scrolled, unscrolled, "scrolling must actually change what's rendered");
     }
 
     #[test]
