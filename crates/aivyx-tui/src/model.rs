@@ -78,8 +78,10 @@ pub struct Status {
 }
 
 /// A top-level view in the TUI. `Chat` is the shipped interactive
-/// surface; the others are read-only panels (live-data wiring is the
-/// Phase 186 follow-on). The order is the tab order.
+/// surface; the others are read-only panels. Missions/Audit/Tools were
+/// already live-data-wired by Phase 185 and POLISH_WAVES.md sub-project
+/// 8 — Dashboard was Phase 186's one remaining stub. The order is the
+/// tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
     #[default]
@@ -330,6 +332,31 @@ pub struct AppState {
     /// fetched once on switching into the view (no background poll,
     /// same posture as `audit_entries` before pagination).
     pub tool_stats: Vec<aivyx_channel::daemon_ipc::ToolStat>,
+    /// Phase 186 — the Dashboard's loop-status panel. `None` until the
+    /// first fetch (switching onto Dashboard) resolves; re-fetched on
+    /// the Missions poll tick while Dashboard stays the active view (see
+    /// `app.rs`'s `run_loop`) so a running loop's iteration count is
+    /// visibly live, not a one-shot snapshot like Audit/Tools.
+    pub loop_status: Option<LoopStatusView>,
+    /// Phase 186 — the Dashboard's reminders panel, soonest-due-first
+    /// (matches `ReminderStore::list`'s own order). Same fetch posture
+    /// as `loop_status`.
+    pub reminders: Vec<aivyx_channel::daemon_ipc::ReminderView>,
+}
+
+/// Phase 186 — a named-field wrapper around `daemon_client::
+/// loop_status`'s 8-tuple response, so the Dashboard's render code
+/// doesn't index into a tuple.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopStatusView {
+    pub state: aivyx_channel::loop_driver::LoopRunState,
+    pub remaining: usize,
+    pub armed: bool,
+    pub gate_enabled: bool,
+    pub max_run_secs: Option<u64>,
+    pub max_run_tokens: Option<u64>,
+    pub max_run_usd: Option<f64>,
+    pub max_idle_iterations: u32,
 }
 
 /// A message into the reducer. Key events become editing / scroll /
@@ -422,6 +449,10 @@ pub enum Msg {
     /// POLISH_WAVES.md sub-project 8 item B — a fresh `GetToolStats`
     /// snapshot, pushed on switching into `View::Tools`.
     ToolStatsUpdated(Vec<aivyx_channel::daemon_ipc::ToolStat>),
+    /// Phase 186 — a fresh loop-status fetch resolved.
+    LoopStatusUpdated(LoopStatusView),
+    /// Phase 186 — a fresh reminders fetch resolved.
+    RemindersUpdated(Vec<aivyx_channel::daemon_ipc::ReminderView>),
 }
 
 impl AppState {
@@ -639,6 +670,14 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
 
         Msg::ToolStatsUpdated(tools) => {
             state.tool_stats = tools;
+        }
+
+        Msg::LoopStatusUpdated(view) => {
+            state.loop_status = Some(view);
+        }
+
+        Msg::RemindersUpdated(reminders) => {
+            state.reminders = reminders;
         }
     }
     state
@@ -1505,6 +1544,44 @@ mod tests {
             assert_eq!(lines[0].kind, LineKind::Tool);
             assert!(lines[0].text.contains("web.search"));
         }
+    }
+
+    #[test]
+    fn loop_status_updated_replaces_state() {
+        let s = AppState::new();
+        assert!(s.loop_status.is_none());
+        let view = LoopStatusView {
+            state: aivyx_channel::loop_driver::LoopRunState {
+                active: true,
+                iteration: 3,
+                max_iterations: 10,
+                ..Default::default()
+            },
+            remaining: 2,
+            armed: true,
+            gate_enabled: false,
+            max_run_secs: None,
+            max_run_tokens: None,
+            max_run_usd: None,
+            max_idle_iterations: 0,
+        };
+        let s = update(s, Msg::LoopStatusUpdated(view.clone()));
+        assert_eq!(s.loop_status, Some(view));
+    }
+
+    #[test]
+    fn reminders_updated_replaces_list() {
+        let s = AppState::new();
+        assert!(s.reminders.is_empty());
+        let reminders = vec![aivyx_channel::daemon_ipc::ReminderView {
+            id: "r1".into(),
+            due_unix: 100,
+            message: "call mom".into(),
+            notify_targets: vec![],
+            created_unix: 0,
+        }];
+        let s = update(s, Msg::RemindersUpdated(reminders.clone()));
+        assert_eq!(s.reminders, reminders);
     }
 
     #[test]
