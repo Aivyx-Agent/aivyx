@@ -9232,6 +9232,10 @@ async fn run_async(
             loop_backlog: Some(Arc::clone(&loop_backlog)),
             loop_state: loop_state.clone(),
             loop_config: config_loop.clone(),
+            // Phase 186 — the reminder store this same function already
+            // built above (used to wire the `remind.*` tools + spawn the
+            // reminder driver) is also the `GetReminders` query's source.
+            reminder_store: Some(Arc::clone(&reminder_store)),
             // Chapter L (L.5) — the team-mission service built above.
             team_missions,
             // Chapter H — the daemon's default gate posture. Interactive for

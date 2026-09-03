@@ -810,6 +810,12 @@ pub enum QueryPayload {
         #[serde(default)]
         window_secs: Option<u64>,
     },
+    /// Phase 186 — read-only reminders query for the TUI Dashboard's
+    /// reminders panel. No frontend surface existed for `remind.*`
+    /// before this: the feature was agent-tool-only
+    /// (`crate::reminder_tool::RemindListTool`). Always "all pending" —
+    /// no parameters, matching `ReminderStore::list`'s own shape.
+    GetReminders,
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1524,6 +1530,8 @@ pub enum QueryResponsePayload {
     ProactiveConfigApplied { config: ProactiveConfigView, restart_required: bool },
     /// Response to [`QueryPayload::GetMcpServerCallStats`].
     McpServerCallStats { servers: Vec<McpServerCallStats> },
+    /// Response to [`QueryPayload::GetReminders`].
+    Reminders { reminders: Vec<ReminderView> },
 }
 
 /// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean
@@ -1749,6 +1757,22 @@ pub struct McpServerCallStats {
     pub outcomes: std::collections::BTreeMap<String, u64>,
     /// Total wall-clock duration across all `calls`, in milliseconds.
     pub total_duration_ms: u64,
+}
+
+/// Phase 186 — a wasm-clean mirror of `aivyx_channel::reminder_store::
+/// Reminder`, carried on the wire by [`QueryResponsePayload::Reminders`].
+/// `aivyx-ipc` cannot depend on `aivyx-channel` (the wasm-clean
+/// boundary), so this is a plain field-for-field copy, not a shared type
+/// — `daemon_server.rs` converts between them with a free function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReminderView {
+    pub id: String,
+    /// When the reminder fires, unix seconds.
+    pub due_unix: i64,
+    pub message: String,
+    #[serde(default)]
+    pub notify_targets: Vec<String>,
+    pub created_unix: i64,
 }
 
 /// Phase 74 — wire-format view of one memory entry. Flat shape

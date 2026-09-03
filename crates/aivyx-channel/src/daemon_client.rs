@@ -983,6 +983,23 @@ pub async fn get_tool_stats(
     }
 }
 
+/// Phase 186 — fetch every pending reminder for the TUI Dashboard's
+/// reminders panel. Mirrors `get_tool_stats`'s shape.
+pub async fn get_reminders(
+    socket_path: &Path,
+) -> Result<Vec<crate::daemon_ipc::ReminderView>, DaemonError> {
+    let payload = send_query(socket_path, "reminders", QueryPayload::GetReminders).await?;
+    match payload {
+        QueryResponsePayload::Reminders { reminders } => Ok(reminders),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected Reminders, got {other:?}"
+        ))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 173 — autonomous loop control
 // ---------------------------------------------------------------------------

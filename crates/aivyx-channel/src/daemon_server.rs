@@ -27,7 +27,8 @@ use crate::daemon_ipc::{
     AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
     FrontendType, GalleryImage, GateSummary, MissionDetail, MissionSummary,
     NotificationHistoryEntry, PROTOCOL_VERSION, ProfileSummary, QueryPayload, QueryResponsePayload,
-    SessionSummary, StreamEventPayload, WireChannelPlatform, decode_frame, encode_frame,
+    ReminderView, SessionSummary, StreamEventPayload, WireChannelPlatform, decode_frame,
+    encode_frame,
 };
 use crate::mission;
 
@@ -515,6 +516,11 @@ pub struct DaemonConfig {
     /// Chapter Z — the canonical roots the read-only Documents browser may reach
     /// (`fs` = the access-scoped `fs_root`, `workspace` = the agent's workspace).
     pub document_roots: DocumentRoots,
+    /// Phase 186 — the reminder store for the `GetReminders` query (the
+    /// TUI Dashboard's reminders panel). `None` ⇒ the `GetReminders`
+    /// query returns an empty list rather than erroring — matches the
+    /// existing `remind.*` tools' own degrade-gracefully posture.
+    pub reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
 }
 
 /// Chapter X — the provider + model the daemon uses for one-shot persona-seed
@@ -642,6 +648,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         team_config_write_path,
         seed_draft_llm,
         document_roots,
+        reminder_store,
         wiki_sweep,
         wiki_store,
         graph_sweep,
@@ -1614,6 +1621,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             team_config_write_path: team_config_write_path.clone(),
             seed_draft_llm: seed_draft_llm.clone(),
             document_roots: document_roots.clone(),
+            reminder_store: reminder_store.clone(),
             comfyui_base_url: comfyui_base_url.clone(),
         };
 
@@ -1925,6 +1933,8 @@ struct ConnectionContext {
     seed_draft_llm: Option<SeedDraftLlm>,
     /// Chapter Z — the canonical roots the Documents browser may reach.
     document_roots: DocumentRoots,
+    /// Phase 186 — see `DaemonConfig::reminder_store`'s own doc comment.
+    reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
     /// Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s
     /// backing ComfyUI instance, for the `GetGallery` query handler.
     comfyui_base_url: Option<String>,
@@ -1981,6 +1991,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         team_config_write_path,
         seed_draft_llm,
         document_roots,
+        reminder_store,
         comfyui_base_url,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
@@ -2771,6 +2782,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &document_roots,
                                 seed_draft_llm.as_ref(),
                                 comfyui_base_url.as_deref(),
+                                reminder_store.as_ref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -3635,6 +3647,7 @@ async fn run_single_connection_daemon(
         team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
+        reminder_store: None,
         comfyui_base_url: None,
     })
     .await
@@ -3730,6 +3743,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         team_config_write_path: None,
         seed_draft_llm: None,
         document_roots: Default::default(),
+        reminder_store: None,
         wiki_sweep: None,
         graph_sweep: None,
     })
@@ -3991,6 +4005,8 @@ async fn handle_query(
     // Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s backing
     // ComfyUI instance. `None` ⇒ no `comfyui` server configured.
     comfyui_base_url: Option<&str>,
+    // Phase 186 — see `DaemonConfig::reminder_store`'s own doc comment.
+    reminder_store: Option<&crate::reminder_tool::SharedReminderStore>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -4148,6 +4164,7 @@ async fn handle_query(
                 },
             }
         }
+        QueryPayload::GetReminders => reminders_query_response(reminder_store).await,
         QueryPayload::DumpToolRelevance { keyword_key_filter } => {
             let Some(ledger) = tool_relevance_ledger else {
                 return QueryResponsePayload::QueryError {
@@ -7507,6 +7524,43 @@ fn fold_tool_stats(
     tools
 }
 
+/// Phase 186 — `aivyx-ipc` cannot depend on `aivyx-channel` (the
+/// wasm-clean boundary), so this is a plain field-for-field copy, not a
+/// `From` impl (`impl From<Reminder> for ReminderView` would violate the
+/// orphan rule: both types are foreign to this crate's own local types).
+fn reminder_to_view(r: crate::reminder_store::Reminder) -> ReminderView {
+    ReminderView {
+        id: r.id,
+        due_unix: r.due_unix,
+        message: r.message,
+        notify_targets: r.notify_targets,
+        created_unix: r.created_unix,
+    }
+}
+
+/// Phase 186 — the `GetReminders` query's actual logic, extracted so it's
+/// testable without hand-constructing the giant `handle_query` parameter
+/// list (matches `fold_tool_stats`/`fold_mcp_server_stats`'s own
+/// extracted-pure-function precedent). `None` (no `[reminders]` /
+/// reminder store configured) degrades to an empty list, not an error —
+/// matches every other `Option<&...>` arm in `handle_query`.
+async fn reminders_query_response(
+    reminder_store: Option<&crate::reminder_tool::SharedReminderStore>,
+) -> QueryResponsePayload {
+    let Some(store) = reminder_store else {
+        return QueryResponsePayload::Reminders { reminders: Vec::new() };
+    };
+    match store.list().await {
+        Ok(reminders) => QueryResponsePayload::Reminders {
+            reminders: reminders.into_iter().map(reminder_to_view).collect(),
+        },
+        Err(e) => QueryResponsePayload::QueryError {
+            code: "reminders_failed".into(),
+            message: e.to_string(),
+        },
+    }
+}
+
 /// POLISH_WAVES.md sub-project 8 item C — fold `mcp.call`-scoped audit
 /// `ToolCall` events into per-MCP-server statistics. Shares
 /// `fold_tool_stats`'s own audit-walking/cutoff-window shape, but
@@ -9217,6 +9271,67 @@ system_prompt = "You are a custom role."
         let servers = fold_mcp_server_stats(&entries, None);
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].server_name, "web-search");
+    }
+
+    // -- Phase 186 GetReminders -------------------------------------------
+
+    async fn open_reminder_store() -> crate::reminder_tool::SharedReminderStore {
+        // Mirrors `reminder_store.rs`'s own `open_store()` test fixture.
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-dashboard-reminders-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn aivyx_storage::Storage> = aivyx_storage::RedbStorage::open(
+            aivyx_storage::StorageConfig::new(dir.join("store.redb")),
+            aivyx_crypto::MasterKey::from_raw([201u8; 32]),
+        )
+        .await
+        .unwrap();
+        Arc::new(crate::reminder_store::ReminderStore::new(
+            storage.domain(aivyx_storage::KeyDomain::Reminders),
+        ))
+    }
+
+    #[tokio::test]
+    async fn reminders_query_response_lists_pending_soonest_first() {
+        let store = open_reminder_store().await;
+        store
+            .set(&crate::reminder_store::Reminder {
+                id: "r1".into(),
+                due_unix: 300,
+                message: "call mom".into(),
+                notify_targets: vec![],
+                created_unix: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .set(&crate::reminder_store::Reminder {
+                id: "r2".into(),
+                due_unix: 100,
+                message: "standup".into(),
+                notify_targets: vec!["telegram:123".into()],
+                created_unix: 0,
+            })
+            .await
+            .unwrap();
+
+        let resp = reminders_query_response(Some(&store)).await;
+        let QueryResponsePayload::Reminders { reminders } = resp else {
+            panic!("expected Reminders, got {resp:?}");
+        };
+        assert_eq!(reminders.len(), 2);
+        assert_eq!(reminders[0].id, "r2"); // due 100, soonest first
+        assert_eq!(reminders[0].notify_targets, vec!["telegram:123".to_string()]);
+        assert_eq!(reminders[1].message, "call mom");
+    }
+
+    #[tokio::test]
+    async fn reminders_query_response_none_store_is_empty_not_an_error() {
+        let resp = reminders_query_response(None).await;
+        let QueryResponsePayload::Reminders { reminders } = resp else {
+            panic!("expected Reminders, got {resp:?}");
+        };
+        assert!(reminders.is_empty());
     }
 
     // -- Chapter U Settings handlers --------------------------------------
