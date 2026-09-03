@@ -143,8 +143,8 @@ edited freely when a new adapter or subsystem teaches us something new.
 Frozen, point-in-time artifacts live under [`archive/`](archive/) so the
 top of `docs/` stays focused on living reference + roadmap material:
 
-- [`archive/phases/`](archive/phases/) — the 185 **phase journals**
-  (`PHASE_0.md`–`PHASE_185.md`), indexed by the Phase status table below.
+- [`archive/phases/`](archive/phases/) — the 186 **phase journals**
+  (`PHASE_0.md`–`PHASE_186.md`), indexed by the Phase status table below.
 - [`archive/walkthrough.md`](archive/walkthrough.md) — the frozen Phase 9
   codebase audit.
 - [`archive/AGENT_REVIEW_2026-06-05.md`](archive/AGENT_REVIEW_2026-06-05.md)
@@ -343,6 +343,7 @@ See [`archive/README.md`](archive/README.md) for the archive's own index.
 | Phase 183 | Frozen | [PHASE_183.md](archive/phases/PHASE_183.md) | `b9e59d0`  |
 | Phase 184 | Frozen | [PHASE_184.md](archive/phases/PHASE_184.md) | `ff0463d`  |
 | Phase 185 | Frozen | [PHASE_185.md](archive/phases/PHASE_185.md) | _pending_  |
+| Phase 186 | Frozen | [PHASE_186.md](archive/phases/PHASE_186.md) | `08d14e43`  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an
