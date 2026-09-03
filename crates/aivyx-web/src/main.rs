@@ -24,7 +24,7 @@ use aivyx_ipc::protocol::{
     NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProactiveConfigView, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, ReflectionScheduleConfigView, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
+    QueryResponsePayload, ReflectionScheduleConfigView, ReminderView, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
     SkillAuthorOp, SkillView, SlackConfigView, StreamEventPayload, TelegramConfigView,
     ToolCatalogEntry, VoiceSettingsSnapshot,
     turn_outcome_correction,
@@ -122,6 +122,7 @@ enum View {
     /// the Studio.
     Notifications,
     Loop,
+    Reminders,
     Chat,
     Memory,
     /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
@@ -167,7 +168,7 @@ impl View {
     /// `groups`) — reordering this array is a bigger, riskier change than
     /// this comment fix, since other code (e.g. Tab-cycling) may depend on
     /// this exact order.
-    const ALL: [View; 23] = [
+    const ALL: [View; 24] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -191,6 +192,7 @@ impl View {
         View::Audit,
         View::Sessions,
         View::Loop,
+        View::Reminders,
     ];
 
     /// The URL-hash slug for this view (deep-linking: `…/#memory`).
@@ -219,6 +221,7 @@ impl View {
             View::Audit => "audit",
             View::Sessions => "sessions",
             View::Loop => "loop",
+            View::Reminders => "reminders",
         }
     }
 
@@ -253,6 +256,7 @@ impl View {
             View::Audit => "Audit",
             View::Sessions => "Sessions",
             View::Loop => "Loop",
+            View::Reminders => "Reminders",
         }
     }
 }
@@ -341,6 +345,43 @@ struct LoopUiState {
     /// The last Start/Stop attempt's outcome, for the inline banner.
     /// `None` before any control action this session.
     last_control_result: Option<(bool, String)>,
+}
+
+/// Chapter I Phase 188 — the Reminders screen's state: pending
+/// reminders, fanned in by `read_task` from
+/// `QueryResponsePayload::Reminders`. Read-only, matching the TUI
+/// Dashboard's own posture for the same data (Phase 186) -- no
+/// set/cancel UI exists in Studio either.
+#[derive(Clone, Default, PartialEq)]
+struct RemindersState {
+    reminders: Vec<ReminderView>,
+    loaded: bool,
+}
+
+/// Chapter I Phase 188 — a reminder's due time as a short relative
+/// offset. Plain integer-second arithmetic, matching
+/// `crates/aivyx-tui/src/render.rs`'s own `format_due_offset` (a
+/// separate, non-wasm crate -- nothing is literally shared, this is
+/// an independent re-implementation of the same approach for the
+/// same reason: no new date/time dependency in this wasm-clean
+/// crate).
+fn format_due_offset(due_unix: i64, now_unix: i64) -> String {
+    let delta = due_unix.saturating_sub(now_unix);
+    let abs = delta.unsigned_abs();
+    let (value, unit) = if abs < 60 {
+        (abs, "s")
+    } else if abs < 3_600 {
+        (abs / 60, "m")
+    } else if abs < 86_400 {
+        (abs / 3_600, "h")
+    } else {
+        (abs / 86_400, "d")
+    };
+    if delta >= 0 {
+        format!("in {value}{unit}")
+    } else {
+        format!("{value}{unit} overdue")
+    }
 }
 
 /// Chapter I Phase 188 — pure Start/Stop button-disabled logic for the
@@ -883,6 +924,7 @@ fn App() -> Element {
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
     let loop_ui = use_signal(LoopUiState::default);
+    let reminders_ui = use_signal(RemindersState::default);
     let notify_config_ui = use_signal(NotifyConfigUi::default);
     let mut audit_page = use_signal(AuditState::default);
     let sessions_page = use_signal(SessionsState::default);
@@ -914,7 +956,7 @@ fn App() -> Element {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, loop_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         )
     });
@@ -940,6 +982,7 @@ fn App() -> Element {
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
     use_context_provider(|| loop_ui);
+    use_context_provider(|| reminders_ui);
     use_context_provider(|| notify_config_ui);
     use_context_provider(|| audit_page);
     use_context_provider(|| sessions_page);
@@ -1113,6 +1156,7 @@ fn App() -> Element {
         View::Audit => "Audit",
         View::Sessions => "Sessions",
         View::Loop => "Autonomous Loop",
+        View::Reminders => "Reminders",
     };
 
     rsx! {
@@ -1191,6 +1235,7 @@ fn App() -> Element {
                         View::Lattice => rsx! { LatticePanel {} },
                         View::Skills => rsx! { SkillsPanel {} },
                         View::Loop => rsx! { LoopPanel {} },
+                        View::Reminders => rsx! { RemindersPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
@@ -1353,6 +1398,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 (ICON_GALLERY, "Gallery", View::Gallery),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_LOOP, "Loop", View::Loop),
+                (ICON_NOTIFICATIONS, "Reminders", View::Reminders),
                 (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_TOOLS, "Tools", View::Tools),
                 (ICON_VOICE, "Voice", View::Voice),
@@ -4751,6 +4797,13 @@ fn SkillCard(view: SkillView) -> Element {
 // aivyx.toml (the screen shows, it does not edit).
 // ---------------------------------------------------------------------------
 
+fn reminders_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "reminders".to_string(),
+        payload: QueryPayload::GetReminders,
+    }
+}
+
 fn loop_status_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "loop-status".to_string(),
@@ -5001,6 +5054,50 @@ fn LoopPanel() -> Element {
     }
 }
 
+#[component]
+fn RemindersPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let reminders_ui = use_context::<Signal<RemindersState>>();
+
+    use_future(move || async move {
+        ws.send(reminders_query());
+    });
+
+    let r = reminders_ui();
+    let now_unix = js_sys::Date::now() as i64 / 1000;
+    rsx! {
+        div { class: "settings",
+            div { class: "panel-head",
+                h3 { "Reminders" }
+                if r.loaded && !r.reminders.is_empty() {
+                    span { class: "label-tech", "{r.reminders.len()} pending" }
+                }
+                button {
+                    class: "btn-ghost",
+                    onclick: move |_| { ws.send(reminders_query()); },
+                    "Refresh"
+                }
+            }
+            if !r.loaded {
+                SkeletonCards { cards: 2 }
+            } else if r.reminders.is_empty() {
+                div { class: "glass-card empty",
+                    p { class: "label-tech", "No pending reminders." }
+                }
+            } else {
+                div { class: "glass-card",
+                    for reminder in r.reminders.iter() {
+                        div { key: "{reminder.id}", class: "field-row",
+                            span { class: "label-tech", "{format_due_offset(reminder.due_unix, now_unix)}" }
+                            span { "{reminder.message}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// POLISH_WAVES.md sub-project 8 item C — the health-chip class + label
 /// for one server's rolling call stats. A pure function (no `Element`,
 /// no context) so it's directly unit-testable, mirroring this file's
@@ -5110,6 +5207,31 @@ mod mcp_health_chip_tests {
         let (start_disabled, stop_disabled) = loop_button_state(false, true);
         assert!(start_disabled);
         assert!(!stop_disabled);
+    }
+
+    #[test]
+    fn format_due_offset_future_minutes() {
+        assert_eq!(format_due_offset(660, 60), "in 10m");
+    }
+
+    #[test]
+    fn format_due_offset_future_hours() {
+        assert_eq!(format_due_offset(7_260, 60), "in 2h");
+    }
+
+    #[test]
+    fn format_due_offset_future_days() {
+        assert_eq!(format_due_offset(90_060, 60), "in 1d");
+    }
+
+    #[test]
+    fn format_due_offset_overdue() {
+        assert_eq!(format_due_offset(60, 660), "10m overdue");
+    }
+
+    #[test]
+    fn format_due_offset_exactly_now() {
+        assert_eq!(format_due_offset(60, 60), "in 0s");
     }
 
     #[test]
@@ -9529,6 +9651,7 @@ async fn ws_task(
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
     loop_ui: Signal<LoopUiState>,
+    reminders_ui: Signal<RemindersState>,
     notify_config_ui: Signal<NotifyConfigUi>,
     audit_page: Signal<AuditState>,
     sessions_page: Signal<SessionsState>,
@@ -9572,7 +9695,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, loop_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         ));
 
@@ -9673,6 +9796,7 @@ async fn read_task(
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
     mut loop_ui: Signal<LoopUiState>,
+    mut reminders_ui: Signal<RemindersState>,
     mut notify_config_ui: Signal<NotifyConfigUi>,
     mut audit_page: Signal<AuditState>,
     mut sessions_page: Signal<SessionsState>,
@@ -10021,6 +10145,14 @@ async fn read_task(
                     ..
                 } => {
                     loop_ui.write().last_control_result = Some((ok, message));
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::Reminders { reminders },
+                    ..
+                } => {
+                    let mut r = reminders_ui.write();
+                    r.reminders = reminders;
+                    r.loaded = true;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::McpServersApplied { servers, .. },
