@@ -596,7 +596,7 @@ fn offer_service_install(
         ServiceInstallDecision::Install { web_ui } => {
             writeln!(
                 writer,
-                "  (this sets a new passphrase for the unattended service — set \
+                "  (next: the store passphrase the service will use — set \
                  AIVYX_PASSPHRASE beforehand to skip the prompt)"
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
