@@ -4993,7 +4993,10 @@ fn LoopPanel() -> Element {
     let loop_ui = use_context::<Signal<LoopUiState>>();
 
     use_future(move || async move {
-        ws.send(loop_status_query());
+        loop {
+            ws.send(loop_status_query());
+            TimeoutFuture::new(POLL_INTERVAL_MS).await;
+        }
     });
 
     let l = loop_ui();
@@ -5038,13 +5041,19 @@ fn LoopPanel() -> Element {
                         button {
                             class: "btn btn-primary",
                             disabled: start_disabled,
-                            onclick: move |_| { ws.send(loop_start_query()); },
+                            onclick: move |_| {
+                                ws.send(loop_start_query());
+                                ws.send(loop_status_query());
+                            },
                             "Start"
                         }
                         button {
                             class: "btn-ghost",
                             disabled: stop_disabled,
-                            onclick: move |_| { ws.send(loop_stop_query()); },
+                            onclick: move |_| {
+                                ws.send(loop_stop_query());
+                                ws.send(loop_status_query());
+                            },
                             "Stop"
                         }
                     }
@@ -5060,7 +5069,10 @@ fn RemindersPanel() -> Element {
     let reminders_ui = use_context::<Signal<RemindersState>>();
 
     use_future(move || async move {
-        ws.send(reminders_query());
+        loop {
+            ws.send(reminders_query());
+            TimeoutFuture::new(POLL_INTERVAL_MS).await;
+        }
     });
 
     let r = reminders_ui();
@@ -5085,11 +5097,17 @@ fn RemindersPanel() -> Element {
                     p { class: "label-tech", "No pending reminders." }
                 }
             } else {
-                div { class: "glass-card",
-                    for reminder in r.reminders.iter() {
-                        div { key: "{reminder.id}", class: "field-row",
-                            span { class: "label-tech", "{format_due_offset(reminder.due_unix, now_unix)}" }
-                            span { "{reminder.message}" }
+                {
+                    let mut sorted: Vec<_> = r.reminders.iter().collect();
+                    sorted.sort_by_key(|reminder| (reminder.due_unix, reminder.id.clone()));
+                    rsx! {
+                        div { class: "mcp-grid",
+                            for reminder in sorted.iter() {
+                                div { key: "{reminder.id}", class: "glass-card",
+                                    span { class: "label-tech", "{format_due_offset(reminder.due_unix, now_unix)}" }
+                                    span { "{reminder.message}" }
+                                }
+                            }
                         }
                     }
                 }
