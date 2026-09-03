@@ -117,6 +117,18 @@ async fn run_loop(
             k = wait_for_key() => k,
             _ = tokio::time::sleep(MISSION_POLL) => {
                 poll_missions(socket_path, state).await;
+                // Phase 186 — piggyback loop-status/reminders refresh on
+                // the same tick, but only while Dashboard is the active
+                // view (unlike Missions, which polls unconditionally) so
+                // an operator parked on Dashboard sees a running loop's
+                // iteration count climb without a second timer, and
+                // nothing is queried while Dashboard isn't on screen.
+                // Audit deliberately does not ride this tick — see
+                // `switching_to_dashboard`'s own comment above.
+                if should_poll_dashboard(state.view) {
+                    fetch_loop_status(socket_path, state).await;
+                    fetch_reminders(socket_path, state).await;
+                }
                 continue;
             }
         };
@@ -134,32 +146,25 @@ async fn run_loop(
                 // POLISH_WAVES.md sub-project 8 item B — same posture for
                 // the Tools view: seed on switch, no background refresh.
                 let switching_to_tools = matches!(msg, Msg::SwitchView(View::Tools));
+                // Phase 186 — same posture again for Dashboard: seed all
+                // three of its panels on switch (loop/reminders also ride
+                // the Missions poll tick below while Dashboard stays
+                // active; the audit summary does not, matching Audit's
+                // own static-until-paginate behavior).
+                let switching_to_dashboard = matches!(msg, Msg::SwitchView(View::Dashboard));
                 apply(state, msg);
                 if switching_to_audit {
-                    // The `from_seq` here is a *guess* — `state.audit_total`
-                    // is whatever happened to be cached before this fetch
-                    // (`0` on the session's first-ever visit, or possibly
-                    // stale if the chain grew since a previous visit). Once
-                    // the fetch reveals the real `total_len`, check the
-                    // guess against it and, if wrong, fetch again with the
-                    // corrected window — all synchronously, before control
-                    // returns to the render loop, so the operator never
-                    // sees the wrong page. Runs on every switch (no latch),
-                    // so a chain that grew between visits self-corrects
-                    // every time, not just once per session.
-                    let guessed_from_seq =
-                        state.audit_total.saturating_sub(AUDIT_PAGE_SIZE as u64);
-                    fetch_audit_page(socket_path, state, guessed_from_seq).await;
-                    if let Some(corrected_from_seq) = audit_initial_fetch_correction(
-                        guessed_from_seq,
-                        state.audit_total,
-                        AUDIT_PAGE_SIZE as u64,
-                    ) {
-                        fetch_audit_page(socket_path, state, corrected_from_seq).await;
-                    }
+                    // See `fetch_latest_audit_page`'s own doc comment for
+                    // the guess-then-correct rationale.
+                    fetch_latest_audit_page(socket_path, state).await;
                 }
                 if switching_to_tools {
                     fetch_tool_stats(socket_path, state).await;
+                }
+                if switching_to_dashboard {
+                    fetch_loop_status(socket_path, state).await;
+                    fetch_reminders(socket_path, state).await;
+                    fetch_latest_audit_page(socket_path, state).await;
                 }
             }
             Action::Quit => apply(state, Msg::Quit),
@@ -262,6 +267,71 @@ async fn fetch_tool_stats(socket_path: &Path, state: &mut AppState) {
     }
 }
 
+/// Phase 186 — seed the newest audit page, self-correcting the guessed
+/// window against the real total. Shared by `switching_to_audit` and
+/// `switching_to_dashboard` (Dashboard's audit summary shows the same
+/// "newest page," just fewer lines of it) — extracted from what was
+/// previously `switching_to_audit`'s own inline body so both call sites
+/// share one implementation.
+async fn fetch_latest_audit_page(socket_path: &Path, state: &mut AppState) {
+    let guessed_from_seq = state.audit_total.saturating_sub(AUDIT_PAGE_SIZE as u64);
+    fetch_audit_page(socket_path, state, guessed_from_seq).await;
+    if let Some(corrected_from_seq) = audit_initial_fetch_correction(
+        guessed_from_seq,
+        state.audit_total,
+        AUDIT_PAGE_SIZE as u64,
+    ) {
+        fetch_audit_page(socket_path, state, corrected_from_seq).await;
+    }
+}
+
+/// Phase 186 — fetch loop status for the Dashboard's loop panel. Called
+/// on switching onto Dashboard, and again on every Missions poll tick
+/// while Dashboard stays the active view (see `run_loop`) so a running
+/// loop's iteration count is visibly live.
+async fn fetch_loop_status(socket_path: &Path, state: &mut AppState) {
+    if let Ok((
+        rs_state,
+        remaining,
+        armed,
+        gate_enabled,
+        max_run_secs,
+        max_run_tokens,
+        max_run_usd,
+        max_idle_iterations,
+    )) = aivyx_channel::daemon_client::loop_status(socket_path).await
+    {
+        apply(
+            state,
+            Msg::LoopStatusUpdated(crate::model::LoopStatusView {
+                state: rs_state,
+                remaining,
+                armed,
+                gate_enabled,
+                max_run_secs,
+                max_run_tokens,
+                max_run_usd,
+                max_idle_iterations,
+            }),
+        );
+    }
+}
+
+/// Phase 186 — fetch reminders for the Dashboard's reminders panel.
+/// Same refresh posture as `fetch_loop_status`.
+async fn fetch_reminders(socket_path: &Path, state: &mut AppState) {
+    if let Ok(reminders) = aivyx_channel::daemon_client::get_reminders(socket_path).await {
+        apply(state, Msg::RemindersUpdated(reminders));
+    }
+}
+
+/// Phase 186 — pure gate for the Missions-poll-tick branch below:
+/// loop-status/reminders only re-fetch while Dashboard is the active
+/// view. See the Step 9 test above for why this is its own function.
+fn should_poll_dashboard(view: View) -> bool {
+    matches!(view, View::Dashboard)
+}
+
 /// Chapter L.6 — resolve the selected mission's human-approval gate, then
 /// refresh the feed so the panel reflects the new phase immediately.
 async fn resolve_team_gate_action(socket_path: &Path, state: &mut AppState, approved: bool) {
@@ -333,4 +403,18 @@ async fn poll_key(timeout: Duration) -> Option<KeyEvent> {
     .await
     .ok()
     .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_poll_dashboard_only_when_dashboard_is_active() {
+        assert!(should_poll_dashboard(View::Dashboard));
+        assert!(!should_poll_dashboard(View::Chat));
+        assert!(!should_poll_dashboard(View::Missions));
+        assert!(!should_poll_dashboard(View::Audit));
+        assert!(!should_poll_dashboard(View::Tools));
+    }
 }
