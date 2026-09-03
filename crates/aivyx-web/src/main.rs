@@ -30,7 +30,7 @@ use aivyx_ipc::protocol::{
     turn_outcome_correction,
 };
 use aivyx_ipc::{
-    PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
+    LoopRunState, PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
     TeamStepState, TeamStepView, TrustTier,
 };
 use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
@@ -83,6 +83,7 @@ const ICON_GUIDE: Asset = asset!("/assets/icons/guide.svg");
 const ICON_PLUGINS: Asset = asset!("/assets/icons/plugins.svg");
 const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
 const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
+const ICON_LOOP: Asset = asset!("/assets/icons/schedules.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
 const ICON_TOOLS: Asset = asset!("/assets/icons/tools.svg");
 const ICON_GALLERY: Asset = asset!("/assets/icons/gallery.svg");
@@ -120,6 +121,7 @@ enum View {
     /// dispatch history, for missions/schedules that notify outside
     /// the Studio.
     Notifications,
+    Loop,
     Chat,
     Memory,
     /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
@@ -165,7 +167,7 @@ impl View {
     /// `groups`) — reordering this array is a bigger, riskier change than
     /// this comment fix, since other code (e.g. Tab-cycling) may depend on
     /// this exact order.
-    const ALL: [View; 22] = [
+    const ALL: [View; 23] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -188,6 +190,7 @@ impl View {
         View::Guide,
         View::Audit,
         View::Sessions,
+        View::Loop,
     ];
 
     /// The URL-hash slug for this view (deep-linking: `…/#memory`).
@@ -215,6 +218,7 @@ impl View {
             View::Onboarding => "create",
             View::Audit => "audit",
             View::Sessions => "sessions",
+            View::Loop => "loop",
         }
     }
 
@@ -248,6 +252,7 @@ impl View {
             View::Onboarding => "Create",
             View::Audit => "Audit",
             View::Sessions => "Sessions",
+            View::Loop => "Loop",
         }
     }
 }
@@ -315,6 +320,37 @@ struct McpState {
     /// (`GetMcpStatus`'s boot-time snapshot). Joined against `servers`
     /// by `server_name == name` when rendering `McpServerCard`.
     call_stats: Vec<McpServerCallStats>,
+}
+
+/// Chapter I Phase 188 — the Loop screen's state: the daemon's
+/// autonomous-loop run status, fanned in by `read_task` from
+/// `QueryResponsePayload::LoopStatus`. `loaded` distinguishes "still
+/// loading" from "daemon reports armed=false, nothing running" (same
+/// convention `McpState`/`ToolsState` already use).
+#[derive(Clone, Default, PartialEq)]
+struct LoopUiState {
+    state: LoopRunState,
+    remaining: usize,
+    armed: bool,
+    gate_enabled: bool,
+    max_run_secs: Option<u64>,
+    max_run_tokens: Option<u64>,
+    max_run_usd: Option<f64>,
+    max_idle_iterations: u32,
+    loaded: bool,
+    /// The last Start/Stop attempt's outcome, for the inline banner.
+    /// `None` before any control action this session.
+    last_control_result: Option<(bool, String)>,
+}
+
+/// Chapter I Phase 188 — pure Start/Stop button-disabled logic for the
+/// Loop screen. Returns `(start_disabled, stop_disabled)`. Extracted
+/// as its own function so it's testable without rendering anything —
+/// this crate's own established convention (see `mcp_health_chip`).
+fn loop_button_state(armed: bool, active: bool) -> (bool, bool) {
+    let start_disabled = !armed || active;
+    let stop_disabled = !active;
+    (start_disabled, stop_disabled)
 }
 
 /// Chapter Almanac — Tools screen state: the daemon's registered tool
@@ -846,6 +882,7 @@ fn App() -> Element {
     let gallery = use_signal(GalleryState::default);
     let schedules_ui = use_signal(SchedulesUi::default);
     let notifications = use_signal(NotificationsState::default);
+    let loop_ui = use_signal(LoopUiState::default);
     let notify_config_ui = use_signal(NotifyConfigUi::default);
     let mut audit_page = use_signal(AuditState::default);
     let sessions_page = use_signal(SessionsState::default);
@@ -877,7 +914,7 @@ fn App() -> Element {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, loop_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         )
     });
@@ -902,6 +939,7 @@ fn App() -> Element {
     use_context_provider(|| gallery);
     use_context_provider(|| schedules_ui);
     use_context_provider(|| notifications);
+    use_context_provider(|| loop_ui);
     use_context_provider(|| notify_config_ui);
     use_context_provider(|| audit_page);
     use_context_provider(|| sessions_page);
@@ -1074,6 +1112,7 @@ fn App() -> Element {
         View::Onboarding => "Create your agent",
         View::Audit => "Audit",
         View::Sessions => "Sessions",
+        View::Loop => "Autonomous Loop",
     };
 
     rsx! {
@@ -1151,6 +1190,7 @@ fn App() -> Element {
                         View::Wiki => rsx! { WikiPanel {} },
                         View::Lattice => rsx! { LatticePanel {} },
                         View::Skills => rsx! { SkillsPanel {} },
+                        View::Loop => rsx! { LoopPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
@@ -1312,6 +1352,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 (ICON_TEAMS, "Sessions", View::Sessions),
                 (ICON_GALLERY, "Gallery", View::Gallery),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
+                (ICON_LOOP, "Loop", View::Loop),
                 (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_TOOLS, "Tools", View::Tools),
                 (ICON_VOICE, "Voice", View::Voice),
@@ -4710,6 +4751,27 @@ fn SkillCard(view: SkillView) -> Element {
 // aivyx.toml (the screen shows, it does not edit).
 // ---------------------------------------------------------------------------
 
+fn loop_status_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "loop-status".to_string(),
+        payload: QueryPayload::LoopStatus,
+    }
+}
+
+fn loop_start_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "loop-start".to_string(),
+        payload: QueryPayload::LoopStart { max_iterations: None },
+    }
+}
+
+fn loop_stop_query() -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "loop-stop".to_string(),
+        payload: QueryPayload::LoopStop,
+    }
+}
+
 fn mcp_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-mcp-status".to_string(),
@@ -4872,6 +4934,73 @@ fn McpPanel() -> Element {
     }
 }
 
+#[component]
+fn LoopPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let loop_ui = use_context::<Signal<LoopUiState>>();
+
+    use_future(move || async move {
+        ws.send(loop_status_query());
+    });
+
+    let l = loop_ui();
+    let (start_disabled, stop_disabled) = loop_button_state(l.armed, l.state.active);
+    rsx! {
+        div { class: "settings",
+            div { class: "panel-head",
+                h3 { "Autonomous Loop" }
+                button {
+                    class: "btn-ghost",
+                    onclick: move |_| { ws.send(loop_status_query()); },
+                    "Refresh"
+                }
+            }
+            if let Some((ok, text)) = l.last_control_result.clone() {
+                div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
+            }
+            if !l.loaded {
+                SkeletonCards { cards: 1 }
+            } else if !l.armed {
+                div { class: "glass-card empty",
+                    p { class: "label-tech", "No [loop] section configured -- nothing to start." }
+                }
+            } else {
+                div { class: "glass-card",
+                    p {
+                        if l.state.consecutive_idle > 0 && l.state.active {
+                            "Stalled ({l.state.consecutive_idle} consecutive idle iterations)"
+                        } else if l.state.active {
+                            "Running -- iteration {l.state.iteration}/{l.state.max_iterations}"
+                        } else {
+                            {
+                                let reason = l.state.last_stop_reason.as_deref().unwrap_or("never run");
+                                rsx! { "Idle ({reason})" }
+                            }
+                        }
+                    }
+                    p { class: "label-tech",
+                        "Spend: ${(l.state.spent_cents as f64 / 100.0):.2} -- {l.state.tokens_used / 1000}k tokens -- backlog: {l.remaining} remaining"
+                    }
+                    div { style: "display:flex; gap:10px; margin-top:12px;",
+                        button {
+                            class: "btn btn-primary",
+                            disabled: start_disabled,
+                            onclick: move |_| { ws.send(loop_start_query()); },
+                            "Start"
+                        }
+                        button {
+                            class: "btn-ghost",
+                            disabled: stop_disabled,
+                            onclick: move |_| { ws.send(loop_stop_query()); },
+                            "Stop"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// POLISH_WAVES.md sub-project 8 item C — the health-chip class + label
 /// for one server's rolling call stats. A pure function (no `Element`,
 /// no context) so it's directly unit-testable, mirroring this file's
@@ -4949,6 +5078,38 @@ mod mcp_health_chip_tests {
         let (class, label) = mcp_health_chip(None);
         assert_eq!(class, "chip");
         assert_eq!(label, "no recent activity");
+    }
+
+    #[test]
+    fn loop_button_state_both_enabled_when_armed_and_idle() {
+        let (start_disabled, stop_disabled) = loop_button_state(true, false);
+        assert!(!start_disabled, "armed + idle: Start should be enabled");
+        assert!(stop_disabled, "idle: Stop should stay disabled");
+    }
+
+    #[test]
+    fn loop_button_state_stop_enabled_when_active() {
+        let (start_disabled, stop_disabled) = loop_button_state(true, true);
+        assert!(start_disabled, "already active: Start should be disabled");
+        assert!(!stop_disabled, "active: Stop should be enabled");
+    }
+
+    #[test]
+    fn loop_button_state_start_disabled_when_not_armed() {
+        let (start_disabled, stop_disabled) = loop_button_state(false, false);
+        assert!(start_disabled, "not armed: nothing to start");
+        assert!(stop_disabled, "not armed and idle: nothing to stop");
+    }
+
+    #[test]
+    fn loop_button_state_stop_enabled_even_when_not_armed_if_somehow_active() {
+        // Defensive case: armed=false but active=true shouldn't happen in
+        // practice (armed reflects [loop] config presence, active reflects
+        // a running driver), but Stop must never be the wrong answer if it
+        // does -- an operator must always be able to stop a running loop.
+        let (start_disabled, stop_disabled) = loop_button_state(false, true);
+        assert!(start_disabled);
+        assert!(!stop_disabled);
     }
 
     #[test]
@@ -9367,6 +9528,7 @@ async fn ws_task(
     gallery: Signal<GalleryState>,
     schedules_ui: Signal<SchedulesUi>,
     notifications: Signal<NotificationsState>,
+    loop_ui: Signal<LoopUiState>,
     notify_config_ui: Signal<NotifyConfigUi>,
     audit_page: Signal<AuditState>,
     sessions_page: Signal<SessionsState>,
@@ -9410,7 +9572,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, loop_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info,
         ));
 
@@ -9510,6 +9672,7 @@ async fn read_task(
     mut gallery: Signal<GalleryState>,
     mut schedules_ui: Signal<SchedulesUi>,
     mut notifications: Signal<NotificationsState>,
+    mut loop_ui: Signal<LoopUiState>,
     mut notify_config_ui: Signal<NotifyConfigUi>,
     mut audit_page: Signal<AuditState>,
     mut sessions_page: Signal<SessionsState>,
@@ -9828,6 +9991,36 @@ async fn read_task(
                     ..
                 } => {
                     mcp.write().configs = servers;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::LoopStatus {
+                        state,
+                        remaining,
+                        armed,
+                        gate_enabled,
+                        max_run_secs,
+                        max_run_tokens,
+                        max_run_usd,
+                        max_idle_iterations,
+                    },
+                    ..
+                } => {
+                    let mut l = loop_ui.write();
+                    l.state = state;
+                    l.remaining = remaining;
+                    l.armed = armed;
+                    l.gate_enabled = gate_enabled;
+                    l.max_run_secs = max_run_secs;
+                    l.max_run_tokens = max_run_tokens;
+                    l.max_run_usd = max_run_usd;
+                    l.max_idle_iterations = max_idle_iterations;
+                    l.loaded = true;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::LoopControl { ok, message },
+                    ..
+                } => {
+                    loop_ui.write().last_control_result = Some((ok, message));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::McpServersApplied { servers, .. },
