@@ -172,8 +172,10 @@ fn panel_block(title: &str) -> Block<'_> {
 /// to live daemon data (`/classic` retirement, Task 5) and scrolls via
 /// [`audit_scroll_offset`] (the Audit-page counterpart of
 /// [`chat_scroll_offset`], which `render_chat` uses for the same
-/// purpose); Dashboard's mission/loop/reminders detail and Tools'
-/// capability/call-stats detail remain the Phase 186 follow-on.
+/// purpose); Tools' capability/call-stats detail shipped in
+/// POLISH_WAVES.md sub-project 8. Dashboard's loop/reminders/missions/
+/// audit summaries (`dashboard_lines`) shipped in Phase 186 — the last
+/// of this comment's own original follow-on list.
 fn render_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let (title, lines) = match state.view {
         View::Dashboard => ("DASHBOARD", dashboard_lines(state)),
@@ -378,6 +380,28 @@ fn kv<'a>(k: &'a str, v: Span<'a>) -> Line<'a> {
     Line::from(vec![Span::styled(format!("{k:<10}"), fg(palette::DIM)), v])
 }
 
+/// Phase 186 — a reminder's due time as a short relative offset. Plain
+/// integer-second arithmetic (no date/time crate, matching this crate's
+/// existing style — see the Global Constraints in this phase's plan).
+fn format_due_offset(due_unix: i64, now_unix: i64) -> String {
+    let delta = due_unix - now_unix;
+    let abs = delta.unsigned_abs();
+    let (value, unit) = if abs < 60 {
+        (abs, "s")
+    } else if abs < 3_600 {
+        (abs / 60, "m")
+    } else if abs < 86_400 {
+        (abs / 3_600, "h")
+    } else {
+        (abs / 86_400, "d")
+    };
+    if delta >= 0 {
+        format!("in {value}{unit}")
+    } else {
+        format!("{value}{unit} overdue")
+    }
+}
+
 fn dashboard_lines(state: &AppState) -> Vec<Line<'_>> {
     let role = state.status.role.as_deref().unwrap_or("—");
     let daemon = if state.status.daemon_connected {
@@ -390,7 +414,8 @@ fn dashboard_lines(state: &AppState) -> Vec<Line<'_>> {
     } else {
         Span::styled("idle", fg(palette::FG))
     };
-    vec![
+
+    let mut lines = vec![
         kv("role", Span::styled(role.to_string(), fg(palette::FG))),
         kv("daemon", daemon),
         kv("status", status),
@@ -399,15 +424,97 @@ fn dashboard_lines(state: &AppState) -> Vec<Line<'_>> {
             Span::styled(format!("{} lines", state.history.len()), fg(palette::FG)),
         ),
         Line::from(""),
-        Line::from(Span::styled(
-            "mission · loop · reminders · recent-audit panels land in Phase 186,",
-            fg(palette::DIMMER),
-        )),
-        Line::from(Span::styled(
-            "wired to the live daemon state the IPC already serves.",
-            fg(palette::DIMMER),
-        )),
-    ]
+    ];
+
+    // --- Loop ---
+    lines.push(Line::from(Span::styled("LOOP", bold(palette::AMBER))));
+    match &state.loop_status {
+        None => lines.push(Line::from(Span::styled("idle — not yet fetched", fg(palette::DIM)))),
+        Some(ls) => {
+            if ls.state.consecutive_idle > 0 && ls.state.active {
+                lines.push(Line::from(Span::styled(
+                    format!("stalled ({} consecutive idle)", ls.state.consecutive_idle),
+                    fg(palette::ERR),
+                )));
+            } else if ls.state.active {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "running (iter {}/{}, ${:.2}, {}k tokens)",
+                        ls.state.iteration,
+                        ls.state.max_iterations,
+                        ls.state.spent_cents as f64 / 100.0,
+                        ls.state.tokens_used / 1_000,
+                    ),
+                    fg(palette::LAV),
+                )));
+            } else {
+                let reason = ls.state.last_stop_reason.as_deref().unwrap_or("never run");
+                lines.push(Line::from(Span::styled(format!("idle ({reason})"), fg(palette::FG))));
+            }
+        }
+    }
+    lines.push(Line::from(""));
+
+    // --- Reminders ---
+    lines.push(Line::from(Span::styled("REMINDERS", bold(palette::AMBER))));
+    if state.reminders.is_empty() {
+        lines.push(Line::from(Span::styled("none pending", fg(palette::DIM))));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("{} pending", state.reminders.len()),
+            fg(palette::FG),
+        )));
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // Soonest-due-first. `ReminderStore::list` already returns entries
+        // in this order, but sort defensively here so the panel's display
+        // order doesn't silently depend on the caller's fetch order.
+        let mut sorted: Vec<&aivyx_channel::daemon_ipc::ReminderView> = state.reminders.iter().collect();
+        sorted.sort_by_key(|r| r.due_unix);
+        for r in sorted.into_iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{:<12}", format_due_offset(r.due_unix, now_unix)), fg(palette::DIMMER)),
+                Span::styled(r.message.clone(), fg(palette::FG)),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // --- Missions ---
+    lines.push(Line::from(Span::styled("MISSIONS", bold(palette::AMBER))));
+    if state.missions.rows.is_empty() {
+        lines.push(Line::from(Span::styled("none", fg(palette::DIM))));
+    } else {
+        let active = state
+            .missions
+            .rows
+            .iter()
+            .filter(|m| !matches!(m.phase, crate::model::MissionPhase::Done))
+            .count();
+        let done = state.missions.rows.len() - active;
+        lines.push(Line::from(Span::styled(
+            format!("{active} active, {done} done"),
+            fg(palette::FG),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    // --- Audit ---
+    lines.push(Line::from(Span::styled("AUDIT", bold(palette::AMBER))));
+    lines.push(Line::from(Span::styled(
+        format!("{} total events", state.audit_total),
+        fg(palette::FG),
+    )));
+    for e in state.audit_entries.iter().rev().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("#{} ", e.seq), fg(palette::DIMMER)),
+            Span::styled(e.event_type.clone(), fg(palette::AMBER)),
+        ]));
+    }
+
+    lines
 }
 
 fn render_chat(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -684,7 +791,7 @@ mod tests {
 
     #[test]
     fn dashboard_view_renders_panel_not_chat_input() {
-        let backend = TestBackend::new(72, 14);
+        let backend = TestBackend::new(72, 20);
         let mut terminal = Terminal::new(backend).unwrap();
 
         let mut state = AppState::new();
@@ -698,10 +805,177 @@ mod tests {
         // The panel renders (not the chat input line).
         assert!(text.contains("DASHBOARD"), "panel titled");
         assert!(text.contains("researcher"), "role shown in panel");
-        assert!(text.contains("Phase 186"), "honest live-wiring note");
         assert!(!text.contains(" Input "), "no chat input in a panel view");
         // Tab bar still present.
         assert!(text.contains("Audit"), "tab bar lists Audit");
+    }
+
+    #[test]
+    fn dashboard_shows_idle_loop_and_no_reminders_by_default() {
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("idle"), "no loop_status fetched yet reads as idle/unknown");
+        assert!(text.contains("none pending"), "no reminders fetched yet");
+    }
+
+    #[test]
+    fn dashboard_shows_running_loop_status() {
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.loop_status = Some(crate::model::LoopStatusView {
+            state: aivyx_channel::loop_driver::LoopRunState {
+                active: true,
+                iteration: 3,
+                max_iterations: 10,
+                spent_cents: 250,
+                tokens_used: 4_000,
+                ..Default::default()
+            },
+            remaining: 2,
+            armed: true,
+            gate_enabled: false,
+            max_run_secs: None,
+            max_run_tokens: None,
+            max_run_usd: None,
+            max_idle_iterations: 0,
+        });
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("3/10"), "iteration/max shown");
+        assert!(text.contains("running"), "active loop reads as running");
+    }
+
+    #[test]
+    fn dashboard_shows_stalled_loop_status() {
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.loop_status = Some(crate::model::LoopStatusView {
+            state: aivyx_channel::loop_driver::LoopRunState {
+                active: true,
+                consecutive_idle: 4,
+                ..Default::default()
+            },
+            remaining: 0,
+            armed: true,
+            gate_enabled: false,
+            max_run_secs: None,
+            max_run_tokens: None,
+            max_run_usd: None,
+            max_idle_iterations: 5,
+        });
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("stalled"), "consecutive_idle > 0 reads as stalled");
+    }
+
+    #[test]
+    fn dashboard_shows_next_reminders_soonest_first() {
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.reminders = vec![
+            aivyx_channel::daemon_ipc::ReminderView {
+                id: "r1".into(),
+                due_unix: 300,
+                message: "call mom".into(),
+                notify_targets: vec![],
+                created_unix: 0,
+            },
+            aivyx_channel::daemon_ipc::ReminderView {
+                id: "r2".into(),
+                due_unix: 100,
+                message: "standup".into(),
+                notify_targets: vec![],
+                created_unix: 0,
+            },
+        ];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("2 pending"), "count shown");
+        assert!(text.contains("standup"), "soonest reminder shown");
+        let standup_pos = text.find("standup").unwrap();
+        let call_mom_pos = text.find("call mom").unwrap();
+        assert!(standup_pos < call_mom_pos, "soonest (standup, due 100) listed before due 300");
+    }
+
+    #[test]
+    fn dashboard_summarizes_missions_by_phase() {
+        use crate::model::{MissionPhase, MissionRow};
+        let backend = TestBackend::new(72, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.missions.rows = vec![
+            MissionRow {
+                id: "m1".into(),
+                title: "t1".into(),
+                lead: "aria".into(),
+                phase: MissionPhase::Executing,
+                progress: 40,
+                steps: vec![],
+                pending_gate: None,
+            },
+            MissionRow {
+                id: "m2".into(),
+                title: "t2".into(),
+                lead: "aria".into(),
+                phase: MissionPhase::Done,
+                progress: 100,
+                steps: vec![],
+                pending_gate: None,
+            },
+        ];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("1 active"), "one Executing mission counted");
+        assert!(text.contains("1 done"), "one Done mission counted");
+    }
+
+    #[test]
+    fn dashboard_summarizes_audit_total_and_recent() {
+        use aivyx_channel::daemon_ipc::AuditEntrySummary;
+        // Taller than the other Dashboard tests: this fixture's LOOP +
+        // REMINDERS + MISSIONS + AUDIT sections (with one audit entry) add
+        // up to 17 content rows, one more than a 72x20 terminal's 16-row
+        // panel viewport can show — bump the height so the most-recent
+        // audit entry isn't clipped before the assertion below sees it.
+        let backend = TestBackend::new(72, 22);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.audit_total = 42;
+        state.audit_entries = vec![AuditEntrySummary {
+            seq: 42,
+            appended_at_unix_ms: 1_000,
+            event_type: "ToolCall".into(),
+            event: serde_json::json!({}),
+            mac_hex: "aaa".into(),
+        }];
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("42"), "audit total shown");
+        assert!(text.contains("ToolCall"), "most recent event type shown");
     }
 
     #[test]
