@@ -163,6 +163,7 @@ All frames are length-prefixed JSON per
 | `ToolEvent` | Streaming progress (0..N per invocation) | `call_id: String`, `event: ToolEventPayload` |
 | `ToolResult` | Terminal — success | `call_id: String`, `verified: Verification`, `output: serde_json::Value` |
 | `ToolError` | Terminal — failure | `call_id: String`, `code: String`, `message: String` |
+| `DispatchNotification` | Unprompted, when tool needs to alert | `target: String`, `message: String`, `subject: Option<String>` |
 
 ### `ToolDescriptor` shape
 
@@ -216,6 +217,23 @@ think about verification at the type level.
 Streaming progress for long-running tools. The agent's render
 layer surfaces these to the operator. New variants may land;
 treat unknown kinds as "ignore" (see § 8).
+
+### `DispatchNotification`
+
+```text
+{
+  "target": "user@example.com",
+  "message": "Service health degraded: response times increased.",
+  "subject": "Health Alert"
+}
+```
+
+An unprompted notification dispatched by your tool process
+directly to the operator (not in response to any `InvokeTool`).
+Requires the tool process to hold the `notify.dispatch` capability
+scope; the daemon checks this at handshake and silently drops
+`DispatchNotification` frames from tools lacking this scope.
+The `subject` field is optional; `target` and `message` are required.
 
 ---
 

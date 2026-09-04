@@ -4413,10 +4413,12 @@ Phase 144 scope cap: no category whitelist, no currency field, no bulk update/de
 
 #### Health-monitoring alert composition recipe
 
-The polling loop records state transitions; the **agent
-composes alerts**. Substrate-minimal per Phase 125 — no
-daemon-side automatic alert dispatch (deferred to Phase
-126+). Operator's setup:
+The polling loop records state transitions and, since Phase 191, also
+dispatches a plain automatic notification for every transition directly
+(see `[toolkit] default_notify_target` above) — no cron or agent turn
+required for that baseline case. The recipe below remains useful when you
+want the *agent* to compose richer, more specific alert text instead of
+(or alongside) the automatic one. Operator's setup:
 
 ```toml
 # In your aivyx.toml or via the schedule.create tool:
@@ -4482,13 +4484,15 @@ state should include this directory.
 
 #### What Phase 125 deliberately leaves to follow-on phases
 
-- **No `health.check.remove` tool.** Operators can manually
-  edit `health.json` until a proper remove tool ships.
-- **No automatic alert dispatch.** The agent composes
-  alerts from `health.check.recent_changes`; the daemon
-  doesn't auto-call `notify.send`. Phase 126+ may add a
-  daemon-side IPC hook for tool processes to dispatch
-  notifications directly.
+- ~~No automatic alert dispatch~~ — **shipped Phase 191.** Set
+  `[toolkit] default_notify_target` in
+  `~/.aivyx/tool-processes/toolkit/config.toml` and the polling
+  loop dispatches a notification directly (both directions: down
+  and recovered) whenever `health.check.recent_changes` would
+  have shown a new entry — no cron, no agent turn required. The
+  agent-mediated recipe below still works and is useful for
+  richer, LLM-composed alert text; the automatic path is a
+  reliable floor under it, not a replacement.
 - **No multi-tool harness lift.** Phase 123's SDK-validation
   finding (lift `run_multi_tool_subprocess` from per-crate
   duplicates into `aivyx-tool`) is still outstanding;
