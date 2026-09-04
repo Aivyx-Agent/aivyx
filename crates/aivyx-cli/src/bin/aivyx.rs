@@ -5412,6 +5412,87 @@ fn compute_backcompat_floor(
     backcompat_floor
 }
 
+// ---- Phase 191 — daemon-side automatic alert dispatch ---------------------
+//
+// `ToolkitNotifySink` is the daemon-side half of a tool process's
+// unprompted `DispatchNotification` wire frame (Task 1/2): it implements
+// `aivyx_tool::bridge::NotificationSink`, capability-checks the request
+// against the active role's granted scopes, and — if granted — forwards it
+// through the daemon's own `NotifyDispatcher`.
+//
+// It has to live here (not in `aivyx-channel`, which owns `NotifyDispatcher`,
+// nor in `aivyx-tool`, which owns `NotificationSink`) because the orphan
+// rule permits implementing a foreign trait for a foreign type only from a
+// crate that owns *one* of them; `ToolkitNotifySink` is a type this crate
+// owns, so implementing the foreign `NotificationSink` trait for it is
+// allowed regardless of where `NotifyDispatcher` lives.
+type NotifyDispatchDeps = (
+    aivyx_capability::CapabilitySet,
+    std::sync::Arc<aivyx_channel::notify_dispatcher::NotifyDispatcher>,
+);
+
+struct ToolkitNotifySink {
+    // Filled in once, right after both `notify_dispatcher` and
+    // `capabilities` exist further down in `run_async` — the tool-process
+    // spawn loop that constructs this sink runs before either value does
+    // (it's a generic loop over every operator-configured
+    // `[[tool_process]]` entry, built long before role/capability
+    // resolution happens later in the same function). `dispatch()` sees
+    // `None` only if a frame arrives during daemon startup itself, before
+    // any tool process could plausibly have connected — treat that as
+    // ungranted (deny, don't panic, don't guess).
+    deps: std::sync::Arc<std::sync::OnceLock<NotifyDispatchDeps>>,
+    target: String,
+}
+
+/// Pure, directly-testable: does this capability set grant the
+/// push-notification scope? Kept separate from `NotificationSink::dispatch`
+/// specifically so it doesn't need an async mock or a spawned task to test.
+fn notify_dispatch_granted(capabilities: &aivyx_capability::CapabilitySet) -> bool {
+    let needed = aivyx_capability::Scope::parse("notify.dispatch")
+        .expect("notify.dispatch must parse — added to KNOWN_BASES in Task 3 Step 1");
+    capabilities.grants(&needed)
+}
+
+impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
+    fn dispatch(&self, target: String, message: String, subject: Option<String>) {
+        let Some((capabilities, dispatcher)) = self.deps.get() else {
+            // Startup not finished yet — deny, don't guess.
+            eprintln!(
+                "aivyx: tool process denied notify.dispatch (target {target}); \
+                 daemon startup not complete"
+            );
+            return;
+        };
+        if !notify_dispatch_granted(capabilities) {
+            eprintln!(
+                "aivyx: tool process denied notify.dispatch (target {target}); \
+                 capability not held by the active role"
+            );
+            return;
+        }
+        // The wire frame's own `target` is currently unused in favor of
+        // the configured default — Task 4 wires the real
+        // `default_notify_target` value into `self.target`; both fields
+        // exist on the frame (mirroring `notify.send`'s own shape) but
+        // this phase only supports one target per toolkit process, so
+        // `self.target` (the configured default) wins. If they ever
+        // diverge, that's a signal per-watcher targets (explicitly out
+        // of scope) are wanted — not a bug to silently paper over.
+        let dispatcher = std::sync::Arc::clone(dispatcher);
+        let target_name = self.target.clone();
+        tokio::spawn(async move {
+            if let Err(e) = dispatcher
+                .dispatch(&target_name, &message, subject.as_deref())
+                .await
+            {
+                eprintln!("aivyx: notify.dispatch failed (target {target_name}): {e}");
+            }
+        });
+        let _ = target; // see comment above — frame's own target intentionally unused for now
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
 async fn run_async(
     config: AivyxConfig,
@@ -7708,6 +7789,13 @@ async fn run_async(
              set an explicit [tool_process.sandbox] block."
         );
     }
+    // Phase 191 — the deferred fill-once cell backing every spawned tool
+    // process's `ToolkitNotifySink`. Neither `notify_dispatcher` nor
+    // `capabilities` exists yet at this point in `run_async` (both are
+    // computed later in this same function) — see `ToolkitNotifySink`'s
+    // own doc comment above for the full ordering rationale.
+    let notify_deps: std::sync::Arc<std::sync::OnceLock<NotifyDispatchDeps>> =
+        std::sync::Arc::new(std::sync::OnceLock::new());
     for tp_cfg in &config_tool_processes {
         // Phase 182 — if a Google productivity tool is configured
         // but not yet authenticated, name its own remedy.
@@ -7766,6 +7854,16 @@ async fn run_async(
             args: tp_cfg.args.clone(),
             env: tp_cfg.env.clone(),
             sandbox: spawn_sandbox,
+            // Phase 191 — general-purpose by construction: every spawned
+            // tool process gets a sink, and the capability check inside
+            // `ToolkitNotifySink::dispatch` (not a process-name check) is
+            // what actually gates whether a `DispatchNotification` frame
+            // goes anywhere. Task 4 replaces the placeholder empty
+            // `target` with the real configured `default_notify_target`.
+            notification_sink: Some(std::sync::Arc::new(ToolkitNotifySink {
+                deps: std::sync::Arc::clone(&notify_deps),
+                target: String::new(), // Task 4 replaces this with the real configured value
+            }) as std::sync::Arc<dyn aivyx_tool::bridge::NotificationSink>),
         };
         let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
             Ok(b) => std::sync::Arc::new(b),
@@ -8202,6 +8300,16 @@ async fn run_async(
     // structural-impossibility rule from P1+P7.
     let role_tier_ceiling = role_for_envelope.trust_ceiling.value.default_ceiling();
     let capabilities = role_envelope.intersect(role_tier_ceiling);
+
+    // Phase 191 — fill the deferred notify-dispatch cell now that both
+    // dependencies exist (`notify_dispatcher` was built earlier above;
+    // `capabilities` is the later of the two, computed just above this
+    // line). `OnceLock::set` returns `Err` if already set — impossible
+    // here since this is the only call site, but the `let _ =`
+    // deliberately doesn't unwrap/panic on it: a startup-path panic over
+    // a notify-dispatch wiring detail would be a worse failure mode than
+    // silently keeping the first-set value.
+    let _ = notify_deps.set((capabilities.clone(), std::sync::Arc::clone(&notify_dispatcher)));
 
     // ---- Phase 37 Task 4 — wire effective capabilities for redirect
     //      scope re-checks on web.fetch and web.post tools. The
@@ -10279,6 +10387,35 @@ mod tests {
             rate_limit_max: None,
             rate_limit_window_secs: None,
         }
+    }
+
+    // ---- Phase 191 — notify.dispatch capability gate --------------------
+    //
+    // Pure-function tests of `notify_dispatch_granted` in isolation: no
+    // async mocking, no spawned task, no live `NotifyDispatcher` or
+    // `OnceLock` fill needed — `ToolkitNotifySink::dispatch` itself
+    // delegates to this same function, so pinning it here pins the real
+    // gate behavior without daemon/tool-process machinery.
+
+    #[test]
+    fn notify_dispatch_granted_true_when_scope_held() {
+        let caps = aivyx_capability::CapabilitySet::from_scopes(vec![
+            aivyx_capability::Scope::parse("notify.dispatch").unwrap(),
+        ]);
+        assert!(notify_dispatch_granted(&caps));
+    }
+
+    #[test]
+    fn notify_dispatch_granted_false_when_scope_absent() {
+        let caps = aivyx_capability::CapabilitySet::from_scopes(vec![
+            aivyx_capability::Scope::parse("health.write").unwrap(),
+        ]);
+        assert!(!notify_dispatch_granted(&caps));
+    }
+
+    #[test]
+    fn notify_dispatch_granted_false_for_empty_capability_set() {
+        assert!(!notify_dispatch_granted(&aivyx_capability::CapabilitySet::empty()));
     }
 
     #[test]

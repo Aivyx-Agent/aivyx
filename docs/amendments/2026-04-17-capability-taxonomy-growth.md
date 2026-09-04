@@ -780,6 +780,33 @@ behind the real `KNOWN_BASES.len()` before this base was added — a
 pre-existing gap this entry doesn't attempt to reconcile, only to not
 compound.)
 
+## Phase 191 addendum — daemon-side automatic alert dispatch (2026-09-04)
+
+> *Added at Phase 191 (daemon-side automatic alert dispatch for tool
+> processes). One base, `notify.dispatch`, gates a tool process's own
+> ability to push a notification through the daemon's `NotifyDispatcher`
+> without a model round-trip — e.g. a toolkit health-check watcher
+> detecting a low-stock or overdue-order transition and alerting the
+> operator directly. Distinct from `notify.send`: that base gates the
+> model-invoked `notify.send` infrastructure tool; this one gates the
+> daemon-side sink a tool process's unprompted `DispatchNotification`
+> wire frame is routed through. Trusted-tier only at the ceiling,
+> matching `notify.send`'s own tier restriction (same cross-boundary
+> data-exfil rationale — a SemiTrusted tool process must not be able to
+> push arbitrary content to an operator-configured notify target).
+> Currently unqualified-only (no per-target qualifier): the configured
+> tool process has exactly one default notify target for this phase.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Phase 191 | `notify.dispatch` | Daemon-side sink gate for a tool process's own `DispatchNotification` wire frame — Trusted-tier-only at the ceiling, matching `notify.send` |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **94 → 95** (the one new `notify.dispatch`
+base). The `known_bases_count_matches_phase_143_a3_addendum` test pins
+the new total at **95**, so this addendum and the runtime stay in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

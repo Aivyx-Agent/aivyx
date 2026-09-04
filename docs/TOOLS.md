@@ -128,6 +128,7 @@ base, Trusted-tier only. See the Lattice addendum in
 |---|---|---|---|
 | *(send/receive)* | `channel.send`, `channel.receive` | Trusted | channel I/O capability |
 | `notify.send` | `notify.send` | Trusted | push a message to the operator (Trusted-only — cross-boundary leak guard) |
+| *(daemon-side dispatch)* | `notify.dispatch` | Trusted | gates a tool process's own `DispatchNotification` wire frame — an unprompted, daemon-routed push (e.g. a toolkit watcher alerting on a detected condition) rather than a model-invoked tool call; no registered `Tool`, so it never appears in a live tool catalog. Trusted-only, same cross-boundary leak guard as `notify.send` — Phase 191 |
 | `turn.history` | `audit.read` | Trusted | read recent turn outcomes from the audit chain |
 | `daemon.state` | `audit.read` | Trusted | read daemon/agent status |
 | `tools.list` | `audit.read` | Trusted | **enumerate the agent's own tools** (name + description; `detail=true` for input schemas; optional `filter`). Live, ground-truth introspection — Chapter Atlas AT.2 |

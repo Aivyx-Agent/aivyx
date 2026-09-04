@@ -486,6 +486,22 @@ const KNOWN_BASES: &[&str] = &[
     // audit-trail/drift-guard consistency with every other gated
     // capability surface in this codebase.
     "team.run.channel",
+    // Phase 191 — Daemon-side automatic alert dispatch. `notify.dispatch`
+    // gates a tool process's *own* ability to push a notification through
+    // the daemon's `NotifyDispatcher` (e.g. a toolkit watcher detecting a
+    // low-stock or overdue-order condition and alerting the operator
+    // without a model round-trip). Distinct from `notify.send`: that one
+    // gates the model-invoked `notify.send` infrastructure tool; this one
+    // gates the daemon-side sink a tool process's `DispatchNotification`
+    // wire frame is routed through. Unlike `notify.send`, this base is
+    // currently unqualified-only (no per-target qualifier) — the
+    // configured tool process has exactly one default notify target for
+    // this phase (per-watcher targets are explicitly out of scope; see
+    // Task 3/4 of the Phase 191 plan). Trusted-tier only by default,
+    // matching `notify.send`'s own tier restriction (same data-exfil
+    // rationale: a SemiTrusted tool process must not be able to push
+    // arbitrary content to an operator-configured target).
+    "notify.dispatch",
 ];
 
 /// The capability bases whose actions are **irreversible, outbound, or
@@ -1208,6 +1224,16 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // iteration could ever actually invoke it (silently denied at
         // the capability gate before reaching the tool).
         "team.run",
+        // Phase 191 — daemon-side automatic alert dispatch. Trusted-tier
+        // only, matching notify.send's own tier restriction directly
+        // above (same data-exfil rationale: a SemiTrusted tool process
+        // must not be able to push arbitrary content to an
+        // operator-configured notify target). Added alongside the
+        // KNOWN_BASES entry itself — see the `team.run` comment just
+        // above for what happens when a base's Trusted-tier doc claim
+        // isn't backed by an actual ceiling entry: silently denied at
+        // the capability gate, no matter what a role's config grants.
+        "notify.dispatch",
     ])
 });
 
@@ -1342,6 +1368,11 @@ mod tests {
         assert!(Scope::parse("nonsense.base").is_none());
         assert!(Scope::parse("display.window_close").is_none(),
                 "Reserved scopes are not v1 active");
+    }
+
+    #[test]
+    fn notify_dispatch_scope_parses() {
+        assert!(Scope::parse("notify.dispatch").is_some());
     }
 
     #[test]
@@ -2264,11 +2295,15 @@ mod tests {
         // reachable at SemiTrusted (no I/O, no operator data). AB.2 adds
         // convert.units (the convert group: convert.units + convert.time);
         // AB.3 adds date.compute (the date group: date.diff + date.add).
+        // Phase 191 adds notify.dispatch — the daemon-side sink gate for
+        // a tool process's own unprompted DispatchNotification wire
+        // frame (distinct from the model-invoked notify.send tool),
+        // Trusted-tier-only at the ceiling like notify.send itself.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            94,
+            95,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
