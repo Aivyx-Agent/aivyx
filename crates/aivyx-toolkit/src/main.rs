@@ -100,14 +100,10 @@ async fn main() -> ExitCode {
 
     // Phase 191 — side channel for unsolicited outbound frames
     // (today: DispatchNotification) emitted independently of the
-    // dispatch loop's own request/reply cycle. `notify_tx` isn't
-    // wired into the polling loop yet — Task 6 changes
-    // `run_polling_loop`'s signature to accept it and to send
-    // `DispatchNotification` on a detected health-check transition;
-    // wiring the call site ahead of that signature change would not
-    // compile. `notify_rx` is consumed now, by
-    // `run_multi_tool_subprocess` below.
-    #[allow(unused_variables)] // notify_tx: consumed by Task 6's `run_polling_loop` wiring
+    // dispatch loop's own request/reply cycle. `notify_tx` is wired
+    // into the polling loop below, which sends `DispatchNotification`
+    // on a detected health-check transition. `notify_rx` is consumed
+    // by `run_multi_tool_subprocess` below.
     let (notify_tx, notify_rx) = tokio::sync::mpsc::unbounded_channel();
 
     // Spawn the health polling loop in the background. Tokio
@@ -115,8 +111,9 @@ async fn main() -> ExitCode {
     // (the harness loop terminates which returns from main).
     let polling_store = Arc::clone(&health_store);
     let polling_http = http.clone();
+    let default_notify_target = config.default_notify_target.clone();
     tokio::spawn(async move {
-        run_polling_loop(polling_store, polling_http).await
+        run_polling_loop(polling_store, polling_http, notify_tx, default_notify_target).await
     });
 
     // Build the eight registered tools. `web.search` reports

@@ -49,9 +49,14 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run the polling loop forever. The function never returns;
 /// the tokio runtime aborts the task on shutdown.
-pub async fn run_polling_loop(store: Arc<HealthStore>, http: Client) -> ! {
+pub async fn run_polling_loop(
+    store: Arc<HealthStore>,
+    http: Client,
+    notify_tx: tokio::sync::mpsc::UnboundedSender<aivyx_tool::wire::ToolToDaemon>,
+    default_notify_target: Option<String>,
+) -> ! {
     loop {
-        run_polling_tick(&store, &http, Utc::now()).await;
+        run_polling_tick(&store, &http, Utc::now(), &notify_tx, &default_notify_target).await;
         let wait = match store.next_check_in(Utc::now()).await {
             Some(d) => d.clamp(MIN_SLEEP, MAX_SLEEP),
             None => MAX_SLEEP,
@@ -66,6 +71,8 @@ pub async fn run_polling_tick(
     store: &HealthStore,
     http: &Client,
     now: chrono::DateTime<Utc>,
+    notify_tx: &tokio::sync::mpsc::UnboundedSender<aivyx_tool::wire::ToolToDaemon>,
+    default_notify_target: &Option<String>,
 ) {
     let due = store.due_watchers(now).await;
     for watcher in due {
@@ -76,7 +83,26 @@ pub async fn run_polling_tick(
         // the next tool invocation anyway. Logging here would
         // need a structured surface we don't have inside the
         // tool process.
-        let _ = store.record_check(&watcher.name, outcome, Utc::now()).await;
+        if let Ok(Some(transition)) = store.record_check(&watcher.name, outcome, Utc::now()).await {
+            if let Some(target) = default_notify_target {
+                let direction = if transition.to_ok { "RECOVERED" } else { "DOWN" };
+                let status = transition
+                    .status_code
+                    .map(|c| format!(" (status {c})"))
+                    .unwrap_or_default();
+                let message = format!(
+                    "Health watcher '{}' went {direction}{status}",
+                    transition.watcher_name
+                );
+                let _ = notify_tx.send(aivyx_tool::wire::ToolToDaemon::DispatchNotification {
+                    target: target.clone(),
+                    message,
+                    subject: Some("Health alert".to_string()),
+                });
+            }
+            // default_notify_target unset: skip silently, per Global
+            // Constraints — no notify_tx.send attempted at all.
+        }
     }
 }
 
@@ -239,7 +265,8 @@ mod tests {
             .await
             .unwrap();
         let http = Client::new();
-        run_polling_tick(&store, &http, Utc::now()).await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        run_polling_tick(&store, &http, Utc::now(), &tx, &None).await;
         let watchers = store.list_watchers().await;
         assert_eq!(watchers.len(), 1);
         assert!(watchers[0].1.last_check_at.is_some());
@@ -260,8 +287,9 @@ mod tests {
             .await
             .unwrap();
         let http = Client::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let t1 = Utc::now();
-        run_polling_tick(&store, &http, t1).await;
+        run_polling_tick(&store, &http, t1, &tx, &None).await;
 
         // Second tick — now we replace the watcher's URL with
         // a mock that returns 503. We can't update the URL
@@ -278,7 +306,7 @@ mod tests {
         let store = Arc::new(HealthStore::open(watchers_path).await.unwrap());
         // Advance time so the watcher is due again.
         let t2 = t1 + chrono::Duration::seconds(120);
-        run_polling_tick(&store, &http, t2).await;
+        run_polling_tick(&store, &http, t2, &tx, &None).await;
 
         let transitions = store
             .recent_transitions_within(t2, Duration::from_secs(3600))
@@ -293,5 +321,89 @@ mod tests {
     /// the first watcher in the store.
     async fn url_from(store: &HealthStore) -> String {
         store.list_watchers().await[0].0.url.clone()
+    }
+
+    #[tokio::test]
+    async fn tick_sends_dispatch_notification_on_down_transition() {
+        let dir = scratch_dir();
+        let path = dir.join("health.json");
+        let store = Arc::new(HealthStore::open(path).await.unwrap());
+        let ok_url = spawn_mock_server(200).await;
+        store.add_watcher("x".to_string(), ok_url, 60, 200).await.unwrap();
+        let http = Client::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // First tick: establishes the "up" baseline, no transition yet.
+        let t1 = Utc::now();
+        run_polling_tick(&store, &http, t1, &tx, &Some("phone".to_string())).await;
+        assert!(rx.try_recv().is_err(), "no transition on the first-ever poll");
+
+        // Rewrite the watcher's URL to a failing mock (same technique the
+        // existing polling_tick_records_transition_on_state_flip test
+        // already uses — no direct "update watcher URL" store API exists).
+        let down_url = spawn_mock_server(503).await;
+        let watchers_path = dir.join("health.json");
+        let body = std::fs::read_to_string(&watchers_path).unwrap();
+        let body = body.replace(&format!("\"url\": \"{}\"", url_from(&store).await), &format!("\"url\": \"{down_url}\""));
+        std::fs::write(&watchers_path, body).unwrap();
+        let store = Arc::new(HealthStore::open(watchers_path).await.unwrap());
+
+        // Advance time so the watcher is due again (same technique as
+        // polling_tick_records_transition_on_state_flip — record_check
+        // stamps the real wall-clock time, so due_watchers must be given
+        // a `now` far enough past that real timestamp).
+        let t2 = t1 + chrono::Duration::seconds(120);
+        run_polling_tick(&store, &http, t2, &tx, &Some("phone".to_string())).await;
+        let sent = rx.try_recv().expect("expected a DispatchNotification on the down transition");
+        match sent {
+            aivyx_tool::wire::ToolToDaemon::DispatchNotification { target, message, .. } => {
+                assert_eq!(target, "phone");
+                assert!(message.contains("DOWN"), "message was: {message}");
+            }
+            other => panic!("expected DispatchNotification, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn tick_sends_nothing_when_no_target_configured() {
+        // Deliberately drives a *real* transition (not just a first-ever
+        // poll, which record_check never treats as a transition anyway)
+        // so this test genuinely exercises the `default_notify_target ==
+        // None` skip branch inside the dispatch code, rather than passing
+        // trivially because no transition ever fired at all.
+        let dir = scratch_dir();
+        let path = dir.join("health.json");
+        let store = Arc::new(HealthStore::open(path).await.unwrap());
+        let ok_url = spawn_mock_server(200).await;
+        store.add_watcher("x".to_string(), ok_url, 60, 200).await.unwrap();
+        let http = Client::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // First tick: establishes the "up" baseline, no transition yet.
+        let t1 = Utc::now();
+        run_polling_tick(&store, &http, t1, &tx, &None).await;
+        assert!(rx.try_recv().is_err(), "no transition on the first-ever poll");
+
+        // Flip the watcher to failing, same URL-swap technique as the
+        // sibling test above.
+        let down_url = spawn_mock_server(503).await;
+        let watchers_path = dir.join("health.json");
+        let body = std::fs::read_to_string(&watchers_path).unwrap();
+        let body = body.replace(&format!("\"url\": \"{}\"", url_from(&store).await), &format!("\"url\": \"{down_url}\""));
+        std::fs::write(&watchers_path, body).unwrap();
+        let store = Arc::new(HealthStore::open(watchers_path).await.unwrap());
+
+        let t2 = t1 + chrono::Duration::seconds(120);
+        run_polling_tick(&store, &http, t2, &tx, &None).await;
+        let transitions = store
+            .recent_transitions_within(t2, Duration::from_secs(3600))
+            .await;
+        assert_eq!(transitions.len(), 1, "sanity check: the transition really did fire");
+        assert!(
+            rx.try_recv().is_err(),
+            "no target configured means no send at all, even on a real transition"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
