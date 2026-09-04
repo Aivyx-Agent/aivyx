@@ -103,7 +103,7 @@ async fn run_ipc_loop() -> ExitCode {
     // populate this incrementally; Task 11 adds search.
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(ObsidianSearch::new(Arc::clone(&client))), Arc::new(ObsidianGetNote::new(Arc::clone(&client))), Arc::new(ObsidianListFolder::new(Arc::clone(&client))), Arc::new(ObsidianCreateNote::new(Arc::clone(&client))), Arc::new(ObsidianUpdateNote::new(Arc::clone(&client))), Arc::new(ObsidianDeleteNote::new(Arc::clone(&client)))];
 
-    match run_multi_tool_subprocess(tools, "aivyx-obsidian").await {
+    match run_multi_tool_subprocess(tools, "aivyx-obsidian", None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-obsidian (ipc): harness exited with error: {e}");

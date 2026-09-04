@@ -117,6 +117,7 @@ pub enum HarnessError {
 pub async fn run_multi_tool_subprocess(
     tools: Vec<Arc<dyn Tool>>,
     tool_process_name: impl Into<String>,
+    extra_outbound: Option<tokio::sync::mpsc::UnboundedReceiver<crate::wire::ToolToDaemon>>,
 ) -> Result<(), HarnessError> {
     let tool_process_name = tool_process_name.into();
 
@@ -138,6 +139,23 @@ pub async fn run_multi_tool_subprocess(
 
     let mut stdin = stdin();
     let stdout_sink = Arc::new(Mutex::new(stdout()));
+
+    // Phase 191 — an optional side channel lets tasks running
+    // independently of this function's own dispatch loop (e.g.
+    // `aivyx-toolkit`'s background health-check poller) share the
+    // same stdout writer to emit unsolicited frames (today, just
+    // `DispatchNotification`) without corrupting frame boundaries.
+    // Only spawned when a caller actually passes a receiver; existing
+    // callers passing `None` see zero behavior change.
+    if let Some(mut rx) = extra_outbound {
+        let forward_sink = Arc::clone(&stdout_sink);
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                let mut guard = forward_sink.lock().await;
+                let _ = crate::frame::write_frame(&mut *guard, &frame).await;
+            }
+        });
+    }
 
     // Channel name derived from the process name so an
     // `aivyx-gmail` binary surfaces as
@@ -470,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_tool_list_rejected_with_dedicated_error() {
-        let err = run_multi_tool_subprocess(vec![], "x")
+        let err = run_multi_tool_subprocess(vec![], "x", None)
             .await
             .expect_err("must error");
         assert!(matches!(err, HarnessError::EmptyToolList));
@@ -482,7 +500,7 @@ mod tests {
             Arc::new(EchoTool::new("dup")),
             Arc::new(EchoTool::new("dup")),
         ];
-        let err = run_multi_tool_subprocess(tools, "x")
+        let err = run_multi_tool_subprocess(tools, "x", None)
             .await
             .expect_err("must error");
         match err {

@@ -48,6 +48,12 @@ pub enum ConfigFileError {
 pub struct ToolkitConfig {
     #[serde(default)]
     pub brave_search: Option<BraveSearchConfig>,
+
+    /// Phase 191 — the notify target health-check alerts dispatch
+    /// to automatically. `None` (unset) means alerts are skipped
+    /// silently; see `health_polling.rs`.
+    #[serde(default)]
+    pub default_notify_target: Option<String>,
 }
 
 /// Brave Search API config. Operator generates an API key at
@@ -181,6 +187,26 @@ mod tests {
         let json = serde_json::to_value(&cfg).unwrap();
         let back: BraveSearchConfig = serde_json::from_value(json).unwrap();
         assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn load_config_with_default_notify_target() {
+        let dir = scratch_dir();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "default_notify_target = \"phone\"\n").unwrap();
+        let cfg = load_config(&path).expect("load");
+        assert_eq!(cfg.default_notify_target, Some("phone".to_string()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_config_without_default_notify_target_is_none() {
+        let dir = scratch_dir();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let cfg = load_config(&path).expect("load");
+        assert_eq!(cfg.default_notify_target, None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

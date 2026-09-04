@@ -165,7 +165,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(GmailSend::new(Arc::clone(&client))),
     ];
 
-    match run_multi_tool_subprocess(tools, "aivyx-gmail").await {
+    match run_multi_tool_subprocess(tools, "aivyx-gmail", None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-gmail (ipc): harness exited with error: {e}");

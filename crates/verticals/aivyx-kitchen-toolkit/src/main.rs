@@ -41,7 +41,7 @@ async fn main() -> ExitCode {
         db.organization_id,
     ));
 
-    match run_multi_tool_subprocess(all_tools(client), "aivyx-kitchen-toolkit").await {
+    match run_multi_tool_subprocess(all_tools(client), "aivyx-kitchen-toolkit", None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-kitchen-toolkit: harness exited with error: {e}");

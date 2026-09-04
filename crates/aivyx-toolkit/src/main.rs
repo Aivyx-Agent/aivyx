@@ -98,6 +98,19 @@ async fn main() -> ExitCode {
     // routed through the same reqwest connection pool.
     let http = reqwest::Client::new();
 
+    // Phase 191 — side channel for unsolicited outbound frames
+    // (today: DispatchNotification) emitted independently of the
+    // dispatch loop's own request/reply cycle. `notify_tx` isn't
+    // wired into the polling loop yet — Task 6 changes
+    // `run_polling_loop`'s signature to accept it and to send
+    // `DispatchNotification` on a detected health-check transition;
+    // wiring the call site ahead of that signature change would not
+    // compile. `notify_rx` is consumed now, by
+    // `run_multi_tool_subprocess` below.
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    #[allow(unused_variables)] // consumed by Task 6's `run_polling_loop` wiring
+    let notify_tx = notify_tx;
+
     // Spawn the health polling loop in the background. Tokio
     // aborts the task when main() returns on ToolShutdown
     // (the harness loop terminates which returns from main).
@@ -154,7 +167,7 @@ async fn main() -> ExitCode {
         Arc::new(DateAdd::new()),
     ];
 
-    match run_multi_tool_subprocess(tools, "aivyx-toolkit").await {
+    match run_multi_tool_subprocess(tools, "aivyx-toolkit", Some(notify_rx)).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-toolkit: harness exited with error: {e}");

@@ -27,7 +27,7 @@ async fn main() -> ExitCode {
         Arc::new(AppClick::new()),
     ];
 
-    match run_multi_tool_subprocess(tools, "aivyx-apps").await {
+    match run_multi_tool_subprocess(tools, "aivyx-apps", None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-apps: harness exited with error: {e}");

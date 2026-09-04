@@ -119,7 +119,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(N8nUpdateWorkflow::new(client.clone())),
         Arc::new(N8nDeleteWorkflow::new(client.clone())),
     ];
-    match run_multi_tool_subprocess(tools, "aivyx-n8n").await {
+    match run_multi_tool_subprocess(tools, "aivyx-n8n", None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-n8n (ipc): harness exited with error: {e}");

@@ -163,7 +163,7 @@ async fn run_ipc_loop() -> ExitCode {
         Arc::new(ContactsDelete::new(Arc::clone(&client))),
     ];
 
-    match run_multi_tool_subprocess(tools, "aivyx-contacts").await {
+    match run_multi_tool_subprocess(tools, "aivyx-contacts", None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aivyx-contacts (ipc): harness exited with error: {e}");
