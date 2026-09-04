@@ -377,13 +377,15 @@ impl HealthStore {
     /// Record a check outcome against a watcher. If
     /// `outcome.ok` differs from the previous `last_ok`,
     /// appends a `Transition` to the ring buffer (capped at
-    /// [`TRANSITION_RING_BUFFER_CAP`]).
+    /// [`TRANSITION_RING_BUFFER_CAP`]) and returns `Some(transition)`.
+    /// Returns `None` if no state transition occurred (including
+    /// the first-ever poll, which has no prior state to transition from).
     pub async fn record_check(
         &self,
         watcher_name: &str,
         outcome: ProbeOutcome,
         now: DateTime<Utc>,
-    ) -> Result<(), HealthStoreError> {
+    ) -> Result<Option<Transition>, HealthStoreError> {
         let mut guard = self.inner.lock().await;
         let prev_state = guard.states.get(watcher_name).cloned();
         let prev_ok = prev_state.as_ref().map(|s| s.last_ok);
@@ -402,25 +404,25 @@ impl HealthStore {
         // Record a transition iff the watcher had a prior
         // check (so we don't fire "transition" on the first-
         // ever poll) and the ok-flag flipped.
+        let mut fired: Option<Transition> = None;
         if had_prior_check {
             if let Some(prev) = prev_ok {
                 if prev != outcome.ok {
-                    push_transition_ring(
-                        &mut guard.recent_transitions,
-                        Transition {
-                            watcher_name: watcher_name.to_string(),
-                            transitioned_at: now,
-                            from_ok: prev,
-                            to_ok: outcome.ok,
-                            status_code: outcome.status_code,
-                        },
-                    );
+                    let t = Transition {
+                        watcher_name: watcher_name.to_string(),
+                        transitioned_at: now,
+                        from_ok: prev,
+                        to_ok: outcome.ok,
+                        status_code: outcome.status_code,
+                    };
+                    push_transition_ring(&mut guard.recent_transitions, t.clone());
+                    fired = Some(t);
                 }
             }
         }
 
         save_to_disk(&self.path, &guard).await?;
-        Ok(())
+        Ok(fired)
     }
 }
 
@@ -815,6 +817,54 @@ mod tests {
             )
             .await;
         assert!(transitions.is_empty(), "ok-to-ok is not a transition");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn record_check_returns_the_transition_on_a_real_flip() {
+        let dir = scratch_dir();
+        let store = HealthStore::open(dir.join("health.json")).await.unwrap();
+        store.add_watcher("x".to_string(), "https://x/".to_string(), 60, 200).await.unwrap();
+        // First poll: establishes a baseline, no transition.
+        let first = store
+            .record_check("x", ProbeOutcome { status_code: Some(200), ok: true }, t0())
+            .await
+            .unwrap();
+        assert!(first.is_none(), "first-ever poll must not report a transition");
+
+        // Second poll: real flip.
+        let second = store
+            .record_check(
+                "x",
+                ProbeOutcome { status_code: Some(503), ok: false },
+                t0() + chrono::Duration::seconds(60),
+            )
+            .await
+            .unwrap();
+        assert!(second.is_some(), "an ok-flag flip must report the transition");
+        let t = second.unwrap();
+        assert_eq!(t.watcher_name, "x");
+        assert!(t.from_ok);
+        assert!(!t.to_ok);
+        assert_eq!(t.status_code, Some(503));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn record_check_returns_none_when_state_unchanged() {
+        let dir = scratch_dir();
+        let store = HealthStore::open(dir.join("health.json")).await.unwrap();
+        store.add_watcher("x".to_string(), "https://x/".to_string(), 60, 200).await.unwrap();
+        store.record_check("x", ProbeOutcome { status_code: Some(200), ok: true }, t0()).await.unwrap();
+        let repeat = store
+            .record_check(
+                "x",
+                ProbeOutcome { status_code: Some(200), ok: true },
+                t0() + chrono::Duration::seconds(60),
+            )
+            .await
+            .unwrap();
+        assert!(repeat.is_none(), "no state change must not report a transition");
         std::fs::remove_dir_all(&dir).ok();
     }
 
