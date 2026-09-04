@@ -97,6 +97,64 @@ async function main() {
       .click();
   };
 
+  // Make the current screen's full content part of the *document* before
+  // screenshotting, instead of guessing a viewport height. Why this is
+  // needed at all: the app shell (`.app`, stitch.css) is a fixed
+  // `height: 100vh` grid with an internal scrolling `.view` element, and at
+  // <=860px the sidebar goes `position: fixed` (out of flow) — so the
+  // *document* height is normally exactly the viewport height, no matter
+  // how much content `.view` scrolls internally. `page.screenshot({
+  // fullPage: true })` only screenshots the document, not an element's
+  // internal scroller, so a realistic viewport height (e.g. 900) only ever
+  // captured the above-the-fold slice of every screen and silently missed
+  // below-the-fold clipping/overlap bugs.
+  //
+  // Two guess-a-number approaches were tried and both broke on real
+  // content:
+  //   1. A single oversized constant viewport height (4000px) — too short
+  //      for the Tools screen (57 cards, several thousand px tall at
+  //      440px), since screens vary too much in content length for one
+  //      guessed number to cover all of them.
+  //   2. Measuring `.view.scrollHeight` and resizing the viewport to fit —
+  //      unreliable both ways: (a) if the viewport was still the oversized
+  //      one a *previous* screen's resize left it at, `.view` (flex:1)
+  //      stays stretched to that leftover size, and since `scrollHeight`
+  //      for a non-overflowing box just equals `clientHeight`, short/empty
+  //      screens (e.g. Reminders' "no pending reminders" right after Loop's
+  //      long list) measured to nearly the *previous* screen's height
+  //      instead of their own; (b) even measured from a small, freshly-reset
+  //      baseline, `.view`'s `clientHeight` can itself already exceed
+  //      `window.innerHeight` — CSS Grid's `1fr` row (`.app`'s
+  //      `grid-template-rows: 1fr var(--status-height)`) has an implicit
+  //      `min-height: auto` equal to its content's min-content size, so a
+  //      tall-enough screen partially overflows `.app`'s own `100vh` even
+  //      before any manual resizing, making "viewport height minus `.view`
+  //      clientHeight" an unreliable stand-in for the surrounding chrome's
+  //      real, constant size (it went negative in testing on the Tools
+  //      screen) and silently undercounted the true content height by
+  //      thousands of px.
+  //
+  // So: skip height arithmetic entirely. Directly strip the height
+  // constraint and `overflow-y: auto` from `.view` (and let `.app` size to
+  // its content instead of a fixed `100vh`) via inline style overrides right
+  // before each screenshot. With nothing left to clip it, `.view`'s full
+  // content becomes part of the normal document flow, `.app` (and the
+  // document) grow to match, and `fullPage: true` captures everything with
+  // no guessing. Do not replace this with a fixed or computed viewport
+  // height again — both were tried and both silently clipped long screens.
+  const expandView = async () => {
+    await page.evaluate(() => {
+      const view = document.querySelector('.view');
+      const app = document.querySelector('.app');
+      view.style.overflow = 'visible';
+      view.style.height = 'auto';
+      view.style.flex = 'none';
+      app.style.height = 'auto';
+      app.style.minHeight = '100vh';
+    });
+    await page.waitForTimeout(80); // let the reflow settle before capture
+  };
+
   for (const width of args.widths) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(args.baseUrl, { waitUntil: 'networkidle' });
@@ -127,6 +185,7 @@ async function main() {
     for (const [slug, label] of screens) {
       await clickNav(label, width);
       await page.waitForTimeout(400); // re-render + any query round-trip
+      await expandView();
       const file = path.join(args.out, `${slug}-${width}.png`);
       await page.screenshot({ path: file, fullPage: true });
       console.log(`captured ${file}`);

@@ -25,10 +25,12 @@ Thumbs.db
 # Phase 99 — disposable local-run state from scripts/dev-run.sh
 # (sandbox FS root + encrypted dev store; never real data)
 /.dev-run/
+# Phase 189 — same convention, disposable local-run state for the Studio
+# mobile-verification pass.
+/.dev-run-189/
 
 # Local-only audit / scratch docs (not part of frozen phase journals)
 /docs/walkthrough.md
 .pack-dev/
 .worktrees/
 .superpowers
-/.dev-run-189/

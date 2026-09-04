@@ -1054,6 +1054,13 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
      row — span it across both columns instead of leaving it orphaned. */
   .stat-row-5 > :last-child { grid-column: 1 / -1; }
 }
+/* NOTE: `.stat-row`'s own `@media (max-width: 440px)` rule (stitch.css,
+   "Responsive content grids" block above) sets `grid-template-columns: 1fr`
+   and has the *same specificity* as `.stat-row-5` above (both single-class
+   selectors) — the 2-column-not-1-column behavior on elements with both
+   classes (e.g. Command Center's `class="stat-row stat-row-5"`) only holds
+   because this block comes later in the file. Moving either block would
+   silently flip which one wins at <=440px. */
 
 .agent-status .v.mono { font-family: var(--font-mono); font-size: 0.78em; }
 

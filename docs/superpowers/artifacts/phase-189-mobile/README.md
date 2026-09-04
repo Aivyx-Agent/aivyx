@@ -21,7 +21,22 @@ Task 1 for full detail and expected output at each step):
    noise generator. After building in the main checkout, `rsync -a --delete`
    the resulting `crates/aivyx-web/dist/` into this worktree's
    `crates/aivyx-web/dist/` before committing here.)
-4. Launch the daemon (background, from `.dev-run-189/`):
+4. Create `.dev-run-189/aivyx.toml` with Loop enabled, **before** launching
+   the daemon:
+   ```
+   mkdir -p .dev-run-189
+   cat > .dev-run-189/aivyx.toml <<'EOF'
+   [loop]
+   enabled = true
+   EOF
+   ```
+   This un-gates the Loop and Settings screens — without it, Loop shows
+   "not configured" and Settings hangs on "Loading settings…" forever, since
+   both wait on daemon config that only exists once this file is present at
+   daemon startup. It must exist before Step 5 launches the daemon; adding
+   it after the daemon is already running has no effect until the next
+   restart.
+5. Launch the daemon (background, from `.dev-run-189/`):
    ```
    mkdir -p .dev-run-189/sandbox
    cd .dev-run-189
@@ -34,7 +49,7 @@ Task 1 for full detail and expected output at each step):
    before launching — `AIVYX_FS_ROOT`/`AIVYX_STORAGE_PATH` above are
    relative to that directory via `$PWD`, and the daemon needs `sandbox/`
    to already exist.)
-5. Verify: `curl -fsS http://127.0.0.1:7843/ | head -c 200` should print HTML.
+6. Verify: `curl -fsS http://127.0.0.1:7843/ | head -c 200` should print HTML.
 
 `.dev-run-189/` is disposable scratch state (git-ignored), same convention
 as `.dev-run/` from `scripts/dev-run.sh` — safe to `rm -rf` and restart from
