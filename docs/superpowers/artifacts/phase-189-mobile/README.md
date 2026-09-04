@@ -24,7 +24,17 @@ Task 1 for full detail and expected output at each step):
    comment-only CSS edit can still produce a `dist/` diff on the next
    rebuild — if Dioxus's `asset!` hashes the *source* file rather than the
    emitted one, the hash changes regardless of whether the emitted content
-   actually differs. That's expected, not a sign something went wrong.)
+   actually differs. That's expected, not a sign something went wrong.
+   Separate, worse footgun (Phase 190): `just build-web` run a **second**
+   time in the same session — e.g. one more CSS edit right after a prior
+   rebuild — can silently reuse a stale cached `target/dx/aivyx-web/`
+   asset even though the source genuinely changed, with a clean exit code
+   and no error. This produces *wrong* built output, not just diff noise
+   — it cost a real debugging cycle in Phase 190 (a tap-target measurement
+   came back at the pre-fix size). If rebuilding more than once in the
+   same session, `rm -rf target/dx/aivyx-web` first, or verify the actual
+   built CSS/JS bytes changed (e.g. `grep` the new rule/value directly in
+   the rebuilt `dist/` file) before trusting the measurement.)
 4. Create `.dev-run-189/aivyx.toml` with Loop enabled, **before** launching
    the daemon:
    ```
