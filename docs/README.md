@@ -347,6 +347,7 @@ See [`archive/README.md`](archive/README.md) for the archive's own index.
 | Phase 187 | Frozen | [PHASE_187.md](archive/phases/PHASE_187.md) | `5933a491`  |
 | Phase 188 | Frozen | [PHASE_188.md](archive/phases/PHASE_188.md) | `7c05a9bc`  |
 | Phase 189 | Frozen | [PHASE_189.md](archive/phases/PHASE_189.md) | `9c7e2c6f`  |
+| Phase 190 | Frozen | [PHASE_190.md](archive/phases/PHASE_190.md) | `59834774`  |
 
 Frozen means the phase doc is no longer edited except through commits
 with a message starting `docs(phase-N):` — a convention, not an

@@ -3720,6 +3720,20 @@ systemd/launchd wiring.
   `fullPage: true`, fixed by a real mechanism change plus a full
   re-audit (zero new bugs found). "polish" and `.btn-xs`/`.icon-btn`
   tap-target sizing remain open, logged as follow-ups.
+- **Phase 190 — Tap-target sizing fix.** Shipped 2026-09-04 — see
+  [PHASE_190.md](archive/phases/PHASE_190.md). Picked up the one
+  concrete gap Phase 189 measured but left unfixed: `.icon-btn`
+  (34×34px) bumped to 40×40 globally (4 sites, low risk); `.btn-xs`
+  (~22.5px) bumped to 40px minimum height only at ≤860px via a new
+  media query, leaving its 48 desktop usage sites untouched. A real
+  build-tooling bug (a stale `dx bundle` cache silently reusing old
+  output on a same-session rebuild) was found, fixed, and documented
+  so it doesn't cost a future phase the same debugging cycle. The
+  final review hit an Opus session usage limit mid-run — handled the
+  same way as every prior Opus unavailability this run: asked before
+  falling back to Sonnet, which still found one real (Minor) gap.
+  "polish" remains the only item from Chapter I's original roadmap
+  wording still unscoped.
 
 Subsequent phases (and whether 185/186 merge) are chosen at each
 exit; ordering revised as each exit teaches us something.
