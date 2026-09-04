@@ -11,6 +11,17 @@
 //! ```toml
 //! # ~/.aivyx/tool-processes/toolkit/config.toml
 //!
+//! # Top-level scalar keys (like this one) MUST come before any
+//! # [table] header below — TOML attributes a bare key to whichever
+//! # table most recently opened, and this loader has no
+//! # deny_unknown_fields to catch the mistake, so a key placed after
+//! # [brave_search] would silently land nowhere useful.
+//! #
+//! # Phase 191 — notify target health-check alerts dispatch to
+//! # automatically, both directions (down and recovered). Unset
+//! # means alerts are skipped silently; see `health_polling.rs`.
+//! default_notify_target = "phone"
+//!
 //! [brave_search]
 //! # Get a free key at https://api.search.brave.com/.
 //! # Required for the `web.search` tool. If absent, web.search

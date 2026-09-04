@@ -4343,8 +4343,9 @@ capability_scopes = [
   # For the health-check alert composition recipe:
   "notify.send",
   "schedule.create", "schedule.list",
-  # For the automatic dispatch path (Phase 191) — required, and,
-  # like every toolkit scope, Trusted-tier-only:
+  # For the automatic dispatch path (Phase 191) — required, and
+  # itself Trusted-tier-only (not every toolkit scope is: e.g.
+  # calc.eval, convert.units, and date.compute are SemiTrusted):
   "notify.dispatch",
 ]
 ```
@@ -4492,9 +4493,27 @@ state should include this directory.
   table) in `~/.aivyx/tool-processes/toolkit/config.toml` and the polling
   loop dispatches a notification directly (both directions: down
   and recovered) whenever `health.check.recent_changes` would
-  have shown a new entry — no cron, no agent turn required. The
-  agent-mediated recipe below still works and is useful for
-  richer, LLM-composed alert text; the automatic path is a
+  have shown a new entry — no cron, no agent turn required. Because
+  it's a top-level scalar key, it MUST be listed before any `[table]`
+  header in the file — TOML (without `deny_unknown_fields`, which
+  this loader doesn't set) silently ignores a bare key placed after a
+  table header, treating it as belonging to that table instead of the
+  document root. A complete `config.toml` combining it with the
+  `[brave_search]` block from step 2 above:
+
+  ```toml
+  default_notify_target = "phone"
+
+  [brave_search]
+  api_key = "BSA-..."
+  ```
+
+  `phone` must name an actual configured `[[notify_target]]` entry in
+  `aivyx.toml` — a mismatched name fails with
+  `NotifyError::UnknownTarget`, logged only to the daemon's own
+  stderr (the toolkit process has no channel back to the operator for
+  this failure). The agent-mediated recipe above still works and is
+  useful for richer, LLM-composed alert text; the automatic path is a
   reliable floor under it, not a replacement.
 - **No multi-tool harness lift.** Phase 123's SDK-validation
   finding (lift `run_multi_tool_subprocess` from per-crate

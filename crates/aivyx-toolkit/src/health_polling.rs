@@ -366,6 +366,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tick_sends_dispatch_notification_on_recovered_transition() {
+        // The plan's own binding constraint is that BOTH directions
+        // notify, not just DOWN. Drives a down transition first (same
+        // URL-swap technique as the sibling test above), drains it, then
+        // swaps the URL back to a 200-returning mock and ticks again at
+        // a later timestamp to produce the RECOVERED transition.
+        let dir = scratch_dir();
+        let path = dir.join("health.json");
+        let store = Arc::new(HealthStore::open(path).await.unwrap());
+        let ok_url = spawn_mock_server(200).await;
+        store.add_watcher("x".to_string(), ok_url, 60, 200).await.unwrap();
+        let http = Client::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // First tick: establishes the "up" baseline, no transition yet.
+        let t1 = Utc::now();
+        run_polling_tick(&store, &http, t1, &tx, &Some("phone".to_string())).await;
+        assert!(rx.try_recv().is_err(), "no transition on the first-ever poll");
+
+        // Second tick: swap to a failing mock, drive the DOWN transition,
+        // and drain it so it doesn't get mistaken for the RECOVERED one.
+        let down_url = spawn_mock_server(503).await;
+        let watchers_path = dir.join("health.json");
+        let body = std::fs::read_to_string(&watchers_path).unwrap();
+        let body = body.replace(&format!("\"url\": \"{}\"", url_from(&store).await), &format!("\"url\": \"{down_url}\""));
+        std::fs::write(&watchers_path, body).unwrap();
+        let store = Arc::new(HealthStore::open(watchers_path.clone()).await.unwrap());
+
+        let t2 = t1 + chrono::Duration::seconds(120);
+        run_polling_tick(&store, &http, t2, &tx, &Some("phone".to_string())).await;
+        let down_sent = rx.try_recv().expect("expected a DispatchNotification on the down transition");
+        match down_sent {
+            aivyx_tool::wire::ToolToDaemon::DispatchNotification { message, .. } => {
+                assert!(message.contains("DOWN"), "message was: {message}");
+            }
+            other => panic!("expected DispatchNotification, got {other:?}"),
+        }
+
+        // Third tick: swap back to a 200-returning mock, tick at a later
+        // timestamp, and confirm the RECOVERED direction is dispatched.
+        let recovered_url = spawn_mock_server(200).await;
+        let body = std::fs::read_to_string(&watchers_path).unwrap();
+        let body = body.replace(&format!("\"url\": \"{}\"", url_from(&store).await), &format!("\"url\": \"{recovered_url}\""));
+        std::fs::write(&watchers_path, body).unwrap();
+        let store = Arc::new(HealthStore::open(watchers_path).await.unwrap());
+
+        let t3 = t2 + chrono::Duration::seconds(120);
+        run_polling_tick(&store, &http, t3, &tx, &Some("phone".to_string())).await;
+        let sent = rx.try_recv().expect("expected a DispatchNotification on the recovered transition");
+        match sent {
+            aivyx_tool::wire::ToolToDaemon::DispatchNotification { target, message, .. } => {
+                assert_eq!(target, "phone");
+                assert!(message.contains("RECOVERED"), "message was: {message}");
+                assert!(!message.contains("DOWN"), "message was: {message}");
+            }
+            other => panic!("expected DispatchNotification, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn tick_sends_nothing_when_no_target_configured() {
         // Deliberately drives a *real* transition (not just a first-ever
         // poll, which record_check never treats as a transition anyway)

@@ -230,13 +230,24 @@ treat unknown kinds as "ignore" (see § 8).
 
 An unprompted notification dispatched by your tool process
 directly to the operator (not in response to any `InvokeTool`).
-Requires the tool process to hold the `notify.dispatch` capability
-scope; the daemon checks this on every `DispatchNotification` frame
-(inside `dispatch()` itself, not once at connection time — unlike
-the per-tool `required_scope` check described above under
-`ToolDescriptor` shape, which genuinely is a one-time handshake
-check via `ToolRegister`) and silently drops frames from tools
-lacking this scope. `notify.dispatch` is
+Unlike the per-tool `required_scope` check described above under
+`ToolDescriptor` shape — which your tool process itself declares,
+and which is checked once, at the `ToolRegister` handshake —
+`notify.dispatch` is **not** a scope your tool process declares or
+holds anywhere. The daemon checks its own active role's capability
+set for `notify.dispatch` on every `DispatchNotification` frame
+(inside `dispatch()` itself, not once at connection time), and
+silently drops frames if the daemon's active role lacks it,
+regardless of anything your tool process's `ToolRegister` claimed.
+There is no `required_scope`-style declaration mechanism for this
+variant — nothing you add to your tool's own manifest changes
+whether frames get through.
+Because the check is generic (attached to every spawned tool
+process, not special-cased to `aivyx-toolkit`), granting
+`notify.dispatch` to the daemon's active role lets **any** configured
+tool-process binary push notifications to any registered target —
+it is not scoped per tool process.
+`notify.dispatch` is
 Trusted-tier-only (it's in `aivyx-capability`'s `CEILING_TRUSTED`
 array, the same restriction `notify.send` carries): a SemiTrusted
 role can never be granted this scope, no matter what an operator

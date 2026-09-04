@@ -5298,6 +5298,7 @@ fn compute_backcompat_floor(
     workspace_scopes: Vec<Scope>,
     tool_scope_bases: &[Scope],
     loop_armed: bool,
+    has_tool_processes: bool,
 ) -> Vec<Scope> {
     let mut backcompat_floor: Vec<Scope> = vec![
         Scope::parse("memory.read").unwrap(),
@@ -5408,6 +5409,20 @@ fn compute_backcompat_floor(
         backcompat_floor.push(Scope::parse("loop.complete").unwrap());
         backcompat_floor.push(Scope::parse("loop.note").unwrap());
         backcompat_floor.push(Scope::parse("team.run").unwrap());
+    }
+    // Phase 191 — `notify.dispatch` belongs to no `Tool` trait object (the
+    // check lives entirely inside `ToolkitNotifySink::dispatch`, gated on
+    // the daemon's own active-role capability set, not a tool's
+    // `required_scope`), so it can never enter `tool_scope_bases` and
+    // therefore never enters the floor via the generic sweep above. The
+    // sink is attached to every spawned tool process unconditionally
+    // (see the `notification_sink: Some(...)` construction in the
+    // `for tp_cfg in &config_tool_processes` loop), so whenever any tool
+    // process exists at all, the default role should be able to use the
+    // feature without an operator having to know to grant a scope they
+    // won't think to ask for — mirroring `loop_armed` immediately above.
+    if has_tool_processes {
+        backcompat_floor.push(Scope::parse("notify.dispatch").unwrap());
     }
     backcompat_floor
 }
@@ -8140,6 +8155,7 @@ async fn run_async(
         workspace_scopes,
         &tool_scope_bases,
         loop_state.is_some(),
+        !config_tool_processes.is_empty(),
     );
 
     // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider,
@@ -10419,6 +10435,78 @@ mod tests {
         assert!(!notify_dispatch_granted(&aivyx_capability::CapabilitySet::empty()));
     }
 
+    /// End-to-end coverage of `ToolkitNotifySink::dispatch` itself, not
+    /// just the pure `notify_dispatch_granted` gate: constructs a real
+    /// `NotifyDispatcher` with a recording test backend, fills the sink's
+    /// deferred cell with a granting `CapabilitySet` and that real
+    /// dispatcher, calls `dispatch`, and confirms the frame actually
+    /// reaches the registered backend. This is exactly the seam where
+    /// this branch's earlier Critical bug (a hardcoded-empty dispatch
+    /// target) lived undetected through every task-level test — those
+    /// tests only ever checked the capability gate in isolation.
+    #[tokio::test]
+    async fn toolkit_notify_sink_dispatches_to_a_real_registered_backend() {
+        use aivyx_tool::bridge::NotificationSink;
+
+        type RecordedCalls = Vec<(String, Option<String>)>;
+        struct RecordingBackend {
+            calls: std::sync::Arc<std::sync::Mutex<RecordedCalls>>,
+        }
+        #[async_trait::async_trait]
+        impl aivyx_channel::notify_dispatcher::NotifyBackend for RecordingBackend {
+            async fn send(
+                &self,
+                message: &str,
+                subject: Option<&str>,
+            ) -> Result<(), aivyx_channel::notify_dispatcher::NotifyError> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((message.to_string(), subject.map(|s| s.to_string())));
+                Ok(())
+            }
+            fn kind(&self) -> &'static str {
+                "test-recording"
+            }
+        }
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut dispatcher = aivyx_channel::notify_dispatcher::NotifyDispatcher::new();
+        dispatcher.register(
+            "the-registered-target-name",
+            std::sync::Arc::new(RecordingBackend {
+                calls: std::sync::Arc::clone(&calls),
+            }) as std::sync::Arc<dyn aivyx_channel::notify_dispatcher::NotifyBackend>,
+        );
+        let dispatcher = std::sync::Arc::new(dispatcher);
+
+        let caps = aivyx_capability::CapabilitySet::from_scopes(vec![
+            aivyx_capability::Scope::parse("notify.dispatch").unwrap(),
+        ]);
+
+        let deps: std::sync::Arc<std::sync::OnceLock<NotifyDispatchDeps>> =
+            std::sync::Arc::new(std::sync::OnceLock::new());
+        deps.set((caps, std::sync::Arc::clone(&dispatcher)))
+            .map_err(|_| "fresh OnceLock must not already be filled")
+            .unwrap();
+
+        let sink = ToolkitNotifySink { deps };
+        sink.dispatch(
+            "the-registered-target-name".to_string(),
+            "test message".to_string(),
+            None,
+        );
+
+        // `dispatch()` spawns a tokio task internally rather than awaiting
+        // inline — give it a beat to actually run before asserting.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let recorded = calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "expected exactly one recorded send");
+        assert_eq!(recorded[0].0, "test message");
+        assert_eq!(recorded[0].1, None);
+    }
+
     #[test]
     fn synthesizes_a_default_webui_target_when_none_configured_and_no_other_default() {
         let synthesized = synthesize_default_webui_target(&[]).expect("must synthesize");
@@ -11261,6 +11349,7 @@ mod tests {
             ],
             &tool_scope_bases,
             true, // loop_armed
+            true, // has_tool_processes
         );
 
         let scope_strings: Vec<&str> = floor.iter().map(|s| s.as_str()).collect();
@@ -11308,6 +11397,7 @@ mod tests {
                 "loop.complete",
                 "loop.note",
                 "team.run",
+                "notify.dispatch",
             ]
         );
         // Explicit, redundant-on-purpose per the plan's own global
@@ -11340,6 +11430,7 @@ mod tests {
             vec![],
             &[],
             false,
+            false, // has_tool_processes
         );
 
         let scope_strings: Vec<&str> = floor.iter().map(|s| s.as_str()).collect();
@@ -11368,6 +11459,10 @@ mod tests {
                 "fs.write:/tmp/proj",
                 "fs.metadata:/tmp/proj",
             ]
+        );
+        assert!(
+            !scope_strings.contains(&"notify.dispatch"),
+            "notify.dispatch must be absent when has_tool_processes is false"
         );
     }
 
@@ -11465,6 +11560,7 @@ mod tests {
             vec![],
             &tool_scope_bases,
             false,
+            false, // has_tool_processes
         );
         let lead_scopes: Vec<String> = floor.iter().map(|s| s.as_str().to_string()).collect();
 

@@ -140,23 +140,6 @@ pub async fn run_multi_tool_subprocess(
     let mut stdin = stdin();
     let stdout_sink = Arc::new(Mutex::new(stdout()));
 
-    // Phase 191 — an optional side channel lets tasks running
-    // independently of this function's own dispatch loop (e.g.
-    // `aivyx-toolkit`'s background health-check poller) share the
-    // same stdout writer to emit unsolicited frames (today, just
-    // `DispatchNotification`) without corrupting frame boundaries.
-    // Only spawned when a caller actually passes a receiver; existing
-    // callers passing `None` see zero behavior change.
-    if let Some(mut rx) = extra_outbound {
-        let forward_sink = Arc::clone(&stdout_sink);
-        tokio::spawn(async move {
-            while let Some(frame) = rx.recv().await {
-                let mut guard = forward_sink.lock().await;
-                let _ = crate::frame::write_frame(&mut *guard, &frame).await;
-            }
-        });
-    }
-
     // Channel name derived from the process name so an
     // `aivyx-gmail` binary surfaces as
     // `"aivyx-gmail-harness"` etc — preserves the pre-lift
@@ -196,6 +179,33 @@ pub async fn run_multi_tool_subprocess(
         write_frame(&mut *guard, &register)
             .await
             .map_err(HarnessError::Frame)?;
+    }
+
+    // Phase 191 — an optional side channel lets tasks running
+    // independently of this function's own dispatch loop (e.g.
+    // `aivyx-toolkit`'s background health-check poller) share the
+    // same stdout writer to emit unsolicited frames (today, just
+    // `DispatchNotification`) without corrupting frame boundaries.
+    // Only spawned when a caller actually passes a receiver; existing
+    // callers passing `None` see zero behavior change.
+    //
+    // Spawned only AFTER `ToolRegister` above has actually been
+    // written: the daemon's handshake is strict — the first frame it
+    // reads from this process MUST be `ToolRegister`, and anything
+    // else (including a `DispatchNotification` that raced ahead) is a
+    // protocol violation that makes the daemon drop this ENTIRE tool
+    // process's surface, not just the errant frame. Spawning the
+    // forwarder any earlier (e.g. right after `stdout_sink` is built,
+    // before the handshake) would let an eager background task (like
+    // the health poller's immediate first probe) win that race.
+    if let Some(mut rx) = extra_outbound {
+        let forward_sink = Arc::clone(&stdout_sink);
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                let mut guard = forward_sink.lock().await;
+                let _ = crate::frame::write_frame(&mut *guard, &frame).await;
+            }
+        });
     }
 
     // Dispatch loop.
