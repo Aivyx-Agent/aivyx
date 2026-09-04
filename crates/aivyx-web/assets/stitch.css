@@ -247,7 +247,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .topbar .spacer { flex: 1; }
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px; border-radius: 8px;
+  width: 40px; height: 40px; border-radius: 8px;
   background: transparent; border: 1px solid var(--color-border-ghost);
   color: var(--color-text-secondary); cursor: pointer;
   transition: all 0.15s var(--ease-smooth);
@@ -666,6 +666,9 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .member-meta .label-tech { color: var(--color-text-disabled); }
 .chip.muted { background: var(--color-secondary-dim); color: var(--color-text-disabled); }
 .btn-xs { align-self: flex-start; padding: 3px 8px; font-size: 11px; }
+@media (max-width: 860px) {
+  .btn-xs { min-height: 40px; display: inline-flex; align-items: center; }
+}
 .member-detail { display: flex; flex-direction: column; gap: 8px; }
 .tool-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .soul {
