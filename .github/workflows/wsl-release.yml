@@ -64,12 +64,17 @@ jobs:
         run: |
           set -eu
           ref="${IMAGE,,}:${VERSION}"   # GHCR requires a lowercase repo path
-          for i in $(seq 1 30); do
+          # 90 attempts x 20s = 30 min, matching the "wait for cargo-dist's
+          # release" loop below -- the previous 30-attempt/10-min budget was
+          # shorter than Docker Publish's own real, historical 11-25 min
+          # runtime, so this loop could (and did, for v0.9.1) exhaust its
+          # retries and fail before the base image was ever actually ready.
+          for i in $(seq 1 90); do
             if docker pull "$ref"; then
               echo "BASE_REF=$ref" >> "$GITHUB_ENV"
               exit 0
             fi
-            echo "base image $ref not ready yet (attempt $i/30) — waiting…"
+            echo "base image $ref not ready yet (attempt $i/90) — waiting…"
             sleep 20
           done
           echo "base image $ref never appeared"; exit 1
