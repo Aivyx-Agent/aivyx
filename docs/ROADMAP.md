@@ -3695,10 +3695,14 @@ systemd/launchd wiring.
   real remaining scope was wiring an interactive offer into the
   `init` wizard's ending, which now calls that existing machinery
   directly instead of only printing the command.
-- **Phase 188+ — Web UI feature-parity refresh.** Dependency-free:
-  bring the localhost SPA up to Chapter F–H (loop, reminders,
-  skills, connect, identity) + polish + mobile-responsive.
-  Broadens reach for non-terminal users.
+- **Phase 188 — Studio Loop + Reminders screens.** Shipped
+  2026-09-04 — see [PHASE_188.md](archive/phases/PHASE_188.md). Of
+  the 5 named features, 3 (skills, connect, identity) were already
+  shipped before this phase started; only loop and reminders were
+  genuinely missing, and both reused queries already built for other
+  frontends (the CLI, the TUI Dashboard) — zero new backend work.
+  "polish" and "mobile-responsive" stayed unscoped, real candidates
+  for a future phase.
 
 Subsequent phases (and whether 185/186 merge) are chosen at each
 exit; ordering revised as each exit teaches us something.
