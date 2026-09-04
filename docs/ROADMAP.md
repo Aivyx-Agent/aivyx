@@ -3703,6 +3703,23 @@ systemd/launchd wiring.
   frontends (the CLI, the TUI Dashboard) — zero new backend work.
   "polish" and "mobile-responsive" stayed unscoped, real candidates
   for a future phase.
+- **Phase 189 — Studio mobile-responsive verification pass.** Shipped
+  2026-09-04 — see [PHASE_189.md](archive/phases/PHASE_189.md). The
+  first phase this run with nothing pre-named to ground against —
+  Chapter I's own "Expected phases" list ended at 188. Grounding found
+  Phase 188's "mobile-responsive" framing was itself stale: a complete
+  responsive shell (drawer sidebar, hamburger, 3 breakpoints) had
+  already shipped 2026-06-23, months earlier — the real gap was that
+  it had never actually been watched render, only confirmed present in
+  the built bundle. A live-backend test environment (real LLM via the
+  GPU rig, real Chrome via Playwright) produced 92 real screenshots
+  across 23 screens × 4 widths, found and fixed 3 genuine CSS bugs, and
+  — per this session's now-standard pattern — the final whole-branch
+  review still caught something every other pass missed: the capture
+  tool's screenshots were silently viewport-clipped despite
+  `fullPage: true`, fixed by a real mechanism change plus a full
+  re-audit (zero new bugs found). "polish" and `.btn-xs`/`.icon-btn`
+  tap-target sizing remain open, logged as follow-ups.
 
 Subsequent phases (and whether 185/186 merge) are chosen at each
 exit; ordering revised as each exit teaches us something.
