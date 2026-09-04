@@ -596,10 +596,11 @@ sys.exit(0)
         // (it's meant for blocking threads calling into async code,
         // not the reverse). A std mutex held only across a
         // non-blocking `push` is the right tool here.
-        let recorded: Arc<std::sync::Mutex<Vec<(String, String, Option<String>)>>> =
+        type RecordedCalls = Vec<(String, String, Option<String>)>;
+        let recorded: Arc<std::sync::Mutex<RecordedCalls>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        struct TestSink(Arc<std::sync::Mutex<Vec<(String, String, Option<String>)>>>);
+        struct TestSink(Arc<std::sync::Mutex<RecordedCalls>>);
         impl NotificationSink for TestSink {
             fn dispatch(&self, target: String, message: String, subject: Option<String>) {
                 self.0.lock().unwrap().push((target, message, subject));
