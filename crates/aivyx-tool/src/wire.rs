@@ -78,6 +78,19 @@ pub enum ToolToDaemon {
         code: String,
         message: String,
     },
+    /// Phase 191 — a tool process pushes a notification with no
+    /// preceding `InvokeTool` (no `call_id`: this isn't a response
+    /// to anything, it fires from the tool process's own background
+    /// task, e.g. a health-check watcher's polling loop noticing a
+    /// state change). The daemon capability-checks the sending tool
+    /// process before honoring this — see `aivyx-tool`'s
+    /// `NotificationSink` trait (Task 2) for the injection point;
+    /// `aivyx-tool` itself has no opinion on scopes.
+    DispatchNotification {
+        target: String,
+        message: String,
+        subject: Option<String>,
+    },
 }
 
 /// One entry in a `ToolRegister`. The daemon validates the
@@ -190,6 +203,20 @@ mod tests {
             call_id: "c-1".into(),
             code: "internal".into(),
             message: "boom".into(),
+        });
+    }
+
+    #[test]
+    fn dispatch_notification_round_trips() {
+        roundtrip(&ToolToDaemon::DispatchNotification {
+            target: "phone".into(),
+            message: "watcher x went down".into(),
+            subject: Some("Health alert".into()),
+        });
+        roundtrip(&ToolToDaemon::DispatchNotification {
+            target: "phone".into(),
+            message: "watcher x recovered".into(),
+            subject: None,
         });
     }
 
