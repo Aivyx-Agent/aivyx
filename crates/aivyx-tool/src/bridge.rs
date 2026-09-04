@@ -26,6 +26,22 @@ use crate::wire::{
     DaemonToTool, ToolDescriptor, ToolEventPayload, ToolToDaemon, TOOL_PROTOCOL_VERSION,
 };
 
+/// Phase 191 — injected by the daemon binary (which owns
+/// capability-checking and the real notification dispatcher)
+/// so `aivyx-tool` stays free of any dependency on
+/// `aivyx-channel`/`aivyx-capability`. `None` (the default) means
+/// this tool process's `DispatchNotification` frames are silently
+/// dropped — existing tool processes that never send them are
+/// unaffected either way.
+///
+/// Not `async fn` — implementations that need to await (the real
+/// one does, to call `NotifyDispatcher::dispatch`) should spawn
+/// their own task internally and return immediately, so the
+/// reader loop is never blocked waiting on a notification send.
+pub trait NotificationSink: Send + Sync {
+    fn dispatch(&self, target: String, message: String, subject: Option<String>);
+}
+
 #[derive(Debug, Error)]
 pub enum ToolBridgeError {
     #[error("failed to spawn tool process `{command}`: {source}")]
@@ -76,7 +92,7 @@ enum BridgeMessage {
 }
 
 /// Configuration for spawning a tool process.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolProcessConfig {
     pub name: String,
     pub command: String,
@@ -89,6 +105,23 @@ pub struct ToolProcessConfig {
     /// policy (bubblewrap / firejail / Docker / sandbox-exec /
     /// nothing).
     pub sandbox: Option<SandboxConfig>,
+    /// Phase 191 — injected sink for unprompted `DispatchNotification`
+    /// frames (see `NotificationSink`). `None` for every tool process
+    /// that doesn't need it (the default for all existing callers).
+    pub notification_sink: Option<Arc<dyn NotificationSink>>,
+}
+
+impl std::fmt::Debug for ToolProcessConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolProcessConfig")
+            .field("name", &self.name)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("env", &self.env)
+            .field("sandbox", &self.sandbox)
+            .field("notification_sink", &self.notification_sink.is_some())
+            .finish()
+    }
 }
 
 /// Phase 52 — generic command wrapper around a tool process spawn.
@@ -221,8 +254,9 @@ impl ToolProcessBridge {
         // Spawn the background reader that demultiplexes responses
         // by call_id.
         let pending_for_reader = Arc::clone(&pending);
+        let notification_sink = config.notification_sink.clone();
         let reader_handle = tokio::spawn(async move {
-            reader_loop(reader, pending_for_reader).await;
+            reader_loop(reader, pending_for_reader, notification_sink).await;
         });
 
         Ok(ToolProcessBridge {
@@ -353,6 +387,7 @@ impl ToolProcessBridge {
 async fn reader_loop(
     mut reader: BufReader<ChildStdout>,
     pending: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<BridgeMessage>>>>,
+    notification_sink: Option<Arc<dyn NotificationSink>>,
 ) {
     loop {
         let body = match read_frame(&mut reader).await {
@@ -415,10 +450,16 @@ async fn reader_loop(
             ToolToDaemon::ToolRegister { .. } => {
                 // Spurious — the handshake already consumed this. Ignore.
             }
-            ToolToDaemon::DispatchNotification { .. } => {
-                // Phase 191 — currently dropped here (not forwarded
-                // anywhere). Task 2 replaces this arm's body with real
-                // NotificationSink routing.
+            ToolToDaemon::DispatchNotification {
+                target,
+                message,
+                subject,
+            } => {
+                // No call_id — this doesn't go through `pending` at
+                // all, unlike every other variant in this match.
+                if let Some(sink) = &notification_sink {
+                    sink.dispatch(target, message, subject);
+                }
             }
         }
     }
@@ -485,6 +526,7 @@ sys.exit(0)
             args: vec!["-c".into(), script.into()],
             env: vec![],
             sandbox: None,
+            notification_sink: None,
         };
         let bridge = match ToolProcessBridge::spawn(config).await {
             Ok(b) => b,
@@ -514,6 +556,89 @@ sys.exit(0)
     }
 
     #[tokio::test]
+    async fn bridge_routes_dispatch_notification_with_no_call_id() {
+        let script = r#"
+import sys, json, struct
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4:
+        return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+hello = read_frame()
+assert hello["type"] == "ToolHello"
+write_frame({
+    "type": "ToolRegister",
+    "tool_process_name": "test-tool",
+    "tools": []
+})
+
+# Unprompted — no InvokeTool preceded this, no call_id at all.
+write_frame({
+    "type": "DispatchNotification",
+    "target": "phone",
+    "message": "watcher x went down",
+    "subject": None
+})
+sys.exit(0)
+"#;
+        // A plain `std::sync::Mutex`, not tokio's — `dispatch` is
+        // called synchronously from inside the reader loop's async
+        // task, and `tokio::sync::Mutex::blocking_lock()` panics
+        // when called from within an asynchronous execution context
+        // (it's meant for blocking threads calling into async code,
+        // not the reverse). A std mutex held only across a
+        // non-blocking `push` is the right tool here.
+        let recorded: Arc<std::sync::Mutex<Vec<(String, String, Option<String>)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        struct TestSink(Arc<std::sync::Mutex<Vec<(String, String, Option<String>)>>>);
+        impl NotificationSink for TestSink {
+            fn dispatch(&self, target: String, message: String, subject: Option<String>) {
+                self.0.lock().unwrap().push((target, message, subject));
+            }
+        }
+
+        let config = ToolProcessConfig {
+            name: "test".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![],
+            sandbox: None,
+            notification_sink: Some(Arc::new(TestSink(Arc::clone(&recorded)))),
+        };
+        let bridge = match ToolProcessBridge::spawn(config).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skipping: python3 unavailable: {e}");
+                return;
+            }
+        };
+        assert_eq!(bridge.descriptors().len(), 0);
+
+        // Give the reader loop a moment to process the frame the
+        // Python script sent immediately after ToolRegister.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let calls = recorded.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected exactly one DispatchNotification routed"
+        );
+        assert_eq!(calls[0].0, "phone");
+        assert_eq!(calls[0].1, "watcher x went down");
+        assert_eq!(calls[0].2, None);
+    }
+
+    #[tokio::test]
     async fn bridge_reports_handshake_failure_on_bad_command() {
         let config = ToolProcessConfig {
             name: "bad".into(),
@@ -521,6 +646,7 @@ sys.exit(0)
             args: vec![],
             env: vec![],
             sandbox: None,
+            notification_sink: None,
         };
         let result = ToolProcessBridge::spawn(config).await;
         assert!(matches!(result, Err(ToolBridgeError::Spawn { .. })));
@@ -560,6 +686,7 @@ sys.exit(0)
             args: vec!["-c".into(), script.into()],
             env: vec![],
             sandbox: None,
+            notification_sink: None,
         };
         let bridge = match ToolProcessBridge::spawn(config).await {
             Ok(b) => b,
@@ -597,6 +724,7 @@ sys.exit(0)
                 wrapper: "/definitely/not/a/real/sandbox-binary".into(),
                 args: vec!["--isolated".into()],
             }),
+            notification_sink: None,
         };
         let err = ToolProcessBridge::spawn(config)
             .await
