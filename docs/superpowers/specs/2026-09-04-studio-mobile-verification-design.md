@@ -70,8 +70,12 @@ must open it via the hamburger (`.nav-toggle`) before each click at narrow
 widths, then let the tap-to-dismiss backdrop close it (matching real user
 behavior) before screenshotting.
 
-**Capture matrix:** all 24 `View::ALL` screens × {1280px desktop baseline,
-860px, 600px, 440px} = 96 screenshots, saved to
+**Capture matrix:** 23 of the 24 `View::ALL` screens — every one except
+`View::Onboarding`, which isn't reachable from the sidebar once an agent
+profile exists (confirmed during plan-writing:
+`crates/aivyx-web/src/main.rs:1358-1371`'s `agent_group` only includes the
+"Create" entry when `!genesis_done`) — × {1280px desktop baseline, 860px,
+600px, 440px} = 92 screenshots, saved to
 `docs/superpowers/artifacts/phase-189-mobile/<slug>-<width>.png` (one
 directory, one file per screen×breakpoint, named after `View::slug()` so
 every artifact traces back to a specific screen and width — not a
