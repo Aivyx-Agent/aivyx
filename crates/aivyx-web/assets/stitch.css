@@ -542,12 +542,12 @@ a { color: var(--color-primary); text-decoration: none; }
 .settings { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
 .settings-section { display: flex; flex-direction: column; gap: 12px; }
 .settings-section p { margin: 0; }
-.settings-section .label-tech.sub { color: var(--color-text-disabled); }
+.settings-section .label-tech.sub { color: var(--color-text-disabled); word-break: break-word; }
 .field-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }
 .field-row label { color: var(--color-text-secondary); }
 .field-row .input { width: 100%; }
 .toggle-line { display: flex; align-items: center; gap: 12px; }
-select.input { appearance: none; cursor: pointer; }
+select.input { appearance: none; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-section .actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 2px; }
 .kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }
 .kv-grid > div { display: flex; flex-direction: column; gap: 2px; }
@@ -1048,7 +1048,12 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 
 /* ── Command Center: agent vitals + routines (v0.7.1) ───────────────────── */
 .stat-row-5 { grid-template-columns: repeat(5, 1fr); }
-@media (max-width: 900px) { .stat-row-5 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 900px) {
+  .stat-row-5 { grid-template-columns: repeat(2, 1fr); }
+  /* 5 tiles in a 2-column grid always strands the 5th alone in the last
+     row — span it across both columns instead of leaving it orphaned. */
+  .stat-row-5 > :last-child { grid-column: 1 / -1; }
+}
 
 .agent-status .v.mono { font-family: var(--font-mono); font-size: 0.78em; }
 
