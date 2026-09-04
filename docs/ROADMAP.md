@@ -3529,11 +3529,30 @@ pattern) without architectural additions.
   across gmail + toolkit harnesses (lift recommended
   alongside the next Chapter F/G integration).
 
-Subsequent Chapter G phases (Chapter G #2 candidates:
-calendar reminders, lightweight budget tracking,
-health.check.remove + automatic alert dispatch) picked at
-each phase exit based on operator pressure and observed
-first-real-use signal.
+- **Phase 191 — Daemon-side automatic alert dispatch for tool
+  processes.** Shipped 2026-09-05 — see
+  [PHASE_191.md](archive/phases/PHASE_191.md). By the time this phase
+  started, two of Phase 125's original three Chapter G #2 candidates were
+  already closed (calendar reminders: Phases 141-142; budget tracking:
+  Phases 143-144) and the third had itself been split — Phase 147 shipped
+  `health.check.remove` but held automatic alert dispatch back
+  deliberately, "intentionally held with Channel Activation" per that
+  phase's own retrospective. This phase closes that last remaining half.
+  A new call_id-free wire variant lets a tool process's own background
+  task (not just a daemon-initiated call) push a notification,
+  capability-gated by a new `notify.dispatch` scope. Three separate
+  layers of the same "the scope parses but can never actually be
+  granted" bug class were found and fixed across this phase's own review
+  cycle (`KNOWN_BASES` vs. `CEILING_TRUSTED`; a daemon-side placeholder
+  target that no task could ever fill; the backcompat-floor auto-grant
+  mechanism only picking up scopes declared by real `Tool` objects) plus
+  a real handshake-race concurrency bug — the final whole-branch review's
+  fix wave added genuine end-to-end test coverage that the re-review
+  confirmed would have caught all of them.
+
+Subsequent Chapter G phases (the original Chapter G #2 candidate list is
+now fully closed) picked at each phase exit based on operator pressure
+and observed first-real-use signal.
 
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
