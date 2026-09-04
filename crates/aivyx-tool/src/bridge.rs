@@ -416,10 +416,9 @@ async fn reader_loop(
                 // Spurious — the handshake already consumed this. Ignore.
             }
             ToolToDaemon::DispatchNotification { .. } => {
-                // Phase 191 — notifications are dispatched by the
-                // NotificationSink trait (Task 2+). The bridge passes
-                // them through but doesn't route them to pending calls.
-                // TODO: Route to NotificationSink when available.
+                // Phase 191 — currently dropped here (not forwarded
+                // anywhere). Task 2 replaces this arm's body with real
+                // NotificationSink routing.
             }
         }
     }
