@@ -249,12 +249,19 @@ crossterm = "0.29"
 # `landlock`/`seccompiler`) off, and `aivyx-core`'s target-gated
 # `[target.'cfg(target_os = "linux")'.dependencies]` table opts it back on
 # — see that crate's Cargo.toml for why (macOS release build).
-# TEMPORARY (Phase 193 investigation): rev swapped to a throwaway
-# diagnostic branch (77db927) to localize the CI-only "spawn failed:
-# Invalid argument (os error 22)" failure. MUST be reverted to
-# 03de88616789f9a52adf41afe71fd14d538f3144 before this branch is
-# finalized -- this diagnostic commit is not meant to ship.
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "77db927bd2d96e7b289aeeabb61416375060c0f0", default-features = false }
+# Bumped to a08be93 (Phase 193, Chapter N.2): fixes require_enforcement
+# refusing to run under Landlock's own designed PartiallyEnforced
+# best-effort degradation, not just the genuine NotEnforced case --
+# found because GitHub Actions' ubuntu-22.04 runner kernel only reaches
+# PartiallyEnforced at this crate's hardcoded LANDLOCK_ABI (V7), which
+# made every sandboxed shell.exec test fail outright in CI with a
+# misleading "spawn failed: Invalid argument (os error 22)" (Rust's
+# process-spawn error-propagation fallback for a pre_exec closure
+# returning a non-raw-OS-code error, not a genuine kernel EINVAL). Not
+# CI-only: shell.rs hardcodes require_enforcement=true for production
+# too, so this also fixes shell.exec for any real end user on a kernel
+# that doesn't fully support Landlock ABI V7.
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "a08be939069f6fda30b07aba5a0ff7e0071f134c", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder

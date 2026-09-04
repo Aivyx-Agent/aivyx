@@ -928,18 +928,7 @@ mod tests {
                 assert_eq!(output["timed_out"], false);
                 assert_eq!(verified, Verification::NotApplicable);
             }
-            other => {
-                // TEMPORARY (Phase 193 investigation): surface the
-                // aivyx-confine diagnostic patch's output in this
-                // failure's panic message, since a failing test's
-                // captured stdout/stderr always shows in `cargo test`
-                // output (no --nocapture / CI config change needed) —
-                // unlike the pre_exec child's own writes, which can't
-                // reach the parent test process directly.
-                let diag = std::fs::read_to_string("/tmp/aivyx_confine_diag.log")
-                    .unwrap_or_else(|e| format!("<could not read diag file: {e}>"));
-                panic!("expected Completed, got {other:?}\n--- aivyx_confine_diag.log ---\n{diag}");
-            }
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
