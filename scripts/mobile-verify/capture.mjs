@@ -83,20 +83,49 @@ async function main() {
   const page = await browser.newPage();
   await page.emulateMedia({ reducedMotion: 'reduce' });
 
+  // Click a sidebar nav item by its exact label, opening the off-canvas
+  // drawer first below 860px (stitch.css:926-943) since every nav-item click
+  // closes it again.
+  const clickNav = async (label, width) => {
+    if (width <= 860) {
+      await page.click('button.nav-toggle');
+    }
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await page
+      .locator('.sidebar button.nav-item')
+      .filter({ hasText: new RegExp(`^${escaped}$`) })
+      .click();
+  };
+
   for (const width of args.widths) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(args.baseUrl, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(500); // first WS snapshot
+    await page.waitForTimeout(2000); // first WS snapshot
+    // Warm the Agent profile snapshot (main.rs AgentsPanel's `mc-agents-get`
+    // query) before capturing anything: it's fetched lazily on that panel's
+    // first mount, and it gates the sidebar's "Create" item (genesis_done in
+    // main.rs Sidebar/CommandPalette). Left cold, every screen visited before
+    // "Agents" in SCREENS order would show a different sidebar than every
+    // screen visited after it — not a render race, a fetch that plain hasn't
+    // happened yet. Visiting Agents once here (profile persists on
+    // AgentsState for the rest of this page load) makes the sidebar identical
+    // across all screens at this width.
+    await clickNav('Agents', width);
+    await page.waitForTimeout(600);
+    // This daemon's throwaway profile is pre-genesis (assistant_name_source
+    // != "toml"), which arms a one-shot redirect in main.rs (~line 1008-1023):
+    // the *next* time the app is sitting on Command after that snapshot has
+    // landed, it force-navigates to the Onboarding wizard once. Since Command
+    // is the default view, that one-shot would otherwise hijack the real
+    // `command-*.png` capture below. Deliberately spend it here — landing on
+    // Onboarding is expected and thrown away — then return to Command a
+    // second time, which is a no-op nav-wise and doesn't re-arm the redirect.
+    await clickNav('Command', width);
+    await page.waitForTimeout(400);
+    await clickNav('Command', width);
+    await page.waitForTimeout(400);
     for (const [slug, label] of screens) {
-      if (width <= 860) {
-        // Off-canvas drawer below 860px (stitch.css:926-943).
-        await page.click('button.nav-toggle');
-      }
-      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      await page
-        .locator('.sidebar button.nav-item')
-        .filter({ hasText: new RegExp(`^${escaped}$`) })
-        .click();
+      await clickNav(label, width);
       await page.waitForTimeout(400); // re-render + any query round-trip
       const file = path.join(args.out, `${slug}-${width}.png`);
       await page.screenshot({ path: file, fullPage: true });
