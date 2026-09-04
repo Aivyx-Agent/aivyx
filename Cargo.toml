@@ -233,11 +233,13 @@ crossterm = "0.29"
 # Shared Landlock+seccomp process confinement for shell.exec/git.rs,
 # adopted from the sibling aivyx-coder repo rather than reimplemented here.
 # Not on crates.io (see aivyx-confine's own README) — pinned by commit SHA.
-# MUST stay a public repo: this was privately-hosted from 2026-06 until
-# Phase 192 (Chapter N), and its privacy silently broke the entire
-# v0.9.0 release pipeline (CI's ambient GITHUB_TOKEN can't authenticate
-# against a different, private repo) for 7+ weeks before anyone noticed.
-# `./scripts/check-git-deps-public.sh` verifies this reachability and is
+# MUST stay a public repo: aivyx-confine, aivyx-checkpoint, and aivyx-kvcache
+# were all created 2026-08-16/2026-08-17 as private GitHub repos and adopted
+# as git dependencies here shortly after. Their privacy went undiscovered as
+# a problem until it broke the v0.9.0 release workflow on 2026-09-02 (CI's
+# ambient GITHUB_TOKEN can't authenticate against a different, private repo)
+# -- found and fixed as Phase 192 (Chapter N) on 2026-09-05.
+# `./scripts/check-git-deps-public.sh` verifies this reachability and will be
 # wired into CI (Phase 194) specifically to catch a re-privatization fast.
 # `default-features = false` here (rather than at the consuming crate):
 # Cargo's MSRV-aware resolver (edition 2024) forbids a member manifest from

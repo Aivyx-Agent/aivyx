@@ -18,7 +18,7 @@ if [ ! -f "$CARGO_TOML" ]; then
   exit 2
 fi
 
-urls=$(grep -oE 'git = "https://[^"]+"' "$CARGO_TOML" | sed -E 's/git = "(.*)"/\1/' | sort -u)
+urls=$(grep -oE 'git = "https://[^"]+"' "$CARGO_TOML" | sed -E 's/git = "(.*)"/\1/' | sort -u) || true
 
 if [ -z "$urls" ]; then
   echo "No git dependencies found in $CARGO_TOML — nothing to check."
