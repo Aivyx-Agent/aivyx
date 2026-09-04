@@ -20,7 +20,11 @@ Task 1 for full detail and expected output at each step):
    which is dead code at runtime but a build-hygiene defect and a diff
    noise generator. After building in the main checkout, `rsync -a --delete`
    the resulting `crates/aivyx-web/dist/` into this worktree's
-   `crates/aivyx-web/dist/` before committing here.)
+   `crates/aivyx-web/dist/` before committing here. Note: even a
+   comment-only CSS edit can still produce a `dist/` diff on the next
+   rebuild — if Dioxus's `asset!` hashes the *source* file rather than the
+   emitted one, the hash changes regardless of whether the emitted content
+   actually differs. That's expected, not a sign something went wrong.)
 4. Create `.dev-run-189/aivyx.toml` with Loop enabled, **before** launching
    the daemon:
    ```

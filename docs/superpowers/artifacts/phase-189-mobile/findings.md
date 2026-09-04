@@ -107,8 +107,10 @@ above-the-fold portion.
 The bug bar's tap-target criterion (interactive elements under ~40px tall
 at 440px width) was implicitly applied throughout this pass but never
 explicitly recorded as checked, which left the "zero tap-target findings"
-result reading as "not checked" rather than "checked and clean." Recording
-it explicitly here:
+result ambiguous — was it not checked, or checked and clean? It was
+checked, and it isn't clean: two global classes measure under the bar.
+Recording that explicitly here, along with why it isn't being fixed in
+this phase:
 
 - **`.btn-xs`** (`crates/aivyx-web/assets/stitch.css:668`) computes to
   **22.5px tall** (measured directly via `getBoundingClientRect()` on the

@@ -142,6 +142,16 @@ async function main() {
   // document) grow to match, and `fullPage: true` captures everything with
   // no guessing. Do not replace this with a fixed or computed viewport
   // height again — both were tried and both silently clipped long screens.
+  //
+  // Tradeoff, not a free lunch: `.view` going `flex: none; height: auto`
+  // means any child that relied on `.view` having a definite height now
+  // sizes to its content instead of filling it — e.g. Chat's composer is
+  // normally pinned to the bottom via flex-fill, but in an expanded capture
+  // it just sits under a short transcript with empty space below. So this
+  // method proves there's no *clipped* content, but by construction it
+  // can't catch a "flex-fill region overflows its real constrained height"
+  // bug — that class of bug needs a screenshot taken at the real, unexpanded
+  // layout instead.
   const expandView = async () => {
     await page.evaluate(() => {
       const view = document.querySelector('.view');
