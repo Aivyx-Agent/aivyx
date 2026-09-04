@@ -3554,6 +3554,66 @@ Subsequent Chapter G phases (the original Chapter G #2 candidate list is
 now fully closed) picked at each phase exit based on operator pressure
 and observed first-real-use signal.
 
+## Chapter N — Release & Distribution Integrity (Phases 192+)
+
+Opened 2026-09-05 after investigating "how would an end user deploy
+Aivyx on their own bare metal" surfaced that `v0.9.0` — the version
+`README.md`'s own "Status" line named as current — was never actually
+published as a real GitHub Release. Root cause, confirmed against real
+GitHub/CI state rather than documentation claims: `aivyx-confine`,
+`aivyx-checkpoint`, and `aivyx-kvcache` were private `Aivyx-Agent`
+repos wired into `aivyx-core` (a dependency of every shipped binary)
+as pinned-rev git dependencies — a CI runner's ambient `GITHUB_TOKEN`
+can't authenticate against a different, private repo, so every
+`v0.9.0` release workflow failed before reaching its real
+cross-compile/package/publish work, and the same failure almost
+certainly blocked "build from source" for any real outside
+contributor too. Full grounding:
+`docs/superpowers/specs/2026-09-05-release-distribution-integrity-design.md`.
+
+Goal: an unaffiliated outside end user can get a current, working
+`aivyx` binary through every path `docs/INSTALL.md` documents, and the
+release pipeline can't silently regress into shipping stale or broken
+artifacts again without being caught immediately.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 192 — Unblock the pipeline.** Shipped 2026-09-05 — see
+  [PHASE_192.md](archive/phases/PHASE_192.md). Made all three repos
+  public (their privacy was never intentional — infrastructure
+  utilities adopted from `aivyx-coder`, not business logic or secrets)
+  and proved it with a new, reusable `scripts/check-git-deps-public.sh`
+  anonymous-clone probe rather than assuming the fix worked. The final
+  whole-branch review caught two real issues a task-level review
+  couldn't have — a factually wrong date/causality claim the plan's own
+  literal text had specified for the new `Cargo.toml` comment, and a
+  `set -e` silent-abort bug in the script's zero-git-deps path — both
+  fixed and independently re-verified with fresh evidence, not trusted
+  from reports.
+- **Phase 193 — Cut and verify a real release; prove build-from-source
+  works for a real outsider.** Not yet started. Tag a new release
+  (`v0.9.0`'s tag already exists and never produced a real release, so
+  likely `v0.9.1`), watch all four release workflows actually succeed,
+  then verify the documented `git clone && cargo build` sequence in a
+  throwaway container with no cached credentials of any kind — stricter
+  proof than trusting a GitHub-hosted CI runner, which still sits
+  inside org network/token context in subtle ways even when nothing is
+  deliberately shared.
+- **Phase 194 — Regression guard + doc correction.** Not yet started.
+  Wire `check-git-deps-public.sh` into `quality-gate.yml` so a future
+  regression fails in seconds with a specific message instead of ~20
+  minutes in via an opaque `cargo clippy` backtrace. Correct
+  `README.md`'s "Release pipeline status" section (currently overclaims
+  `v0.9.0` as active/latest) and `docs/INSTALL.md`'s "Current install
+  state" section (separately stale in the *opposite* direction — still
+  says pre-`v0.1.0`).
+
+**Known follow-up, not yet scheduled to a phase:** audit
+`aivyx-confine`/`aivyx-checkpoint`/`aivyx-kvcache`'s git history for
+accidentally-committed secrets now that they're public — nothing in
+Phase 192's design, plan, or review process checked this before the
+visibility flip.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
