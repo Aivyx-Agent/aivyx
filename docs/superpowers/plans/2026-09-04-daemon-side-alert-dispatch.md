@@ -605,7 +605,7 @@ In `crates/aivyx-toolkit/src/main.rs`, before the existing `tokio::spawn(async m
     let (notify_tx, notify_rx) = tokio::sync::mpsc::unbounded_channel();
 ```
 
-Pass `notify_tx` into the polling loop's spawn (Task 5 changes `run_polling_loop`'s signature to accept it — for this task, just thread the value through; the parameter name/type is fixed by Task 5's interface below) and pass `Some(notify_rx)` as `run_multi_tool_subprocess`'s new third argument.
+Pass `notify_tx` into the polling loop's spawn (Task 6 changes `run_polling_loop`'s signature to accept it — for this task, just thread the value through; the parameter name/type is fixed by Task 6's interface below) and pass `Some(notify_rx)` as `run_multi_tool_subprocess`'s new third argument.
 
 - [ ] **Step 7: Run the tests**
 
