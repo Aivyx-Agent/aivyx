@@ -249,7 +249,12 @@ crossterm = "0.29"
 # `landlock`/`seccompiler`) off, and `aivyx-core`'s target-gated
 # `[target.'cfg(target_os = "linux")'.dependencies]` table opts it back on
 # — see that crate's Cargo.toml for why (macOS release build).
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "03de88616789f9a52adf41afe71fd14d538f3144", default-features = false }
+# TEMPORARY (Phase 193 investigation): rev swapped to a throwaway
+# diagnostic branch (77db927) to localize the CI-only "spawn failed:
+# Invalid argument (os error 22)" failure. MUST be reverted to
+# 03de88616789f9a52adf41afe71fd14d538f3144 before this branch is
+# finalized -- this diagnostic commit is not meant to ship.
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "77db927bd2d96e7b289aeeabb61416375060c0f0", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder

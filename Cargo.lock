@@ -272,7 +272,7 @@ dependencies = [
 [[package]]
 name = "aivyx-confine"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=03de88616789f9a52adf41afe71fd14d538f3144#03de88616789f9a52adf41afe71fd14d538f3144"
+source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=77db927bd2d96e7b289aeeabb61416375060c0f0#77db927bd2d96e7b289aeeabb61416375060c0f0"
 dependencies = [
  "globset",
  "landlock",
