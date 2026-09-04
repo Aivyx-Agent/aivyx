@@ -1,0 +1,8 @@
+{
+  "name": "aivyx-mobile-verify",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
