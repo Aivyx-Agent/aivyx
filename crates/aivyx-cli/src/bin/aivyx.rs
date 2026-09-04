@@ -5442,7 +5442,6 @@ struct ToolkitNotifySink {
     // any tool process could plausibly have connected — treat that as
     // ungranted (deny, don't panic, don't guess).
     deps: std::sync::Arc<std::sync::OnceLock<NotifyDispatchDeps>>,
-    target: String,
 }
 
 /// Pure, directly-testable: does this capability set grant the
@@ -5471,25 +5470,24 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
             );
             return;
         }
-        // The wire frame's own `target` is currently unused in favor of
-        // the configured default — Task 4 wires the real
-        // `default_notify_target` value into `self.target`; both fields
-        // exist on the frame (mirroring `notify.send`'s own shape) but
-        // this phase only supports one target per toolkit process, so
-        // `self.target` (the configured default) wins. If they ever
-        // diverge, that's a signal per-watcher targets (explicitly out
-        // of scope) are wanted — not a bug to silently paper over.
+        // The wire frame's own `target` is what actually gets dispatched
+        // (mirroring `notify.send`'s own shape, where the caller names the
+        // target and the capability check gates *whether* dispatch is
+        // allowed at all, not *which* target string is used). For
+        // `aivyx-toolkit`'s health-polling watcher, that frame field is
+        // populated from its own `default_notify_target` config value
+        // (`crates/aivyx-toolkit/src/health_polling.rs`) — a private
+        // config file this daemon process has no access to, so there is
+        // no daemon-side value to prefer over the frame's own.
         let dispatcher = std::sync::Arc::clone(dispatcher);
-        let target_name = self.target.clone();
         tokio::spawn(async move {
             if let Err(e) = dispatcher
-                .dispatch(&target_name, &message, subject.as_deref())
+                .dispatch(&target, &message, subject.as_deref())
                 .await
             {
-                eprintln!("aivyx: notify.dispatch failed (target {target_name}): {e}");
+                eprintln!("aivyx: notify.dispatch failed (target {target}): {e}");
             }
         });
-        let _ = target; // see comment above — frame's own target intentionally unused for now
     }
 }
 
@@ -7858,12 +7856,15 @@ async fn run_async(
             // tool process gets a sink, and the capability check inside
             // `ToolkitNotifySink::dispatch` (not a process-name check) is
             // what actually gates whether a `DispatchNotification` frame
-            // goes anywhere. Task 4 replaces the placeholder empty
-            // `target` with the real configured `default_notify_target`.
+            // goes anywhere. The dispatch target itself comes from the
+            // wire frame, not from this sink — the daemon has no access
+            // to a tool process's own private config file (e.g.
+            // `aivyx-toolkit`'s `default_notify_target`), so there is no
+            // daemon-side value to fill in here.
             notification_sink: Some(std::sync::Arc::new(ToolkitNotifySink {
                 deps: std::sync::Arc::clone(&notify_deps),
-                target: String::new(), // Task 4 replaces this with the real configured value
-            }) as std::sync::Arc<dyn aivyx_tool::bridge::NotificationSink>),
+            })
+                as std::sync::Arc<dyn aivyx_tool::bridge::NotificationSink>),
         };
         let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
             Ok(b) => std::sync::Arc::new(b),

@@ -231,8 +231,16 @@ treat unknown kinds as "ignore" (see § 8).
 An unprompted notification dispatched by your tool process
 directly to the operator (not in response to any `InvokeTool`).
 Requires the tool process to hold the `notify.dispatch` capability
-scope; the daemon checks this at handshake and silently drops
-`DispatchNotification` frames from tools lacking this scope.
+scope; the daemon checks this on every `DispatchNotification` frame
+(inside `dispatch()` itself, not once at connection time — unlike
+the per-tool `required_scope` check described above under
+`ToolDescriptor` shape, which genuinely is a one-time handshake
+check via `ToolRegister`) and silently drops frames from tools
+lacking this scope. `notify.dispatch` is
+Trusted-tier-only (it's in `aivyx-capability`'s `CEILING_TRUSTED`
+array, the same restriction `notify.send` carries): a SemiTrusted
+role can never be granted this scope, no matter what an operator
+writes in `capability_scopes`.
 The `subject` field is optional; `target` and `message` are required.
 
 ---

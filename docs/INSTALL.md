@@ -4343,6 +4343,9 @@ capability_scopes = [
   # For the health-check alert composition recipe:
   "notify.send",
   "schedule.create", "schedule.list",
+  # For the automatic dispatch path (Phase 191) — required, and,
+  # like every toolkit scope, Trusted-tier-only:
+  "notify.dispatch",
 ]
 ```
 
@@ -4415,7 +4418,7 @@ Phase 144 scope cap: no category whitelist, no currency field, no bulk update/de
 
 The polling loop records state transitions and, since Phase 191, also
 dispatches a plain automatic notification for every transition directly
-(see `[toolkit] default_notify_target` above) — no cron or agent turn
+(see `default_notify_target` below) — no cron or agent turn
 required for that baseline case. The recipe below remains useful when you
 want the *agent* to compose richer, more specific alert text instead of
 (or alongside) the automatic one. Operator's setup:
@@ -4485,8 +4488,8 @@ state should include this directory.
 #### What Phase 125 deliberately leaves to follow-on phases
 
 - ~~No automatic alert dispatch~~ — **shipped Phase 191.** Set
-  `[toolkit] default_notify_target` in
-  `~/.aivyx/tool-processes/toolkit/config.toml` and the polling
+  `default_notify_target` (a top-level key, not inside any TOML
+  table) in `~/.aivyx/tool-processes/toolkit/config.toml` and the polling
   loop dispatches a notification directly (both directions: down
   and recovered) whenever `health.check.recent_changes` would
   have shown a new entry — no cron, no agent turn required. The
