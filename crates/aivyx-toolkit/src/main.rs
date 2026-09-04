@@ -107,9 +107,8 @@ async fn main() -> ExitCode {
     // wiring the call site ahead of that signature change would not
     // compile. `notify_rx` is consumed now, by
     // `run_multi_tool_subprocess` below.
+    #[allow(unused_variables)] // notify_tx: consumed by Task 6's `run_polling_loop` wiring
     let (notify_tx, notify_rx) = tokio::sync::mpsc::unbounded_channel();
-    #[allow(unused_variables)] // consumed by Task 6's `run_polling_loop` wiring
-    let notify_tx = notify_tx;
 
     // Spawn the health polling loop in the background. Tokio
     // aborts the task when main() returns on ToolShutdown
