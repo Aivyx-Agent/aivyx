@@ -129,6 +129,7 @@ async fn real_binary_serves_inventory_list_over_the_harness() {
         args: vec![],
         env: vec![("HOME".into(), home.to_string_lossy().to_string())],
         sandbox: None,
+        notification_sink: None,
     };
     let bridge = match ToolProcessBridge::spawn(config).await {
         Ok(b) => Arc::new(b),
