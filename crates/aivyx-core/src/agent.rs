@@ -1486,9 +1486,19 @@ impl ConcreteAgent {
 fn check_for_injection(output: &serde_json::Value, tool_name: &str) -> Option<String> {
     let text = output.to_string();
     let finding = aivyx_injection_guard::scan_for_injection_markers(&text, tool_name)?;
+    // Deliberately excludes `finding.excerpt` — it's raw, attacker-influenced
+    // content (up to ~180 bytes centered on the match), and this string flows
+    // into `TurnOutcome::Escalated.reason`, which reaches surfaces a model can
+    // read (`mission.status`'s gate output has no Bulwark fencing of its own)
+    // and, if enabled, the skill auto-proposer's LLM judge prompt. Re-injecting
+    // the very payload this scan exists to catch back into a model-readable
+    // surface would defeat the point. `matched_pattern` is always one of our
+    // own fixed `INJECTION_MARKERS` entries — never attacker-controlled — so
+    // it's safe to include; it plus `tool_name` is enough for a human deciding
+    // whether to investigate further via the tool process's own logs/audit.
     Some(format!(
-        "content flagged as a likely prompt injection (matched \"{}\"): {}",
-        finding.matched_pattern, finding.excerpt
+        "content from tool \"{tool_name}\" flagged as a likely prompt injection (matched \"{}\")",
+        finding.matched_pattern
     ))
 }
 
