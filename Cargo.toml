@@ -99,7 +99,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.9.3"
 edition = "2024"
 rust-version = "1.85"
 # Chapter Charter (CR.2): relicensed MIT -> BUSL-1.1 (docs/LICENSING.md).
@@ -249,7 +249,26 @@ crossterm = "0.29"
 # `landlock`/`seccompiler`) off, and `aivyx-core`'s target-gated
 # `[target.'cfg(target_os = "linux")'.dependencies]` table opts it back on
 # — see that crate's Cargo.toml for why (macOS release build).
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "03de88616789f9a52adf41afe71fd14d538f3144", default-features = false }
+# Bumped to a08be93 (Phase 193, Chapter N.2): fixes require_enforcement
+# refusing to run under Landlock's own designed PartiallyEnforced
+# best-effort degradation, not just the genuine NotEnforced case --
+# found because GitHub Actions' ubuntu-22.04 runner kernel only reaches
+# PartiallyEnforced at this crate's hardcoded LANDLOCK_ABI (V7), which
+# made every sandboxed shell.exec test fail outright in CI with a
+# misleading "spawn failed: Invalid argument (os error 22)" (Rust's
+# process-spawn error-propagation fallback for a pre_exec closure
+# returning a non-raw-OS-code error, not a genuine kernel EINVAL). Not
+# CI-only: shell.rs hardcodes require_enforcement=true for production
+# too, so this also fixes shell.exec for any real end user on a kernel
+# that doesn't fully support Landlock ABI V7.
+# Bumped again to 8ee18f2: libc::SYS_kexec_file_load doesn't exist in
+# this crate's musl bindings for aarch64/riscv64 (present for musl
+# x86_64/loongarch64/s390x/powerpc64 -- an upstream musl libc binding
+# gap), which broke the real aarch64-unknown-linux-musl release target
+# outright (E0425). The only one of the four shipped targets
+# aivyx-confine had never actually been cross-compiled for before --
+# it wasn't adopted until 2026-08-17, after aivyx's last real release.
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "8ee18f20e247121df55ee0cf22947d22754271b2", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder
