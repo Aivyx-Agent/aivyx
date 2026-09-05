@@ -3604,15 +3604,15 @@ artifacts again without being caught immediately.
   with all real build/desktop/WSL/GHCR artifacts verified, and a
   genuinely credential-less container build-from-source run confirmed
   the documented install sequence works end to end.
-- **Phase 194** (Chapter N's own numbering — since reassigned; see
-  below) **— Regression guard + doc correction.** Not yet started.
-  Wire `check-git-deps-public.sh` into `quality-gate.yml` so a future
-  regression fails in seconds with a specific message instead of ~20
-  minutes in via an opaque `cargo clippy` backtrace. Correct
-  `README.md`'s "Release pipeline status" section (currently overclaims
-  `v0.9.0` as active/latest) and `docs/INSTALL.md`'s "Current install
-  state" section (separately stale in the *opposite* direction — still
-  says pre-`v0.1.0`).
+- **Phase 197 — Regression guard + doc correction.** Shipped
+  2026-09-06 — see [PHASE_197.md](archive/phases/PHASE_197.md). Wired
+  `check-git-deps-public.sh` into `quality-gate.yml`; corrected five
+  stale pre-launch version references across `README.md` and
+  `docs/INSTALL.md` (not just the two originally scoped — a broader
+  sweep found three more of the same category, including a literal
+  installer command pointing at a `v0.1.0` tag that was never actually
+  created); backfilled `CHANGELOG.md` with the one real release
+  (`v0.9.4`) it was missing. **Chapter N is now complete.**
 
 **Known follow-up, not yet scheduled to a phase:** audit
 `aivyx-confine`/`aivyx-checkpoint`/`aivyx-kvcache`'s git history for
