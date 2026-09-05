@@ -99,7 +99,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.9.2"
+version = "0.9.3"
 edition = "2024"
 rust-version = "1.85"
 # Chapter Charter (CR.2): relicensed MIT -> BUSL-1.1 (docs/LICENSING.md).
@@ -261,7 +261,14 @@ crossterm = "0.29"
 # CI-only: shell.rs hardcodes require_enforcement=true for production
 # too, so this also fixes shell.exec for any real end user on a kernel
 # that doesn't fully support Landlock ABI V7.
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "a08be939069f6fda30b07aba5a0ff7e0071f134c", default-features = false }
+# Bumped again to 8ee18f2: libc::SYS_kexec_file_load doesn't exist in
+# this crate's musl bindings for aarch64/riscv64 (present for musl
+# x86_64/loongarch64/s390x/powerpc64 -- an upstream musl libc binding
+# gap), which broke the real aarch64-unknown-linux-musl release target
+# outright (E0425). The only one of the four shipped targets
+# aivyx-confine had never actually been cross-compiled for before --
+# it wasn't adopted until 2026-08-17, after aivyx's last real release.
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "8ee18f20e247121df55ee0cf22947d22754271b2", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder
