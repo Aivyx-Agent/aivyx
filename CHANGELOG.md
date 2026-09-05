@@ -5,6 +5,52 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-09-05
+
+**Milestone: the first real, working GitHub Release since `v0.8.3`.**
+Closes Chapter N (Release & Distribution Integrity, opened this same
+day after discovering `v0.9.0` never actually published — see
+`docs/archive/phases/PHASE_192.md` and `PHASE_193.md`) and Chapter
+Picket (the prompt-injection tripwire, `PHASE_194.md`-`PHASE_196.md`)
+in one release.
+
+### Added
+
+- **Active prompt-injection tripwire (Chapter Picket).**
+  `aivyx-injection-guard`, a new shared crate extracted from
+  `aivyx-coder`'s existing production tripwire, scans untrusted tool
+  output for known injection phrasings and escalates the turn via the
+  existing `TurnOutcome::Escalated` → `ApprovalGate`/`HeadlessRefusal`
+  path — a side-channel signal checked after the tool's real outcome
+  is recorded, so a mutating tool's audit trail always reflects what
+  actually executed. Complements, doesn't replace, Bulwark's existing
+  passive `fence_untrusted_output` labeling. See `docs/THREAT_MODEL.md`
+  and `PHASE_196.md`.
+
+### Fixed
+
+- **`aivyx-confine`'s `require_enforcement` check incorrectly required
+  `RulesetStatus::FullyEnforced`.** GitHub's own hosted-runner kernel
+  only ever achieves `PartiallyEnforced` at the crate's hardcoded
+  Landlock ABI version, which made every release build fail its own
+  quality gate before reaching the real cross-compile work. Now only
+  `NotEnforced` fails closed.
+- **`aivyx-confine`'s syscall blocklist referenced
+  `libc::SYS_kexec_file_load`, absent from libc's musl bindings for
+  aarch64/riscv64,** breaking the `aarch64-unknown-linux-musl` release
+  target's build.
+- **The WSL release workflow's retry budget for pulling the appliance
+  base image (10 minutes) was too short for real-world timing;**
+  raised to 30 minutes to match the sibling wait-for-release retry
+  loop in the same workflow.
+- **The three private git dependencies (`aivyx-confine`,
+  `aivyx-checkpoint`, `aivyx-kvcache`) that silently broke every
+  `v0.9.0` release workflow — and any outside contributor's
+  build-from-source path — are now public,** with a new CI regression
+  guard (`scripts/check-git-deps-public.sh`, wired into
+  `quality-gate.yml`) that fails fast and by name if this ever
+  recurs.
+
 ## [0.9.0] — 2026-09-03
 
 **Milestone: the Interface Polish phase is complete — v0.9.0 cuts as
