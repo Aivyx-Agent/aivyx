@@ -11,15 +11,11 @@ stores everything locally in an encrypted redb file.
 
 ## Current install state
 
-The first public release is **`v0.1.0` (pre-release)**. The
-recommended install path is the [shell installer](#shell-installer-recommended),
+The recommended install path is the [shell installer](#shell-installer-recommended),
 which downloads a prebuilt binary for your platform; you can also
 [build from source](#build-from-source). Both install the same
-single `aivyx` binary.
-
-> `v0.1.0` is an early pre-release — see the [CHANGELOG](../CHANGELOG.md).
-> The shell-installer URL is live only once the `v0.1.0` tag has been
-> pushed and GitHub Actions has finished building the release.
+single `aivyx` binary. The release pipeline is active — see the
+[CHANGELOG](../CHANGELOG.md) for release history.
 
 ## Supported targets
 
@@ -276,17 +272,15 @@ aivyx --version
 # aivyx 0.1.0
 ```
 
-For a specific version, replace `latest` with the tag:
+For a specific version, replace `latest` with the tag (see the
+[Releases page](https://github.com/Aivyx-Agent/aivyx/releases) for
+available tags):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Aivyx-Agent/aivyx/releases/download/v0.1.0/aivyx-cli-installer.sh \
+  https://github.com/Aivyx-Agent/aivyx/releases/download/vX.Y.Z/aivyx-cli-installer.sh \
   | sh
 ```
-
-> The URL resolves only once `v0.1.0` has been tagged and the
-> GitHub Actions release build has completed. Until then, use
-> [build from source](#build-from-source).
 
 ### macOS first launch: Gatekeeper
 
