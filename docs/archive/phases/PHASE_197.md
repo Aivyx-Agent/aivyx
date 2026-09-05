@@ -42,11 +42,13 @@ close the chapter.
   `aivyx-injection-guard` all `OK: anonymously cloneable`). The script
   itself was not modified — its three known gaps (see Known
   follow-ups) are unchanged.
-- **Five stale pre-launch version references corrected across two
-  files** (`b787c6d2`) — one more than the chapter design's original
-  two-location scope, since a full sweep of both files during
-  implementation found three more instances of the same category of
-  error rather than the two originally named:
+- **Six stale pre-launch version references corrected across two
+  files** (`b787c6d2`, plus a sixth caught by the final whole-branch
+  review and fixed in `214843f0` — see below) — four more than the
+  chapter design's original two-location scope: an initial sweep
+  during implementation found three more instances of the same
+  category of error, and the final review found one more that the
+  sweep's own verification grep couldn't have caught:
   - `README.md`'s "Status" header (`v0.9.0 — 2026-09-03` →
     `v0.9.4 — 2026-09-05`).
   - `README.md`'s status-table "Release pipeline" row (same version
@@ -111,9 +113,10 @@ described; (2) a **sixth** stale version reference Task 2 missed —
 verification grep (`v0\.1\.0`) structurally couldn't catch since the
 line has no leading `v`; fixed to a generic `# aivyx x.y.z`; (3)
 `docs/ROADMAP.md`'s Chapter N section heading itself was never marked
-`[COMPLETE]`, unlike every other finished chapter in that file's own
-established convention — the phase-list bullet said so, the heading
-didn't. All three fixed in one commit (`214843f0`), plus two Minor
+`[COMPLETE]`, unlike the file's dominant convention for other finished
+chapters (a few, like Chapter J, instead use `✅ COMPLETE` — either
+form is established, but Chapter N's heading used neither) — the
+phase-list bullet said so, the heading didn't. All three fixed in one commit (`214843f0`), plus two Minor
 polish items from the same review (a "Chapter N" naming collision with
 README.md's own already-in-use, unrelated "Chapter N" — Operator
 Access Levels — and a cosmetic backtick-vs-link inconsistency).
