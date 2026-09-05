@@ -73,26 +73,65 @@ repo" comment pattern Phase 192 established for `aivyx-confine` /
 
 ### Integration point in `aivyx-core`
 
-At the existing Bulwark call site (`agent.rs:1372`, gated on
-`tool.output_is_untrusted()`): before (or in place of) fencing, run
-`aivyx_injection_guard::scan` against the tool's completed output. If it
-returns any `InjectionFinding`, overwrite that step's outcome into
-`TurnOutcome::Escalated`:
+**Correction (re-grounded before Phase 196's plan was written): the
+integration point is one level lower than originally stated above.**
+Bulwark's call site (`agent.rs:1372`) lives inside `Agent::run_tool_call`,
+which returns `ToolOutcome` (per-tool-call), not `TurnOutcome` (per-turn) —
+those are different types. `TurnOutcome::Escalated` is never constructed
+directly at this site; it's the *turn loop* (the caller of
+`run_tool_call`, `agent.rs` around line 566) that already inspects the
+returned outcome:
 
-- `reason` — a human-readable string built from the finding's
-  `matched_pattern` and `excerpt`
-- `pending_tool` — the `tool_id` whose output triggered the match
-- `scope` — `None`. This is not a capability-scope escalation, so the
+```rust
+if let ToolOutcome::RequiresEscalation { reason, scope } = &outcome {
+    let escalated_scope = scope.clone();
+    planner.observe_tool_outcome(tool_id, &outcome).await;
+    loop_outcome = LoopOutcome::Escalated {
+        reason: reason.clone(),
+        pending_tool: tool_id,
+        scope: escalated_scope,
+    };
+    break;
+}
+```
+
+— and this existing check already produces the full escalation flow
+(`LoopOutcome::Escalated` → `TurnOutcome::Escalated` →
+`ApprovalGate`/`HeadlessRefusal` via `daemon_server.rs`'s
+`escalation_parks`), with `pending_tool` populated automatically from the
+turn loop's own already-known `tool_id` — not something the tripwire needs
+to supply itself.
+
+So the tripwire's actual, corrected job is much narrower: at the existing
+Bulwark call site, before (or in place of) fencing, run
+`aivyx_injection_guard::scan_for_injection_markers` against the tool's
+completed output — serialized via the JSON value's own `to_string()`
+(confirmed real untrusted-tool output, e.g. `fs.read`/`web.fetch`, returns
+a structured JSON object like `{"content": ..., ...}`, not a bare string,
+so the marker phrase could be nested anywhere inside it). If it returns a
+match, overwrite that step's `outcome` — currently
+`ToolOutcome::Completed { output, .. }` — with:
+
+```rust
+ToolOutcome::RequiresEscalation {
+    reason: format!("content flagged as a likely prompt injection (matched \"{}\"): {}", finding.matched_pattern, finding.excerpt),
+    scope: None,
+}
+```
+
+- `scope: None` — this is not a capability-scope escalation, so the
   existing reversible/irreversible classification `escalation_parks`'s
   unattended-gate logic performs on `scope` doesn't apply here — an
   injection match always either parks (attended) or headless-refuses
   (unattended); it never silently auto-approves the way an allowlisted
   reversible action might.
 
-No new plumbing is needed for the human-approval or audit path — both
-already exist and already branch correctly on `escalation_parks
-(effective_policy)`. The only genuinely new code in `aivyx` itself is the
-scan call, the match-to-`Escalated` conversion, and the new dependency
+No new plumbing is needed for the human-approval or audit path, the
+`LoopOutcome`/`TurnOutcome` conversion, or `pending_tool` population — all
+already exist and already work correctly for the *existing*
+`RequiresEscalation` producer (a tool's own capability check). The
+genuinely new code in `aivyx` itself is only: the scan call, the
+match-to-`RequiresEscalation` conversion, and the new dependency
 declaration.
 
 ## Testing
@@ -100,10 +139,16 @@ declaration.
 - **`aivyx-injection-guard`**: ports `aivyx-coder`'s existing unit tests for
   `scan` verbatim — marker matching, excerpt extraction, case-insensitivity,
   scan-window bounding.
-- **`aivyx-core`** (new tests in `agent.rs`'s existing test module):
+- **`aivyx-core`** (new tests in `agent.rs`'s existing test module — per
+  the corrected integration point above, the most direct test targets
+  `run_tool_call` itself, since that's the function whose return value
+  actually changes; a full-turn test confirming `TurnOutcome::Escalated`
+  is the end-to-end integration check on top):
   - A fake untrusted tool returning content containing an injection marker
-    confirms `TurnOutcome::Escalated` fires with the correct `pending_tool`
-    and a `reason` naming the match.
+    confirms `run_tool_call` returns `ToolOutcome::RequiresEscalation` with
+    a `reason` naming the match, and that a full `Agent::turn` call
+    surfaces this as `TurnOutcome::Escalated` with the correct
+    `pending_tool` (populated by the existing, unchanged turn-loop code).
   - A fake untrusted tool returning *clean* content confirms Bulwark's
     fencing still applies unaffected — the two mechanisms must coexist, not
     clobber each other.
