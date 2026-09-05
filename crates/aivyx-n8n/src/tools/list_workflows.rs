@@ -58,8 +58,9 @@ impl Tool for N8nListWorkflows {
         "n8n.list_workflows"
     }
 
-    // Chapter Picket follow-up (Finding 3) — same rationale as
-    // n8n.get_workflow: externally authored workflow definitions.
+    // Chapter Picket follow-up (Finding 3) — workflow names and tags
+    // are externally authored and may carry a prompt-injection
+    // payload.
     fn output_is_untrusted(&self) -> bool {
         true
     }

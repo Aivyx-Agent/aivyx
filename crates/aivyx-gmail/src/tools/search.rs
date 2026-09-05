@@ -62,9 +62,10 @@ impl Tool for GmailSearch {
         "gmail.search"
     }
 
-    // Chapter Picket follow-up (Finding 3) — search results include
-    // message snippets and subjects, externally authored email
-    // content that may carry a prompt-injection payload.
+    // Chapter Picket follow-up (Finding 3) — the result set is
+    // derived from externally-authored mail; flagged so a future
+    // widening of the returned fields (e.g. adding snippets/subjects)
+    // can't silently reopen this gap unnoticed.
     fn output_is_untrusted(&self) -> bool {
         true
     }

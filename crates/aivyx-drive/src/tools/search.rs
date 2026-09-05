@@ -71,7 +71,7 @@ impl Tool for DriveSearch {
     }
 
     // Chapter Picket follow-up (Finding 3) — search results (file
-    // names/snippets) are externally authored.
+    // names) are externally authored.
     fn output_is_untrusted(&self) -> bool {
         true
     }

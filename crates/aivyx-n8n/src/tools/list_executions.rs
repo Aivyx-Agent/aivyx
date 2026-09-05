@@ -58,8 +58,11 @@ impl Tool for N8nListExecutions {
         "n8n.list_executions"
     }
 
-    // Chapter Picket follow-up (Finding 3) — same rationale as
-    // n8n.get_execution: externally authored execution results.
+    // Chapter Picket follow-up (Finding 3) — this tool deliberately
+    // projects away the execution payload (see its own description),
+    // but flagged as a matter of defense-in-depth: if that projection
+    // ever widens to include node inputs/outputs, coverage is already
+    // in place rather than needing to be added at the same time.
     fn output_is_untrusted(&self) -> bool {
         true
     }

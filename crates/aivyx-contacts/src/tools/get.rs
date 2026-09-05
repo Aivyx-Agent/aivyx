@@ -47,8 +47,8 @@ impl Tool for ContactsGet {
     }
 
     // Chapter Picket follow-up (Finding 3) — contact fields (name,
-    // notes, organization) are externally authored and may carry a
-    // prompt-injection payload.
+    // organization, emails, phones) are externally authored and may
+    // carry a prompt-injection payload.
     fn output_is_untrusted(&self) -> bool {
         true
     }
