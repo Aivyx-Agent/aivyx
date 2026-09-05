@@ -3614,7 +3614,7 @@ accidentally-committed secrets now that they're public — nothing in
 Phase 192's design, plan, or review process checked this before the
 visibility flip.
 
-## Chapter Picket — Prompt-Injection Tripwire (Phases 194+)
+## Chapter Picket — Prompt-Injection Tripwire (Phases 194–196) [COMPLETE]
 
 Opened 2026-09-05, while investigating end-user deployment options
 surfaced a broader question: given `aivyx-confine`/`aivyx-checkpoint`/
@@ -3663,13 +3663,30 @@ something does.
   documents the `aivyx-confine`/`aivyx-checkpoint` extractions on their
   crate rows but said nothing about this phase's new dependency — fixed
   directly rather than carried as debt.
-- **Phase 196 (expected) — Adopt into aivyx.** Not yet started. Pin the
-  new dependency, integrate at Bulwark's existing call site
-  (`agent.rs:1372`), converting a match into `TurnOutcome::Escalated`
-  with `pending_tool` set to the offending tool and `scope: None` (not a
-  capability-scope escalation), plus new tests confirming the two
-  mechanisms (Bulwark's fencing, the new tripwire) coexist without one
-  clobbering the other.
+- **Phase 196 — Adopt into aivyx.** Shipped 2026-09-05 — see
+  [PHASE_196.md](archive/phases/PHASE_196.md). The task-level review
+  passed clean, but the final whole-branch review found a real,
+  HIGH-severity bug in the *plan's own design* (not an implementer
+  deviation): the scan ran after tool execution and rewrote a mutating,
+  already-executed tool's real `Completed` outcome into
+  `RequiresEscalation` — the plan had only checked `fs.read`/`web.fetch`
+  for `output_is_untrusted()`, missing that every tool-process/MCP tool
+  (including irreversible ones like `kitchen.order.send`) declares it
+  too, which made the audit chain misrepresent completed actions as
+  pending and risked double-execution on approval-resume. Redesigned
+  (operator's explicit choice over a narrower patch) so `run_tool_call`
+  always returns the real outcome, with a side-channel signal the turn
+  loop checks *after* recording it, breaking for the next step instead
+  of misrepresenting the one that ran — zero changes needed to the
+  existing `RequiresEscalation` handling. The re-review mutation-tested
+  the fix (reintroduced the exact bug to confirm the new test actually
+  catches it) and found a second finding was only partially resolved —
+  the injection excerpt still reached two unfenced, model-readable sinks
+  (`mission.status`'s gate output, the opt-in skill auto-proposer's LLM
+  judge prompt) — fixed by dropping the excerpt from the escalation
+  reason entirely. Three real, independently-verified bugs found and
+  fixed in one review cycle, every one confirmed via direct code tracing
+  or mutation testing.
 
 **Known follow-up, not yet scheduled to a phase:** the phrase list itself
 is ported verbatim, not expanded — real-usage-driven additions to
