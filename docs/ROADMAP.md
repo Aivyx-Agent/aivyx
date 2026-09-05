@@ -3617,11 +3617,16 @@ artifacts again without being caught immediately.
   rather than the already-published release. **Chapter N is now
   complete.**
 
-**Known follow-up, not yet scheduled to a phase:** audit
-`aivyx-confine`/`aivyx-checkpoint`/`aivyx-kvcache`'s git history for
-accidentally-committed secrets now that they're public — nothing in
-Phase 192's design, plan, or review process checked this before the
-visibility flip.
+**Resolved 2026-09-06:** audited `aivyx-confine`/`aivyx-checkpoint`/
+`aivyx-kvcache`/`aivyx-injection-guard`'s full git history (not just
+current tree) for accidentally-committed secrets now that all four are
+public — this had never been checked before the visibility flips.
+`gitleaks detect` (full-history scan, default ruleset) found zero leaks
+across all four repos (10/6/23/1 commits scanned respectively); a
+supplementary manual sweep of every filename ever committed, across
+full history, for credential-shaped names (`.env`, `.pem`, `id_rsa`,
+`id_ed25519`, `credentials`, `.npmrc`, `.netrc`, `*secret*`) found none.
+Clean.
 
 ## Chapter Picket — Prompt-Injection Tripwire (Phases 194–196) [COMPLETE]
 
