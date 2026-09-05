@@ -15,6 +15,12 @@
 # Defense in depth: ci.yml catches failures at commit time;
 # release.yml's wiring catches them at tag time even if the
 # operator skipped the PR-time check.
+#
+# Phase 197 — also runs scripts/check-git-deps-public.sh before
+# anything else: a private workspace git dependency silently broke
+# every v0.9.0 release workflow (Phase 192) and would otherwise only
+# surface ~10-20 minutes later, as an opaque cargo auth failure. See
+# docs/archive/phases/PHASE_192.md and PHASE_197.md.
 
 name: Quality Gate
 
@@ -30,6 +36,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Fails fast (a few seconds) and by name if a workspace git
+      # dependency has silently become private — the exact failure
+      # mode that broke every v0.9.0 release workflow (see
+      # docs/archive/phases/PHASE_192.md). Deliberately placed before
+      # the disk-cleanup/toolchain/cache steps below: those exist only
+      # to support cargo test/clippy, which would fail anyway (just
+      # 10-20 minutes later, via an opaque auth backtrace) if this
+      # check would have failed.
+      - name: Confirm git dependencies are anonymously cloneable
+        run: ./scripts/check-git-deps-public.sh
       # `cargo test --workspace` builds every crate + every test/example binary
       # for 40 crates; combined with the restored dep cache it overflowed the
       # hosted runner's ~14 GB root disk ("No space left on device" mid-test,
