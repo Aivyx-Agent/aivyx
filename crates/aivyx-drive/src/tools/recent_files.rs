@@ -78,6 +78,12 @@ impl Tool for DriveRecentFiles {
         "drive.recent_files"
     }
 
+    // Chapter Picket follow-up (Finding 3) — a list of recently
+    // touched files' externally authored names/metadata.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List Google Drive files the operator owns \
          that were modified within the last N days. \
@@ -508,6 +514,29 @@ pub(crate) fn parse_recursive_cap(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn make_tool() -> DriveRecentFiles {
+        use crate::{DriveClient, OAuthConfig, TokenSet};
+        use std::sync::Arc;
+        let client = Arc::new(DriveClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        DriveRecentFiles::new(client)
+    }
+
+    #[test]
+    fn drive_recent_files_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     fn now_fixed() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap()

@@ -75,6 +75,12 @@ impl Tool for DriveListDrives {
         "drive.list_drives"
     }
 
+    // Chapter Picket follow-up (Finding 3) — shared-drive names can
+    // be set by any collaborator; externally authored metadata.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Enumerate the Google Shared Drives \
          (formerly Team Drives) the operator is \
@@ -159,6 +165,29 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_tool() -> DriveListDrives {
+        use crate::{DriveClient, OAuthConfig, TokenSet};
+        use std::sync::Arc;
+        let client = Arc::new(DriveClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        DriveListDrives::new(client)
+    }
+
+    #[test]
+    fn drive_list_drives_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn drive_summary_maps_full_entry() {

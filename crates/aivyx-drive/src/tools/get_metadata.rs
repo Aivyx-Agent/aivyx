@@ -47,6 +47,12 @@ impl Tool for DriveGetMetadata {
         "drive.get_metadata"
     }
 
+    // Chapter Picket follow-up (Finding 3) — file metadata (name,
+    // owner, description) is externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch full metadata for one Google Drive file by \
          ID. Input is a JSON object with a required \
@@ -213,6 +219,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_get_metadata_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_minimal() {

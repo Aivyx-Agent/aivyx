@@ -78,6 +78,12 @@ impl Tool for DriveRecentActivity {
         "drive.recent_activity"
     }
 
+    // Chapter Picket follow-up (Finding 3) — a list of recent
+    // activity referencing externally authored file names/metadata.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List recent activity (who did what to which file) \
          on Google Drive items visible to the operator. \
@@ -665,6 +671,12 @@ mod tests {
         let client = make_test_client();
         let tool = DriveRecentActivity::new(client);
         assert_eq!(tool.name(), "drive.recent_activity");
+    }
+
+    #[test]
+    fn drive_recent_activity_output_is_untrusted_for_bulwark() {
+        let tool = DriveRecentActivity::new(make_test_client());
+        assert!(tool.output_is_untrusted());
     }
 
     fn make_test_client() -> SharedDriveClient {

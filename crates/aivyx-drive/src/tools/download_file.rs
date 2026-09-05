@@ -72,6 +72,12 @@ impl Tool for DriveDownloadFile {
         "drive.download_file"
     }
 
+    // Chapter Picket follow-up (Finding 3) — the actual file content
+    // is externally authored, the same rationale as fs.read.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Download a Google Drive file's content as \
          base64-encoded bytes. Input is a JSON object with \
@@ -343,6 +349,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_download_file_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_file_id_only() {

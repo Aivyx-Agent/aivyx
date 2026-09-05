@@ -70,6 +70,12 @@ impl Tool for DriveSearch {
         "drive.search"
     }
 
+    // Chapter Picket follow-up (Finding 3) — search results (file
+    // names/snippets) are externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search Google Drive files using Drive's query DSL. \
          Input is a JSON object with an optional `q` field \
@@ -282,6 +288,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_search_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_defaults_when_empty() {

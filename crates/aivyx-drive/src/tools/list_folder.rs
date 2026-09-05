@@ -59,6 +59,13 @@ impl Tool for DriveListFolder {
         "drive.list_folder"
     }
 
+    // Chapter Picket follow-up (Finding 3) — file/folder names in
+    // Drive are externally authored and may carry a prompt-injection
+    // payload.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List the children of a Google Drive folder. Input \
          is a JSON object with optional `folder_id` (default \
@@ -224,6 +231,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_list_folder_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_defaults_when_empty() {

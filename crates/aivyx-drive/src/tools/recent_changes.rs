@@ -78,6 +78,12 @@ impl Tool for DriveRecentChanges {
         "drive.recent_changes"
     }
 
+    // Chapter Picket follow-up (Finding 3) — a list of recently
+    // changed files' externally authored names/metadata.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List Google Drive files visible to the \
          operator that were modified within the \
@@ -449,6 +455,29 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn make_tool() -> DriveRecentChanges {
+        use crate::{DriveClient, OAuthConfig, TokenSet};
+        use std::sync::Arc;
+        let client = Arc::new(DriveClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        DriveRecentChanges::new(client)
+    }
+
+    #[test]
+    fn drive_recent_changes_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     fn now_fixed() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap()
