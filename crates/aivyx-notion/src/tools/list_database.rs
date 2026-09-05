@@ -56,6 +56,12 @@ impl Tool for NotionListDatabase {
         "notion.list_database"
     }
 
+    // Chapter Picket follow-up (Finding 3) — database entries are
+    // editable by any workspace collaborator; externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Query a Notion database for pages. Input is a JSON \
          object with a required `database_id`, optional \
@@ -259,6 +265,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notion_list_database_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_minimal() {

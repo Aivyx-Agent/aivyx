@@ -60,6 +60,12 @@ impl Tool for NotionGetPage {
         "notion.get_page"
     }
 
+    // Chapter Picket follow-up (Finding 3) — page content is
+    // editable by any workspace collaborator; externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch a Notion page's properties + top-level block \
          tree. Input is a JSON object with a required \
@@ -337,6 +343,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notion_get_page_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_minimal() {

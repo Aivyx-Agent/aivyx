@@ -59,6 +59,13 @@ impl Tool for NotionSearch {
         "notion.search"
     }
 
+    // Chapter Picket follow-up (Finding 3) — search results surface
+    // page content editable by any workspace collaborator;
+    // externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search Notion content shared with the integration. \
          Input is a JSON object with optional `q` (the \
@@ -341,6 +348,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notion_search_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_defaults_when_empty() {
