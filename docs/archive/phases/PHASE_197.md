@@ -90,7 +90,10 @@ close the chapter.
   GitHub's own hosted-runner kernel; `SYS_kexec_file_load` missing from
   musl's aarch64/riscv64 libc bindings), the WSL image-pull retry
   budget raise (10 → 30 minutes), and the three git dependencies going
-  public plus this same phase's new CI regression guard.
+  public. This phase's own new CI regression guard (Task 1, above)
+  hadn't shipped yet when `v0.9.4` was tagged the day before — it's
+  recorded in `[Unreleased]` instead, correctly attributed to this
+  phase rather than backdated onto an already-published release.
 
 Along the way, the first review round was briefly slowed by a stale
 leftover report file from an unrelated earlier phase sitting in
@@ -98,6 +101,22 @@ leftover report file from an unrelated earlier phase sitting in
 affected the actual review outcome — noted here since it's a real
 process detail of how this phase went, not because it changed what
 shipped.
+
+The final whole-branch review (Opus) caught three real, worth-fixing
+issues that no task-level review could have, since each only shows up
+viewing the branch as a whole: (1) the CHANGELOG mis-attribution just
+described; (2) a **sixth** stale version reference Task 2 missed —
+`docs/INSTALL.md`'s shell-installer worked example still showed
+`aivyx --version` producing `# aivyx 0.1.0`, which Task 2's Step 6
+verification grep (`v0\.1\.0`) structurally couldn't catch since the
+line has no leading `v`; fixed to a generic `# aivyx x.y.z`; (3)
+`docs/ROADMAP.md`'s Chapter N section heading itself was never marked
+`[COMPLETE]`, unlike every other finished chapter in that file's own
+established convention — the phase-list bullet said so, the heading
+didn't. All three fixed in one commit (`214843f0`), plus two Minor
+polish items from the same review (a "Chapter N" naming collision with
+README.md's own already-in-use, unrelated "Chapter N" — Operator
+Access Levels — and a cosmetic backtick-vs-link inconsistency).
 
 ## The result
 

@@ -3606,13 +3606,16 @@ artifacts again without being caught immediately.
   the documented install sequence works end to end.
 - **Phase 197 — Regression guard + doc correction.** Shipped
   2026-09-06 — see [PHASE_197.md](archive/phases/PHASE_197.md). Wired
-  `check-git-deps-public.sh` into `quality-gate.yml`; corrected five
+  `check-git-deps-public.sh` into `quality-gate.yml`; corrected six
   stale pre-launch version references across `README.md` and
   `docs/INSTALL.md` (not just the two originally scoped — a broader
   sweep found three more of the same category, including a literal
   installer command pointing at a `v0.1.0` tag that was never actually
-  created); backfilled `CHANGELOG.md` with the one real release
-  (`v0.9.4`) it was missing. **Chapter N is now complete.**
+  created, and the final whole-branch review caught a sixth); backfilled
+  `CHANGELOG.md` with the one real release (`v0.9.4`) it was missing,
+  correctly attributing this phase's own CI-guard work to `[Unreleased]`
+  rather than the already-published release. **Chapter N is now
+  complete.**
 
 **Known follow-up, not yet scheduled to a phase:** audit
 `aivyx-confine`/`aivyx-checkpoint`/`aivyx-kvcache`'s git history for
