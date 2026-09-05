@@ -3649,11 +3649,20 @@ something does.
   documented why, in the phase retrospective): the entire deliverable is
   one commit already fully reviewed at the task level, and there's no
   `aivyx`-repo-local branch to merge since the new repo is standalone.
-- **Phase 195 (expected) — Migrate aivyx-coder onto the new crate.** Not
-  yet started. Remove `aivyx-coder`'s local `injection_scan.rs`, wire the
-  dependency, and correct that repo's own stale README/CLAUDE.md line
-  ("indirect prompt injection... re-enters context untagged" — confirmed
-  stale this session).
+- **Phase 195 — Migrate aivyx-coder onto the new crate.** Shipped
+  2026-09-05 — see [PHASE_195.md](archive/phases/PHASE_195.md).
+  `aivyx-sandbox` now depends on `aivyx-injection-guard` the same way it
+  already depends on `aivyx-confine`; the local `injection_scan.rs` (260
+  lines, 10 tests) is gone, and every other real call site needed zero
+  changes (confirmed via `grep`, then independently re-confirmed twice).
+  Grounding narrowed the doc-fix scope from what was assumed: `README.md`'s
+  own "Known limitations" section, read in full, turned out to already be
+  accurate — only `CLAUDE.md`'s condensed "re-enters context untagged"
+  summary was stale. The final whole-branch review caught a second real
+  gap a per-task review couldn't have: `CLAUDE.md`'s architecture table
+  documents the `aivyx-confine`/`aivyx-checkpoint` extractions on their
+  crate rows but said nothing about this phase's new dependency — fixed
+  directly rather than carried as debt.
 - **Phase 196 (expected) — Adopt into aivyx.** Not yet started. Pin the
   new dependency, integrate at Bulwark's existing call site
   (`agent.rs:1372`), converting a match into `TurnOutcome::Escalated`
