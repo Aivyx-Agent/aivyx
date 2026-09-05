@@ -3614,6 +3614,59 @@ accidentally-committed secrets now that they're public — nothing in
 Phase 192's design, plan, or review process checked this before the
 visibility flip.
 
+## Chapter Picket — Prompt-Injection Tripwire (Phases 194+)
+
+Opened 2026-09-05, while investigating end-user deployment options
+surfaced a broader question: given `aivyx-confine`/`aivyx-checkpoint`/
+`aivyx-kvcache` were all extracted from `aivyx-coder` and adopted by
+`aivyx`, are there other similar frameworks worth considering? A fresh
+survey (real code opened in both repos) found one strong candidate:
+`aivyx-coder`'s `aivyx-sandbox/src/injection_scan.rs` — a phrase-list
+prompt-injection tripwire, real and extensively wired into five call
+sites there (editor context, repo map, user/project `AGENTS.md`, generic
+tool output). `aivyx` has only a passive defense (Bulwark's
+`fence_untrusted_output`, which labels untrusted content for the model
+but never actively scans for known injection phrasings or halts
+execution) — a real gap given `aivyx`'s autonomy dial runs fully
+unattended at `Autonomous`/`Unleashed` tiers. Full design:
+`docs/superpowers/specs/2026-09-05-injection-guard-design.md`.
+
+Grounding found `TurnOutcome::Escalated` and the `ApprovalGate`/
+`HeadlessRefusal` split (`escalation_parks`) already exist and already
+correctly branch on attended-vs-unattended — nothing currently triggers
+`Escalated` from an injection match, but zero new plumbing is needed once
+something does.
+
+**Expected phases (subject to revision at each exit):**
+
+- **Phase 194 — Create the aivyx-injection-guard repo.** Shipped
+  2026-09-05 — see [PHASE_194.md](archive/phases/PHASE_194.md). A verbatim
+  extraction (confirmed byte-identical to the real source via direct
+  `diff`) into a new, public, standalone, zero-dependency repo —
+  `Aivyx-Agent/aivyx-injection-guard` — the same `aivyx-confine`/
+  `aivyx-checkpoint`/`aivyx-kvcache` pattern, applied a fourth time. The
+  final whole-branch review step was deliberately skipped this phase (and
+  documented why, in the phase retrospective): the entire deliverable is
+  one commit already fully reviewed at the task level, and there's no
+  `aivyx`-repo-local branch to merge since the new repo is standalone.
+- **Phase 195 (expected) — Migrate aivyx-coder onto the new crate.** Not
+  yet started. Remove `aivyx-coder`'s local `injection_scan.rs`, wire the
+  dependency, and correct that repo's own stale README/CLAUDE.md line
+  ("indirect prompt injection... re-enters context untagged" — confirmed
+  stale this session).
+- **Phase 196 (expected) — Adopt into aivyx.** Not yet started. Pin the
+  new dependency, integrate at Bulwark's existing call site
+  (`agent.rs:1372`), converting a match into `TurnOutcome::Escalated`
+  with `pending_tool` set to the offending tool and `scope: None` (not a
+  capability-scope escalation), plus new tests confirming the two
+  mechanisms (Bulwark's fencing, the new tripwire) coexist without one
+  clobbering the other.
+
+**Known follow-up, not yet scheduled to a phase:** the phrase list itself
+is ported verbatim, not expanded — real-usage-driven additions to
+`INJECTION_MARKERS` are a candidate for whenever either consumer's actual
+operation surfaces a real miss.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
