@@ -3591,15 +3591,21 @@ artifacts again without being caught immediately.
   fixed and independently re-verified with fresh evidence, not trusted
   from reports.
 - **Phase 193 — Cut and verify a real release; prove build-from-source
-  works for a real outsider.** Not yet started. Tag a new release
-  (`v0.9.0`'s tag already exists and never produced a real release, so
-  likely `v0.9.1`), watch all four release workflows actually succeed,
-  then verify the documented `git clone && cargo build` sequence in a
-  throwaway container with no cached credentials of any kind — stricter
-  proof than trusting a GitHub-hosted CI runner, which still sits
-  inside org network/token context in subtle ways even when nothing is
-  deliberately shared.
-- **Phase 194 — Regression guard + doc correction.** Not yet started.
+  works for a real outsider.** Shipped 2026-09-05 — see
+  [PHASE_193.md](archive/phases/PHASE_193.md). Reconciled a
+  long-diverged worktree branch into `main`, cut `v0.9.4`, and along
+  the way found a second real regression independent of the code:
+  `aivyx` had silently reverted from public back to private, which
+  explained both a credential-less build-from-source failure and every
+  release workflow instant-failing — not the GitHub secondary-rate-limit
+  throttle this session had assumed. Fixed by flipping visibility back
+  public (root cause of the revert itself stays unresolved — no
+  audit-log access at this account tier). `v0.9.4` is now `Latest`
+  with all real build/desktop/WSL/GHCR artifacts verified, and a
+  genuinely credential-less container build-from-source run confirmed
+  the documented install sequence works end to end.
+- **Phase 194** (Chapter N's own numbering — since reassigned; see
+  below) **— Regression guard + doc correction.** Not yet started.
   Wire `check-git-deps-public.sh` into `quality-gate.yml` so a future
   regression fails in seconds with a specific message instead of ~20
   minutes in via an opaque `cargo clippy` backtrace. Correct
