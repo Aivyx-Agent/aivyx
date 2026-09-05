@@ -62,6 +62,13 @@ impl Tool for GmailSearch {
         "gmail.search"
     }
 
+    // Chapter Picket follow-up (Finding 3) — search results include
+    // message snippets and subjects, externally authored email
+    // content that may carry a prompt-injection payload.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search Gmail messages using Gmail's query DSL. Input \
          is a JSON object with a required `q` field (the Gmail \
@@ -251,6 +258,24 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gmail_search_output_is_untrusted_for_bulwark() {
+        let client = std::sync::Arc::new(crate::GmailClient::new(
+            reqwest::Client::new(),
+            crate::OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            crate::TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        let tool = GmailSearch::new(client);
+        assert!(tool.output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_minimal_query() {

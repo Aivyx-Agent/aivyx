@@ -74,6 +74,13 @@ impl Tool for GmailRead {
         "gmail.read"
     }
 
+    // Chapter Picket follow-up (Finding 3) — the email body and
+    // headers are externally authored content that may carry a
+    // prompt-injection payload.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Read one Gmail message by ID. Input is a JSON object \
          with a required `id` field (the message ID returned by \
@@ -356,6 +363,24 @@ fn input_schema() -> Value {
 mod tests {
     use super::*;
     use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
+
+    #[test]
+    fn gmail_read_output_is_untrusted_for_bulwark() {
+        let client = std::sync::Arc::new(crate::GmailClient::new(
+            reqwest::Client::new(),
+            crate::OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            crate::TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        let tool = GmailRead::new(client);
+        assert!(tool.output_is_untrusted());
+    }
 
     fn b64url(s: &str) -> String {
         BASE64_URL_SAFE_NO_PAD.encode(s.as_bytes())
