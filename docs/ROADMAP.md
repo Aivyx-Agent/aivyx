@@ -3702,10 +3702,36 @@ something does.
   fixed in one review cycle, every one confirmed via direct code tracing
   or mutation testing.
 
+- **Phase 198 (Finding 3 follow-up: close the productivity-integration
+  coverage gap) shipped 2026-09-06** — see
+  [PHASE_198.md](archive/phases/PHASE_198.md). Grounding found the
+  original Finding 3 framing (a false-positive/calibration risk on
+  Gmail/Calendar/Slack/MCP content) was wrong about coverage: `grep`
+  across `aivyx-gmail`/`aivyx-calendar`/`aivyx-drive`/`aivyx-contacts`/
+  `aivyx-notion`/`aivyx-obsidian`/`aivyx-n8n`/`aivyx-toolkit` found
+  zero `output_is_untrusted()` overrides anywhere in those eight
+  crates — this content was neither fenced by Bulwark nor scanned by
+  Picket at all, a real open injection surface, not a tuning problem
+  on already-scanned content. Flagged 28 tools (plus a ninth-crate gap
+  of the same class, `aivyx-toolkit`'s `WebSearch`) via one mechanical
+  trait-method addition each, riding the existing centralized call
+  site with zero turn-loop changes. The final whole-branch review
+  caught 5 override comments that described content their tools don't
+  actually return (verified against each tool's real `execute()`
+  body) — the `true` flag was correct in every case, only the
+  audit-trail comment text was wrong; fixed in one commit. The
+  config-knob half of the original Finding 3 framing remains a
+  separate, still-open follow-up.
+
 **Known follow-up, not yet scheduled to a phase:** the phrase list itself
 is ported verbatim, not expanded — real-usage-driven additions to
 `INJECTION_MARKERS` are a candidate for whenever either consumer's actual
 operation surfaces a real miss.
+
+**Known follow-up, not yet scheduled to a phase:** no operator-facing
+config knob to disable or tune the tripwire, independent of what
+content gets scanned — the other half of Finding 3's original framing,
+deliberately deferred when Phase 198 closed the coverage-gap half.
 
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
