@@ -49,6 +49,12 @@ impl Tool for ContactsSearch {
         "contacts.search"
     }
 
+    // Chapter Picket follow-up (Finding 3) — same rationale as
+    // contacts.get: externally authored contact fields.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search the user's Google contacts by name, email, phone, \
          or organization. Input is a JSON object with a required \
@@ -180,6 +186,29 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_tool() -> ContactsSearch {
+        use crate::{ContactsClient, OAuthConfig, TokenSet};
+        use std::sync::Arc;
+        let client = Arc::new(ContactsClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        ContactsSearch::new(client)
+    }
+
+    #[test]
+    fn contacts_search_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_requires_query() {

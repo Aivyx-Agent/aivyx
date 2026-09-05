@@ -46,6 +46,13 @@ impl Tool for ContactsGet {
         "contacts.get"
     }
 
+    // Chapter Picket follow-up (Finding 3) — contact fields (name,
+    // notes, organization) are externally authored and may carry a
+    // prompt-injection payload.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch full detail for one Google contact. Input is a \
          JSON object with a required `resource_name` field (e.g. \
@@ -112,6 +119,29 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_tool() -> ContactsGet {
+        use crate::{ContactsClient, OAuthConfig, TokenSet};
+        use std::sync::Arc;
+        let client = Arc::new(ContactsClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        ContactsGet::new(client)
+    }
+
+    #[test]
+    fn contacts_get_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_resource_name_accepts_people_id() {
