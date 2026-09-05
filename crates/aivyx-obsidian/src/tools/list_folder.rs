@@ -40,6 +40,12 @@ impl Tool for ObsidianListFolder {
         "obsidian.list_folder"
     }
 
+    // Chapter Picket follow-up (Finding 3) — filenames in the vault
+    // are externally authored, the same rationale as fs.read.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List markdown notes in a vault folder. Input is a \
          JSON object with optional `folder` (vault-relative; \
@@ -215,6 +221,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsidian_list_folder_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_defaults_when_empty() {

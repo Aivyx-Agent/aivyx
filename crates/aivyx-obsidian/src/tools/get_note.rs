@@ -38,6 +38,13 @@ impl Tool for ObsidianGetNote {
         "obsidian.get_note"
     }
 
+    // Chapter Picket follow-up (Finding 3) — note content could have
+    // been written by anyone with vault access or synced from
+    // elsewhere; externally authored, the same rationale as fs.read.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch one Obsidian note. Input is a JSON object with \
          a required `path` (vault-relative). Returns \
@@ -152,6 +159,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsidian_get_note_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
     use std::fs;
     use std::path::PathBuf;
 

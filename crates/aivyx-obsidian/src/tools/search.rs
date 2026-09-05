@@ -55,6 +55,12 @@ impl Tool for ObsidianSearch {
         "obsidian.search"
     }
 
+    // Chapter Picket follow-up (Finding 3) — same rationale as
+    // obsidian.get_note: externally authored vault content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search the Obsidian vault. Input is a JSON object \
          with optional `q` (substring matched line-by-line \
@@ -359,6 +365,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsidian_search_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
     use std::fs;
     use std::path::PathBuf;
 
