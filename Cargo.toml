@@ -271,6 +271,15 @@ aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", re
 # aivyx-cli, and aivyx-channel's own Cargo.toml files.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
 aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
+
+# Prompt-injection phrase-list tripwire (Chapter Picket) for untrusted
+# tool output (fs.read, web.fetch, every tool-process/MCP tool),
+# extracted from the sibling aivyx-coder repo rather than reimplemented
+# here — see docs/superpowers/specs/2026-09-05-injection-guard-design.md.
+# Not on crates.io — pinned by commit SHA, same as aivyx-checkpoint/
+# aivyx-confine/aivyx-kvcache above. No platform-specific backend, so no
+# default-features/target-gating split is needed.
+# MUST stay a public repo — see the aivyx-confine entry above for why.
 aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "8d8583f9cd63dd48b72ffea9455f98f5a9405ffc" }
 
 # The profile that 'dist' will build with

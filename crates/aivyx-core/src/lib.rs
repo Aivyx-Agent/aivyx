@@ -531,6 +531,17 @@ pub enum ToolOutcome {
         /// irreversible (see [`aivyx_capability::is_irreversible_base`]), on the
         /// auto-approve allowlist or not. `None` when produced outside the turn
         /// loop (e.g. a tool-process child before the parent stamps it).
+        ///
+        /// Chapter Picket — `None` also now covers a second, distinct case:
+        /// a `LoopOutcome::Escalated` raised by the turn loop's own
+        /// prompt-injection side-channel signal (`check_for_injection` in
+        /// `agent.rs`) is not built from a `RequiresEscalation` value at
+        /// all and carries `scope: None` unconditionally, since an
+        /// injection match is not a capability-scope escalation and the
+        /// unattended-gate reversible/irreversible classification above
+        /// doesn't apply to it. Do not assume `None` here always means
+        /// "scope unknown, stamp it later" — it may instead mean
+        /// "deliberately not a capability escalation."
         scope: Option<Scope>,
     },
     Failed(AivyxError),
