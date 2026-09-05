@@ -113,7 +113,7 @@ current, working `aivyx` binary through every documented path, and the
 pipeline can't silently regress into shipping stale or broken
 artifacts again without being caught immediately — is met.
 
-## Known follow-ups
+## Known follow-ups (not done here, logged for whenever they matter)
 
 - **`check-git-deps-public.sh`'s `|| true` also swallows `grep`'s exit
   code 2** (a genuine read error, e.g. an unreadable — not missing —
