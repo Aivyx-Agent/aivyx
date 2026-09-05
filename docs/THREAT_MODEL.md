@@ -368,19 +368,24 @@ teeth.
 
 ### 5.3 Prompt injection beyond capability gating
 
-**Updated post-Phase-180** (this section's own "last reviewed" line at
-the top of the document still reads "Phase 180 exit" and was not bumped
-for this edit — a real staleness this correction closes, not a new
-phase). Chapter Bulwark added real prompt-injection resistance since
-Phase 180: fetched, parsed, and tool-process content is fenced as
-untrusted data at every ingress (web fetches, file reads, MCP tool
-output, operator-provided context files), so the model sees that
-content marked as data, not as instructions it should follow. This is
-a structural mitigation, not a pattern-matching scanner — Aivyx still
-has no content-level scanner for prompt-injection *payloads* the way
-Hermes Agent's Tirith does; Bulwark's fencing works by changing how
-untrusted content is presented to the model, not by detecting and
-blocking malicious patterns within it.
+**Updated post-Phase-180, corrected again for Phase 197's own
+follow-up work** (this section's own "last reviewed" line at the top
+of the document still reads "Phase 180 exit" — out of scope for this
+correction; only the two factual claims below, which this phase's own
+work directly contradicts, are being fixed here). Chapter Bulwark
+added real prompt-injection resistance since Phase 180: fetched,
+parsed, and tool-process content is fenced as untrusted data at every
+ingress (web fetches, file reads, MCP tool output, operator-provided
+context files, the productivity integrations' externally-authored
+content — Gmail, Calendar, Drive, Contacts, Notion, Obsidian, n8n —
+and the toolkit's web search), so the model sees that content marked
+as data, not as instructions it should follow. Since Chapter Picket
+(Phases 194-196), this is no longer only a structural mitigation:
+`aivyx-injection-guard` is a real content-level scanner for
+prompt-injection *payloads*, layered on top of Bulwark's fencing — it
+actively scans the same untrusted content for known injection
+phrasings and escalates the turn on a match, the same category of
+defense Hermes Agent's Tirith provides.
 
 Beyond Bulwark's fencing, the remaining defense is capability gating:
 an LLM that has been jail-broken into trying to exfiltrate data still
