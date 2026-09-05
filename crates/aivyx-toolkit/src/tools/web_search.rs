@@ -83,6 +83,12 @@ impl Tool for WebSearch {
         "web.search"
     }
 
+    // Chapter Picket follow-up (Finding 3) — real web search results
+    // are externally authored, the same rationale as web.fetch.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search the web using Brave Search. Input is a JSON \
          object with a required `q` field (the search query) \
@@ -272,6 +278,12 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_search_output_is_untrusted_for_bulwark() {
+        let tool = WebSearch::new(Client::new(), "BSA-test".to_string());
+        assert!(tool.output_is_untrusted());
+    }
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
