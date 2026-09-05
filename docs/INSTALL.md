@@ -269,7 +269,7 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
   | sh
 aivyx --version
-# aivyx 0.1.0
+# aivyx x.y.z
 ```
 
 For a specific version, replace `latest` with the tag (see the

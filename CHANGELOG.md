@@ -5,14 +5,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **CI now fails fast, by name, if a workspace git dependency ever
+  silently reverts to private.** `scripts/check-git-deps-public.sh`
+  (Phase 192) is wired into `quality-gate.yml` as an early step —
+  closes Chapter N (Release & Distribution Integrity). See
+  `docs/archive/phases/PHASE_197.md`.
+
 ## [0.9.4] — 2026-09-05
 
 **Milestone: the first real, working GitHub Release since `v0.8.3`.**
-Closes Chapter N (Release & Distribution Integrity, opened this same
-day after discovering `v0.9.0` never actually published — see
-`docs/archive/phases/PHASE_192.md` and `PHASE_193.md`) and Chapter
-Picket (the prompt-injection tripwire, `PHASE_194.md`-`PHASE_196.md`)
-in one release.
+Ships Chapter N's root-cause and release-cutting work (Phases 192-193,
+opened this same day after discovering `v0.9.0` never actually
+published — see `docs/archive/phases/PHASE_192.md` and `PHASE_193.md`;
+the chapter's closing phase, 197, is the `[Unreleased]` entry above)
+and closes Chapter Picket (the prompt-injection tripwire,
+`PHASE_194.md`-`PHASE_196.md`) in one release.
 
 ### Added
 
@@ -46,10 +55,9 @@ in one release.
 - **The three private git dependencies (`aivyx-confine`,
   `aivyx-checkpoint`, `aivyx-kvcache`) that silently broke every
   `v0.9.0` release workflow — and any outside contributor's
-  build-from-source path — are now public,** with a new CI regression
-  guard (`scripts/check-git-deps-public.sh`, wired into
-  `quality-gate.yml`) that fails fast and by name if this ever
-  recurs.
+  build-from-source path — are now public** (the CI regression guard
+  that enforces this going forward ships in `[Unreleased]` above,
+  Phase 197).
 
 ## [0.9.0] — 2026-09-03
 

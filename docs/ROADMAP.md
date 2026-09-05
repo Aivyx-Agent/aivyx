@@ -3554,7 +3554,7 @@ Subsequent Chapter G phases (the original Chapter G #2 candidate list is
 now fully closed) picked at each phase exit based on operator pressure
 and observed first-real-use signal.
 
-## Chapter N — Release & Distribution Integrity (Phases 192+)
+## Chapter N — Release & Distribution Integrity (Phases 192, 193, 197) [COMPLETE]
 
 Opened 2026-09-05 after investigating "how would an end user deploy
 Aivyx on their own bare metal" surfaced that `v0.9.0` — the version
