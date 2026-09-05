@@ -67,6 +67,13 @@ impl Tool for CalendarListCalendars {
         "calendar.list_calendars"
     }
 
+    // Chapter Picket follow-up (Finding 3) — calendar names/summaries
+    // can be set by whoever shares a calendar with the operator;
+    // externally authored metadata.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Enumerate the Google Calendars the \
          operator has access to. Takes no \
@@ -213,6 +220,30 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_tool() -> CalendarListCalendars {
+        use crate::oauth::TokenSet;
+        use crate::{CalendarClient, OAuthConfig};
+        use std::sync::Arc;
+        let client = Arc::new(CalendarClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        CalendarListCalendars::new(client)
+    }
+
+    #[test]
+    fn calendar_list_calendars_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn calendar_summary_maps_primary_owner_calendar() {

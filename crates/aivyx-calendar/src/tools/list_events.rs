@@ -80,6 +80,13 @@ impl Tool for CalendarListEvents {
         "calendar.list_events"
     }
 
+    // Chapter Picket follow-up (Finding 3) — same rationale as
+    // calendar.get_event: a list of externally authored event
+    // content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List events on a Google Calendar within a time \
          range. Input is a JSON object with optional \
@@ -286,6 +293,11 @@ fn input_schema() -> Value {
 mod tests {
     use super::super::event_summary;
     use super::*;
+
+    #[test]
+    fn calendar_list_events_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_defaults_when_all_optional_omitted() {

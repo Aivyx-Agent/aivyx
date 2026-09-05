@@ -84,6 +84,13 @@ impl Tool for CalendarUpcoming {
         "calendar.upcoming"
     }
 
+    // Chapter Picket follow-up (Finding 3) — same rationale as
+    // calendar.get_event: a list of externally authored event
+    // content.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List Google Calendar events starting within \
          the next N hours, optionally across multiple \
@@ -749,6 +756,30 @@ fn parse_input(input: &Value) -> Result<ParsedInput, String> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn make_tool() -> CalendarUpcoming {
+        use crate::oauth::TokenSet;
+        use crate::{CalendarClient, OAuthConfig};
+        use std::sync::Arc;
+        let client = Arc::new(CalendarClient::new(
+            reqwest::Client::new(),
+            OAuthConfig::new("id", "secret", "http://127.0.0.1:0/cb"),
+            TokenSet {
+                access_token: "x".to_string(),
+                refresh_token: None,
+                expires_at_unix_secs: 0,
+                granted_scope: "scope".to_string(),
+                token_type: "Bearer".to_string(),
+            },
+            std::path::PathBuf::from("/tmp/unused"),
+        ));
+        CalendarUpcoming::new(client)
+    }
+
+    #[test]
+    fn calendar_upcoming_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     fn now_fixed() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap()

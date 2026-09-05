@@ -46,6 +46,14 @@ impl Tool for CalendarGetEvent {
         "calendar.get_event"
     }
 
+    // Chapter Picket follow-up (Finding 3) — an event's title,
+    // description, and attendee-supplied fields are externally
+    // authored (e.g. from an invite sent by someone else) and may
+    // carry a prompt-injection payload.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch the full detail of one Google Calendar event \
          by ID. Input is a JSON object with a required \
@@ -254,6 +262,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calendar_get_event_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_minimal_required() {
