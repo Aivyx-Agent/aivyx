@@ -271,6 +271,7 @@ aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", re
 # aivyx-cli, and aivyx-channel's own Cargo.toml files.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
 aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
+aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "8d8583f9cd63dd48b72ffea9455f98f5a9405ffc" }
 
 # The profile that 'dist' will build with
 [profile.dist]

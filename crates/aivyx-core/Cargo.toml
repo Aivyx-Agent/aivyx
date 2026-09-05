@@ -96,6 +96,9 @@ aivyx-confine = { workspace = true }
 [dependencies.aivyx-checkpoint]
 workspace = true
 
+[dependencies.aivyx-injection-guard]
+workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
 # Confinement test fixture (Task 3 — shell.exec confinement): needs a

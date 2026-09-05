@@ -308,6 +308,7 @@ dependencies = [
  "aivyx-checkpoint",
  "aivyx-confine",
  "aivyx-crypto",
+ "aivyx-injection-guard",
  "aivyx-kvcache",
  "aivyx-llm",
  "aivyx-storage",
@@ -473,6 +474,11 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
 ]
+
+[[package]]
+name = "aivyx-injection-guard"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=8d8583f9cd63dd48b72ffea9455f98f5a9405ffc#8d8583f9cd63dd48b72ffea9455f98f5a9405ffc"
 
 [[package]]
 name = "aivyx-ipc"
