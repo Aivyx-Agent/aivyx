@@ -52,6 +52,13 @@ impl Tool for N8nGetExecution {
         "n8n.get_execution"
     }
 
+    // Chapter Picket follow-up (Finding 3) — execution results can
+    // include arbitrary output from external systems/webhooks the
+    // workflow touched; externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch a single n8n execution by id. Input is a \
          JSON object with required `id` (execution id \
@@ -160,6 +167,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n8n_get_execution_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_minimal() {

@@ -58,6 +58,12 @@ impl Tool for N8nListWorkflows {
         "n8n.list_workflows"
     }
 
+    // Chapter Picket follow-up (Finding 3) — same rationale as
+    // n8n.get_workflow: externally authored workflow definitions.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List workflows on the operator's n8n instance. \
          Input is a JSON object with optional `active` \
@@ -273,6 +279,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n8n_list_workflows_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_empty() {

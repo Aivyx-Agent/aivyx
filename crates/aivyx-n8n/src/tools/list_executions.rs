@@ -58,6 +58,12 @@ impl Tool for N8nListExecutions {
         "n8n.list_executions"
     }
 
+    // Chapter Picket follow-up (Finding 3) — same rationale as
+    // n8n.get_execution: externally authored execution results.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "List workflow executions on the operator's n8n \
          instance. Input is a JSON object with optional \
@@ -260,6 +266,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n8n_list_executions_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_empty() {

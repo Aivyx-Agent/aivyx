@@ -61,6 +61,13 @@ impl Tool for N8nGetWorkflow {
         "n8n.get_workflow"
     }
 
+    // Chapter Picket follow-up (Finding 3) — a workflow definition
+    // could have been created by any team member with n8n access;
+    // externally authored.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Fetch the full definition of an n8n workflow by \
          id. Input is a JSON object with a required `id` \
@@ -153,6 +160,11 @@ fn input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n8n_get_workflow_output_is_untrusted_for_bulwark() {
+        assert!(make_tool().output_is_untrusted());
+    }
 
     #[test]
     fn parse_input_accepts_id() {
