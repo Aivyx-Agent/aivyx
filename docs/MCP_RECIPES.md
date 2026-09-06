@@ -610,6 +610,32 @@ connected with 2 tools (`code`, `code_reply`). See
 `docs/NONAGON.md` §9 for a worked example wiring this into a
 Nonagon specialist.
 
+**Sharing KV-cache prefill work with `aivyx-coder`:** if both `aivyx`
+and this delegated `aivyx-coder` process point at the *same*
+`llama-server` instance, they can also share the expensive prefill work
+of a long, stable prompt prefix — `aivyx-kvcache`'s manifest is already
+safe for two separate OS processes writing the same store directory
+concurrently (WAL-mode sqlite index; eviction tolerates a file another
+process already deleted). To opt in, set both configs' kvcache store
+path to the *identical* absolute directory:
+
+```toml
+# aivyx's own config.toml
+kvcache_store_path = "/home/me/.local/share/shared-kvcache"
+```
+
+```toml
+# aivyx-coder's own config.toml
+[backend]
+kvcache_store_path = "/home/me/.local/share/shared-kvcache"
+```
+
+This only helps when both sides are *already* configured against the
+same `llama-server` — pointing two processes at the same directory
+while they talk to two different backend servers just means two
+independent, non-interfering sets of cache entries coexisting in one
+folder: harmless, but pointless.
+
 ---
 
 ## Adding a recipe to this catalog
