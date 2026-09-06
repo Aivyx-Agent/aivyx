@@ -3850,6 +3850,31 @@ independently re-verified against the real, built binary (not just the
 diff), confirming a single prefix, a correct remedy, and zero files
 created on the failure path.
 
+## Phase 204 — Expanding INJECTION_MARKERS [COMPLETE]
+
+Opened and shipped 2026-09-07 — see [PHASE_204.md](archive/phases/PHASE_204.md).
+Chapter Picket's `INJECTION_MARKERS` phrase list (in the separate
+`aivyx-injection-guard` repo, pinned into `aivyx` by git `rev`) grew from
+9 entries to 22, grouped into 4 categories, proactively rather than in
+response to any observed real-usage miss. The final whole-branch review
+found the content itself needed a second pass before merge: 2 of the 14
+proposed markers (`"developer mode"`, an ordinary technical noun phrase
+in Chrome/Android/iOS/Windows settings UI, and `"you are no longer"`,
+which collides with routine email-unsubscribe footers) were meaningfully
+more false-positive-prone than the rest — and a match here isn't cosmetic,
+it hard-stops the agent's turn (`LoopOutcome::Escalated`). Both were
+dropped/narrowed before merge. The same review caught a doc comment on
+`aivyx-core`'s `check_for_injection` that had gone stale on two counts —
+claiming the list was still "ported verbatim from aivyx-coder" (no longer
+true post-expansion) and "no config knob to disable the tripwire" (false
+even before this phase; `injection_scan_enabled`/`injection_scan_exempt`
+already existed) — and a process gap in this phase's own execution (the
+implementation plan was written but never committed). All fixed and
+independently re-verified directly against the real diffs and a fresh
+`cargo test`/`clippy` run in both repos, not from subagent reports.
+`aivyx-coder`'s own separate pin was deliberately left untouched (a
+different, unrelated active project) and now diverges from `aivyx`'s.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
