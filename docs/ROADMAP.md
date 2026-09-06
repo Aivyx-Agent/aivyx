@@ -3830,6 +3830,26 @@ on some machines), and two stale `#[allow(dead_code)]` attributes from
 an intermediate branch state. All three fixed and independently
 re-verified.
 
+## Phase 203 — Closing Phase 202's Three Logged Follow-Ups [COMPLETE]
+
+Opened and shipped 2026-09-06 — see [PHASE_203.md](archive/phases/PHASE_203.md).
+Closes all 3 follow-ups Phase 202's own final review logged: the real
+gap (`verify-only`/`audit export`/`cost` could still create a store on
+an unconfigured machine, since those 3 modes never require an API key
+so `config.validate()` could never catch it) plus 2 cosmetic issues
+(doubled `aivyx:`-prefixed output, an untestable passphrase-retry
+message). Task 1's own review caught a real bug its implementer's
+self-report missed entirely — a doc comment left genuinely duplicated
+by an imperfect find/replace, found only by reading the real file
+directly. The final whole-branch review found something more serious:
+Task 1's own fix had reintroduced the exact doubled-prefix symptom it
+existed to remove, and traced that the diagnostic-mode hint pointed
+operators at `aivyx init` — which never creates a store — walking
+through the real dead-end loop that would produce. Both fixed and
+independently re-verified against the real, built binary (not just the
+diff), confirming a single prefix, a correct remedy, and zero files
+created on the failure path.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
