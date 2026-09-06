@@ -785,12 +785,17 @@ pub struct AivyxConfig {
     /// (default) preserves the historical per-app `ProjectDirs`-derived
     /// path (`~/.local/share/aivyx/kvcache`). Set this to the *same*
     /// directory as `aivyx-coder`'s own `[backend] kvcache_store_path`
-    /// (and point both configs' backends at the same `llama-server`) to
-    /// share prefill work across the two processes — see
-    /// `docs/MCP_RECIPES.md`'s `aivyx-coder` recipe for the full pairing
-    /// guidance. `[kvcache] store_path` in TOML, `AIVYX_KVCACHE_STORE_PATH`
-    /// env override. Must be an absolute path — `~` is not expanded,
-    /// same convention as `storage_path` above.
+    /// when both point at the same `llama-server` — a single server has
+    /// exactly one `--slot-save-path`, so both sides must agree on the
+    /// directory for save/restore size-accounting to work correctly at
+    /// all; see `docs/MCP_RECIPES.md`'s `aivyx-coder` recipe for the
+    /// full pairing guidance (the two apps' cache keys never actually
+    /// match each other, so this doesn't mean either reuses the other's
+    /// prefill work — see that recipe for what sharing the directory
+    /// does and doesn't buy). `[kvcache] store_path` in TOML,
+    /// `AIVYX_KVCACHE_STORE_PATH` env override. Must be an absolute
+    /// path — `~` is not expanded, same convention as `storage_path`
+    /// elsewhere in this struct.
     pub kvcache_store_path: Option<Sourced<PathBuf>>,
     /// Chapter Emboss (EB.2) — `[openai] constrain_tool_calls`. When
     /// `true` *and* the provider is a llama.cpp-family OpenAI-compat
