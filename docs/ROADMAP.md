@@ -3893,6 +3893,33 @@ silently absent. Every cell traces to an existing source (a `View` enum
 doc comment or existing roadmap prose) — nothing invented, independently
 re-verified against the real code twice.
 
+## Phase 206 — Configurable KV-Cache Store Path Sharing (Aivyx ↔ Aivyx Coder) [COMPLETE]
+
+Opened and shipped 2026-09-07 — see [PHASE_206.md](archive/phases/PHASE_206.md).
+Followed a direct-code interoperability audit (aivyx and aivyx-coder can
+already interact today via a real, working MCP bridge — aivyx-coder
+exposes `code`/`code_reply` MCP tools that aivyx's Nonagon team bridges
+in as an out-of-process specialist) and a refinements audit that found
+`aivyx-kvcache`'s cross-process store — built specifically so the two
+apps could share prefill work — could never actually be shared, since
+both hardcoded their own app-name-scoped store path with no override.
+Added one to each side, plus a security fix each (aivyx-coder's own
+deny_paths protection for the directory was blind to any override;
+aivyx had *no* protection for its own kvcache directory at all). The
+final whole-branch review (Opus, spanning both repos) found the largest
+finding set of any phase this run — 1 Critical + 6 Important + 3 Minor,
+led by a doc that told operators to write a TOML key that didn't match
+the real loader (would have silently half-configured the pairing) and a
+core claim that was itself wrong (the two apps' cache keys can never
+actually match, so sharing the directory doesn't share cache hits — the
+real reason is a shared llama-server has exactly one `--slot-save-path`,
+so both sides must agree on it for correct size accounting). All fixed
+and independently re-verified. A real infra quirk surfaced mid-run —
+switching the session's own active worktree while a background subagent
+was still running caused a commit to land on the wrong (harmless)
+branch, caught only by checking `git worktree list` directly rather than
+trusting the subagent's own reported hash.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
