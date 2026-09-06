@@ -11202,6 +11202,48 @@ fn confine_require_enforcement_reads_an_explicit_false() {
     drop(env);
 }
 
+/// No `[agent] injection_scan_enabled` key ⇒ defaults to `true`
+/// (fail-closed), matching `require_enforcement`'s posture.
+#[test]
+fn agent_injection_scan_enabled_defaults_to_true_when_absent() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n", "injection-scan-absent");
+    assert!(cfg.injection_scan_enabled.value);
+    assert_eq!(cfg.injection_scan_enabled.source, FieldSource::Default);
+    assert!(cfg.injection_scan_exempt.is_empty());
+    drop(env);
+}
+
+/// An explicit `[agent] injection_scan_enabled = false` overrides the
+/// fail-closed default.
+#[test]
+fn agent_injection_scan_enabled_reads_an_explicit_false() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[agent]\ninjection_scan_enabled = false\n",
+        "injection-scan-explicit-false",
+    );
+    assert!(!cfg.injection_scan_enabled.value);
+    assert_eq!(cfg.injection_scan_enabled.source, FieldSource::Toml);
+    drop(env);
+}
+
+/// `[agent] injection_scan_exempt` reads a populated list of tool
+/// names verbatim, with no validation against a known-tools registry.
+#[test]
+fn agent_injection_scan_exempt_reads_an_explicit_list() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[agent]\ninjection_scan_exempt = [\"gmail.read\", \"not.a.real.tool\"]\n",
+        "injection-scan-exempt-list",
+    );
+    assert_eq!(
+        cfg.injection_scan_exempt,
+        vec!["gmail.read".to_string(), "not.a.real.tool".to_string()]
+    );
+    drop(env);
+}
+
 // --- Chapter Reins (RN.2) — the `[autonomy]` section -----------------
 
 /// No `[autonomy]` section ⇒ `assisted` ⇒ today's behavior: the effective

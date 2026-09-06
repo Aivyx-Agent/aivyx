@@ -834,6 +834,19 @@ pub struct AivyxConfig {
     /// `shell.exec`/`git.rs` to run a command at all. `true` (fail-closed)
     /// by default, matching `aivyx-coder`'s own `aivyx-confine` usage.
     pub require_enforcement: Sourced<bool>,
+    /// `[agent] injection_scan_enabled` — global on/off for Chapter
+    /// Picket's active injection scan (`check_for_injection`). `true`
+    /// (fail-closed) by default. Does NOT affect Chapter Bulwark's
+    /// passive fencing (`fence_untrusted_output`), which always runs
+    /// for untrusted tool output regardless of this setting.
+    pub injection_scan_enabled: Sourced<bool>,
+    /// `[agent] injection_scan_exempt` — tool names exempted from the
+    /// active injection scan even when `injection_scan_enabled` is
+    /// `true`. Matched exactly against `Tool::name()`. Empty by
+    /// default (no exemptions). Not validated against a known-tools
+    /// registry — an unmatched name is a silent no-op, matching
+    /// `tool_allowlist`'s existing behavior.
+    pub injection_scan_exempt: Vec<String>,
     /// Chapter Ward — whether the sensitive-path read guard is active. Default
     /// `true` (privacy-by-default): even at broad reach, `fs.read` refuses
     /// known secret locations (SSH/cloud creds, `.env`, private keys, Aivyx's
@@ -4479,6 +4492,17 @@ struct RawAgent {
     /// Unset → [`DEFAULT_CONVERSATION_HISTORY_TURNS`]; `0` disables.
     #[serde(default)]
     conversation_history_turns: Option<usize>,
+    /// Chapter Picket Finding 3 follow-up — global on/off for the active
+    /// injection scan. Unset → `true` (fail-closed, matching
+    /// `[confine] require_enforcement`'s posture).
+    #[serde(default)]
+    injection_scan_enabled: Option<bool>,
+    /// Chapter Picket Finding 3 follow-up — tool names exempted from the
+    /// active injection scan even when `injection_scan_enabled` is `true`.
+    /// Matched exactly against `Tool::name()`. Unset → empty (no
+    /// exemptions).
+    #[serde(default)]
+    injection_scan_exempt: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -5759,6 +5783,15 @@ impl AivyxConfig {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(true, FieldSource::Default),
         };
+
+        // --- agent.injection_scan_enabled / injection_scan_exempt -----
+        // Chapter Picket Finding 3 follow-up. Fail-closed by default,
+        // same posture as require_enforcement above.
+        let injection_scan_enabled = match toml.agent.injection_scan_enabled {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(true, FieldSource::Default),
+        };
+        let injection_scan_exempt = toml.agent.injection_scan_exempt.clone();
 
         // --- sensitive-path read guard (Chapter Ward) ---------------
         // Privacy-by-default: on unless explicitly disabled. The allow-list is
@@ -7546,6 +7579,8 @@ impl AivyxConfig {
             mistralrs_options,
             turn_timeout_secs: toml.agent.turn_timeout_secs,
             cycle_detection: toml.agent.cycle_detection,
+            injection_scan_enabled,
+            injection_scan_exempt,
             conversation_history_turns: toml
                 .agent
                 .conversation_history_turns
