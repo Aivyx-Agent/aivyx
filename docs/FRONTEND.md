@@ -84,21 +84,37 @@ The Studio is a classic command-center shell, driven by the layout tokens
 
 ## 3. Studio screen inventory (mapped to daemon capabilities)
 
-| Nav item | Maps to | State |
-|---|---|---|
-| **Command** | dashboard: stat cards + active missions + live audit-trail feed + agent status | ✅ Live (Ch. S — the default landing view) |
-| **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
-| **Mission Control** | one active mission's live LEAD/specialist graph, click-to-drill-in (current step, capability scopes, NT-02 hint), and abort/pause/resume controls | ✅ Live (Ch. Mission Control) |
-| **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
-| **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
-| **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
-| **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T + MG) |
-| **Wiki** | knowledge-wiki browser: synthesized per-topic pages (LLM summary + co-occurrence backlinks + source-entry count) over read-only IPC | ✅ Live (Ch. Codex) |
-| **Graph** | typed knowledge-graph view: entity nodes + directed, predicate-labeled relation edges (force-laid-out) over read-only IPC; distinct from the Memory co-occurrence graph | ✅ Live (Ch. Lattice) |
-| **Skills** | the skill library: every skill (operator-taught / agent-authored / agent-refined) with its WH.2 effectiveness, provenance, `domain`, version, lineage + the procedure on demand; pending proposals link to Agents; read-only `GetSkills` IPC | ✅ Live (Ch. Repertoire) |
-| **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z + DW) |
-| **Settings** | the first config **write** surface: access level + autonomy level (both confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U, + Reins) |
-| **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | 🔨 In progress (Ch. Voice) |
+| Group | Nav item | Maps to | State |
+|---|---|---|---|
+| — | **Command** | dashboard: stat cards + active missions + live audit-trail feed + agent status | ✅ Live (Ch. S — the default landing view) |
+| Workspace | **Chat** | single-agent turn loop + streamed events + gate | ✅ Live, reskinned |
+| Workspace | **Missions** | `team.run` goal→plan→gated execution (Nonagon, Ch. L) | ✅ Live, reskinned |
+| Workspace | **Mission Control** | one active mission's live LEAD/specialist graph, click-to-drill-in (current step, capability scopes, NT-02 hint), and abort/pause/resume controls | ✅ Live (Ch. Mission Control) |
+| Workspace | **Schedules** | cron routines: config/operator/agent-created schedules, with create/toggle/delete + the agent-proposal approval flow | ✅ Live (Ch. Chime) |
+| Knowledge | **Memory** | self-learning memory browser: topics + entries + search (T) **+ knowledge graph** — see §13 | ✅ Live (Ch. T + MG) |
+| Knowledge | **Wiki** | knowledge-wiki browser: synthesized per-topic pages (LLM summary + co-occurrence backlinks + source-entry count) over read-only IPC | ✅ Live (Ch. Codex) |
+| Knowledge | **Graph** | typed knowledge-graph view: entity nodes + directed, predicate-labeled relation edges (force-laid-out) over read-only IPC; distinct from the Memory co-occurrence graph | ✅ Live (Ch. Lattice) |
+| Agent | **Create**\* | the guided agent-creation flow (Profile → Persona seed → access); first-run lands here when the Profile isn't yet declared | ✅ Live (Ch. Genesis) |
+| Agent | **Agents** | persona / soul / profile editor: direct Profile write + persona-governance loop (proposals + revert) — see §9 | ✅ Live (Ch. V) |
+| Agent | **Skills** | the skill library: every skill (operator-taught / agent-authored / agent-refined) with its WH.2 effectiveness, provenance, `domain`, version, lineage + the procedure on demand; pending proposals link to Agents; read-only `GetSkills` IPC | ✅ Live (Ch. Repertoire) |
+| Agent | **Teams** | the Nonagon roster: team header + member cards (role / trust / scopes / tools / soul) — see §10 | ✅ Live (Ch. Y) |
+| System | **Documents** | file browser + **editor** over the agent workspace + the access-scoped fs_root — see §11, §14 | ✅ Live (Ch. Z + DW) |
+| System | **Audit** | the dedicated, paginated Audit screen — reuses the Command Center's `AuditFeed` row-renderer rather than a second copy of the same markup | ✅ Live (`/classic` retirement) |
+| System | **Sessions** | every active daemon session (channel, trust tier, created/last-active), replacing `/classic`'s own sessions pane | ✅ Live (`/classic` retirement) |
+| System | **Gallery** | recent images generated via the configured `comfyui` `[[mcp_server]]`, read from ComfyUI's own `/history` API | ✅ Live (Studio Gallery) |
+| System | **Notifications** | configured notify targets (read-only) + dispatch history, for missions/schedules that notify outside the Studio | ✅ Live (Ch. Herald) |
+| System | **Loop** | the daemon's autonomous loop control: start/stop/status/log/skip, backlog add/list — full read+write IPC (`QueryPayload::Loop*`) | ✅ Live |
+| System | **Reminders** | pending reminders list, soonest-first — read-only `GetReminders` IPC, shared with the TUI Dashboard | ✅ Live |
+| System | **MCP** | each configured MCP server's last-start health (connected + tool count, or failed + reason) | ✅ Live (Ch. Lantern) |
+| System | **Tools** | a read-only, searchable catalog of every registered tool (name, capability base, minimum trust tier, description) | ✅ Live (Ch. Almanac) |
+| System | **Voice** | `[voice]` config editor + readiness check + launch command (audio runs host-side) — see §12 | ✅ Live (Ch. Voice) |
+| System | **Settings** | the first config **write** surface: access level + autonomy level (both confirm-first) + budgets editable; provider/model read-only — see §8 | ✅ Live (Ch. U, + Reins) |
+| System | **Guide** | the in-app end-user guide — the `docs/guide/*.md` pages rendered in the Studio (see `guide.rs`); pure static content, no daemon IPC | ✅ Live |
+
+\* **Create** only appears pre-genesis — before an agent Profile is
+declared. Once a Profile exists, the entry is hidden (`Sidebar`'s
+`genesis_done` conditional in `main.rs`); editing then lives in
+Agents/Settings instead.
 
 The reference mockups for the locked look: `aivyx-brand/assets/stitch/`
 `aivyx_command_center`, `aivyx_missions_orchestration`, `the_terminal`.
