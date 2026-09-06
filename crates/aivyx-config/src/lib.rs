@@ -781,6 +781,16 @@ pub struct AivyxConfig {
     /// `None` means `http://localhost:11434`. Explicit values override
     /// both defaults.
     pub openai_base_url: Option<Sourced<String>>,
+    /// Overrides where the kvcache store directory lives. `None`
+    /// (default) preserves the historical per-app `ProjectDirs`-derived
+    /// path (`~/.local/share/aivyx/kvcache`). Set this to the *same*
+    /// directory as `aivyx-coder`'s own `[backend] kvcache_store_path`
+    /// (and point both configs' backends at the same `llama-server`) to
+    /// share prefill work across the two processes — see
+    /// `docs/MCP_RECIPES.md`'s `aivyx-coder` recipe for the full pairing
+    /// guidance. `[kvcache] store_path` in TOML, `AIVYX_KVCACHE_STORE_PATH`
+    /// env override.
+    pub kvcache_store_path: Option<Sourced<PathBuf>>,
     /// Chapter Emboss (EB.2) — `[openai] constrain_tool_calls`. When
     /// `true` *and* the provider is a llama.cpp-family OpenAI-compat
     /// server (`llamacpp` / `jan`), the binary builds the provider with
@@ -3769,6 +3779,8 @@ struct RawToml {
     #[serde(default)]
     storage: RawStorage,
     #[serde(default)]
+    kvcache: RawKvcache,
+    #[serde(default)]
     memory: RawMemory,
     #[serde(default)]
     telegram: RawTelegram,
@@ -4601,6 +4613,12 @@ struct RawWorkspaceJournaling {
 struct RawStorage {
     #[serde(default)]
     path: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawKvcache {
+    #[serde(default)]
+    store_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -5599,6 +5617,7 @@ const ENV_SLACK_TEAM_ID: &str = "AIVYX_SLACK_TEAM_ID";
 const ENV_ROLE: &str = "AIVYX_ROLE";
 const ENV_OPENAI_API_KEY: &str = "AIVYX_OPENAI_API_KEY";
 const ENV_OPENAI_BASE_URL: &str = "AIVYX_OPENAI_BASE_URL";
+const ENV_KVCACHE_STORE_PATH: &str = "AIVYX_KVCACHE_STORE_PATH";
 const ENV_PROVIDER: &str = "AIVYX_PROVIDER";
 /// Phase 75 — env override for the embedding-backend API key.
 /// Highest priority in the env > TOML > encrypted-store
@@ -5658,6 +5677,16 @@ impl AivyxConfig {
                 .base_url
                 .clone()
                 .map(|v| Sourced::new(v, FieldSource::Toml)),
+        };
+
+        // --- kvcache_store_path ---------------------------------------
+        let kvcache_store_path = match env_path(ENV_KVCACHE_STORE_PATH) {
+            Some(p) => Some(Sourced::new(p, FieldSource::Env)),
+            None => toml
+                .kvcache
+                .store_path
+                .clone()
+                .map(|p| Sourced::new(p, FieldSource::Toml)),
         };
 
         // --- openai_constrain_tool_calls (Chapter Emboss EB.2) ------
@@ -7543,6 +7572,7 @@ impl AivyxConfig {
             workspace_journaling_enabled,
             workspace_journaling_interval_secs,
             storage_path,
+            kvcache_store_path,
             memory_max_per_topic,
             memory_ttl_secs,
             memory_retention,

@@ -5642,6 +5642,21 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
     }
 }
 
+/// The kvcache store directory this run actually uses: the configured
+/// override, or the historical `ProjectDirs`-derived default when
+/// unset. Single source of truth reused by both the real kvcache
+/// construction above and the Ward `SensitivePolicy` extra-deny list
+/// below -- the two can never silently diverge.
+fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path::PathBuf {
+    match &config.kvcache_store_path {
+        Some(sourced) => sourced.value.clone(),
+        None => match directories::ProjectDirs::from("", "", "aivyx") {
+            Some(dirs) => dirs.data_local_dir().join("kvcache"),
+            None => std::env::temp_dir().join("aivyx").join("kvcache"),
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
 async fn run_async(
     config: AivyxConfig,
@@ -5674,6 +5689,14 @@ async fn run_async(
     // is irrelevant — api key is required whenever this function is
     // called, because `--verify-only` takes a separate branch in
     // `run()`.
+    // `effective_kvcache_store_path` needs the whole `AivyxConfig` (it
+    // reads `kvcache_store_path` and, on `None`, falls back to the
+    // historical `ProjectDirs` default) but the destructure below moves
+    // `config` field-by-field into the individual locals the rest of this
+    // function reaches for. Clone once up front so both the kvcache
+    // construction and the Ward `SensitivePolicy` wiring further down can
+    // still call it after the destructure consumes `config`.
+    let config_for_kvcache_and_ward = config.clone();
     let AivyxConfig {
         anthropic_api_key,
         openai_api_key,
@@ -5722,6 +5745,10 @@ async fn run_async(
         workspace_journaling_enabled,
         workspace_journaling_interval_secs,
         storage_path: _,
+        // Read via `config_for_kvcache_and_ward` (cloned above) instead of
+        // as an individual local -- `effective_kvcache_store_path` wants
+        // the whole config.
+        kvcache_store_path: _,
         memory_max_per_topic,
         passphrase: _,
         telegram,
@@ -6369,9 +6396,7 @@ async fn run_async(
     let kv_cache_handles = match llamacpp_base_url_for_kvcache {
         Some(base_url) => match aivyx_llm::fetch_llama_slots_info(&base_url).await {
             Some(info) => {
-                let store_path = directories::ProjectDirs::from("", "", "aivyx")
-                    .map(|dirs| dirs.data_local_dir().join("kvcache"))
-                    .unwrap_or_else(|| std::env::temp_dir().join("aivyx").join("kvcache"));
+                let store_path = effective_kvcache_store_path(&config_for_kvcache_and_ward);
                 match aivyx_kvcache::LlamaServerSlotStore::open(
                     &store_path,
                     &base_url,
@@ -6497,7 +6522,7 @@ async fn run_async(
         if guard_sensitive_paths.value {
             aivyx_core::sensitive_paths::SensitivePolicy::new(
                 allow_sensitive_paths.clone(),
-                Vec::new(),
+                vec![effective_kvcache_store_path(&config_for_kvcache_and_ward)],
             )
         } else {
             aivyx_core::sensitive_paths::SensitivePolicy::disabled()
@@ -14173,6 +14198,79 @@ mod tests {
         assert!(
             format_ollama_prompt_strategy_banner_line(&cfg).is_none(),
             "non-Ollama providers must not emit the strategy line"
+        );
+    }
+
+    #[test]
+    fn kvcache_store_path_defaults_to_none() {
+        let cfg = load_phase_122_config("");
+        assert!(cfg.kvcache_store_path.is_none());
+    }
+
+    #[test]
+    fn kvcache_store_path_loads_from_toml() {
+        let cfg = load_phase_122_config(
+            "[kvcache]\n\
+             store_path = \"/tmp/shared-kvcache\"\n",
+        );
+        let sourced = cfg.kvcache_store_path.expect("must be set from TOML");
+        assert_eq!(sourced.value, PathBuf::from("/tmp/shared-kvcache"));
+        assert_eq!(sourced.source, aivyx_config::FieldSource::Toml);
+    }
+
+    #[test]
+    fn effective_kvcache_store_path_matches_historical_default_when_unset() {
+        let cfg = load_phase_122_config("");
+        let path = effective_kvcache_store_path(&cfg);
+        assert!(
+            path.to_string_lossy().contains(".local/share/aivyx/kvcache"),
+            "default kvcache path must be unchanged when no override is configured, got {path:?}"
+        );
+    }
+
+    #[test]
+    fn effective_kvcache_store_path_uses_the_configured_override() {
+        let cfg = load_phase_122_config(
+            "[kvcache]\n\
+             store_path = \"/tmp/shared-kvcache\"\n",
+        );
+        let path = effective_kvcache_store_path(&cfg);
+        assert_eq!(path, PathBuf::from("/tmp/shared-kvcache"));
+    }
+
+    #[test]
+    fn ward_protects_the_effective_kvcache_path_default_and_overridden() {
+        let default_cfg = load_phase_122_config("");
+        let default_path = effective_kvcache_store_path(&default_cfg);
+        let default_guard = aivyx_core::sensitive_paths::SensitivePolicy::new(
+            Vec::new(),
+            vec![default_path.clone()],
+        );
+        assert!(
+            default_guard
+                .classify(&default_path.join("slots").join("some-handle.bin"))
+                .is_some(),
+            "the default kvcache directory must be protected"
+        );
+
+        let overridden_cfg = load_phase_122_config(
+            "[kvcache]\n\
+             store_path = \"/tmp/shared-kvcache\"\n",
+        );
+        let overridden_path = effective_kvcache_store_path(&overridden_cfg);
+        let overridden_guard = aivyx_core::sensitive_paths::SensitivePolicy::new(
+            Vec::new(),
+            vec![overridden_path.clone()],
+        );
+        assert!(
+            overridden_guard
+                .classify(&overridden_path.join("slots").join("some-handle.bin"))
+                .is_some(),
+            "the overridden kvcache directory must be protected"
+        );
+        assert!(
+            overridden_guard.classify(&default_path).is_none(),
+            "once overridden, the stale default path must no longer be the one protected"
         );
     }
 
