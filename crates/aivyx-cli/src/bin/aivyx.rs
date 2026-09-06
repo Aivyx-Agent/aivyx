@@ -1134,7 +1134,7 @@ fn run() -> Result<(), String> {
                     return Ok(());
                 }
                 init::UnconfiguredFirstRunDecision::Fail => {
-                    return Err(format!("{e}{hint}"));
+                    return Err("setup required — see above".to_string());
                 }
             }
         }
