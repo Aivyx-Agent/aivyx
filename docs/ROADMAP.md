@@ -3875,6 +3875,24 @@ independently re-verified directly against the real diffs and a fresh
 `aivyx-coder`'s own separate pin was deliberately left untouched (a
 different, unrelated active project) and now diverges from `aivyx`'s.
 
+## Phase 205 — Reconciling FRONTEND.md's Studio Screen Inventory [COMPLETE]
+
+Opened and shipped 2026-09-07 — see [PHASE_205.md](archive/phases/PHASE_205.md).
+Came out of a scoping attempt for Chapter I's "polish" placeholder, which
+was paused (needs live-backend infra — a real LLM + Playwright — not
+currently running in this environment). Picked up instead: `docs/
+FRONTEND.md`'s §3 screen-inventory table, flagged stale in 3 straight
+retrospectives (188/189/190) and never fixed. Direct grounding against
+the real `View` enum and `Sidebar` component found the staleness was
+larger than any retrospective specified — 11 of 23 real screens were
+missing entirely, and the existing Voice row's "In progress" state was
+itself stale (it shipped). Rewrote the table with a new `Group` column
+mirroring the real `Sidebar`'s own grouping, so a future addition that
+isn't mirrored in the doc reads as obviously incomplete rather than
+silently absent. Every cell traces to an existing source (a `View` enum
+doc comment or existing roadmap prose) — nothing invented, independently
+re-verified against the real code twice.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
