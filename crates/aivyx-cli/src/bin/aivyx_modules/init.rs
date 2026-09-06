@@ -553,6 +553,69 @@ fn decide_service_install(
     Ok(ServiceInstallDecision::Install { web_ui })
 }
 
+/// Whether to proceed writing a config that points at a storage path
+/// where a store already exists (e.g. from an earlier accidental bare
+/// `aivyx` run, or any prior install). Pure with respect to OS calls,
+/// mirroring `decide_service_install`'s own testability shape — the
+/// caller does the actual `Path::exists()` check and only calls this
+/// when it's already true.
+fn decide_storage_collision(
+    storage_path: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<bool, String> {
+    writeln!(
+        writer,
+        "\n⚠ A store already exists at {storage_path}\n  \
+         (possibly from an earlier run). Continuing will NOT delete it — your\n  \
+         passphrase on first launch must match the one it was created under.\n  \
+         If you don't know that passphrase, delete the file first."
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+    prompt_yes_no("Continue anyway?", false, reader, writer)
+}
+
+/// Whether `run()` should run the setup wizard inline or fail, when it
+/// finds itself about to create a brand-new store for a config that
+/// would fail validation anyway. Pure with respect to OS calls,
+/// mirroring `ServiceInstallDecision`'s own testability shape — no I/O
+/// beyond the injected `reader`/`writer`.
+#[allow(dead_code)]
+pub(crate) enum UnconfiguredFirstRunDecision {
+    /// Run `run_init_wizard` inline, then exit — the operator said yes.
+    RunWizardInline,
+    /// Fail with the original validation error — the operator said no,
+    /// or stdin isn't a terminal to ask in the first place.
+    Fail,
+}
+
+/// Decides `UnconfiguredFirstRunDecision` from whether stdin is a
+/// terminal and, if so, the operator's answer to "run the wizard now?".
+/// When `is_tty` is `false` (scripts, CI, a misconfigured service unit),
+/// fails immediately without prompting — there's no one to ask, and
+/// blocking on a read that will never come would hang the process.
+#[allow(dead_code)]
+pub(crate) fn decide_unconfigured_first_run(
+    is_tty: bool,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<UnconfiguredFirstRunDecision, String> {
+    if !is_tty {
+        return Ok(UnconfiguredFirstRunDecision::Fail);
+    }
+    let run_now = prompt_yes_no(
+        "Run the setup wizard now?",
+        true,
+        reader,
+        writer,
+    )?;
+    Ok(if run_now {
+        UnconfiguredFirstRunDecision::RunWizardInline
+    } else {
+        UnconfiguredFirstRunDecision::Fail
+    })
+}
+
 /// Runs the full service-install offer: decide, then (if the operator
 /// said yes) actually install via `run_install`. `run_install` is
 /// injected so tests can exercise the success/failure print paths
@@ -2203,6 +2266,20 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         storage_path
     };
 
+    // Store-collision guard — closes the compounding half of the
+    // first-launch audit finding: writing a fresh aivyx.toml that
+    // points at a storage path where a store already exists (e.g.
+    // from an earlier accidental bare `aivyx` run) would let a
+    // different passphrase on first launch silently fail to decrypt
+    // it later, with no indication why.
+    if Path::new(&storage_path).exists() {
+        let proceed = decide_storage_collision(&storage_path, &mut reader, &mut writer)?;
+        if !proceed {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+
     // 5b. Web search — bundled MCP server (Phase 46).
     let enable_web_search = prompt_yes_no(
         "Enable web search?",
@@ -2880,6 +2957,86 @@ mod tests {
         assert!(matches!(
             decision,
             ServiceInstallDecision::Install { web_ui: false }
+        ));
+    }
+
+    #[test]
+    fn decide_storage_collision_no_aborts() {
+        let mut input = Cursor::new(b"n\n" as &[u8]);
+        let mut output = Vec::new();
+        let proceed =
+            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output)
+                .unwrap();
+        assert!(!proceed);
+        let written = String::from_utf8_lossy(&output);
+        assert!(
+            written.contains("already exists"),
+            "warning must mention the collision: {written:?}"
+        );
+    }
+
+    #[test]
+    fn decide_storage_collision_yes_proceeds() {
+        let mut input = Cursor::new(b"y\n" as &[u8]);
+        let mut output = Vec::new();
+        let proceed =
+            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output)
+                .unwrap();
+        assert!(proceed);
+    }
+
+    #[test]
+    fn decide_storage_collision_defaults_to_no_on_bare_enter() {
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let proceed =
+            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output)
+                .unwrap();
+        assert!(!proceed, "default must be No — continuing is the riskier choice");
+    }
+
+    #[test]
+    fn decide_unconfigured_first_run_fails_immediately_when_not_a_tty() {
+        let mut input = Cursor::new(b"" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_unconfigured_first_run(false, &mut input, &mut output).unwrap();
+        assert!(matches!(decision, UnconfiguredFirstRunDecision::Fail));
+        // No prompt was printed -- nothing was asked when there's no
+        // one to ask.
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn decide_unconfigured_first_run_yes_runs_the_wizard() {
+        let mut input = Cursor::new(b"y\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
+        assert!(matches!(
+            decision,
+            UnconfiguredFirstRunDecision::RunWizardInline
+        ));
+    }
+
+    #[test]
+    fn decide_unconfigured_first_run_no_fails() {
+        let mut input = Cursor::new(b"n\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
+        assert!(matches!(decision, UnconfiguredFirstRunDecision::Fail));
+    }
+
+    #[test]
+    fn decide_unconfigured_first_run_defaults_to_yes_on_bare_enter() {
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let decision =
+            decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
+        assert!(matches!(
+            decision,
+            UnconfiguredFirstRunDecision::RunWizardInline
         ));
     }
 

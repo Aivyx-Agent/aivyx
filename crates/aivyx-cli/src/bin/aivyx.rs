@@ -4962,7 +4962,7 @@ fn select_passphrase_source(
         ),
     }
     if io::stdin().is_terminal() {
-        Ok(PassphraseSource::InteractivePrompt)
+        Ok(PassphraseSource::InteractivePrompt { confirm: false })
     } else {
         Err(format!(
             "no passphrase available: `{DEFAULT_ENV_VAR}` is not set, \
