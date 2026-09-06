@@ -1110,12 +1110,23 @@ fn run() -> Result<(), String> {
     // so this check is skipped once a prior store is on disk (the
     // unchanged order
     // further down handles that case, exactly as before this change).
-    if should_early_validate(verify_only, audit_export_mode, cost_mode, &storage_path) {
-        if let Err(e) = config.validate(&load_opts) {
+    if should_early_validate(&storage_path) {
+        let validation_result = early_validate_message(
+            verify_only,
+            audit_export_mode,
+            cost_mode,
+            &storage_path,
+            || config.validate(&load_opts),
+        );
+        if let Err(e) = validation_result {
             let hint = "\n\nRun `aivyx init` to set this up (or `aivyx init \
                          --template coder|researcher|personal` for a quick start).";
-            eprintln!("aivyx: {e}{hint}");
             let is_tty = io::stdin().is_terminal();
+            let (early_print, fail_message) =
+                early_validate_fail_output(is_tty, format!("aivyx: {e}{hint}"));
+            if let Some(msg) = early_print {
+                eprintln!("{msg}");
+            }
             let stdin = io::stdin();
             let mut reader = stdin.lock();
             let mut stderr_writer = io::stderr();
@@ -1134,7 +1145,7 @@ fn run() -> Result<(), String> {
                     return Ok(());
                 }
                 init::UnconfiguredFirstRunDecision::Fail => {
-                    return Err("setup required — see above".to_string());
+                    return Err(fail_message);
                 }
             }
         }
@@ -1729,13 +1740,62 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
 /// own side-effecting body (the prompt + wizard invocation) so the
 /// *condition* is unit-testable without needing to drive a full `run()`
 /// call.
-fn should_early_validate(
+/// Whether `run()`'s early-validate gate should fire at all. Pure —
+/// takes the already-computed facts, no I/O. Separated from the gate's
+/// own side-effecting body (the prompt + wizard invocation) so the
+/// *condition* is unit-testable without needing to drive a full `run()`
+/// call.
+///
+/// Mode-independent: it used to also exclude `verify_only`/
+/// `audit_export_mode`/`cost_mode`, but that exclusion meant those 3
+/// modes could still create a real store on a totally unconfigured
+/// machine (they never require an API key, so `config.validate()` can
+/// never catch it for them). Mode-awareness now lives entirely in
+/// `early_validate_message` below — this function only asks "does a
+/// store exist yet," for every mode alike.
+fn should_early_validate(storage_path: &std::path::Path) -> bool {
+    !storage_path.exists()
+}
+
+/// The validation-failure message for the early-validate gate, given the
+/// mode and whether a store exists. The 3 diagnostic modes
+/// (`verify_only`/`audit_export_mode`/`cost_mode`) never require an API
+/// key (`LoadOptions.require_api_key` is `false` for them), so
+/// `config.validate()` can never detect "nothing is configured yet" for
+/// them — the absence of a store IS the signal for those modes,
+/// independent of whatever `validate` would otherwise say. Takes
+/// `validate` as an injected closure so this is testable without a real
+/// `AivyxConfig`/`LoadOptions`.
+fn early_validate_message(
     verify_only: bool,
     audit_export_mode: bool,
     cost_mode: bool,
     storage_path: &std::path::Path,
-) -> bool {
-    !verify_only && !audit_export_mode && !cost_mode && !storage_path.exists()
+    validate: impl FnOnce() -> Result<(), aivyx_config::ConfigError>,
+) -> Result<(), String> {
+    if verify_only || audit_export_mode || cost_mode {
+        Err(format!(
+            "no store exists yet at {storage_path:?} — nothing to verify/export/report on"
+        ))
+    } else {
+        validate().map_err(|e| e.to_string())
+    }
+}
+
+/// What the early-validate gate should print immediately (if anything)
+/// and what it should return if the operator declines the wizard offer
+/// (or stdin isn't a terminal to ask in the first place). Pure — no I/O.
+/// TTY: shows the full message before the wizard-offer prompt, then a
+/// short follow-up on decline (a prompt already happened in between, so
+/// the short follow-up doesn't read as a duplicate). Non-TTY: nothing
+/// was shown yet, so print nothing early and return the full message
+/// once, letting `main()`'s generic handler print it exactly one time.
+fn early_validate_fail_output(is_tty: bool, full_message: String) -> (Option<String>, String) {
+    if is_tty {
+        (Some(full_message), "setup required — see above".to_string())
+    } else {
+        (None, full_message)
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -14204,37 +14264,100 @@ mod early_validate_gate_tests {
     use std::path::Path;
 
     #[test]
-    fn fires_when_store_absent_and_no_special_mode_active() {
-        assert!(should_early_validate(false, false, false, Path::new("/nonexistent/path/for/this/test")));
+    fn fires_when_store_absent() {
+        assert!(should_early_validate(Path::new(
+            "/nonexistent/path/for/this/test"
+        )));
     }
 
     #[test]
     fn skipped_when_store_already_exists() {
-        // `tempfile` is not a dev-dependency of this crate (confirmed —
-        // grep `Cargo.toml`); `uuid` already is, so build a throwaway
-        // path the same way this session's own aivyx-telegram/-discord/
-        // -slack checkpoint tests already do.
+        // `tempfile` is not a dev-dependency of this crate; `uuid`
+        // already is, so build a throwaway path the same way this
+        // session's own aivyx-telegram/-discord/-slack checkpoint tests
+        // already do.
         let path = std::env::temp_dir().join(format!(
             "aivyx-early-validate-gate-test-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&path, b"").expect("create dummy store file");
-        assert!(!should_early_validate(false, false, false, &path));
+        assert!(!should_early_validate(&path));
         let _ = std::fs::remove_file(&path);
     }
+}
+
+#[cfg(test)]
+mod early_validate_message_tests {
+    use super::early_validate_message;
+    use std::path::Path;
 
     #[test]
-    fn skipped_for_verify_only_mode() {
-        assert!(!should_early_validate(true, false, false, Path::new("/nonexistent/path")));
+    fn diagnostic_mode_errors_even_when_validate_would_pass() {
+        let result = early_validate_message(
+            true, // verify_only
+            false,
+            false,
+            Path::new("/nonexistent/path"),
+            || Ok(()),
+        );
+        let err = result.expect_err("diagnostic mode must always error when the gate fires");
+        assert!(
+            err.contains("nothing to verify/export/report on"),
+            "{err}"
+        );
     }
 
     #[test]
-    fn skipped_for_audit_export_mode() {
-        assert!(!should_early_validate(false, true, false, Path::new("/nonexistent/path")));
+    fn audit_export_mode_errors_even_when_validate_would_pass() {
+        let result = early_validate_message(false, true, false, Path::new("/nonexistent/path"), || Ok(()));
+        assert!(result.is_err());
     }
 
     #[test]
-    fn skipped_for_cost_mode() {
-        assert!(!should_early_validate(false, false, true, Path::new("/nonexistent/path")));
+    fn cost_mode_errors_even_when_validate_would_pass() {
+        let result = early_validate_message(false, false, true, Path::new("/nonexistent/path"), || Ok(()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_mode_passes_through_validate_ok() {
+        let result = early_validate_message(false, false, false, Path::new("/nonexistent/path"), || Ok(()));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn default_mode_passes_through_validate_err() {
+        let result = early_validate_message(
+            false,
+            false,
+            false,
+            Path::new("/nonexistent/path"),
+            || {
+                Err(aivyx_config::ConfigError::Missing {
+                    field: "anthropic_api_key",
+                })
+            },
+        );
+        let err = result.expect_err("default mode must surface validate()'s own error");
+        assert!(err.contains("anthropic_api_key"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod early_validate_fail_output_tests {
+    use super::early_validate_fail_output;
+
+    #[test]
+    fn tty_shows_full_message_early_and_short_message_on_fail() {
+        let (early, fail) = early_validate_fail_output(true, "aivyx: full message".to_string());
+        assert_eq!(early, Some("aivyx: full message".to_string()));
+        assert_eq!(fail, "setup required — see above");
+    }
+
+    #[test]
+    fn non_tty_shows_nothing_early_and_full_message_on_fail() {
+        let (early, fail) = early_validate_fail_output(false, "aivyx: full message".to_string());
+        assert_eq!(early, None);
+        assert_eq!(fail, "aivyx: full message");
     }
 }
