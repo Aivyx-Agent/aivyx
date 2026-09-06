@@ -3747,15 +3747,39 @@ operation surfaces a real miss.
   is constructed from four separate files), not a quick patch — logged
   as its own follow-up below rather than rushed into this phase.
 
-**Known follow-up, not yet scheduled to a phase:** extend `TurnSafety`
-(`crates/aivyx-core/src/agent.rs` — the codebase's own existing choke
-point for exactly this class of "a new construction site forgets a
-safety knob" bug) to carry `injection_scan_enabled`/
-`injection_scan_exempt`, and propagate them through `SpecialistFactory`'s
-four construction sites in `aivyx-team` back to `aivyx-cli`'s
-`team.rs` and the daemon's `team_mission_driver.rs`, closing the
-team-mission gap Phase 199 found and left open. Real, multi-crate
-work — deserves its own brainstorm→spec→plan cycle.
+- **Phase 200 (Finding 3 follow-up: closing the team-mission gap) shipped
+  2026-09-06** — see [PHASE_200.md](archive/phases/PHASE_200.md). Fresh
+  re-grounding corrected Phase 199's own retrospective estimate: only 3
+  of the "four separate files" were real production code (the other 3
+  were test-only fixtures) — the real gap was exactly 3 previously-
+  uncovered construction paths. Extended `TurnSafety`
+  (`crates/aivyx-core/src/agent.rs` — the codebase's own existing choke
+  point for exactly this class of bug) to carry
+  `injection_scan_enabled`/`injection_scan_exempt`, and threaded it
+  through all 6 real `TurnSafety::interactive`/`autonomous` call sites in
+  the system (converting Phase 199's own 2 already-covered sites to the
+  same mechanism too, per the user's explicit choice, for full
+  consistency). The final whole-branch review (Opus) found a real,
+  Critical regression the branch itself introduced: `TurnSafety`'s
+  derived `Default` had `injection_scan_enabled: false`, and this
+  branch's own change to `apply()` (writing that field unconditionally)
+  turned it into a silent kill-switch on 4 live production paths
+  (standalone Telegram x2/Discord/Slack channel sessions) that construct
+  agents via `TurnSafety::default()` directly — correctly out of this
+  phase's propagation scope, but newly exposed to `apply()`'s changed
+  semantics. The design spec's own dismissal of this exact risk ("no
+  such production call exists today") was factually wrong — a spec-level
+  miss, not an implementer error — fixed with a hand-written `Default`
+  impl preserving scan-on, independently verified against all 4 call
+  sites directly. Chapter Picket's Finding 3 is now fully closed.
+
+**Known follow-up, not yet scheduled to a phase:** the standalone
+Telegram/Discord/Slack channel-session paths never call
+`.interactive()`/`.autonomous()` at all, so they receive none of the
+operator's `[agent]` config — not just the injection-scan knobs, but
+`cycle_detection`/`turn_timeout_secs` too. Predates this whole
+Chapter-Picket arc; correctly out of scope for what Phase 200 set out to
+do, but a real gap worth its own look.
 
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
