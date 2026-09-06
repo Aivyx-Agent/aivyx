@@ -1740,11 +1740,6 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
 /// own side-effecting body (the prompt + wizard invocation) so the
 /// *condition* is unit-testable without needing to drive a full `run()`
 /// call.
-/// Whether `run()`'s early-validate gate should fire at all. Pure —
-/// takes the already-computed facts, no I/O. Separated from the gate's
-/// own side-effecting body (the prompt + wizard invocation) so the
-/// *condition* is unit-testable without needing to drive a full `run()`
-/// call.
 ///
 /// Mode-independent: it used to also exclude `verify_only`/
 /// `audit_export_mode`/`cost_mode`, but that exclusion meant those 3
