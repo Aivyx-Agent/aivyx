@@ -610,18 +610,23 @@ connected with 2 tools (`code`, `code_reply`). See
 `docs/NONAGON.md` §9 for a worked example wiring this into a
 Nonagon specialist.
 
-**Sharing KV-cache prefill work with `aivyx-coder`:** if both `aivyx`
-and this delegated `aivyx-coder` process point at the *same*
-`llama-server` instance, they can also share the expensive prefill work
-of a long, stable prompt prefix — `aivyx-kvcache`'s manifest is already
-safe for two separate OS processes writing the same store directory
-concurrently (WAL-mode sqlite index; eviction tolerates a file another
-process already deleted). To opt in, set both configs' kvcache store
-path to the *identical* absolute directory:
+**Pointing `aivyx-coder` at the same KV-cache store as `aivyx`:** if
+both `aivyx` and this delegated `aivyx-coder` process point at the
+*same* `llama-server` instance, that server has exactly **one**
+`--slot-save-path` — so both configs' kvcache store paths must agree
+for save/restore accounting to work correctly at all, not just as an
+optional optimization. `aivyx-kvcache`'s manifest is already safe for
+two separate OS processes writing the same store directory concurrently
+(WAL-mode sqlite index; eviction tolerates a file another process
+already deleted). To opt in, set both configs' kvcache store path to
+the *identical* absolute directory, matching whatever you pass to
+`llama-server`'s own `--slot-save-path` (see `docs/INSTALL.md`'s
+"KV-cache persistence" section):
 
 ```toml
 # aivyx's own config.toml
-kvcache_store_path = "/home/me/.local/share/shared-kvcache"
+[kvcache]
+store_path = "/home/me/.local/share/shared-kvcache"
 ```
 
 ```toml
@@ -629,6 +634,23 @@ kvcache_store_path = "/home/me/.local/share/shared-kvcache"
 [backend]
 kvcache_store_path = "/home/me/.local/share/shared-kvcache"
 ```
+
+**What this does and doesn't buy you.** Each app computes its own cache
+key from its own system prompt and tool set, so the two processes never
+actually produce matching cache keys — pointing both at one directory
+does *not* mean `aivyx-coder` reuses `aivyx`'s prefill work or vice
+versa. What it *does* buy: correct size accounting and eviction against
+the one real `--slot-save-path` directory the shared `llama-server`
+actually writes to (without this, whichever app's configured path
+doesn't match the server's real save path silently falls back to a
+1-byte placeholder size per entry, and `kvcache_max_bytes` never
+triggers).
+
+**The eviction budget is shared and asymmetric once the directory is
+shared.** Both apps evict against the *same* directory using each app's
+own `kvcache_max_bytes` independently — whichever app has the smaller
+budget configured evicts the other's slot files first. Both default to
+10 GiB, so this is invisible until an operator tunes one down.
 
 This only helps when both sides are *already* configured against the
 same `llama-server` — pointing two processes at the same directory

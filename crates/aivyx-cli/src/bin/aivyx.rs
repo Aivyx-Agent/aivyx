@@ -5648,13 +5648,14 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
 /// construction above and the Ward `SensitivePolicy` extra-deny list
 /// below -- the two can never silently diverge.
 fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path::PathBuf {
-    match &config.kvcache_store_path {
+    let raw = match &config.kvcache_store_path {
         Some(sourced) => sourced.value.clone(),
         None => match directories::ProjectDirs::from("", "", "aivyx") {
             Some(dirs) => dirs.data_local_dir().join("kvcache"),
             None => std::env::temp_dir().join("aivyx").join("kvcache"),
         },
-    }
+    };
+    std::fs::canonicalize(&raw).unwrap_or(raw)
 }
 
 #[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
@@ -5693,10 +5694,11 @@ async fn run_async(
     // reads `kvcache_store_path` and, on `None`, falls back to the
     // historical `ProjectDirs` default) but the destructure below moves
     // `config` field-by-field into the individual locals the rest of this
-    // function reaches for. Clone once up front so both the kvcache
-    // construction and the Ward `SensitivePolicy` wiring further down can
-    // still call it after the destructure consumes `config`.
-    let config_for_kvcache_and_ward = config.clone();
+    // function reaches for. Compute the (cheap) resulting `PathBuf` once up
+    // front -- rather than cloning the whole (secret-bearing) config -- so
+    // both the kvcache construction and the Ward `SensitivePolicy` wiring
+    // further down can reuse it after the destructure consumes `config`.
+    let kvcache_store_path = effective_kvcache_store_path(&config);
     let AivyxConfig {
         anthropic_api_key,
         openai_api_key,
@@ -5745,9 +5747,9 @@ async fn run_async(
         workspace_journaling_enabled,
         workspace_journaling_interval_secs,
         storage_path: _,
-        // Read via `config_for_kvcache_and_ward` (cloned above) instead of
-        // as an individual local -- `effective_kvcache_store_path` wants
-        // the whole config.
+        // Already resolved into `kvcache_store_path` above instead of as
+        // an individual local -- `effective_kvcache_store_path` wants the
+        // whole config, which is no longer available after this destructure.
         kvcache_store_path: _,
         memory_max_per_topic,
         passphrase: _,
@@ -6396,7 +6398,7 @@ async fn run_async(
     let kv_cache_handles = match llamacpp_base_url_for_kvcache {
         Some(base_url) => match aivyx_llm::fetch_llama_slots_info(&base_url).await {
             Some(info) => {
-                let store_path = effective_kvcache_store_path(&config_for_kvcache_and_ward);
+                let store_path = kvcache_store_path.clone();
                 match aivyx_kvcache::LlamaServerSlotStore::open(
                     &store_path,
                     &base_url,
@@ -6522,7 +6524,7 @@ async fn run_async(
         if guard_sensitive_paths.value {
             aivyx_core::sensitive_paths::SensitivePolicy::new(
                 allow_sensitive_paths.clone(),
-                vec![effective_kvcache_store_path(&config_for_kvcache_and_ward)],
+                vec![kvcache_store_path.clone()],
             )
         } else {
             aivyx_core::sensitive_paths::SensitivePolicy::disabled()

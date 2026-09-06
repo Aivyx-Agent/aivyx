@@ -789,7 +789,8 @@ pub struct AivyxConfig {
     /// share prefill work across the two processes — see
     /// `docs/MCP_RECIPES.md`'s `aivyx-coder` recipe for the full pairing
     /// guidance. `[kvcache] store_path` in TOML, `AIVYX_KVCACHE_STORE_PATH`
-    /// env override.
+    /// env override. Must be an absolute path — `~` is not expanded,
+    /// same convention as `storage_path` above.
     pub kvcache_store_path: Option<Sourced<PathBuf>>,
     /// Chapter Emboss (EB.2) — `[openai] constrain_tool_calls`. When
     /// `true` *and* the provider is a llama.cpp-family OpenAI-compat

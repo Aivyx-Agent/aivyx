@@ -1582,9 +1582,14 @@ llama-server -m /path/to/model.gguf -c 32768 \
   --slot-save-path ~/.local/share/aivyx/kvcache/slots
 ```
 
-Nothing else needs configuring — it activates automatically once
-`provider = "llama_cpp"` and the flag above are both set; there is no
-separate `aivyx.toml` field to opt in or out.
+By default this activates automatically once `provider = "llama_cpp"`
+and the flag above are both set, using
+`~/.local/share/aivyx/kvcache/slots` (platform-specific — see the
+`directories` crate's own docs). Set `[kvcache] store_path` in
+`aivyx.toml` to use a different directory instead — in particular, to
+share the store with a locally delegated `aivyx-coder` process pointed
+at the same `llama-server`; see `docs/MCP_RECIPES.md`'s `aivyx-coder`
+recipe for that pairing.
 
 Known caveat: this benefits fresh-process turns only today — the
 daemon's own main agent on its very first turn after a restart — not an
