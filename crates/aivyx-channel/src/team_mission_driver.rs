@@ -162,6 +162,17 @@ pub struct TeamRunDeps {
     /// `SpecialistFactory` so fs_root-mutating tool calls made during a team
     /// mission are checkpointed, same as every other agent construction path.
     pub checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
+    /// Chapter Picket team-mission follow-up — passed through to
+    /// `TeamAssembly::build` so a daemon-driven team mission's lead and
+    /// every specialist honor the operator's real `[agent]`
+    /// injection-scan posture, same as every other agent construction
+    /// path. `true` (the default) preserves Chapter Picket's original
+    /// always-on behavior.
+    pub injection_scan_enabled: bool,
+    /// Chapter Picket team-mission follow-up — same as
+    /// `injection_scan_enabled`. Empty (the default) preserves Chapter
+    /// Picket's original behavior byte-for-byte.
+    pub injection_scan_exempt: std::collections::BTreeSet<String>,
     /// The daemon's own shared kvcache pool/store + served build hash (Task
     /// 5's binding, reused — not re-probed). Passed through to every
     /// specialist's `SpecialistFactory` so a team mission's specialist turns
@@ -1636,6 +1647,8 @@ fn assemble_runtime(
         deps.checkpointer.clone(),
         deps.kv_cache_handles.clone(),
         message_origin,
+        deps.injection_scan_enabled,
+        deps.injection_scan_exempt.clone(),
     )?;
     Ok((assembly.runtime(), meter))
 }
@@ -2325,6 +2338,8 @@ pub(crate) mod tests {
             audit_log: None,
             schedule_store: None,
             checkpointer: None,
+            injection_scan_enabled: true,
+            injection_scan_exempt: std::collections::BTreeSet::new(),
             kv_cache_handles: None,
         }
     }
@@ -2362,6 +2377,8 @@ pub(crate) mod tests {
             audit_log: None,
             schedule_store: None,
             checkpointer: None,
+            injection_scan_enabled: true,
+            injection_scan_exempt: std::collections::BTreeSet::new(),
             kv_cache_handles: None,
         }
     }

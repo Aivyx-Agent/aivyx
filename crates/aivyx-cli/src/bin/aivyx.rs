@@ -9074,6 +9074,8 @@ async fn run_async(
                 // team mission runs shares the exact same `KvSlotPool` the
                 // daemon's main agent uses.
                 kv_cache_handles: kv_cache_handles.clone(),
+                injection_scan_enabled,
+                injection_scan_exempt: injection_scan_exempt.clone(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
