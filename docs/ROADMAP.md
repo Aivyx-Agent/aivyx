@@ -3800,6 +3800,36 @@ operation surfaces a real miss.
   is now fully closed — every real agent-construction site in the system
   receives the operator's full `[agent]` config through one mechanism.
 
+## Phase 202 — First-Launch Store Safety [COMPLETE]
+
+Opened 2026-09-06 from a direct audit of what happens when an End User
+launches Aivyx for the first time — traced against real code, not
+inferred from docs. Shipped the same day — see
+[PHASE_202.md](archive/phases/PHASE_202.md). Found and closed a real bug
+chain: running bare `aivyx` before `aivyx init` on a fresh machine
+silently created a permanent, unconfirmed encrypted store (real mkdirs,
+an unconfirmed interactive passphrase prompt, a real `RedbStorage::open`)
+before config validation ever ran, and a later, real `aivyx init` run
+could then collide with that orphaned store under a different
+passphrase — an opaque, undiagnosable decrypt failure. Three
+mechanisms: an early-validate gate in `run()` that only activates when
+no store exists yet (preserving the store-can-supply-a-secret fallback
+for every returning install, byte-for-byte, independently verified by
+building and running the real binary for both paths), a store-collision
+guard in `aivyx init` mirroring its existing `aivyx.toml`-overwrite
+guard, and confirm-reentry on the first-time interactive passphrase
+prompt scoped to new-store creation only. The final whole-branch review
+found 3 Important issues by going further than reading the diff — it
+built and ran the real binary itself: a zeroize-hygiene regression in
+the new confirm-reentry function (contradicting the module's own
+documented invariant), a real pre-existing `$XDG_DATA_HOME` divergence
+between `aivyx init`'s own path defaults and `aivyx-config`'s loader
+that this phase's own design spec incorrectly claimed didn't exist
+(letting the new store-collision guard silently miss an orphaned store
+on some machines), and two stale `#[allow(dead_code)]` attributes from
+an intermediate branch state. All three fixed and independently
+re-verified.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
