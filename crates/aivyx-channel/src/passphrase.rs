@@ -418,13 +418,22 @@ where
 /// each capturing the same test reader/writer would violate the borrow
 /// checker, since both would need to exist simultaneously as function
 /// arguments. One closure invoked twice sequentially avoids that.
+///
+/// This closure-per-prompt shape also doubles as this function's only
+/// output channel: on a mismatch, the retry notice ("Passphrases
+/// didn't match. Try again.") is folded into the *next* prompt string
+/// rather than printed separately, so it's observable through the same
+/// seam every other prompt already uses — no separate `eprintln!`, no
+/// new parameter.
 fn read_interactive_password_with_confirm<F>(mut read: F) -> Result<Vec<u8>, PassphraseError>
 where
     F: FnMut(&str) -> std::io::Result<String>,
 {
     const FIRST_PROMPT: &str = "aivyx passphrase (new store — you'll need this every time): ";
-    const RETRY_PROMPT: &str = "Passphrases didn't match. Try again.\n\
-                                 aivyx passphrase (new store — you'll need this every time): ";
+    const RETRY_PROMPT: &str = concat!(
+        "Passphrases didn't match. Try again.\n",
+        "aivyx passphrase (new store — you'll need this every time): "
+    );
     let mut prompt = FIRST_PROMPT;
     loop {
         let first = map_read_result(read(prompt))?;

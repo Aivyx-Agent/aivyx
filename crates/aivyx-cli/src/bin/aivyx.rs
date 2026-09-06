@@ -1103,13 +1103,17 @@ fn run() -> Result<(), String> {
 
     // First-launch store safety — before touching disk at all, catch
     // the case where nothing has ever configured this install: no
-    // store exists yet at the target path, and validation would fail
-    // anyway. Moving `validate()` this early is only safe when the
-    // store doesn't exist yet — an *existing* store can still supply
-    // a missing secret via `hydrate_secrets_from_store` further down,
-    // so this check is skipped once a prior store is on disk (the
-    // unchanged order
-    // further down handles that case, exactly as before this change).
+    // store exists yet at the target path. For the default chat path,
+    // that's paired with "and config.validate() would fail anyway"; for
+    // the 3 diagnostic modes (verify_only/audit_export/cost), store-
+    // absence alone is the trigger, since they never require an API key
+    // and validate() can never catch "nothing configured" for them (see
+    // early_validate_message). Moving validation this early is only
+    // safe when the store doesn't exist yet — an *existing* store can
+    // still supply a missing secret via `hydrate_secrets_from_store`
+    // further down, so this whole check is skipped once a prior store
+    // is on disk (the unchanged order further down handles that case,
+    // exactly as before this branch).
     if should_early_validate(&storage_path) {
         let validation_result = early_validate_message(
             verify_only,
@@ -1119,13 +1123,10 @@ fn run() -> Result<(), String> {
             || config.validate(&load_opts),
         );
         if let Err(e) = validation_result {
-            let hint = "\n\nRun `aivyx init` to set this up (or `aivyx init \
-                         --template coder|researcher|personal` for a quick start).";
             let is_tty = io::stdin().is_terminal();
-            let (early_print, fail_message) =
-                early_validate_fail_output(is_tty, format!("aivyx: {e}{hint}"));
+            let (early_print, fail_message) = early_validate_fail_output(is_tty, e);
             if let Some(msg) = early_print {
-                eprintln!("{msg}");
+                eprintln!("aivyx: {msg}");
             }
             let stdin = io::stdin();
             let mut reader = stdin.lock();
@@ -1761,6 +1762,16 @@ fn should_early_validate(storage_path: &std::path::Path) -> bool {
 /// independent of whatever `validate` would otherwise say. Takes
 /// `validate` as an injected closure so this is testable without a real
 /// `AivyxConfig`/`LoadOptions`.
+///
+/// The returned message is complete and prefix-free (no leading
+/// `"aivyx: "` — the caller adds that exactly once, at whichever of the
+/// two places actually prints it) and already carries its own
+/// mode-appropriate remedy: the default chat path's remedy is
+/// `aivyx init`, but for the 3 diagnostic modes `aivyx init` alone can
+/// never fix "no store exists" (it only ever writes `aivyx.toml`, never
+/// creates a store — the store is created later by `run()`'s own
+/// passphrase/store-open sequence), so those modes get a remedy that
+/// actually resolves the condition.
 fn early_validate_message(
     verify_only: bool,
     audit_export_mode: bool,
@@ -1770,10 +1781,17 @@ fn early_validate_message(
 ) -> Result<(), String> {
     if verify_only || audit_export_mode || cost_mode {
         Err(format!(
-            "no store exists yet at {storage_path:?} — nothing to verify/export/report on"
+            "no store exists yet at {storage_path:?} — nothing to verify/export/report on.\n\n\
+             Run `aivyx init` first if you haven't configured anything yet, then run \
+             `aivyx` once to create the store, then re-run this command."
         ))
     } else {
-        validate().map_err(|e| e.to_string())
+        validate().map_err(|e| {
+            format!(
+                "{e}\n\nRun `aivyx init` to set this up (or `aivyx init \
+                 --template coder|researcher|personal` for a quick start)."
+            )
+        })
     }
 }
 
@@ -1785,6 +1803,13 @@ fn early_validate_message(
 /// the short follow-up doesn't read as a duplicate). Non-TTY: nothing
 /// was shown yet, so print nothing early and return the full message
 /// once, letting `main()`'s generic handler print it exactly one time.
+///
+/// `full_message` is prefix-free (no leading `"aivyx: "`) — whichever
+/// of the two call sites actually prints it owns adding that prefix
+/// exactly once. Baking the prefix in here would double it on the
+/// non-TTY path, since `main()`'s generic error handler already adds
+/// its own `"aivyx: "` to anything this function returns as the second
+/// tuple element.
 fn early_validate_fail_output(is_tty: bool, full_message: String) -> (Option<String>, String) {
     if is_tty {
         (Some(full_message), "setup required — see above".to_string())
@@ -14300,6 +14325,15 @@ mod early_validate_message_tests {
             err.contains("nothing to verify/export/report on"),
             "{err}"
         );
+        assert!(
+            !err.starts_with("aivyx: "),
+            "early_validate_message must return a prefix-free message: {err}"
+        );
+        assert!(
+            err.contains("run `aivyx` once to create the store"),
+            "diagnostic-mode hint must name a remedy that actually creates a store, \
+             not just `aivyx init`: {err}"
+        );
     }
 
     #[test]
@@ -14335,6 +14369,11 @@ mod early_validate_message_tests {
         );
         let err = result.expect_err("default mode must surface validate()'s own error");
         assert!(err.contains("anthropic_api_key"), "{err}");
+        assert!(
+            !err.starts_with("aivyx: "),
+            "early_validate_message must return a prefix-free message: {err}"
+        );
+        assert!(err.contains("aivyx init"), "{err}");
     }
 }
 
@@ -14344,15 +14383,20 @@ mod early_validate_fail_output_tests {
 
     #[test]
     fn tty_shows_full_message_early_and_short_message_on_fail() {
-        let (early, fail) = early_validate_fail_output(true, "aivyx: full message".to_string());
-        assert_eq!(early, Some("aivyx: full message".to_string()));
+        let (early, fail) = early_validate_fail_output(true, "full message".to_string());
+        assert_eq!(early, Some("full message".to_string()));
         assert_eq!(fail, "setup required — see above");
     }
 
     #[test]
     fn non_tty_shows_nothing_early_and_full_message_on_fail() {
-        let (early, fail) = early_validate_fail_output(false, "aivyx: full message".to_string());
+        let (early, fail) = early_validate_fail_output(false, "full message".to_string());
         assert_eq!(early, None);
-        assert_eq!(fail, "aivyx: full message");
+        assert_eq!(fail, "full message");
+        assert!(
+            !fail.starts_with("aivyx: "),
+            "the non-TTY fail message must stay prefix-free -- main()'s generic \
+             handler adds \"aivyx: \" itself; baking it in here doubles it"
+        );
     }
 }
