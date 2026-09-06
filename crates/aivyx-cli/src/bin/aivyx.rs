@@ -8613,11 +8613,14 @@ async fn run_async(
         )
         .with_tool_allowlist(child_tool_allowlist)
         .with_memory_topic_prefix(child_memory_topic_prefix)
-        .with_checkpointer(checkpointer_for_factory.clone())
-        .with_injection_scan_enabled(injection_scan_enabled)
-        .with_injection_scan_exempt(injection_scan_exempt_for_factory.clone());
-        let child_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
-            .apply(child_agent);
+        .with_checkpointer(checkpointer_for_factory.clone());
+        let child_agent = aivyx_core::TurnSafety::interactive(
+            turn_timeout_secs,
+            cycle_detection,
+            injection_scan_enabled,
+            injection_scan_exempt_for_factory.clone(),
+        )
+        .apply(child_agent);
 
         Ok(Box::new(child_agent) as Box<dyn Agent>)
     });
@@ -9113,11 +9116,14 @@ async fn run_async(
         .with_memory_topic_prefix(memory_topic_prefix)
         .with_budget_gate(daemon_budget_gate)
         .with_rate_gate(daemon_rate_gate)
-        .with_checkpointer(checkpointer.clone())
-        .with_injection_scan_enabled(injection_scan_enabled)
-        .with_injection_scan_exempt(injection_scan_exempt.clone());
-        let daemon_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
-            .apply(daemon_agent);
+        .with_checkpointer(checkpointer.clone());
+        let daemon_agent = aivyx_core::TurnSafety::interactive(
+            turn_timeout_secs,
+            cycle_detection,
+            injection_scan_enabled,
+            injection_scan_exempt.clone(),
+        )
+        .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
         let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
