@@ -299,7 +299,7 @@ aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e
 # aivyx-confine/aivyx-kvcache above. No platform-specific backend, so no
 # default-features/target-gating split is needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "8d8583f9cd63dd48b72ffea9455f98f5a9405ffc" }
+aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "06134e6447587b0b064c4a6d871cc5bb1741b9f0" }
 
 # The profile that 'dist' will build with
 [profile.dist]
