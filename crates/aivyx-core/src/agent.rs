@@ -1562,12 +1562,15 @@ impl ConcreteAgent {
 /// the *next* step once the true, fenced outcome has already been
 /// recorded.
 ///
-/// Known follow-up: the marker list was ported verbatim from
-/// aivyx-coder and hasn't been evaluated against non-file/non-web
-/// content (Gmail/Calendar/other MCP tool output) — false positives
-/// there currently hard-stop a turn with no config knob to disable the
-/// tripwire. Deliberately deferred; see Finding 3 of the Phase 196
-/// review.
+/// Known follow-up: the marker list has since diverged from
+/// aivyx-coder's own copy (this crate's pin now carries a larger list,
+/// deliberately not synced back) and still hasn't been evaluated
+/// end-to-end against non-file/non-web content (Gmail/Calendar/other MCP
+/// tool output), beyond the two markers narrowed by this phase's own
+/// final-review pass. A config knob to disable or exempt the tripwire
+/// per-tool does exist today (`injection_scan_enabled` /
+/// `injection_scan_exempt` on this struct), so a false positive there is
+/// no longer an unconditional hard-stop with no escape hatch.
 fn check_for_injection(output: &serde_json::Value, tool_name: &str) -> Option<String> {
     let text = output.to_string();
     let finding = aivyx_injection_guard::scan_for_injection_markers(&text, tool_name)?;

@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "aivyx-injection-guard"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=06134e6447587b0b064c4a6d871cc5bb1741b9f0#06134e6447587b0b064c4a6d871cc5bb1741b9f0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=ad9141c6ca242532db7b8e34eff423084e1eba4d#ad9141c6ca242532db7b8e34eff423084e1eba4d"
 
 [[package]]
 name = "aivyx-ipc"
