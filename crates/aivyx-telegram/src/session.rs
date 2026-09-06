@@ -130,6 +130,20 @@ pub struct TelegramSessionConfig {
     /// `aivyx_channel::SessionConfig::memory_topic_prefix` for
     /// semantics. `None` preserves legacy behavior.
     pub memory_topic_prefix: Option<String>,
+    /// Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override.
+    /// Threaded into `TurnSafety::interactive(...)` at each construction
+    /// site below, matching `daemon_agent`/`child_agent`. `None` preserves
+    /// the turn loop's built-in default deadline.
+    pub turn_timeout_secs: Option<u64>,
+    /// `[agent] cycle_detection` — arm the small-cycle breaker. Threaded
+    /// into `TurnSafety::interactive(...)` alongside `turn_timeout_secs`.
+    pub cycle_detection: Option<bool>,
+    /// `[agent] injection_scan_enabled` — Chapter Picket's active-scan
+    /// on/off. See `aivyx_core::TurnSafety` for the full contract.
+    pub injection_scan_enabled: bool,
+    /// `[agent] injection_scan_exempt` — per-tool-name exemption list for
+    /// the active scan. See `aivyx_core::TurnSafety` for the full contract.
+    pub injection_scan_exempt: std::collections::BTreeSet<String>,
 }
 
 /// How long to hold each `getUpdates` request open (seconds).
@@ -429,11 +443,15 @@ where
     )
     .with_tool_allowlist(config.tool_allowlist)
     .with_memory_topic_prefix(config.memory_topic_prefix);
-    // Route through the shared per-turn-safety choke point. This standalone path
-    // carries no `[agent]` config to inherit, so it stays at the built-in
-    // defaults (`default()`); a future config thread switches this to
-    // `TurnSafety::interactive(...)` in one place.
-    let agent = aivyx_core::TurnSafety::default().apply(agent);
+    // Route through the shared per-turn-safety choke point with the
+    // operator's configured values.
+    let agent = aivyx_core::TurnSafety::interactive(
+        config.turn_timeout_secs,
+        config.cycle_detection,
+        config.injection_scan_enabled,
+        config.injection_scan_exempt,
+    )
+    .apply(agent);
 
     // ---- Long-poll loop ----------------------------------------------
     //
@@ -800,11 +818,15 @@ where
     .with_tool_allowlist(config.tool_allowlist)
     .with_memory_topic_prefix(config.memory_topic_prefix)
     .with_checkpointer(checkpointer);
-    // Route through the shared per-turn-safety choke point. This standalone path
-    // carries no `[agent]` config to inherit, so it stays at the built-in
-    // defaults (`default()`); a future config thread switches this to
-    // `TurnSafety::interactive(...)` in one place.
-    let agent = aivyx_core::TurnSafety::default().apply(agent);
+    // Route through the shared per-turn-safety choke point with the
+    // operator's configured values.
+    let agent = aivyx_core::TurnSafety::interactive(
+        config.turn_timeout_secs,
+        config.cycle_detection,
+        config.injection_scan_enabled,
+        config.injection_scan_exempt,
+    )
+    .apply(agent);
 
     let mut turns_run: usize = 0;
     let mut pending: VecDeque<IncomingMessage> = VecDeque::new();
