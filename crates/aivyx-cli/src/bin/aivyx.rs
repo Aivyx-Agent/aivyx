@@ -8406,7 +8406,7 @@ async fn run_async(
     // below is `move`, so it needs its own clone (the bool is Copy,
     // no clone needed for it; the outer `injection_scan_exempt`
     // binding is still needed afterward for `daemon_agent`'s own
-    // `.with_injection_scan_exempt(...)`).
+    // `TurnSafety::interactive(...)` call).
     let injection_scan_exempt_for_factory = injection_scan_exempt.clone();
     let roles_for_factory = roles.clone();
     let backcompat_floor_for_factory = backcompat_floor.clone();

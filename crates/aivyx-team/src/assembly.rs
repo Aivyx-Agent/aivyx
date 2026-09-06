@@ -213,7 +213,7 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
-            false,
+            true,
             std::collections::BTreeSet::new(),
         )
         .expect("valid team")
@@ -235,7 +235,7 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
-            false,
+            true,
             std::collections::BTreeSet::new(),
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
@@ -303,7 +303,7 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
-            false,
+            true,
             std::collections::BTreeSet::new(),
         )
         .unwrap();

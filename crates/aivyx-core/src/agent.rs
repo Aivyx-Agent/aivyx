@@ -967,18 +967,39 @@ impl CycleConfig {
 }
 
 /// The per-turn safety knobs — the wall-clock deadline ([`ConcreteAgent::
-/// with_turn_timeout`]) and the small-cycle breaker ([`ConcreteAgent::
-/// with_cycle_detection`]) — bundled so every agent-construction site applies
-/// them through ONE call ([`Self::apply`]) instead of re-deriving the builder
-/// chain by hand. That ad-hoc duplication is exactly what previously left the
-/// daemon, the role-switch child, and the team agents unprotected; routing all
-/// sites through `apply` keeps the wiring from drifting again.
-#[derive(Clone, Debug, Default)]
+/// with_turn_timeout`]), the small-cycle breaker ([`ConcreteAgent::
+/// with_cycle_detection`]), and the Chapter Picket injection-scan posture
+/// ([`ConcreteAgent::with_injection_scan_enabled`]/
+/// [`ConcreteAgent::with_injection_scan_exempt`]) — bundled so every
+/// agent-construction site applies them through ONE call ([`Self::apply`])
+/// instead of re-deriving the builder chain by hand. That ad-hoc duplication
+/// is exactly what previously left the daemon, the role-switch child, and
+/// the team agents unprotected; routing all sites through `apply` keeps the
+/// wiring from drifting again.
+#[derive(Clone, Debug)]
 pub struct TurnSafety {
     turn_timeout: Option<Duration>,
     cycle_config: Option<CycleConfig>,
     injection_scan_enabled: bool,
     injection_scan_exempt: std::collections::BTreeSet<String>,
+}
+
+impl Default for TurnSafety {
+    /// Hand-written rather than derived: `bool::default()` is `false`, which
+    /// would make `TurnSafety::default()` — used by the standalone
+    /// Telegram/Discord/Slack channel-session paths, which never call
+    /// `interactive()`/`autonomous()` — silently disable the injection scan
+    /// (`apply()` unconditionally writes `injection_scan_enabled`). This
+    /// preserves the pre-existing "byte-identical to a bare `ConcreteAgent`"
+    /// contract those callers document and rely on.
+    fn default() -> Self {
+        Self {
+            turn_timeout: None,
+            cycle_config: None,
+            injection_scan_enabled: true,
+            injection_scan_exempt: std::collections::BTreeSet::new(),
+        }
+    }
 }
 
 impl TurnSafety {
