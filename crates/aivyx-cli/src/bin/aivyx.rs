@@ -5562,6 +5562,11 @@ async fn run_async(
         // the data readers below.
         guard_sensitive_paths,
         allow_sensitive_paths,
+        // Chapter Picket Finding 3 follow-up — `[agent] injection_scan_enabled`
+        // / `injection_scan_exempt`, threaded into both ConcreteAgent
+        // construction sites (daemon_agent + child_agent) below.
+        injection_scan_enabled,
+        injection_scan_exempt,
         // Chapter Rampart — the network egress guard, applied to the web tools.
         allow_private_egress,
         allow_egress_hosts,
@@ -6380,6 +6385,11 @@ async fn run_async(
     // posture, unwrapped once here for the shell.exec + git.rs
     // confiner-construction sites below.
     let require_enforcement = require_enforcement.value;
+    // Chapter Picket Finding 3 follow-up — unwrapped once here for both
+    // ConcreteAgent construction sites below (daemon_agent + child_agent).
+    let injection_scan_enabled = injection_scan_enabled.value;
+    let injection_scan_exempt: std::collections::BTreeSet<String> =
+        injection_scan_exempt.into_iter().collect();
     let fs_write = FsWriteToolConfig::new(fs_root.clone())
         .with_confirm_destructive(confirm_destructive)
         // Chapter Portcullis — same guard as fs.read, on the write path:
@@ -8390,6 +8400,12 @@ async fn run_async(
     // own clone of `checkpointer`; the outer binding is still needed
     // afterward for `daemon_agent`'s own `.with_checkpointer(...)`.
     let checkpointer_for_factory = checkpointer.clone();
+    // Chapter Picket Finding 3 follow-up — same reasoning: the closure
+    // below is `move`, so it needs its own clone (the bool is Copy,
+    // no clone needed for it; the outer `injection_scan_exempt`
+    // binding is still needed afterward for `daemon_agent`'s own
+    // `.with_injection_scan_exempt(...)`).
+    let injection_scan_exempt_for_factory = injection_scan_exempt.clone();
     let roles_for_factory = roles.clone();
     let backcompat_floor_for_factory = backcompat_floor.clone();
     let model_for_factory = model.clone();
@@ -8597,7 +8613,9 @@ async fn run_async(
         )
         .with_tool_allowlist(child_tool_allowlist)
         .with_memory_topic_prefix(child_memory_topic_prefix)
-        .with_checkpointer(checkpointer_for_factory.clone());
+        .with_checkpointer(checkpointer_for_factory.clone())
+        .with_injection_scan_enabled(injection_scan_enabled)
+        .with_injection_scan_exempt(injection_scan_exempt_for_factory.clone());
         let child_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
             .apply(child_agent);
 
@@ -9095,7 +9113,9 @@ async fn run_async(
         .with_memory_topic_prefix(memory_topic_prefix)
         .with_budget_gate(daemon_budget_gate)
         .with_rate_gate(daemon_rate_gate)
-        .with_checkpointer(checkpointer.clone());
+        .with_checkpointer(checkpointer.clone())
+        .with_injection_scan_enabled(injection_scan_enabled)
+        .with_injection_scan_exempt(injection_scan_exempt.clone());
         let daemon_agent = aivyx_core::TurnSafety::interactive(turn_timeout_secs, cycle_detection)
             .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
