@@ -76,6 +76,8 @@ impl TeamAssembly {
             String,
         )>,
         message_origin: aivyx_core::MessageOrigin,
+        injection_scan_enabled: bool,
+        injection_scan_exempt: std::collections::BTreeSet<String>,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
@@ -85,7 +87,9 @@ impl TeamAssembly {
             .with_dialogue(Arc::clone(&bus), dialogue.clone())
             .with_member_backends(member_backends)
             .with_checkpointer(checkpointer)
-            .with_kv_cache(kv_cache_handles);
+            .with_kv_cache(kv_cache_handles)
+            .with_injection_scan_enabled(injection_scan_enabled)
+            .with_injection_scan_exempt(injection_scan_exempt);
         let pool = Arc::new(SpecialistPool::new(
             factory,
             config.clone(),
@@ -209,6 +213,8 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
+            false,
+            std::collections::BTreeSet::new(),
         )
         .expect("valid team")
     }
@@ -229,6 +235,8 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
+            false,
+            std::collections::BTreeSet::new(),
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
     }
@@ -295,6 +303,8 @@ mod tests {
             None,
             None,
             aivyx_core::MessageOrigin::Operator,
+            false,
+            std::collections::BTreeSet::new(),
         )
         .unwrap();
 
