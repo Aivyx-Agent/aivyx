@@ -3728,10 +3728,34 @@ is ported verbatim, not expanded — real-usage-driven additions to
 `INJECTION_MARKERS` are a candidate for whenever either consumer's actual
 operation surfaces a real miss.
 
-**Known follow-up, not yet scheduled to a phase:** no operator-facing
-config knob to disable or tune the tripwire, independent of what
-content gets scanned — the other half of Finding 3's original framing,
-deliberately deferred when Phase 198 closed the coverage-gap half.
+- **Phase 199 (Finding 3 follow-up: the config-knob half) shipped
+  2026-09-06** — see [PHASE_199.md](archive/phases/PHASE_199.md). Added
+  `[agent] injection_scan_enabled` (global on/off) and `[agent]
+  injection_scan_exempt` (per-tool-name exemption list) — the user's
+  own choice of the richer shape over a plain boolean, since the
+  original finding said "disable *or tune*." Threaded through
+  `aivyx-config` → `aivyx-core`'s `ConcreteAgent` →
+  `aivyx-cli`'s daemon-startup wiring, gating only the active scan;
+  Bulwark's fencing stays unconditional, confirmed by the final review
+  tracing it to its one real call site. The same review found the
+  design spec's own premise ("only two `ConcreteAgent::new` sites exist
+  in this binary") was wrong — team missions build agents through a
+  separate path (`aivyx-team`'s `SpecialistFactory::build`) this phase
+  never touched, so the two knobs don't yet reach team missions
+  (fail-safe: they stay scan-always-on there). Further grounding found
+  the real fix is a genuine multi-crate propagation (`SpecialistFactory`
+  is constructed from four separate files), not a quick patch — logged
+  as its own follow-up below rather than rushed into this phase.
+
+**Known follow-up, not yet scheduled to a phase:** extend `TurnSafety`
+(`crates/aivyx-core/src/agent.rs` — the codebase's own existing choke
+point for exactly this class of "a new construction site forgets a
+safety knob" bug) to carry `injection_scan_enabled`/
+`injection_scan_exempt`, and propagate them through `SpecialistFactory`'s
+four construction sites in `aivyx-team` back to `aivyx-cli`'s
+`team.rs` and the daemon's `team_mission_driver.rs`, closing the
+team-mission gap Phase 199 found and left open. Real, multi-crate
+work — deserves its own brainstorm→spec→plan cycle.
 
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
