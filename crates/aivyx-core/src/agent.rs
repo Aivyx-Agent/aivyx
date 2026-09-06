@@ -3370,7 +3370,7 @@ mod tests {
         let mut exempt = std::collections::BTreeSet::new();
         exempt.insert("test.exempt".to_string());
         let safety = TurnSafety::autonomous(false, exempt.clone());
-        assert_eq!(safety.injection_scan_enabled, false);
+        assert!(!safety.injection_scan_enabled);
         assert_eq!(safety.injection_scan_exempt, exempt);
     }
 
