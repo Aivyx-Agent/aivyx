@@ -3773,13 +3773,32 @@ operation surfaces a real miss.
   impl preserving scan-on, independently verified against all 4 call
   sites directly. Chapter Picket's Finding 3 is now fully closed.
 
-**Known follow-up, not yet scheduled to a phase:** the standalone
-Telegram/Discord/Slack channel-session paths never call
-`.interactive()`/`.autonomous()` at all, so they receive none of the
-operator's `[agent]` config — not just the injection-scan knobs, but
-`cycle_detection`/`turn_timeout_secs` too. Predates this whole
-Chapter-Picket arc; correctly out of scope for what Phase 200 set out to
-do, but a real gap worth its own look.
+- **Phase 201 (channel-session config threading) shipped 2026-09-06** —
+  see [PHASE_201.md](archive/phases/PHASE_201.md). Grounding found the
+  gap was narrower than it sounded: only the 3 channels' in-process
+  fallback (used on `--no-daemon` or when no daemon socket is reachable)
+  ever called `TurnSafety::default()` — the daemon-mode dispatch path
+  never constructs an agent client-side at all. Added the same 4 fields
+  to `TelegramSessionConfig`/`DiscordSessionConfig`/`SlackSessionConfig`
+  (mirroring `tool_allowlist`/`memory_topic_prefix`) and converted all 4
+  real `TurnSafety::default()` call sites to `TurnSafety::interactive(...)`.
+  A real plan defect (not an implementer error) was caught mid-execution:
+  the new tests' assertion expected an exact-match reply text, but every
+  channel unconditionally renders a tool-call progress line regardless of
+  scanning — fixed by asserting on the absence of the escalation footer
+  instead, independently mutation-tested by 3 of 4 task reviews. The
+  final whole-branch review (Opus) re-verified every grounding claim from
+  scratch and found one more instance of Phase 200's own regression
+  class, one level up: `TurnSafety::default()`'s hand-written `Default`
+  impl (Phase 200's fix) had a doc comment naming the exact callers this
+  branch just moved off of it, with zero test enforcing the invariant —
+  a future "helpful" `#[derive(Default)]` could have silently re-opened
+  the identical regression, undetectably this time. Fixed with a reworded
+  comment plus a dedicated test pinning
+  `TurnSafety::default().injection_scan_enabled == true`. Chapter
+  Picket's team-mission/channel-session propagation arc (Phases 199-201)
+  is now fully closed — every real agent-construction site in the system
+  receives the operator's full `[agent]` config through one mechanism.
 
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
