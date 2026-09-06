@@ -9820,10 +9820,13 @@ async fn run_async(
                 system_prompt_refiner: system_prompt_refiner.clone(),
                 // Chapter Bridle (BR.4) — operator override for the
                 // Per-turn safety knobs from `[agent]` (deadline + cycle
-                // breaker), applied uniformly in `build_agent_stack`.
+                // breaker + injection-scan posture), applied uniformly in
+                // `build_agent_stack`.
                 turn_safety: aivyx_core::TurnSafety::interactive(
                     turn_timeout_secs,
                     cycle_detection,
+                    injection_scan_enabled,
+                    injection_scan_exempt.clone(),
                 ),
             };
 
@@ -10307,10 +10310,13 @@ async fn run_async(
                         config_rate_limit.clone(),
                     ),
                     // Same per-turn safety knobs as the Local path (deadline +
-                    // cycle breaker), applied uniformly in `build_agent_stack`.
+                    // cycle breaker + injection-scan posture), applied
+                    // uniformly in `build_agent_stack`.
                     turn_safety: aivyx_core::TurnSafety::interactive(
                         turn_timeout_secs,
                         cycle_detection,
+                        injection_scan_enabled,
+                        injection_scan_exempt.clone(),
                     ),
                     checkpointer: checkpointer.clone(),
                 };
