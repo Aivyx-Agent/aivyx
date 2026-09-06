@@ -580,7 +580,6 @@ fn decide_storage_collision(
 /// would fail validation anyway. Pure with respect to OS calls,
 /// mirroring `ServiceInstallDecision`'s own testability shape — no I/O
 /// beyond the injected `reader`/`writer`.
-#[allow(dead_code)]
 pub(crate) enum UnconfiguredFirstRunDecision {
     /// Run `run_init_wizard` inline, then exit — the operator said yes.
     RunWizardInline,
@@ -594,7 +593,6 @@ pub(crate) enum UnconfiguredFirstRunDecision {
 /// When `is_tty` is `false` (scripts, CI, a misconfigured service unit),
 /// fails immediately without prompting — there's no one to ask, and
 /// blocking on a read that will never come would hang the process.
-#[allow(dead_code)]
 pub(crate) fn decide_unconfigured_first_run(
     is_tty: bool,
     reader: &mut dyn BufRead,
@@ -1575,7 +1573,15 @@ fn build_wizard_provider(
 fn default_paths() -> (String, String) {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let fs_root = format!("{home}/aivyx-sandbox");
-    let storage_path = format!("{home}/.local/share/aivyx/store.redb");
+    // Mirror aivyx-config's own storage_path default resolution exactly
+    // (crates/aivyx-config/src/lib.rs: XDG_DATA_HOME first, falling back
+    // to $HOME/.local/share) -- Task 2's store-collision guard checks
+    // this same path, so a divergence here would let it silently miss
+    // an orphaned store that actually lives at the XDG path.
+    let storage_path = match std::env::var("XDG_DATA_HOME") {
+        Ok(xdg) if !xdg.is_empty() => format!("{xdg}/aivyx/store.redb"),
+        _ => format!("{home}/.local/share/aivyx/store.redb"),
+    };
     (fs_root, storage_path)
 }
 

@@ -426,10 +426,18 @@ where
         let first = map_read_result(read(
             "aivyx passphrase (new store — you'll need this every time): ",
         ))?;
-        let confirm = map_read_result(read("Confirm passphrase: "))?;
+        let mut confirm = map_read_result(read("Confirm passphrase: "))?;
         if first == confirm {
+            confirm.zeroize();
             return Ok(first);
         }
+        // Mismatch: neither copy is going anywhere near a master key,
+        // so zeroize both before looping — same discipline the
+        // invariant above requires for every passphrase byte that
+        // ever touches the heap.
+        let mut first = first;
+        first.zeroize();
+        confirm.zeroize();
         eprintln!("Passphrases didn't match. Try again.");
     }
 }

@@ -24,6 +24,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
   effect on these paths. They now route through `TurnSafety::interactive(...)`
   like every other agent construction site. Daemon-mode dispatch was
   never affected (it never constructs agents client-side).
+- **First-launch safety: running `aivyx` before `aivyx init` on a genuinely
+  fresh machine no longer silently creates a permanent, unconfirmed
+  encrypted store.** Previously a bare `aivyx` invocation with no config
+  anywhere would create the sandbox/storage directories, prompt once
+  (unconfirmed) for a brand-new passphrase, and open a real encrypted
+  store — all before config validation ever ran — so a later, real
+  `aivyx init` run could write a config pointing at that same orphaned
+  store under a different passphrase, failing to decrypt it with no
+  indication why. `run()` now validates first when no store exists yet,
+  offering to run the setup wizard inline (interactive) or failing
+  immediately with a clear `aivyx init` pointer (non-interactive) —
+  zero side effects either way. `aivyx init` also now warns and requires
+  confirmation before writing a config that points at a storage path
+  where a store already exists, and the first-time interactive
+  passphrase prompt for a brand-new store now requires confirm-reentry
+  (matching `aivyx keyring set`'s existing shape) instead of accepting
+  an unconfirmed, unrecoverable-if-mistyped entry.
 
 ## [0.9.4] — 2026-09-05
 
