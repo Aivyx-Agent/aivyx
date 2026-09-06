@@ -478,10 +478,24 @@ async fn telegram_injection_scan_disabled_skips_escalation() {
 
     let sent = transport.sent_snapshot();
     assert_eq!(sent.len(), 1, "exactly one reply expected: {sent:?}");
-    assert_eq!(
-        sent[0].text, "done",
+    // Not an exact-match assertion: the channel unconditionally renders a
+    // "→ tool_name" / "← tool_name ..." progress line for every tool call
+    // (see `StreamEvent::ToolCallStarted`/`ToolCallFinished` handling in
+    // this crate's own `*_channel.rs`), regardless of injection scanning —
+    // so `sent[0].text` legitimately contains more than just "done" even
+    // when the scan is correctly disabled. The one signal that actually
+    // distinguishes "scanned and escalated" from "not scanned" is the
+    // escalation footer text itself (`"\n⏸ escalation: {reason}"`,
+    // appended by `finalize()` only for `TurnOutcome::Escalated`).
+    assert!(
+        !sent[0].text.contains("⏸ escalation:"),
         "with injection_scan_enabled: false, the marker-bearing tool output must \
          not escalate the turn — got: {}",
+        sent[0].text
+    );
+    assert!(
+        sent[0].text.trim_end().ends_with("done"),
+        "expected the turn to complete normally with the final \"done\" message — got: {}",
         sent[0].text
     );
 
@@ -759,10 +773,24 @@ async fn discord_injection_scan_disabled_skips_escalation() {
 
     let sent = transport.sent().await;
     assert_eq!(sent.len(), 1, "exactly one reply expected: {sent:?}");
-    assert_eq!(
-        sent[0].text, "done",
+    // Not an exact-match assertion: the channel unconditionally renders a
+    // "→ tool_name" / "← tool_name ..." progress line for every tool call
+    // (see `StreamEvent::ToolCallStarted`/`ToolCallFinished` handling in
+    // this crate's own `*_channel.rs`), regardless of injection scanning —
+    // so `sent[0].text` legitimately contains more than just "done" even
+    // when the scan is correctly disabled. The one signal that actually
+    // distinguishes "scanned and escalated" from "not scanned" is the
+    // escalation footer text itself (`"\n⏸ escalation: {reason}"`,
+    // appended by `finalize()` only for `TurnOutcome::Escalated`).
+    assert!(
+        !sent[0].text.contains("⏸ escalation:"),
         "with injection_scan_enabled: false, the marker-bearing tool output must \
          not escalate the turn — got: {}",
+        sent[0].text
+    );
+    assert!(
+        sent[0].text.trim_end().ends_with("done"),
+        "expected the turn to complete normally with the final \"done\" message — got: {}",
         sent[0].text
     );
 
@@ -1032,10 +1060,24 @@ async fn slack_injection_scan_disabled_skips_escalation() {
 
     let sent = transport.sent().await;
     assert_eq!(sent.len(), 1, "exactly one reply expected: {sent:?}");
-    assert_eq!(
-        sent[0].text, "done",
+    // Not an exact-match assertion: the channel unconditionally renders a
+    // "→ tool_name" / "← tool_name ..." progress line for every tool call
+    // (see `StreamEvent::ToolCallStarted`/`ToolCallFinished` handling in
+    // this crate's own `*_channel.rs`), regardless of injection scanning —
+    // so `sent[0].text` legitimately contains more than just "done" even
+    // when the scan is correctly disabled. The one signal that actually
+    // distinguishes "scanned and escalated" from "not scanned" is the
+    // escalation footer text itself (`"\n⏸ escalation: {reason}"`,
+    // appended by `finalize()` only for `TurnOutcome::Escalated`).
+    assert!(
+        !sent[0].text.contains("⏸ escalation:"),
         "with injection_scan_enabled: false, the marker-bearing tool output must \
          not escalate the turn — got: {}",
+        sent[0].text
+    );
+    assert!(
+        sent[0].text.trim_end().ends_with("done"),
+        "expected the turn to complete normally with the final \"done\" message — got: {}",
         sent[0].text
     );
 
