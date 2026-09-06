@@ -8192,6 +8192,8 @@ async fn run_async(
             tool_list,
             mission,
             config.as_deref(),
+            injection_scan_enabled,
+            injection_scan_exempt.clone(),
         )
         .await;
     }

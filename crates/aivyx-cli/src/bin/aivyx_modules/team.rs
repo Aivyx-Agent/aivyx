@@ -216,6 +216,8 @@ pub async fn run_mission(
     base_tools: Vec<Arc<dyn Tool>>,
     mission: &str,
     config: Option<&str>,
+    injection_scan_enabled: bool,
+    injection_scan_exempt: std::collections::BTreeSet<String>,
 ) -> Result<(), String> {
     let config = load_and_clamp_team(config, lead_scopes)?;
     let team_name = config.name.clone();
@@ -264,6 +266,8 @@ pub async fn run_mission(
         // unattended trigger, so the recursive-scheduling guard doesn't
         // apply here.
         aivyx_core::MessageOrigin::Operator,
+        injection_scan_enabled,
+        injection_scan_exempt.clone(),
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 
@@ -305,7 +309,9 @@ pub async fn run_mission(
     // via team.delegate), so it takes the same autonomous safety posture as the
     // specialists (see SpecialistFactory::build): the small-cycle breaker as a
     // built-in floor, independent of the interactive `[agent] cycle_detection`.
-    let agent = TurnSafety::autonomous().apply(agent);
+    // The injection-scan posture carries the operator's own `[agent]` config
+    // through, same as every specialist this mission builds.
+    let agent = TurnSafety::autonomous(injection_scan_enabled, injection_scan_exempt).apply(agent);
 
     let channel = MissionChannel::new();
     let msg = Message::text(channel.session_id(), mission);
