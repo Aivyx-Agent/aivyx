@@ -977,30 +977,50 @@ impl CycleConfig {
 pub struct TurnSafety {
     turn_timeout: Option<Duration>,
     cycle_config: Option<CycleConfig>,
+    injection_scan_enabled: bool,
+    injection_scan_exempt: std::collections::BTreeSet<String>,
 }
 
 impl TurnSafety {
     /// Interactive posture: inherit the operator's `[agent]` settings
-    /// (`turn_timeout_secs`, `cycle_detection`). Both unset → the built-in
-    /// defaults (120s deadline, no cycle breaker) — i.e. byte-identical to a
-    /// bare `ConcreteAgent`. Used by the REPL, voice, daemon, and the
-    /// role-switch child (all run under a watching operator).
-    pub fn interactive(turn_timeout_secs: Option<u64>, cycle_detection: Option<bool>) -> Self {
+    /// (`turn_timeout_secs`, `cycle_detection`, `injection_scan_enabled`,
+    /// `injection_scan_exempt`). All unset → the built-in defaults (120s
+    /// deadline, no cycle breaker, scan on, no exemptions) — i.e.
+    /// byte-identical to a bare `ConcreteAgent`. Used by the REPL, voice,
+    /// daemon, and the role-switch child (all run under a watching
+    /// operator).
+    pub fn interactive(
+        turn_timeout_secs: Option<u64>,
+        cycle_detection: Option<bool>,
+        injection_scan_enabled: bool,
+        injection_scan_exempt: std::collections::BTreeSet<String>,
+    ) -> Self {
         Self {
             turn_timeout: turn_timeout_secs.map(Duration::from_secs),
             cycle_config: cycle_detection
                 .unwrap_or(false)
                 .then(CycleConfig::default_enabled),
+            injection_scan_enabled,
+            injection_scan_exempt,
         }
     }
 
     /// Autonomous posture (team / mission agents): the small-cycle breaker is a
     /// built-in floor (always on) because no human watches each turn to cancel a
     /// runaway. The per-turn deadline keeps the built-in 120s default.
-    pub fn autonomous() -> Self {
+    /// `injection_scan_enabled`/`injection_scan_exempt` still come from the
+    /// operator's own `[agent]` config — team missions are exactly the
+    /// unattended case Chapter Picket's tripwire exists for, so they honor
+    /// the same posture as every other agent, not a hardcoded always-on.
+    pub fn autonomous(
+        injection_scan_enabled: bool,
+        injection_scan_exempt: std::collections::BTreeSet<String>,
+    ) -> Self {
         Self {
             turn_timeout: None,
             cycle_config: Some(CycleConfig::default_enabled()),
+            injection_scan_enabled,
+            injection_scan_exempt,
         }
     }
 
@@ -1009,6 +1029,9 @@ impl TurnSafety {
     /// `TurnSafety::<posture>(...).apply(agent)`.
     pub fn apply(&self, agent: ConcreteAgent) -> ConcreteAgent {
         let agent = agent.with_cycle_detection(self.cycle_config.clone());
+        let agent = agent
+            .with_injection_scan_enabled(self.injection_scan_enabled)
+            .with_injection_scan_exempt(self.injection_scan_exempt.clone());
         match self.turn_timeout {
             Some(d) => agent.with_turn_timeout(d),
             None => agent,
@@ -3312,26 +3335,43 @@ mod tests {
     #[test]
     fn turn_safety_interactive_maps_config() {
         // Unset → built-in defaults (no override, no breaker) = bare agent.
-        let off = TurnSafety::interactive(None, None);
+        let off = TurnSafety::interactive(None, None, true, std::collections::BTreeSet::new());
         assert_eq!(off.turn_timeout, None);
         assert_eq!(off.cycle_config, None);
         // default() agrees — the no-op posture used by paths without config.
         assert_eq!(TurnSafety::default().turn_timeout, None);
         assert_eq!(TurnSafety::default().cycle_config, None);
         // Set → mapped to Duration + the enabled CycleConfig.
-        let on = TurnSafety::interactive(Some(300), Some(true));
+        let on = TurnSafety::interactive(Some(300), Some(true), true, std::collections::BTreeSet::new());
         assert_eq!(on.turn_timeout, Some(Duration::from_secs(300)));
         assert_eq!(on.cycle_config, Some(CycleConfig::default_enabled()));
         // cycle_detection = Some(false) is off, like None.
-        assert_eq!(TurnSafety::interactive(None, Some(false)).cycle_config, None);
+        assert_eq!(
+            TurnSafety::interactive(None, Some(false), true, std::collections::BTreeSet::new())
+                .cycle_config,
+            None
+        );
     }
 
     #[test]
     fn turn_safety_autonomous_forces_the_breaker_floor() {
-        let a = TurnSafety::autonomous();
+        let a = TurnSafety::autonomous(true, std::collections::BTreeSet::new());
         // Cycle breaker always on (the floor); deadline keeps the 120s default.
         assert_eq!(a.cycle_config, Some(CycleConfig::default_enabled()));
         assert_eq!(a.turn_timeout, None);
+    }
+
+    #[test]
+    fn turn_safety_autonomous_carries_the_injection_scan_posture_through_apply() {
+        // Mirrors Phase 199's own
+        // `injection_scan_disabled_globally_skips_the_scan_but_still_fences`
+        // test, but going through TurnSafety instead of the direct builder
+        // — proves the choke point applies the knob, not just stores it.
+        let mut exempt = std::collections::BTreeSet::new();
+        exempt.insert("test.exempt".to_string());
+        let safety = TurnSafety::autonomous(false, exempt.clone());
+        assert_eq!(safety.injection_scan_enabled, false);
+        assert_eq!(safety.injection_scan_exempt, exempt);
     }
 
     // ---- Phase 10 task 2: JSON-schema validation at the turn loop ----
