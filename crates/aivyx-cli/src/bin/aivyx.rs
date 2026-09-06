@@ -1097,6 +1097,49 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    // Resolve the encrypted store path early — needed both for the
+    // pre-flight check immediately below and the mkdir further down.
+    let storage_path = config.storage_path.value.clone();
+
+    // First-launch store safety — before touching disk at all, catch
+    // the case where nothing has ever configured this install: no
+    // store exists yet at the target path, and validation would fail
+    // anyway. Moving `validate()` this early is only safe when the
+    // store doesn't exist yet — an *existing* store can still supply
+    // a missing secret via `hydrate_secrets_from_store` further down,
+    // so this check is skipped once a prior store is on disk (the
+    // unchanged order
+    // further down handles that case, exactly as before this change).
+    if should_early_validate(verify_only, audit_export_mode, cost_mode, &storage_path) {
+        if let Err(e) = config.validate(&load_opts) {
+            let hint = "\n\nRun `aivyx init` to set this up (or `aivyx init \
+                         --template coder|researcher|personal` for a quick start).";
+            eprintln!("aivyx: {e}{hint}");
+            let is_tty = io::stdin().is_terminal();
+            let stdin = io::stdin();
+            let mut reader = stdin.lock();
+            let mut stderr_writer = io::stderr();
+            match init::decide_unconfigured_first_run(
+                is_tty,
+                &mut reader,
+                &mut stderr_writer,
+            )? {
+                init::UnconfiguredFirstRunDecision::RunWizardInline => {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+                    rt.block_on(init::run_init_wizard(None))?;
+                    eprintln!("\nNow run `aivyx` again to start.");
+                    return Ok(());
+                }
+                init::UnconfiguredFirstRunDecision::Fail => {
+                    return Err(format!("{e}{hint}"));
+                }
+            }
+        }
+    }
+
     // Sandbox root: create the directory if it does not exist so a
     // fresh install "just works" the same way Phase 4 promised. The
     // config layer returns a `PathBuf` with source provenance; we do
@@ -1113,11 +1156,8 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to create fs sandbox root {root:?}: {e}"))?;
     }
 
-    // Resolve the encrypted store path + its sidecar salt file. The
-    // config layer handled path *resolution* (env → toml → XDG → HOME
-    // default); we only need to mkdir the parent directory and build
-    // the sidecar path here.
-    let storage_path = config.storage_path.value.clone();
+    // Storage path's sidecar salt file. `storage_path` itself was
+    // already resolved above.
     if let Some(parent) = storage_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             format!("failed to create storage parent directory {parent:?}: {e}")
@@ -1149,7 +1189,8 @@ fn run() -> Result<(), String> {
     //    tty means we have no interactive user *and* no configured
     //    source — continuing would either hang on a tty read that
     //    never comes, or crash with an opaque Argon2 error.
-    let passphrase_source = select_passphrase_source(config.passphrase.as_ref())?;
+    let new_store = !storage_path.exists();
+    let passphrase_source = select_passphrase_source(config.passphrase.as_ref(), new_store)?;
     let master_key = derive_master_key(
         passphrase_source,
         &salt_path,
@@ -1681,6 +1722,20 @@ fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
     let mut os = store_path.as_os_str().to_owned();
     os.push(".salt");
     PathBuf::from(os)
+}
+
+/// Whether `run()`'s early-validate gate should fire at all. Pure —
+/// takes the already-computed facts, no I/O. Separated from the gate's
+/// own side-effecting body (the prompt + wizard invocation) so the
+/// *condition* is unit-testable without needing to drive a full `run()`
+/// call.
+fn should_early_validate(
+    verify_only: bool,
+    audit_export_mode: bool,
+    cost_mode: bool,
+    storage_path: &std::path::Path,
+) -> bool {
+    !verify_only && !audit_export_mode && !cost_mode && !storage_path.exists()
 }
 
 // ---------------------------------------------------------------------
@@ -4942,6 +4997,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 /// 4. Otherwise → `Err` with a clear operator-facing message.
 fn select_passphrase_source(
     passphrase: Option<&aivyx_config::SourcedSecret>,
+    new_store: bool,
 ) -> Result<PassphraseSource, String> {
     if let Some(secret) = passphrase {
         return match secret.source {
@@ -4962,7 +5018,7 @@ fn select_passphrase_source(
         ),
     }
     if io::stdin().is_terminal() {
-        Ok(PassphraseSource::InteractivePrompt { confirm: false })
+        Ok(PassphraseSource::InteractivePrompt { confirm: new_store })
     } else {
         Err(format!(
             "no passphrase available: `{DEFAULT_ENV_VAR}` is not set, \
@@ -14139,5 +14195,46 @@ mod tests {
         assert!(line.contains("\"none\""), "{line}");
         assert!(line.contains("family: llama3"), "{line}");
         assert!(line.contains("default"), "{line}");
+    }
+}
+
+#[cfg(test)]
+mod early_validate_gate_tests {
+    use super::should_early_validate;
+    use std::path::Path;
+
+    #[test]
+    fn fires_when_store_absent_and_no_special_mode_active() {
+        assert!(should_early_validate(false, false, false, Path::new("/nonexistent/path/for/this/test")));
+    }
+
+    #[test]
+    fn skipped_when_store_already_exists() {
+        // `tempfile` is not a dev-dependency of this crate (confirmed —
+        // grep `Cargo.toml`); `uuid` already is, so build a throwaway
+        // path the same way this session's own aivyx-telegram/-discord/
+        // -slack checkpoint tests already do.
+        let path = std::env::temp_dir().join(format!(
+            "aivyx-early-validate-gate-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"").expect("create dummy store file");
+        assert!(!should_early_validate(false, false, false, &path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn skipped_for_verify_only_mode() {
+        assert!(!should_early_validate(true, false, false, Path::new("/nonexistent/path")));
+    }
+
+    #[test]
+    fn skipped_for_audit_export_mode() {
+        assert!(!should_early_validate(false, true, false, Path::new("/nonexistent/path")));
+    }
+
+    #[test]
+    fn skipped_for_cost_mode() {
+        assert!(!should_early_validate(false, false, true, Path::new("/nonexistent/path")));
     }
 }
