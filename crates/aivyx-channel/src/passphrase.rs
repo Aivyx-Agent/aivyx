@@ -165,13 +165,21 @@ pub enum PassphraseSource {
     /// Interactive TTY prompt via `rpassword::prompt_password`.
     /// Opens `/dev/tty` directly on Unix (so it works even when
     /// stdin is piped, as long as a controlling terminal exists),
-    /// prints `aivyx passphrase: `, reads a single line with echo
-    /// disabled, strips the trailing newline, and zeroizes the
-    /// internal buffer on the way out. Returns
-    /// [`PassphraseError::InteractiveIo`] if `/dev/tty` is not
-    /// reachable, or [`PassphraseError::InteractiveEmpty`] if the
-    /// user pressed enter on an empty line.
-    InteractivePrompt,
+    /// reads a single line with echo disabled, strips the trailing
+    /// newline, and zeroizes the internal buffer on the way out.
+    /// Returns [`PassphraseError::InteractiveIo`] if `/dev/tty` is
+    /// not reachable, or [`PassphraseError::InteractiveEmpty`] if
+    /// the user pressed enter on an empty line.
+    ///
+    /// `confirm` — when `true` (creating a brand-new store), prompts
+    /// twice and requires a match before returning, re-prompting the
+    /// whole pair on mismatch; mirrors `aivyx keyring set`'s existing
+    /// prompt+confirm+match-check shape. When `false` (unlocking an
+    /// existing store), behavior is unchanged from before this field
+    /// existed: one prompt, no confirmation — a wrong guess there
+    /// fails cleanly at decrypt time and the user just retries the
+    /// command, so there's nothing to protect against a typo for.
+    InteractivePrompt { confirm: bool },
 }
 
 impl std::fmt::Debug for PassphraseSource {
@@ -190,7 +198,10 @@ impl std::fmt::Debug for PassphraseSource {
             PassphraseSource::Fixture(_) => {
                 f.debug_struct("Fixture").finish_non_exhaustive()
             }
-            PassphraseSource::InteractivePrompt => f.write_str("InteractivePrompt"),
+            PassphraseSource::InteractivePrompt { confirm } => f
+                .debug_struct("InteractivePrompt")
+                .field("confirm", confirm)
+                .finish(),
         }
     }
 }
@@ -338,7 +349,7 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
             }
         }
         PassphraseSource::Fixture(f) => Ok(f()),
-        PassphraseSource::InteractivePrompt => {
+        PassphraseSource::InteractivePrompt { confirm: false } => {
             // `rpassword::prompt_password` opens `/dev/tty` on Unix,
             // echoes the prompt, reads one line with echo disabled,
             // and returns a `String`. Under `cargo test` there's no
@@ -350,7 +361,30 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
                 rpassword::prompt_password("aivyx passphrase: ")
             })
         }
+        PassphraseSource::InteractivePrompt { confirm: true } => {
+            // Creating a brand-new store — prompt twice and require a
+            // match, the same shape `aivyx keyring set` already uses.
+            // See `read_interactive_password_with_confirm`.
+            read_interactive_password_with_confirm(|prompt| {
+                rpassword::prompt_password(prompt)
+            })
+        }
     }
+}
+
+/// Shared empty-check + I/O-error-mapping step for a single
+/// interactive read. Factored out of `read_interactive_password_inner`
+/// so `read_interactive_password_with_confirm` (below) can reuse it
+/// for each of its two reads without duplicating the mapping logic.
+fn map_read_result(result: std::io::Result<String>) -> Result<Vec<u8>, PassphraseError> {
+    let pass = result.map_err(|e| PassphraseError::InteractiveIo { reason: e.to_string() })?;
+    if pass.is_empty() {
+        return Err(PassphraseError::InteractiveEmpty);
+    }
+    // `String::into_bytes` hands over the existing heap allocation
+    // — no copy — so the outer zeroize path owns the one-and-only
+    // persistent copy of the passphrase bytes.
+    Ok(pass.into_bytes())
 }
 
 /// Shared plumbing for the interactive path. Takes a `read`
@@ -369,15 +403,35 @@ fn read_interactive_password_inner<F>(read: F) -> Result<Vec<u8>, PassphraseErro
 where
     F: FnOnce() -> std::io::Result<String>,
 {
-    let pass = read()
-        .map_err(|e| PassphraseError::InteractiveIo { reason: e.to_string() })?;
-    if pass.is_empty() {
-        return Err(PassphraseError::InteractiveEmpty);
+    map_read_result(read())
+}
+
+/// New-store passphrase entry: prompts, prompts again, and requires a
+/// match before returning — the confirm-reentry counterpart to
+/// `read_interactive_password_inner`'s single unconfirmed prompt.
+/// Loops (re-prompting both) on mismatch, matching this codebase's
+/// existing "loop forever on invalid input" idiom
+/// (`aivyx_modules::init::prompt_yes_no`).
+///
+/// Takes one `FnMut(&str) -> io::Result<String>` closure (parameterized
+/// by the prompt text) rather than two separate closures — two closures
+/// each capturing the same test reader/writer would violate the borrow
+/// checker, since both would need to exist simultaneously as function
+/// arguments. One closure invoked twice sequentially avoids that.
+fn read_interactive_password_with_confirm<F>(mut read: F) -> Result<Vec<u8>, PassphraseError>
+where
+    F: FnMut(&str) -> std::io::Result<String>,
+{
+    loop {
+        let first = map_read_result(read(
+            "aivyx passphrase (new store — you'll need this every time): ",
+        ))?;
+        let confirm = map_read_result(read("Confirm passphrase: "))?;
+        if first == confirm {
+            return Ok(first);
+        }
+        eprintln!("Passphrases didn't match. Try again.");
     }
-    // `String::into_bytes` hands over the existing heap allocation
-    // — no copy — so the outer zeroize path owns the one-and-only
-    // persistent copy of the passphrase bytes.
-    Ok(pass.into_bytes())
 }
 
 // --------------------------------------------------------------------
@@ -885,10 +939,70 @@ mod tests {
 
     #[test]
     fn debug_interactive_prompt_renders_without_side_effects() {
-        // InteractivePrompt has no payload — the tripwire here is
-        // that `format!` must not touch the tty or block on a read.
-        let rendered = format!("{:?}", PassphraseSource::InteractivePrompt);
-        assert_eq!(rendered, "InteractivePrompt");
+        // The tripwire here is that `format!` must not touch the tty
+        // or block on a read.
+        let rendered = format!(
+            "{:?}",
+            PassphraseSource::InteractivePrompt { confirm: false }
+        );
+        assert_eq!(rendered, "InteractivePrompt { confirm: false }");
+    }
+
+    #[test]
+    #[allow(deprecated)] // test seam: rpassword 7.5 deprecated prompt_password_from_bufread; prod uses prompt_password
+    fn confirm_reentry_matching_pair_succeeds() {
+        let mut reader = &b"same-pass\nsame-pass\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        let bytes = read_interactive_password_with_confirm(|prompt| {
+            rpassword::prompt_password_from_bufread(&mut reader, &mut sink, prompt)
+        })
+        .expect("matching pair must succeed");
+        assert_eq!(bytes, b"same-pass");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn confirm_reentry_mismatch_reprompts_until_matching() {
+        // First pair ("typo-a" / "typo-b") mismatches and must be
+        // silently discarded, not returned or mixed with the second
+        // pair. Second pair ("real-pass" / "real-pass") matches.
+        let mut reader = &b"typo-a\ntypo-b\nreal-pass\nreal-pass\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        let bytes = read_interactive_password_with_confirm(|prompt| {
+            rpassword::prompt_password_from_bufread(&mut reader, &mut sink, prompt)
+        })
+        .expect("second, matching pair must eventually succeed");
+        assert_eq!(bytes, b"real-pass");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn confirm_reentry_empty_first_entry_is_rejected() {
+        let mut reader = &b"\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        let err = read_interactive_password_with_confirm(|prompt| {
+            rpassword::prompt_password_from_bufread(&mut reader, &mut sink, prompt)
+        })
+        .unwrap_err();
+        assert!(matches!(err, PassphraseError::InteractiveEmpty));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn confirm_reentry_wording_differs_from_unconfirmed_prompt() {
+        // The new-store prompt must name the stakes; the existing
+        // unlock prompt (confirm: false) must stay exactly as it was.
+        let mut reader = &b"x\nx\n"[..];
+        let mut sink: Vec<u8> = Vec::new();
+        read_interactive_password_with_confirm(|prompt| {
+            rpassword::prompt_password_from_bufread(&mut reader, &mut sink, prompt)
+        })
+        .expect("must succeed");
+        let written = String::from_utf8_lossy(&sink);
+        assert!(
+            written.contains("new store"),
+            "new-store prompt must mention it's a new store: {written:?}"
+        );
     }
 
     // ---- End-to-end with aivyx-storage -------------------------------
