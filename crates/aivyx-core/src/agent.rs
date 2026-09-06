@@ -985,13 +985,14 @@ pub struct TurnSafety {
 }
 
 impl Default for TurnSafety {
-    /// Hand-written rather than derived: `bool::default()` is `false`, which
-    /// would make `TurnSafety::default()` — used by the standalone
-    /// Telegram/Discord/Slack channel-session paths, which never call
-    /// `interactive()`/`autonomous()` — silently disable the injection scan
-    /// (`apply()` unconditionally writes `injection_scan_enabled`). This
-    /// preserves the pre-existing "byte-identical to a bare `ConcreteAgent`"
-    /// contract those callers document and rely on.
+    /// Hand-written rather than derived: `bool::default()` is `false`, and
+    /// `apply()` writes `injection_scan_enabled` unconditionally, so a
+    /// derived `Default` would silently disable the injection scan for any
+    /// caller. No production caller relies on this today — the standalone
+    /// Telegram/Discord/Slack channel-session paths moved to
+    /// `interactive()` on 2026-09-06 — but this impl stays hand-written,
+    /// with the invariant pinned by `turn_safety_default_preserves_
+    /// injection_scan_enabled` below, so the trap can't silently re-open.
     fn default() -> Self {
         Self {
             turn_timeout: None,
@@ -3372,6 +3373,18 @@ mod tests {
                 .cycle_config,
             None
         );
+    }
+
+    #[test]
+    fn turn_safety_default_preserves_injection_scan_enabled() {
+        // Pins the invariant the hand-written `impl Default for TurnSafety`
+        // exists to protect: if this ever derived instead, `bool::default()`
+        // is `false` and `apply()` writes it unconditionally, silently
+        // disabling Chapter Picket's active scan for any future caller of
+        // `TurnSafety::default()`. See that impl's doc comment.
+        let default = TurnSafety::default();
+        assert!(default.injection_scan_enabled);
+        assert!(default.injection_scan_exempt.is_empty());
     }
 
     #[test]

@@ -13,6 +13,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
   closes Chapter N (Release & Distribution Integrity). See
   `docs/archive/phases/PHASE_197.md`.
 
+### Fixed
+
+- **Telegram/Discord/Slack's standalone (`--no-daemon`) session paths now
+  honor the operator's `[agent]` config.** Previously these three
+  in-process-fallback paths constructed every agent via
+  `TurnSafety::default()`, silently ignoring `turn_timeout_secs`,
+  `cycle_detection`, `injection_scan_enabled`, and `injection_scan_exempt`
+  — including a configured `injection_scan_enabled = false`, which had no
+  effect on these paths. They now route through `TurnSafety::interactive(...)`
+  like every other agent construction site. Daemon-mode dispatch was
+  never affected (it never constructs agents client-side).
+
 ## [0.9.4] — 2026-09-05
 
 **Milestone: the first real, working GitHub Release since `v0.8.3`.**
