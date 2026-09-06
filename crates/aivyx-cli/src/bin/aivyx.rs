@@ -9937,6 +9937,10 @@ async fn run_async(
                 storage,
                 tool_allowlist,
                 memory_topic_prefix,
+                turn_timeout_secs,
+                cycle_detection,
+                injection_scan_enabled,
+                injection_scan_exempt,
             };
             run_telegram_multi_session(
                 "aivyx-telegram",
@@ -10049,6 +10053,10 @@ async fn run_async(
                 storage,
                 tool_allowlist,
                 memory_topic_prefix,
+                turn_timeout_secs,
+                cycle_detection,
+                injection_scan_enabled,
+                injection_scan_exempt,
             };
             aivyx_discord::run_discord_session(
                 "aivyx-discord",
@@ -10186,6 +10194,10 @@ async fn run_async(
                 storage,
                 tool_allowlist,
                 memory_topic_prefix,
+                turn_timeout_secs,
+                cycle_detection,
+                injection_scan_enabled,
+                injection_scan_exempt,
             };
             aivyx_slack::run_slack_session(
                 "aivyx-slack",
