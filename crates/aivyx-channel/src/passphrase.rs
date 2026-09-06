@@ -422,10 +422,12 @@ fn read_interactive_password_with_confirm<F>(mut read: F) -> Result<Vec<u8>, Pas
 where
     F: FnMut(&str) -> std::io::Result<String>,
 {
+    const FIRST_PROMPT: &str = "aivyx passphrase (new store — you'll need this every time): ";
+    const RETRY_PROMPT: &str = "Passphrases didn't match. Try again.\n\
+                                 aivyx passphrase (new store — you'll need this every time): ";
+    let mut prompt = FIRST_PROMPT;
     loop {
-        let first = map_read_result(read(
-            "aivyx passphrase (new store — you'll need this every time): ",
-        ))?;
+        let first = map_read_result(read(prompt))?;
         let mut confirm = map_read_result(read("Confirm passphrase: "))?;
         if first == confirm {
             confirm.zeroize();
@@ -438,7 +440,7 @@ where
         let mut first = first;
         first.zeroize();
         confirm.zeroize();
-        eprintln!("Passphrases didn't match. Try again.");
+        prompt = RETRY_PROMPT;
     }
 }
 
@@ -981,6 +983,11 @@ mod tests {
         })
         .expect("second, matching pair must eventually succeed");
         assert_eq!(bytes, b"real-pass");
+        let written = String::from_utf8_lossy(&sink);
+        assert!(
+            written.contains("Passphrases didn't match"),
+            "retry prompt must carry the mismatch notice: {written:?}"
+        );
     }
 
     #[test]
