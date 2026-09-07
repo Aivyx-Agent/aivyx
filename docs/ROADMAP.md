@@ -3920,6 +3920,34 @@ was still running caused a commit to land on the wrong (harmless)
 branch, caught only by checking `git worktree list` directly rather than
 trusting the subagent's own reported hash.
 
+## Phase 207 — `aivyx` client integration for `aivyx-broker` (multi-process GPU-slot coordination) [COMPLETE]
+
+Opened and shipped 2026-09-07 — see [PHASE_207.md](archive/phases/PHASE_207.md).
+The larger of two opportunities surfaced by a strategic question about
+building a custom LLM inference engine (the smaller, an embedded
+`mistral.rs` port, shipped separately in `aivyx-coder`). Confirmed via
+direct-code grounding — including verifying llama.cpp's own
+`server-context.cpp` — that two independent processes sharing one
+`llama-server` really do race for the same slot with zero coordination
+today, but the server itself already defers same-slot collisions safely
+rather than corrupting state, narrowing the problem from data corruption
+to silent head-of-line blocking and cache-locality thrash. Built as a
+new standalone repo, `aivyx-broker` (a loopback-only daemon owning
+cache-locality-aware slot admission and the full `aivyx-kvcache`
+restore/warm/save lifecycle), with this phase wiring `aivyx` up as a
+client via a new `ProviderKind::Broker`. The review found a real gap the
+plan hadn't anticipated: team-mission specialists shared the
+broker-pointed backend but weren't wired for it, so a hint-less
+specialist request could silently clear a hinted request's cache-locality
+bookkeeping — fixed by mirroring the existing `kv_cache_handles` plumbing
+chain through all five files it actually spans. Also found and fixed: a
+third, independent `--provider` CLI parse site that rejected the new
+provider despite the config file and env var already accepting it, and a
+startup banner that printed the wrong base_url field for broker mode.
+`aivyx-broker` itself (and the equivalent `aivyx-coder` client
+integration) are logged in their own repos, not here — see
+`aivyx-ecosystem/ROADMAP.md` for the cross-repo account.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
