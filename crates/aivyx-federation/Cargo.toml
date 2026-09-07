@@ -37,6 +37,15 @@ aivyx-config = { path = "../aivyx-config" }
 aivyx-ipc = { path = "../aivyx-ipc" }
 serde_json = { workspace = true }
 
+# Task 7 (Chapter Passport, hardware-backed identity): hardware-backed Ed25519
+# signing via a YubiKey's OpenPGP card applet. `aivyx-yubi` is a local-only
+# sibling repo (same parent directory as this workspace) with no GitHub
+# remote yet, so a `path` dependency is used instead of the `git` dependency
+# style this workspace otherwise uses for sibling Aivyx repos (see
+# `aivyx-confine`/`aivyx-checkpoint`/`aivyx-kvcache` in the root Cargo.toml) —
+# switch to `git` once `aivyx-yubi` gets a remote.
+aivyx-yubi = { path = "../../../../../aivyx-yubi" }
+
 [dev-dependencies]
 uuid = { workspace = true }
 serde_json = { workspace = true }
@@ -44,3 +53,10 @@ serde_json = { workspace = true }
 aivyx-capability = { path = "../aivyx-capability" }
 aivyx-config = { path = "../aivyx-config" }
 aivyx-ipc = { path = "../aivyx-ipc" }
+# `sign_request`/`sign_relay` are async (Task 7 -- the hardware-backed path
+# can legitimately block for seconds on a physical touch), so tests calling
+# them need a runtime. Already a workspace dependency with `macros` +
+# `rt-multi-thread` (a superset of the bare `rt` feature `#[tokio::test]`
+# needs) via `[workspace.dependencies]`, so no extra features are required
+# here.
+tokio = { workspace = true }

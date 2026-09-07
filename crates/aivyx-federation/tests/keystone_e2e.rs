@@ -79,15 +79,15 @@ fn receive(
 
 /// Happy path: a trusted peer's `search` verifies, attenuates to its policy, and
 /// runs read-only without a gate.
-#[test]
-fn trusted_search_flows_end_to_end() {
+#[tokio::test]
+async fn trusted_search_flows_end_to_end() {
     let peer = Identity::generate("peer".into()).unwrap();
     let host_ceiling = set(&["memory.read", "memory.write"]);
     let policy = TrustPolicy::new([scope("memory.read")]);
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Search { query: "pour-over bloom".into() };
-    let (header, body) = peer.sign_relay(&req).unwrap();
+    let (header, body) = peer.sign_relay(&req).await.unwrap();
 
     let (content, consent) = receive(
         "peer",
@@ -110,8 +110,8 @@ fn trusted_search_flows_end_to_end() {
 
 /// A peer's `task` is effect — accepted, attenuated, but gated on operator
 /// consent. And the peer can never borrow the host's broader caps.
-#[test]
-fn task_is_attenuated_and_gated() {
+#[tokio::test]
+async fn task_is_attenuated_and_gated() {
     let peer = Identity::generate("peer".into()).unwrap();
     // host could do fs.write; the peer's policy does not include it.
     let host_ceiling = set(&["memory.read", "memory.write", "fs.write"]);
@@ -119,7 +119,7 @@ fn task_is_attenuated_and_gated() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Task { goal: "update my notes".into() };
-    let (header, body) = peer.sign_relay(&req).unwrap();
+    let (header, body) = peer.sign_relay(&req).await.unwrap();
 
     let (content, consent) = receive(
         "peer",
@@ -145,14 +145,14 @@ fn task_is_attenuated_and_gated() {
 
 /// Deny-by-default: a peer with no `TrustPolicy` is verified but granted
 /// nothing, and its request is refused at consent.
-#[test]
-fn unknown_peer_is_denied_by_default() {
+#[tokio::test]
+async fn unknown_peer_is_denied_by_default() {
     let peer = Identity::generate("stranger".into()).unwrap();
     let host_ceiling = set(&["memory.read", "memory.write"]);
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Task { goal: "do something".into() };
-    let (header, body) = peer.sign_relay(&req).unwrap();
+    let (header, body) = peer.sign_relay(&req).await.unwrap();
 
     let (content, consent) = receive(
         "stranger",
@@ -174,8 +174,8 @@ fn unknown_peer_is_denied_by_default() {
 
 /// A forged body under a valid header is rejected at signature verification —
 /// the crossing is refused, never reaching trust resolution.
-#[test]
-fn forged_body_is_rejected() {
+#[tokio::test]
+async fn forged_body_is_rejected() {
     let peer = Identity::generate("peer".into()).unwrap();
     let host_ceiling = set(&["memory.read"]);
     let policy = TrustPolicy::new([scope("memory.read")]);
@@ -183,6 +183,7 @@ fn forged_body_is_rejected() {
 
     let (header, _body) = peer
         .sign_relay(&RelayRequest::Chat { message: "hello".into() })
+        .await
         .unwrap();
     // attacker swaps the body for a Task under the same (valid) header
     let forged_req = RelayRequest::Task { goal: "exfiltrate".into() };
@@ -205,15 +206,15 @@ fn forged_body_is_rejected() {
 
 /// A replayed request (same signed header re-sent) is rejected by the guard on
 /// the second arrival.
-#[test]
-fn replayed_request_is_rejected() {
+#[tokio::test]
+async fn replayed_request_is_rejected() {
     let peer = Identity::generate("peer".into()).unwrap();
     let host_ceiling = set(&["memory.read"]);
     let policy = TrustPolicy::new([scope("memory.read")]);
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Search { query: "x".into() };
-    let (header, body) = peer.sign_relay(&req).unwrap();
+    let (header, body) = peer.sign_relay(&req).await.unwrap();
     let pk = peer.public_key_base64();
 
     // first arrival: accepted
@@ -230,8 +231,8 @@ fn replayed_request_is_rejected() {
 
 /// Verifying a peer's request against the *wrong* peer's key fails — identity is
 /// bound to the key, not the claimed instance id.
-#[test]
-fn wrong_peer_key_is_rejected() {
+#[tokio::test]
+async fn wrong_peer_key_is_rejected() {
     let alice = Identity::generate("alice".into()).unwrap();
     let mallory = Identity::generate("mallory".into()).unwrap();
     let host_ceiling = set(&["memory.read"]);
@@ -239,7 +240,7 @@ fn wrong_peer_key_is_rejected() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Search { query: "x".into() };
-    let (header, body) = alice.sign_relay(&req).unwrap();
+    let (header, body) = alice.sign_relay(&req).await.unwrap();
 
     // host looks up "alice" but is given mallory's key → verification fails
     let refused = receive(
@@ -259,27 +260,27 @@ fn wrong_peer_key_is_rejected() {
 
 /// Revocation narrows reach immediately: a broad policy grants write; tightening
 /// it drops write on the very next crossing.
-#[test]
-fn revocation_narrows_reach_on_the_next_crossing() {
+#[tokio::test]
+async fn revocation_narrows_reach_on_the_next_crossing() {
     let peer = Identity::generate("peer".into()).unwrap();
     let host_ceiling = set(&["memory.read", "memory.write"]);
 
-    let make = || {
+    async fn make(peer: &Identity) -> (RelayRequest, SignedHeader, Vec<u8>) {
         let req = RelayRequest::Task { goal: "write notes".into() };
-        let (header, body) = peer.sign_relay(&req).unwrap();
+        let (header, body) = peer.sign_relay(&req).await.unwrap();
         (req, header, body)
-    };
+    }
 
     // broad policy: write is in reach (a Task asks memory.read + memory.write)
     let broad = TrustPolicy::new([scope("memory.read"), scope("memory.write")]);
-    let (req, header, body) = make();
+    let (req, header, body) = make(&peer).await;
     let guard1 = ReplayGuard::new();
     let (before, _) = receive("peer", &peer.public_key_base64(), &header, &body, req, &guard1, Some(&broad), &host_ceiling, AutonomyLevel::Assisted).unwrap();
     assert!(before.may(&scope("memory.write")));
 
     // tighten the policy → write gone on the next request
     let tightened = TrustPolicy::new([scope("memory.read")]);
-    let (req2, header2, body2) = make();
+    let (req2, header2, body2) = make(&peer).await;
     let guard2 = ReplayGuard::new();
     let (after, _) = receive("peer", &peer.public_key_base64(), &header2, &body2, req2, &guard2, Some(&tightened), &host_ceiling, AutonomyLevel::Assisted).unwrap();
     assert!(after.may(&scope("memory.read")));

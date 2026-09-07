@@ -67,6 +67,12 @@ pub enum FederationError {
     /// Malformed input (instance id, key bytes, policy, …).
     #[error("federation validation error: {0}")]
     Validation(String),
+
+    /// A hardware-backed signing operation failed (card absent, wrong card,
+    /// touch not provided, PIN rejected). Wraps `aivyx_yubi::YubiError`'s
+    /// own message rather than re-deriving a parallel taxonomy.
+    #[error("YubiKey signing error: {0}")]
+    Hardware(String),
 }
 
 pub mod consent;

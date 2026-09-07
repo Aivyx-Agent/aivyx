@@ -80,12 +80,15 @@ impl Identity {
     /// bytes that were signed**. Send both to the peer; it verifies the header
     /// against these bytes with [`Identity::verify_request`]. Pair the receive
     /// side with a [`ReplayGuard`](crate::identity::ReplayGuard).
-    pub fn sign_relay(
+    ///
+    /// Async because [`Identity::sign_request`] is (the hardware-backed path
+    /// can block for seconds waiting on a physical touch).
+    pub async fn sign_relay(
         &self,
         req: &RelayRequest,
     ) -> Result<(SignedHeader, Vec<u8>), FederationError> {
         let body = relay_body_bytes(req)?;
-        let header = self.sign_request(&body);
+        let header = self.sign_request(&body).await?;
         Ok((header, body))
     }
 }
@@ -94,20 +97,21 @@ impl Identity {
 mod tests {
     use super::*;
 
-    #[test]
-    fn signed_relay_verifies_at_the_peer() {
+    #[tokio::test]
+    async fn signed_relay_verifies_at_the_peer() {
         let me = Identity::generate("me".into()).unwrap();
         let req = RelayRequest::Task { goal: "summarize the docs".into() };
-        let (header, body) = me.sign_relay(&req).unwrap();
+        let (header, body) = me.sign_relay(&req).await.unwrap();
         // the peer knows my public key and verifies the frame
         Identity::verify_request(&me.public_key_base64(), &header, &body)
             .expect("a faithfully relayed frame verifies");
     }
 
-    #[test]
-    fn tampered_relay_body_fails_verification() {
+    #[tokio::test]
+    async fn tampered_relay_body_fails_verification() {
         let me = Identity::generate("me".into()).unwrap();
-        let (header, _body) = me.sign_relay(&RelayRequest::Chat { message: "hi".into() }).unwrap();
+        let (header, _body) =
+            me.sign_relay(&RelayRequest::Chat { message: "hi".into() }).await.unwrap();
         // an attacker swaps the body for a different verb under the same header
         let forged = relay_body_bytes(&RelayRequest::Task { goal: "exfiltrate".into() }).unwrap();
         assert!(Identity::verify_request(&me.public_key_base64(), &header, &forged).is_err());
