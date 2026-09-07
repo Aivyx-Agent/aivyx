@@ -32,10 +32,10 @@
 
 pub mod agent;
 pub mod claim_check;
+pub mod egress;
 pub mod gate_policy;
 pub mod llm_planner;
 pub mod planner;
-pub mod egress;
 pub mod relevance;
 pub mod schema;
 pub mod sensitive_paths;
@@ -44,8 +44,8 @@ pub mod textual_tool_call;
 pub mod tools;
 
 pub use agent::{
-    BudgetGate, ConcreteAgent, CycleConfig, RateGate, TurnBudgetGuard, TurnSafety,
-    MAX_STEPS_PER_TURN,
+    BudgetGate, ConcreteAgent, CycleConfig, MAX_STEPS_PER_TURN, RateGate, TurnBudgetGuard,
+    TurnSafety,
 };
 pub use gate_policy::GatePolicy;
 pub use llm_planner::{LlmPlanner, LlmPlannerConfig, PruneSink};
@@ -56,9 +56,8 @@ pub use tools::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitCommitTool, GitDiffTool,
     GitReadToolConfig, GitStatusTool, GitWriteToolConfig, NetDnsTool, ShellExecTool,
-    ShellExecToolConfig, SkillReader,
-    SkillsInvokeTool, SkillsListTool, WebExtractTool, WebExtractToolConfig, WebFetchTool,
-    WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+    ShellExecToolConfig, SkillReader, SkillsInvokeTool, SkillsListTool, WebExtractTool,
+    WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
 };
 
 use std::sync::Arc;
@@ -84,8 +83,8 @@ pub use tokio_util::sync::CancellationToken;
 // through `default_confiner`, which already picks the right backend per
 // platform). Re-exporting it would put a Linux-only-real type in a
 // cross-platform crate's public API.
-pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};
 pub use aivyx_checkpoint::GitCheckpointer;
+pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};
 
 // ---------------------------------------------------------------------------
 // ID newtypes
@@ -120,9 +119,18 @@ macro_rules! id_newtype {
 }
 
 id_newtype!(AgentId, "Stable identity of an `Agent` instance.");
-id_newtype!(ToolId, "Stable identity of a `Tool` impl at registration time.");
-id_newtype!(TurnId, "Unique per turn. Correlates `TurnStarted` / `TurnEnded` audit events.");
-id_newtype!(SessionId, "The conversation-session the message belongs to.");
+id_newtype!(
+    ToolId,
+    "Stable identity of a `Tool` impl at registration time."
+);
+id_newtype!(
+    TurnId,
+    "Unique per turn. Correlates `TurnStarted` / `TurnEnded` audit events."
+);
+id_newtype!(
+    SessionId,
+    "The conversation-session the message belongs to."
+);
 id_newtype!(MessageId, "Unique per inbound `Message`.");
 
 // ---------------------------------------------------------------------------
@@ -174,11 +182,7 @@ impl Message {
     }
 
     /// Convenience constructor for an image message (no text).
-    pub fn image(
-        session_id: SessionId,
-        media_type: impl Into<String>,
-        data: Vec<u8>,
-    ) -> Self {
+    pub fn image(session_id: SessionId, media_type: impl Into<String>, data: Vec<u8>) -> Self {
         Message {
             id: MessageId::new(),
             session_id,
@@ -218,11 +222,7 @@ impl Message {
     /// route to provider-specific document
     /// blocks (Anthropic) or skip-and-warn
     /// (others) — see amendment A13.
-    pub fn document(
-        session_id: SessionId,
-        media_type: impl Into<String>,
-        data: Vec<u8>,
-    ) -> Self {
+    pub fn document(session_id: SessionId, media_type: impl Into<String>, data: Vec<u8>) -> Self {
         Message {
             id: MessageId::new(),
             session_id,
@@ -926,11 +926,7 @@ pub trait Tool: Send + Sync {
     /// Pure — must not perform side effects.
     fn required_scope(&self, input: &serde_json::Value) -> Scope;
 
-    async fn execute(
-        &self,
-        input: serde_json::Value,
-        context: &ToolContext<'_>,
-    ) -> ToolOutcome;
+    async fn execute(&self, input: serde_json::Value, context: &ToolContext<'_>) -> ToolOutcome;
 
     /// Chapter Bulwark — whether this tool's output is **untrusted external
     /// content** (a fetched web page, an extracted article, a parsed file, a
@@ -1014,11 +1010,7 @@ pub trait Agent: Send + Sync {
     fn id(&self) -> AgentId;
     fn capabilities(&self) -> &CapabilitySet;
 
-    async fn turn(
-        &self,
-        message: Message,
-        channel: &dyn ChannelContext,
-    ) -> TurnOutcome;
+    async fn turn(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome;
 }
 
 /// Shared-ownership agent handle. The turn loop's idiomatic "one agent,
@@ -1053,10 +1045,7 @@ pub enum AivyxError {
 
     // Capability & Trust
     #[error("capability denied: scope {scope} not held")]
-    CapabilityDenied {
-        scope: Scope,
-        held: CapabilitySet,
-    },
+    CapabilityDenied { scope: Scope, held: CapabilitySet },
 
     #[error("invalid scope: {0}")]
     InvalidScope(String),
@@ -1090,10 +1079,7 @@ pub enum AivyxError {
     Cancelled,
 
     #[error("not found: {kind} {id}")]
-    NotFound {
-        kind: &'static str,
-        id: String,
-    },
+    NotFound { kind: &'static str, id: String },
 
     #[error("internal error: {0}")]
     Internal(String),
@@ -1121,9 +1107,7 @@ mod tests {
         // The Storage variant now wraps the typed StorageError.
         // ? in any function returning Result<_, AivyxError> can
         // propagate StorageError directly.
-        let storage_err = aivyx_storage::StorageError::Redb(
-            "table not found".into(),
-        );
+        let storage_err = aivyx_storage::StorageError::Redb("table not found".into());
         let aivyx_err: AivyxError = storage_err.into();
         match aivyx_err {
             AivyxError::Storage(inner) => {
@@ -1139,10 +1123,7 @@ mod tests {
         let aivyx_err: AivyxError = crypto_err.into();
         match aivyx_err {
             AivyxError::Crypto(inner) => {
-                assert!(matches!(
-                    inner,
-                    aivyx_crypto::CryptoError::AeadOpenFailed
-                ));
+                assert!(matches!(inner, aivyx_crypto::CryptoError::AeadOpenFailed));
             }
             other => panic!("expected Crypto, got {other:?}"),
         }
@@ -1150,9 +1131,7 @@ mod tests {
 
     #[test]
     fn storage_error_display_includes_nested_message() {
-        let storage_err = aivyx_storage::StorageError::Redb(
-            "blocked by reader".into(),
-        );
+        let storage_err = aivyx_storage::StorageError::Redb("blocked by reader".into());
         let aivyx_err: AivyxError = storage_err.into();
         let rendered = aivyx_err.to_string();
         assert!(rendered.starts_with("storage error:"));
@@ -1216,7 +1195,10 @@ mod tests {
         let full = ToolOutcome::NotInRole {
             tool_name: "shell.exec".to_string(),
         };
-        assert_eq!(ToolOutcomeSummary::from(&full), ToolOutcomeSummary::NotInRole);
+        assert_eq!(
+            ToolOutcomeSummary::from(&full),
+            ToolOutcomeSummary::NotInRole
+        );
     }
 
     #[test]
@@ -1231,9 +1213,7 @@ mod tests {
                 TurnOutcomeSummary::Completed,
             ),
             (
-                TurnOutcome::Cancelled {
-                    tool_calls_made: 2,
-                },
+                TurnOutcome::Cancelled { tool_calls_made: 2 },
                 TurnOutcomeSummary::Cancelled,
             ),
             (
@@ -1283,11 +1263,7 @@ mod tests {
             }
         }
 
-        async fn execute(
-            &self,
-            _input: serde_json::Value,
-            _ctx: &ToolContext<'_>,
-        ) -> ToolOutcome {
+        async fn execute(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
             ToolOutcome::Completed {
                 output: serde_json::json!([]),
                 verified: Verification::NotApplicable,
@@ -1335,11 +1311,7 @@ mod tests {
         fn capabilities(&self) -> &CapabilitySet {
             &self.caps
         }
-        async fn turn(
-            &self,
-            _message: Message,
-            _channel: &dyn ChannelContext,
-        ) -> TurnOutcome {
+        async fn turn(&self, _message: Message, _channel: &dyn ChannelContext) -> TurnOutcome {
             // Task 4 writes the real loop; this fake just lets us prove
             // the trait shape compiles.
             TurnOutcome::Completed {
@@ -1408,7 +1380,9 @@ mod tests {
             MessageContent::Mixed(parts) => {
                 assert_eq!(parts.len(), 2);
                 assert!(matches!(&parts[0], ContentPart::Text(t) if t == "describe"));
-                assert!(matches!(&parts[1], ContentPart::Image { media_type, .. } if media_type == "image/jpeg"));
+                assert!(
+                    matches!(&parts[1], ContentPart::Image { media_type, .. } if media_type == "image/jpeg")
+                );
             }
             other => panic!("expected Mixed, got {other:?}"),
         }
@@ -1465,8 +1439,7 @@ mod tests {
             data: vec![1, 2, 3, 4, 5],
         };
         let json = serde_json::to_string(&content).expect("serialize");
-        let round: MessageContent =
-            serde_json::from_str(&json).expect("deserialize");
+        let round: MessageContent = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(round, content);
     }
 

@@ -98,64 +98,64 @@
 
 #[path = "aivyx_modules/access.rs"]
 mod access;
-#[path = "aivyx_modules/autonomy.rs"]
-mod autonomy;
-#[path = "aivyx_modules/workspace.rs"]
-mod workspace;
-#[path = "aivyx_modules/doctor.rs"]
-mod doctor;
-#[path = "aivyx_modules/daemon_service.rs"]
-mod daemon_service;
 #[path = "aivyx_modules/audit_export.rs"]
 mod audit_export;
-#[path = "aivyx_modules/identity.rs"]
-mod identity;
-#[path = "aivyx_modules/mcp_recipes.rs"]
-mod mcp_recipes;
-#[path = "aivyx_modules/init.rs"]
-mod init;
+#[path = "aivyx_modules/autonomy.rs"]
+mod autonomy;
 #[path = "aivyx_modules/connect.rs"]
 mod connect;
 #[path = "aivyx_modules/connect_kitchen.rs"]
 mod connect_kitchen;
-#[path = "aivyx_modules/init_templates.rs"]
-mod init_templates;
+#[path = "aivyx_modules/cost.rs"]
+mod cost;
+#[path = "aivyx_modules/daemon_service.rs"]
+mod daemon_service;
+#[path = "aivyx_modules/doctor.rs"]
+mod doctor;
 #[path = "aivyx_modules/headless.rs"]
 mod headless;
+#[path = "aivyx_modules/identity.rs"]
+mod identity;
+#[path = "aivyx_modules/init.rs"]
+mod init;
+#[path = "aivyx_modules/init_templates.rs"]
+mod init_templates;
 #[path = "aivyx_modules/learning.rs"]
 mod learning;
 #[path = "aivyx_modules/loop_cli.rs"]
 mod loop_cli;
-#[path = "aivyx_modules/pack.rs"]
-mod pack;
+#[path = "aivyx_modules/mcp_recipes.rs"]
+mod mcp_recipes;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]
 mod memory;
 #[path = "aivyx_modules/notify.rs"]
 mod notify;
+#[path = "aivyx_modules/pack.rs"]
+mod pack;
 #[path = "aivyx_modules/persona.rs"]
 mod persona;
-#[path = "aivyx_modules/skills.rs"]
-mod skills;
 #[path = "aivyx_modules/profile.rs"]
 mod profile;
 #[path = "aivyx_modules/role.rs"]
 mod role;
-#[path = "aivyx_modules/tool_relevance.rs"]
-mod tool_relevance;
-#[path = "aivyx_modules/tools.rs"]
-mod tools;
+#[path = "aivyx_modules/skills.rs"]
+mod skills;
 #[path = "aivyx_modules/team.rs"]
 mod team;
 #[path = "aivyx_modules/team_cli.rs"]
 mod team_cli;
-#[path = "aivyx_modules/cost.rs"]
-mod cost;
-#[path = "aivyx_modules/tool_init.rs"]
-mod tool_init;
 #[path = "aivyx_modules/toml_edit_apply.rs"]
 mod toml_edit_apply;
+#[path = "aivyx_modules/tool_init.rs"]
+mod tool_init;
+#[path = "aivyx_modules/tool_relevance.rs"]
+mod tool_relevance;
+#[path = "aivyx_modules/tools.rs"]
+mod tools;
+#[path = "aivyx_modules/workspace.rs"]
+mod workspace;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -170,56 +170,57 @@ use std::sync::Arc;
 
 use aivyx_audit::PersistentAuditLog;
 use aivyx_capability::Scope;
-use aivyx_channel::passphrase::{derive_master_key, PassphraseSource, DEFAULT_ENV_VAR};
-use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::daemon_server::{run_daemon, ChannelFactory, DaemonConfig, ToolDescriptor};
 use aivyx_channel::daemon_client::DaemonSession;
-use aivyx_channel::{
-    assemble_role_envelope, render_role_envelope, run_daemon_session_connected, run_session,
-    ChannelKind, DaemonSessionConfig, LocalChannel, SessionConfig,
-};
-use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
-use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
-use aivyx_dataread::{
-    DataCsvTool, DataPdfTool, DataPdfWriteTool, DataXlsxTool, DataXlsxWriteTool, ReaderSandbox,
-};
-use aivyx_core::{
-    Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsDeleteToolConfig,
-    FsMetadataToolConfig, FsReadToolConfig, FsWriteToolConfig, LlmPlanner, LlmPlannerConfig,
-    ShellExecToolConfig, Tool, ToolRegistry,
-    WebExtractTool, WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool,
-    WebPostToolConfig,
-};
-use aivyx_crypto::Argon2Params;
-use aivyx_memory::{
-    Memory, MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool, RedbMemory,
-};
-use aivyx_config::ProviderKind;
-use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
-use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider, DEFAULT_OLLAMA_BASE_URL};
-use aivyx_llm::LlmProvider;
-use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+use aivyx_channel::daemon_ipc::default_socket_path;
+use aivyx_channel::daemon_server::{ChannelFactory, DaemonConfig, ToolDescriptor, run_daemon};
+use aivyx_channel::file_watch_tool::{FileWatchCreateTool, FileWatchDeleteTool, FileWatchListTool};
 use aivyx_channel::mission_tool::{MissionCreateTool, MissionListTool, MissionStatusTool};
+use aivyx_channel::passphrase::{DEFAULT_ENV_VAR, PassphraseSource, derive_master_key};
+use aivyx_channel::reflection_tool::{ReflectionApplyTool, ReflectionProposeTool};
+use aivyx_channel::role_update_tool::RoleUpdateTool;
 use aivyx_channel::schedule_tool::{
     ScheduleCreateTool, ScheduleDeleteTool, ScheduleListTool, ScheduleUpdateTool,
 };
-use aivyx_channel::webhook_tool::{
-    WebhookCreateTool, WebhookDeleteTool, WebhookListTool,
-};
-use aivyx_channel::file_watch_tool::{
-    FileWatchCreateTool, FileWatchDeleteTool, FileWatchListTool,
-};
-use aivyx_channel::reflection_tool::{ReflectionApplyTool, ReflectionProposeTool};
-use aivyx_channel::role_update_tool::RoleUpdateTool;
-use aivyx_channel::turn_history_tool::TurnHistoryTool;
 use aivyx_channel::telegram_daemon_frontend::{
-    run_telegram_daemon_multi_session, TelegramDaemonChannel,
+    TelegramDaemonChannel, run_telegram_daemon_multi_session,
 };
+use aivyx_channel::turn_history_tool::TurnHistoryTool;
+use aivyx_channel::webhook_tool::{WebhookCreateTool, WebhookDeleteTool, WebhookListTool};
+use aivyx_channel::{
+    ChannelKind, DaemonSessionConfig, LocalChannel, SessionConfig, assemble_role_envelope,
+    render_role_envelope, run_daemon_session_connected, run_session,
+};
+use aivyx_config::ProviderKind;
+use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
+use aivyx_core::tools::role_switch::{ChildAgentFactory, RoleSwitchTool};
+use aivyx_core::{
+    Agent, AgentId, AuditHook, CancellationToken, ConcreteAgent, FsDeleteToolConfig,
+    FsMetadataToolConfig, FsReadToolConfig, FsWriteToolConfig, LlmPlanner, LlmPlannerConfig,
+    ShellExecToolConfig, Tool, ToolRegistry, WebExtractTool, WebExtractToolConfig, WebFetchTool,
+    WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+};
+use aivyx_crypto::Argon2Params;
+use aivyx_dataread::{
+    DataCsvTool, DataPdfTool, DataPdfWriteTool, DataXlsxTool, DataXlsxWriteTool, ReaderSandbox,
+};
+use aivyx_llm::LlmProvider;
+use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
+use aivyx_llm::openai::{DEFAULT_OLLAMA_BASE_URL, OpenAiConfig, OpenAiProvider};
+use aivyx_memory::{
+    Memory, MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool, RedbMemory,
+};
+use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use aivyx_telegram::transport::ReqwestTransport;
-use aivyx_telegram::{run_telegram_multi_session, TelegramSessionConfig};
+use aivyx_telegram::{TelegramSessionConfig, run_telegram_multi_session};
 
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 const PROMPT: &str = "> ";
+
+/// `aivyx-broker`'s own documented default bind address, used when
+/// `[broker] base_url` is unset. Shared by the `ProviderKind::Broker`
+/// provider-construction arm and the config startup banner so the two
+/// can't silently drift apart.
+const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
 
 /// Default path the binary looks at for the TOML config file.
 /// `./aivyx.toml` relative to the current working directory — present
@@ -313,9 +314,7 @@ fn build_shell_exec_for_channel(
                 rooted_glob(&canonical_cwd_root)
             ))
             .ok_or_else(|| {
-                format!(
-                    "canonical shell.exec cwd scope not parseable from {canonical_cwd_root:?}"
-                )
+                format!("canonical shell.exec cwd scope not parseable from {canonical_cwd_root:?}")
             })?;
             Ok(Some((Arc::new(shell) as Arc<dyn Tool>, scope)))
         }
@@ -362,15 +361,12 @@ fn build_fs_delete_for_channel(
                 .build()
                 .map_err(|e| format!("failed to build fs.delete tool: {e}"))?;
             let canonical_root = tool.sandbox_root().to_path_buf();
-            let scope = Scope::parse(&format!(
-                "fs.delete:{}",
-                rooted_glob(&canonical_root)
-            ))
-            .ok_or_else(|| {
-                format!(
-                    "canonical fs.delete sandbox scope not parseable from {canonical_root:?}"
-                )
-            })?;
+            let scope = Scope::parse(&format!("fs.delete:{}", rooted_glob(&canonical_root)))
+                .ok_or_else(|| {
+                    format!(
+                        "canonical fs.delete sandbox scope not parseable from {canonical_root:?}"
+                    )
+                })?;
             Ok(Some((Arc::new(tool) as Arc<dyn Tool>, scope)))
         }
         // Phase 107 + Phase 108 — Discord and Slack share the
@@ -476,7 +472,6 @@ fn build_web_extract_for_channel(
 // because they exercise `parse_cli_args`, which remains
 // binary-private. See `role_render.rs` for the rendered-output
 // structure and per-section teaching commentary.
-
 
 fn main() -> ExitCode {
     match run() {
@@ -637,10 +632,7 @@ fn run() -> Result<(), String> {
                     .enable_all()
                     .build()
                     .map_err(|e| format!("failed to start runtime: {e}"))?;
-                runtime.block_on(profile::run_profile_apply_hint(
-                    &proposal_id,
-                    yes,
-                ))
+                runtime.block_on(profile::run_profile_apply_hint(&proposal_id, yes))
             }
         };
     }
@@ -652,9 +644,7 @@ fn run() -> Result<(), String> {
     if let CliMode::Access(sub) = mode {
         return match sub {
             AccessSubcommand::Show => access::run_access_show(),
-            AccessSubcommand::Set { level, root, yes } => {
-                access::run_access_set(level, root, yes)
-            }
+            AccessSubcommand::Set { level, root, yes } => access::run_access_set(level, root, yes),
         };
     }
 
@@ -662,9 +652,7 @@ fn run() -> Result<(), String> {
     if let CliMode::Autonomy(sub) = mode {
         return match sub {
             AutonomySubcommand::Show => autonomy::run_autonomy_show(),
-            AutonomySubcommand::Set { level, yes } => {
-                autonomy::run_autonomy_set(level, yes)
-            }
+            AutonomySubcommand::Set { level, yes } => autonomy::run_autonomy_set(level, yes),
         };
     }
 
@@ -706,11 +694,7 @@ fn run() -> Result<(), String> {
                     .enable_all()
                     .build()
                     .map_err(|e| format!("failed to start runtime: {e}"))?;
-                runtime.block_on(role::run_role_import(
-                    &proposal_id,
-                    yes,
-                    force,
-                ))
+                runtime.block_on(role::run_role_import(&proposal_id, yes, force))
             }
         };
     }
@@ -747,12 +731,8 @@ fn run() -> Result<(), String> {
                 PersonaSubcommand::List { filter } => {
                     let prefix_filter = match filter {
                         PersonaListFilter::All => persona::PersonaListPrefix::All,
-                        PersonaListFilter::AutoOnly => {
-                            persona::PersonaListPrefix::AutoOnly
-                        }
-                        PersonaListFilter::ManualOnly => {
-                            persona::PersonaListPrefix::ManualOnly
-                        }
+                        PersonaListFilter::AutoOnly => persona::PersonaListPrefix::AutoOnly,
+                        PersonaListFilter::ManualOnly => persona::PersonaListPrefix::ManualOnly,
                     };
                     persona::run_persona_list(prefix_filter).await
                 }
@@ -773,20 +753,14 @@ fn run() -> Result<(), String> {
                         proposal_id,
                         reason,
                     } => {
-                        persona::run_persona_proposals_reject(
-                            &proposal_id,
-                            reason.as_deref(),
-                        )
-                        .await
+                        persona::run_persona_proposals_reject(&proposal_id, reason.as_deref()).await
                     }
                 },
                 PersonaSubcommand::Conflicts => persona::run_persona_conflicts().await,
                 PersonaSubcommand::Resolve { id, remove } => {
                     persona::run_persona_resolve(&id, remove).await
                 }
-                PersonaSubcommand::Dismiss { id } => {
-                    persona::run_persona_dismiss(&id).await
-                }
+                PersonaSubcommand::Dismiss { id } => persona::run_persona_dismiss(&id).await,
             }
         });
     }
@@ -809,16 +783,9 @@ fn run() -> Result<(), String> {
                     trigger,
                     procedure,
                 } => {
-                    skills::run_skills_update(
-                        &name,
-                        trigger.as_deref(),
-                        procedure.as_deref(),
-                    )
-                    .await
+                    skills::run_skills_update(&name, trigger.as_deref(), procedure.as_deref()).await
                 }
-                SkillsSubcommand::Forget { name } => {
-                    skills::run_skills_forget(&name).await
-                }
+                SkillsSubcommand::Forget { name } => skills::run_skills_forget(&name).await,
             }
         });
     }
@@ -858,27 +825,17 @@ fn run() -> Result<(), String> {
                     query,
                     limit,
                     semantic,
-                } => {
-                    memory::run_memory_search(&query, limit, semantic).await
-                }
+                } => memory::run_memory_search(&query, limit, semantic).await,
                 MemorySubcommand::Evict { topic, yes } => {
                     memory::run_memory_evict(&topic, yes).await
                 }
-                MemorySubcommand::Wiki { topic } => {
-                    memory::run_memory_wiki(topic).await
-                }
-                MemorySubcommand::Graph { entity } => {
-                    memory::run_memory_graph(entity).await
-                }
-                MemorySubcommand::Conflicts => {
-                    memory::run_memory_conflicts().await
-                }
+                MemorySubcommand::Wiki { topic } => memory::run_memory_wiki(topic).await,
+                MemorySubcommand::Graph { entity } => memory::run_memory_graph(entity).await,
+                MemorySubcommand::Conflicts => memory::run_memory_conflicts().await,
                 MemorySubcommand::Resolve { topic, archive } => {
                     memory::run_memory_resolve(&topic, archive).await
                 }
-                MemorySubcommand::Dismiss { id } => {
-                    memory::run_memory_dismiss(&id).await
-                }
+                MemorySubcommand::Dismiss { id } => memory::run_memory_dismiss(&id).await,
             }
         });
     }
@@ -891,8 +848,7 @@ fn run() -> Result<(), String> {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        return rt
-            .block_on(async move { learning::run_learning(window_secs).await });
+        return rt.block_on(async move { learning::run_learning(window_secs).await });
     }
 
     // Phase 173 — `aivyx loop <subcommand>`: autonomous loop
@@ -909,9 +865,7 @@ fn run() -> Result<(), String> {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        return rt.block_on(async move {
-            loop_cli::run_loop(sub).await
-        });
+        return rt.block_on(async move { loop_cli::run_loop(sub).await });
     }
 
     // Phase 102 — `aivyx tools`: read-only tool-observability
@@ -921,8 +875,7 @@ fn run() -> Result<(), String> {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        return rt
-            .block_on(async move { tools::run_tools(window_secs).await });
+        return rt.block_on(async move { tools::run_tools(window_secs).await });
     }
 
     // Phase 103 — `aivyx tool init <path>`: scaffold a starter
@@ -984,9 +937,7 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(async move {
             match sub {
-                IdentitySubcommand::Export { path } => {
-                    identity::run_identity_export(&path).await
-                }
+                IdentitySubcommand::Export { path } => identity::run_identity_export(&path).await,
                 IdentitySubcommand::Import { path, force } => {
                     identity::run_identity_import(&path, force).await
                 }
@@ -1005,15 +956,14 @@ fn run() -> Result<(), String> {
     // storage open below; the params are extracted here so the
     // load-options + sandbox-mkdir guards downstream can branch
     // off the same flag without rebuilding the match.
-    let audit_export_params: Option<(Option<u64>, Option<usize>, Option<String>)> =
-        match &mode {
-            CliMode::Audit(AuditSubcommand::Export {
-                from,
-                limit,
-                event_type,
-            }) => Some((*from, *limit, event_type.clone())),
-            _ => None,
-        };
+    let audit_export_params: Option<(Option<u64>, Option<usize>, Option<String>)> = match &mode {
+        CliMode::Audit(AuditSubcommand::Export {
+            from,
+            limit,
+            event_type,
+        }) => Some((*from, *limit, event_type.clone())),
+        _ => None,
+    };
     let audit_export_mode = audit_export_params.is_some();
     // Chapter K — `aivyx cost` shares the same offline cold-start posture
     // (no session / sandbox / API key); it dispatches after storage open.
@@ -1131,11 +1081,7 @@ fn run() -> Result<(), String> {
             let stdin = io::stdin();
             let mut reader = stdin.lock();
             let mut stderr_writer = io::stderr();
-            match init::decide_unconfigured_first_run(
-                is_tty,
-                &mut reader,
-                &mut stderr_writer,
-            )? {
+            match init::decide_unconfigured_first_run(is_tty, &mut reader, &mut stderr_writer)? {
                 init::UnconfiguredFirstRunDecision::RunWizardInline => {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -1171,9 +1117,8 @@ fn run() -> Result<(), String> {
     // Storage path's sidecar salt file. `storage_path` itself was
     // already resolved above.
     if let Some(parent) = storage_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!("failed to create storage parent directory {parent:?}: {e}")
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create storage parent directory {parent:?}: {e}"))?;
     }
     let salt_path = salt_path_for(&storage_path);
 
@@ -1203,12 +1148,8 @@ fn run() -> Result<(), String> {
     //    never comes, or crash with an opaque Argon2 error.
     let new_store = !storage_path.exists();
     let passphrase_source = select_passphrase_source(config.passphrase.as_ref(), new_store)?;
-    let master_key = derive_master_key(
-        passphrase_source,
-        &salt_path,
-        Argon2Params::d7_default(),
-    )
-    .map_err(|e| format!("failed to derive master key: {e}"))?;
+    let master_key = derive_master_key(passphrase_source, &salt_path, Argon2Params::d7_default())
+        .map_err(|e| format!("failed to derive master key: {e}"))?;
 
     // Derive the audit chain key *before* `RedbStorage::open` consumes
     // `master_key`. `PersistentAuditLog` is documented as the single
@@ -1245,9 +1186,7 @@ fn run() -> Result<(), String> {
     let persona_proposal_chain_key: [u8; 32] = {
         let subkey = master_key
             .derive_subkey(b"persona-proposals")
-            .map_err(|e| {
-                format!("failed to derive persona proposal chain key: {e}")
-            })?;
+            .map_err(|e| format!("failed to derive persona proposal chain key: {e}"))?;
         let mut out = [0u8; 32];
         out.copy_from_slice(subkey.as_bytes());
         out
@@ -1260,9 +1199,7 @@ fn run() -> Result<(), String> {
     let loop_backlog_chain_key: [u8; 32] = {
         let subkey = master_key
             .derive_subkey(b"loop-backlog")
-            .map_err(|e| {
-                format!("failed to derive loop backlog chain key: {e}")
-            })?;
+            .map_err(|e| format!("failed to derive loop backlog chain key: {e}"))?;
         let mut out = [0u8; 32];
         out.copy_from_slice(subkey.as_bytes());
         out
@@ -1282,11 +1219,8 @@ fn run() -> Result<(), String> {
         // `spawn_blocking` call lands on a live tokio pool. Opening
         // outside the runtime would panic the moment `open` tried to
         // reach for the current handle.
-        let storage = match RedbStorage::open(
-            StorageConfig::new(storage_path.clone()),
-            master_key,
-        )
-        .await
+        let storage = match RedbStorage::open(StorageConfig::new(storage_path.clone()), master_key)
+            .await
         {
             Ok(s) => s,
             Err(e) => {
@@ -1301,13 +1235,10 @@ fn run() -> Result<(), String> {
                 // collisions while a daemon is actually up; any other open
                 // failure keeps its original error.
                 let msg = e.to_string();
-                let looks_like_lock = msg.contains("acquire lock")
-                    || msg.contains("already open");
+                let looks_like_lock = msg.contains("acquire lock") || msg.contains("already open");
                 let daemon_up = !no_daemon
                     && match default_socket_path() {
-                        Ok(sp) => {
-                            aivyx_channel::daemon_client::daemon_is_running(&sp).await
-                        }
+                        Ok(sp) => aivyx_channel::daemon_client::daemon_is_running(&sp).await,
                         Err(_) => false,
                     };
                 if looks_like_lock && daemon_up {
@@ -1336,22 +1267,14 @@ fn run() -> Result<(), String> {
         // are forwarded straight to
         // `PersistentAuditLog::entries_range`.
         if let Some((from, limit, event_type)) = audit_export_params {
-            return run_audit_export(
-                storage,
-                audit_chain_key,
-                from,
-                limit,
-                event_type,
-            )
-            .await;
+            return run_audit_export(storage, audit_chain_key, from, limit, event_type).await;
         }
 
         // Chapter K — `aivyx cost`. Same cold-start posture: open the chain,
         // price its `LlmCost` events (with the operator's `[pricing]`
         // overrides over the built-in defaults), print the report, exit.
         if let Some(today) = cost_today {
-            let pricing =
-                aivyx_cost::Pricing::with_overrides(config.pricing.clone());
+            let pricing = aivyx_cost::Pricing::with_overrides(config.pricing.clone());
             return cost::run_cost(storage, audit_chain_key, today, pricing).await;
         }
 
@@ -1404,7 +1327,8 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
             let info = aivyx_channel::daemon_client::daemon_status(&socket_path).await;
             if info.running {
                 let version = info.version.as_deref().unwrap_or("unknown");
-                let pid_str = info.pid
+                let pid_str = info
+                    .pid
                     .map(|p| format!("  pid: {p}\n"))
                     .unwrap_or_default();
                 eprintln!(
@@ -1477,8 +1401,12 @@ fn print_config_banner(config: &AivyxConfig) {
             config
                 .broker_base_url
                 .as_deref()
-                .unwrap_or("http://127.0.0.1:8899"),
-            if config.broker_base_url.is_some() { "configured" } else { "default" },
+                .unwrap_or(DEFAULT_BROKER_BASE_URL),
+            if config.broker_base_url.is_some() {
+                "configured"
+            } else {
+                "default"
+            },
         );
     } else if config.provider.value.is_openai_compatible() {
         if config.provider.value == aivyx_config::ProviderKind::OpenAi {
@@ -1663,9 +1591,7 @@ fn print_config_banner(config: &AivyxConfig) {
 /// - `family: undetected` — model name doesn't parse to any
 ///   known Ollama family. Strategy is always `"none"` in this
 ///   case (operator-conservative).
-fn format_ollama_prompt_strategy_banner_line(
-    config: &AivyxConfig,
-) -> Option<String> {
+fn format_ollama_prompt_strategy_banner_line(config: &AivyxConfig) -> Option<String> {
     if config.provider.value != aivyx_config::ProviderKind::Ollama {
         return None;
     }
@@ -2170,7 +2096,11 @@ enum PackSubcommand {
     /// `aivyx pack keygen <keyfile>`
     Keygen { keyfile: String },
     /// `aivyx pack build <staging> --key <keyfile> --out <file>`
-    Build { staging: String, key: String, out: String },
+    Build {
+        staging: String,
+        key: String,
+        out: String,
+    },
     /// `aivyx pack inspect <file> [--allow-untrusted]`
     Inspect { file: String, allow_untrusted: bool },
     /// `aivyx pack install <file>`
@@ -2228,10 +2158,7 @@ enum RoleSubcommand {
 enum NotifySubcommand {
     /// `aivyx notify history [--target NAME] [--limit N]`.
     /// Defaults: no target filter, limit 100.
-    History {
-        target: Option<String>,
-        limit: u32,
-    },
+    History { target: Option<String>, limit: u32 },
 }
 
 /// Phase 74 — `aivyx memory` subcommand variants.
@@ -2614,9 +2541,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             None => None,
             Some(t) => {
                 if t.trim().is_empty() {
-                    return Err(
-                        "`--headless` requires a non-empty task".to_string()
-                    );
+                    return Err("`--headless` requires a non-empty task".to_string());
                 }
                 if args.len() > 2 {
                     return Err(format!(
@@ -2706,9 +2631,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     di += 1;
                 }
                 "--web-ui-port" if mode == CliMode::DaemonRun => {
-                    let value = args.get(di + 1).ok_or_else(|| {
-                        "`--web-ui-port` requires a port number".to_string()
-                    })?;
+                    let value = args
+                        .get(di + 1)
+                        .ok_or_else(|| "`--web-ui-port` requires a port number".to_string())?;
                     let port: u16 = value.parse().map_err(|_| {
                         format!("`--web-ui-port` value `{value}` is not a valid port number")
                     })?;
@@ -2744,9 +2669,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         while ti < args.len() {
             match args[ti].as_str() {
                 "--role" => {
-                    let value = args.get(ti + 1).ok_or_else(|| {
-                        "`--role` requires a value".to_string()
-                    })?;
+                    let value = args
+                        .get(ti + 1)
+                        .ok_or_else(|| "`--role` requires a value".to_string())?;
                     if value.trim().is_empty() {
                         return Err("`--role` requires a non-empty name".to_string());
                     }
@@ -2779,8 +2704,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // returns a descriptive error that names what's supported.
     if !args.is_empty() && args[0] == "identity" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx identity` requires a subcommand. Supported: export <path>"
-                .to_string()
+            "`aivyx identity` requires a subcommand. Supported: export <path>".to_string()
         })?;
         let subcommand = match sub.as_str() {
             "export" => {
@@ -2814,9 +2738,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 for extra in args.iter().skip(3) {
                     if extra == "--force" {
                         if force {
-                            return Err(
-                                "`--force` specified more than once".into(),
-                            );
+                            return Err("`--force` specified more than once".into());
                         }
                         force = true;
                     } else {
@@ -2867,16 +2789,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     match args[idx].as_str() {
                         "--target" => {
                             let value = args.get(idx + 1).ok_or_else(|| {
-                                "`aivyx notify history --target` requires a name"
-                                    .to_string()
+                                "`aivyx notify history --target` requires a name".to_string()
                             })?;
                             target = Some(value.clone());
                             idx += 2;
                         }
                         "--limit" => {
                             let value = args.get(idx + 1).ok_or_else(|| {
-                                "`aivyx notify history --limit` requires a value"
-                                    .to_string()
+                                "`aivyx notify history --limit` requires a value".to_string()
                             })?;
                             let parsed: u32 = value.parse().map_err(|_| {
                                 format!(
@@ -2886,8 +2806,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             })?;
                             if parsed == 0 {
                                 return Err(
-                                    "`aivyx notify history --limit` must be ≥ 1"
-                                        .to_string(),
+                                    "`aivyx notify history --limit` must be ≥ 1".to_string()
                                 );
                             }
                             limit = parsed;
@@ -2902,10 +2821,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                 }
                 return Ok(CliArgs {
-                    mode: CliMode::Notify(NotifySubcommand::History {
-                        target,
-                        limit,
-                    }),
+                    mode: CliMode::Notify(NotifySubcommand::History { target, limit }),
                     channel: ChannelKind::Local,
                     role: None,
                     no_daemon: false,
@@ -2934,17 +2850,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         // Helper: parse a trailing `--limit N` flag from the
         // arg slice starting at `start`, returning (limit,
         // positional-consumed). Default 32.
-        let parse_limit_from = |args: &[String],
-                                start: usize|
-         -> Result<u32, String> {
+        let parse_limit_from = |args: &[String], start: usize| -> Result<u32, String> {
             let mut idx = start;
             let mut limit = 32u32;
             while idx < args.len() {
                 match args[idx].as_str() {
                     "--limit" => {
-                        let v = args.get(idx + 1).ok_or_else(|| {
-                            "`--limit` requires a value".to_string()
-                        })?;
+                        let v = args
+                            .get(idx + 1)
+                            .ok_or_else(|| "`--limit` requires a value".to_string())?;
                         let parsed: u32 = v.parse().map_err(|_| {
                             format!(
                                 "`--limit` expects a positive integer, \
@@ -2952,17 +2866,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             )
                         })?;
                         if parsed == 0 {
-                            return Err(
-                                "`--limit` must be ≥ 1".to_string()
-                            );
+                            return Err("`--limit` must be ≥ 1".to_string());
                         }
                         limit = parsed;
                         idx += 2;
                     }
                     other => {
-                        return Err(format!(
-                            "unrecognized argument: `{other}`"
-                        ));
+                        return Err(format!("unrecognized argument: `{other}`"));
                     }
                 }
             }
@@ -2971,16 +2881,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         let mem_sub = match sub.as_str() {
             "list" => {
                 if args.len() > 2 {
-                    return Err(
-                        "`aivyx memory list` takes no arguments".into()
-                    );
+                    return Err("`aivyx memory list` takes no arguments".into());
                 }
                 MemorySubcommand::List
             }
             "show" => {
-                let topic = args.get(2).ok_or_else(|| {
-                    "`aivyx memory show` requires a topic".to_string()
-                })?;
+                let topic = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx memory show` requires a topic".to_string())?;
                 let limit = parse_limit_from(args, 3)?;
                 MemorySubcommand::Show {
                     topic: topic.clone(),
@@ -2988,9 +2896,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "search" => {
-                let query = args.get(2).ok_or_else(|| {
-                    "`aivyx memory search` requires a query".to_string()
-                })?;
+                let query = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx memory search` requires a query".to_string())?;
                 // Hand-parsed (not `parse_limit_from`) because
                 // search additionally accepts the `--semantic`
                 // flag, which the shared limit parser rejects.
@@ -3004,9 +2912,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             idx += 1;
                         }
                         "--limit" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--limit` requires a value".to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--limit` requires a value".to_string())?;
                             let parsed: u32 = v.parse().map_err(|_| {
                                 format!(
                                     "`--limit` expects a positive \
@@ -3014,9 +2922,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 )
                             })?;
                             if parsed == 0 {
-                                return Err(
-                                    "`--limit` must be ≥ 1".to_string()
-                                );
+                                return Err("`--limit` must be ≥ 1".to_string());
                             }
                             limit = parsed;
                             idx += 2;
@@ -3036,9 +2942,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "evict" => {
-                let topic = args.get(2).ok_or_else(|| {
-                    "`aivyx memory evict` requires a topic".to_string()
-                })?;
+                let topic = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx memory evict` requires a topic".to_string())?;
                 let mut yes = false;
                 for a in &args[3..] {
                     match a.as_str() {
@@ -3073,17 +2979,16 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "resolve" => {
                 let topic = args.get(2).filter(|t| !t.is_empty()).ok_or_else(|| {
-                    "`aivyx memory resolve` needs a <topic> and `--archive <seq>`"
-                        .to_string()
+                    "`aivyx memory resolve` needs a <topic> and `--archive <seq>`".to_string()
                 })?;
                 let mut archive: Option<u64> = None;
                 let mut idx = 3;
                 while idx < args.len() {
                     match args[idx].as_str() {
                         "--archive" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--archive` requires a seq value".to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--archive` requires a seq value".to_string())?;
                             archive = Some(v.parse().map_err(|_| {
                                 format!("`--archive` expects an integer seq, got `{v}`")
                             })?);
@@ -3134,10 +3039,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         while idx < args.len() {
             match args[idx].as_str() {
                 "--window" => {
-                    let v = args.get(idx + 1).ok_or_else(|| {
-                        "`--window` requires a value (seconds)"
-                            .to_string()
-                    })?;
+                    let v = args
+                        .get(idx + 1)
+                        .ok_or_else(|| "`--window` requires a value (seconds)".to_string())?;
                     let parsed: u64 = v.parse().map_err(|_| {
                         format!(
                             "`--window` expects a positive integer \
@@ -3145,9 +3049,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         )
                     })?;
                     if parsed == 0 {
-                        return Err(
-                            "`--window` must be >= 1".to_string()
-                        );
+                        return Err("`--window` must be >= 1".to_string());
                     }
                     window_secs = Some(parsed);
                     idx += 2;
@@ -3186,9 +3088,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
         }
         if args.len() > 2 {
-            return Err(
-                "`aivyx connect` takes at most one service name".into(),
-            );
+            return Err("`aivyx connect` takes at most one service name".into());
         }
         return Ok(CliArgs {
             mode: CliMode::Connect(service),
@@ -3212,7 +3112,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
         };
         let pack_sub = match sub {
-            "keygen" => PackSubcommand::Keygen { keyfile: take_one("a <keyfile> path")? },
+            "keygen" => PackSubcommand::Keygen {
+                keyfile: take_one("a <keyfile> path")?,
+            },
             "build" => {
                 let staging = take_one("a <staging-dir>")?;
                 let mut key = None;
@@ -3221,14 +3123,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while idx < args.len() {
                     match args[idx].as_str() {
                         "--key" => {
-                            key = Some(args.get(idx + 1).ok_or("`--key` requires a value")?.clone());
+                            key =
+                                Some(args.get(idx + 1).ok_or("`--key` requires a value")?.clone());
                             idx += 2;
                         }
                         "--out" => {
-                            out = Some(args.get(idx + 1).ok_or("`--out` requires a value")?.clone());
+                            out =
+                                Some(args.get(idx + 1).ok_or("`--out` requires a value")?.clone());
                             idx += 2;
                         }
-                        other => return Err(format!("unrecognized argument to `aivyx pack build`: `{other}`")),
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx pack build`: `{other}`"
+                            ));
+                        }
                     }
                 }
                 PackSubcommand::Build {
@@ -3242,11 +3150,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let allow_untrusted = match args.get(3).map(|s| s.as_str()) {
                     None => false,
                     Some("--allow-untrusted") => true,
-                    Some(other) => return Err(format!("unrecognized argument to `aivyx pack inspect`: `{other}`")),
+                    Some(other) => {
+                        return Err(format!(
+                            "unrecognized argument to `aivyx pack inspect`: `{other}`"
+                        ));
+                    }
                 };
-                PackSubcommand::Inspect { file, allow_untrusted }
+                PackSubcommand::Inspect {
+                    file,
+                    allow_untrusted,
+                }
             }
-            "install" => PackSubcommand::Install { file: take_one("a <bundle-file>")? },
+            "install" => PackSubcommand::Install {
+                file: take_one("a <bundle-file>")?,
+            },
             other => {
                 return Err(format!(
                     "unrecognized `aivyx pack` subcommand: `{other}`. \
@@ -3272,15 +3189,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
         let loop_sub = match sub {
             "add" => {
-                let title = args.get(2).ok_or_else(|| {
-                    "`aivyx loop add` requires a <title>".to_string()
-                })?;
+                let title = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx loop add` requires a <title>".to_string())?;
                 if title.starts_with('-') {
-                    return Err(
-                        "`aivyx loop add` requires a <title> before any \
+                    return Err("`aivyx loop add` requires a <title> before any \
                          flags"
-                            .to_string(),
-                    );
+                        .to_string());
                 }
                 let mut body = String::new();
                 let mut priority: Option<u32> = None;
@@ -3298,25 +3213,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     match args[idx].as_str() {
                         "--body" => {
                             if !body.is_empty() {
-                                return Err(
-                                    "`aivyx loop add` got both a \
+                                return Err("`aivyx loop add` got both a \
                                      positional body and `--body` — \
                                      pass one or the other"
-                                        .to_string(),
-                                );
+                                    .to_string());
                             }
                             body = args
                                 .get(idx + 1)
-                                .ok_or_else(|| {
-                                    "`--body` requires a value".to_string()
-                                })?
+                                .ok_or_else(|| "`--body` requires a value".to_string())?
                                 .clone();
                             idx += 2;
                         }
                         "--priority" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--priority` requires a value".to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--priority` requires a value".to_string())?;
                             priority = Some(v.parse().map_err(|_| {
                                 format!(
                                     "`--priority` expects a non-negative \
@@ -3343,9 +3254,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "stop" => LoopSubcommand::Stop,
             "status" => LoopSubcommand::Status,
             "skip" => {
-                let story_id = args.get(2).ok_or_else(|| {
-                    "`aivyx loop skip` requires a <story-id>".to_string()
-                })?;
+                let story_id = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx loop skip` requires a <story-id>".to_string())?;
                 if args.len() > 3 {
                     return Err(format!(
                         "unrecognized argument to `aivyx loop skip`: \
@@ -3363,9 +3274,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while idx < args.len() {
                     match args[idx].as_str() {
                         "--limit" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--limit` requires a value".to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--limit` requires a value".to_string())?;
                             let parsed: u32 = v.parse().map_err(|_| {
                                 format!(
                                     "`--limit` expects a positive \
@@ -3373,9 +3284,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 )
                             })?;
                             if parsed == 0 {
-                                return Err(
-                                    "`--limit` must be >= 1".to_string()
-                                );
+                                return Err("`--limit` must be >= 1".to_string());
                             }
                             limit = Some(parsed);
                             idx += 2;
@@ -3396,10 +3305,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while idx < args.len() {
                     match args[idx].as_str() {
                         "--max-iterations" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--max-iterations` requires a value"
-                                    .to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--max-iterations` requires a value".to_string())?;
                             let parsed: u32 = v.parse().map_err(|_| {
                                 format!(
                                     "`--max-iterations` expects a positive \
@@ -3407,10 +3315,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 )
                             })?;
                             if parsed == 0 {
-                                return Err(
-                                    "`--max-iterations` must be >= 1"
-                                        .to_string(),
-                                );
+                                return Err("`--max-iterations` must be >= 1".to_string());
                             }
                             max_iterations = Some(parsed);
                             idx += 2;
@@ -3426,11 +3331,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 LoopSubcommand::Start { max_iterations }
             }
             "" => {
-                return Err(
-                    "`aivyx loop` requires a subcommand: add | list | \
+                return Err("`aivyx loop` requires a subcommand: add | list | \
                      skip | start | status | stop | log"
-                        .to_string(),
-                );
+                    .to_string());
             }
             other => {
                 return Err(format!(
@@ -3490,15 +3393,22 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while idx < tail.len() {
                     match tail[idx].as_str() {
                         "--pack" => {
-                            pack = Some(tail.get(idx + 1).ok_or_else(|| {
-                                "`--pack` requires `default` or a path to a team TOML".to_string()
-                            })?.clone());
+                            pack = Some(
+                                tail.get(idx + 1)
+                                    .ok_or_else(|| {
+                                        "`--pack` requires `default` or a path to a team TOML"
+                                            .to_string()
+                                    })?
+                                    .clone(),
+                            );
                             idx += 2;
                         }
                         "--out" => {
-                            out = Some(tail.get(idx + 1).ok_or_else(|| {
-                                "`--out` requires a path".to_string()
-                            })?.clone());
+                            out = Some(
+                                tail.get(idx + 1)
+                                    .ok_or_else(|| "`--out` requires a path".to_string())?
+                                    .clone(),
+                            );
                             idx += 2;
                         }
                         "--force" => {
@@ -3521,7 +3431,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 })?;
                 if mission.starts_with('-') {
                     return Err(
-                        "`aivyx team run` expects the mission text before any flags".to_string(),
+                        "`aivyx team run` expects the mission text before any flags".to_string()
                     );
                 }
                 TeamSubcommand::Run {
@@ -3540,15 +3450,23 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while idx < tail.len() {
                     match tail[idx].as_str() {
                         "--plan" => {
-                            plan_path = Some(tail.get(idx + 1).ok_or_else(|| {
-                                "`--plan` requires a path to a plan JSON file".to_string()
-                            })?.clone());
+                            plan_path = Some(
+                                tail.get(idx + 1)
+                                    .ok_or_else(|| {
+                                        "`--plan` requires a path to a plan JSON file".to_string()
+                                    })?
+                                    .clone(),
+                            );
                             idx += 2;
                         }
                         "--config" => {
-                            config = Some(tail.get(idx + 1).ok_or_else(|| {
-                                "`--config` requires a path to a team TOML".to_string()
-                            })?.clone());
+                            config = Some(
+                                tail.get(idx + 1)
+                                    .ok_or_else(|| {
+                                        "`--config` requires a path to a team TOML".to_string()
+                                    })?
+                                    .clone(),
+                            );
                             idx += 2;
                         }
                         other if other.starts_with('-') => {
@@ -3570,11 +3488,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 match (plan_path, goal) {
                     (Some(_), Some(_)) => {
-                        return Err(
-                            "`aivyx team start` takes either a \"<goal>\" or `--plan`, \
+                        return Err("`aivyx team start` takes either a \"<goal>\" or `--plan`, \
                              not both"
-                                .to_string(),
-                        );
+                            .to_string());
                     }
                     (Some(plan_path), None) => TeamSubcommand::Start { plan_path, config },
                     (None, Some(goal)) => TeamSubcommand::StartGoal { goal, config },
@@ -3599,12 +3515,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 mission_id: args.get(2).cloned(),
             },
             "approve" | "reject" => {
-                let mission_id = args.get(2).cloned().ok_or_else(|| {
-                    format!("`aivyx team {sub}` requires <mission-id> <step>")
-                })?;
-                let step = args.get(3).cloned().ok_or_else(|| {
-                    format!("`aivyx team {sub}` requires a <step> argument")
-                })?;
+                let mission_id = args
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| format!("`aivyx team {sub}` requires <mission-id> <step>"))?;
+                let step = args
+                    .get(3)
+                    .cloned()
+                    .ok_or_else(|| format!("`aivyx team {sub}` requires a <step> argument"))?;
                 if sub == "approve" {
                     TeamSubcommand::Approve { mission_id, step }
                 } else {
@@ -3612,21 +3530,24 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "abort" => {
-                let mission_id = args.get(2).cloned().ok_or_else(|| {
-                    "`aivyx team abort` requires a <mission-id>".to_string()
-                })?;
+                let mission_id = args
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| "`aivyx team abort` requires a <mission-id>".to_string())?;
                 TeamSubcommand::Abort { mission_id }
             }
             "pause" => {
-                let mission_id = args.get(2).cloned().ok_or_else(|| {
-                    "`aivyx team pause` requires a <mission-id>".to_string()
-                })?;
+                let mission_id = args
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| "`aivyx team pause` requires a <mission-id>".to_string())?;
                 TeamSubcommand::Pause { mission_id }
             }
             "resume" => {
-                let mission_id = args.get(2).cloned().ok_or_else(|| {
-                    "`aivyx team resume` requires a <mission-id>".to_string()
-                })?;
+                let mission_id = args
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| "`aivyx team resume` requires a <mission-id>".to_string())?;
                 TeamSubcommand::Resume { mission_id }
             }
             "" => {
@@ -3687,10 +3608,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         while idx < args.len() {
             match args[idx].as_str() {
                 "--window" => {
-                    let v = args.get(idx + 1).ok_or_else(|| {
-                        "`--window` requires a value (seconds)"
-                            .to_string()
-                    })?;
+                    let v = args
+                        .get(idx + 1)
+                        .ok_or_else(|| "`--window` requires a value (seconds)".to_string())?;
                     let parsed: u64 = v.parse().map_err(|_| {
                         format!(
                             "`--window` expects a positive integer \
@@ -3698,9 +3618,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         )
                     })?;
                     if parsed == 0 {
-                        return Err(
-                            "`--window` must be >= 1".to_string()
-                        );
+                        return Err("`--window` must be >= 1".to_string());
                     }
                     window_secs = Some(parsed);
                     idx += 2;
@@ -3728,15 +3646,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Phase 103 — `aivyx tool <subcommand>`. The first sub-
     // subcommand is `init <path> [--force]`.
     if !args.is_empty() && args[0] == "tool" {
-        let sub = args.get(1).ok_or_else(|| {
-            "`aivyx tool` requires a subcommand. Supported: init"
-                .to_string()
-        })?;
+        let sub = args
+            .get(1)
+            .ok_or_else(|| "`aivyx tool` requires a subcommand. Supported: init".to_string())?;
         match sub.as_str() {
             "init" => {
-                let path_arg = args.get(2).ok_or_else(|| {
-                    "`aivyx tool init` requires a target path".to_string()
-                })?;
+                let path_arg = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx tool init` requires a target path".to_string())?;
                 if path_arg.starts_with("--") {
                     return Err(format!(
                         "`aivyx tool init` requires a target path \
@@ -3783,10 +3700,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // missing `--from` means seq 0, missing `--limit` means no
     // upper bound.
     if !args.is_empty() && args[0] == "audit" {
-        let sub = args.get(1).ok_or_else(|| {
-            "`aivyx audit` requires a subcommand. Supported: export"
-                .to_string()
-        })?;
+        let sub = args
+            .get(1)
+            .ok_or_else(|| "`aivyx audit` requires a subcommand. Supported: export".to_string())?;
         match sub.as_str() {
             "export" => {
                 let mut from: Option<u64> = None;
@@ -3796,10 +3712,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while i < args.len() {
                     match args[i].as_str() {
                         "--from" => {
-                            let val = args.get(i + 1).ok_or_else(|| {
-                                "`--from` requires a sequence number"
-                                    .to_string()
-                            })?;
+                            let val = args
+                                .get(i + 1)
+                                .ok_or_else(|| "`--from` requires a sequence number".to_string())?;
                             let parsed: u64 = val.parse().map_err(|e| {
                                 format!(
                                     "invalid `--from` value `{val}`: \
@@ -3810,9 +3725,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             i += 2;
                         }
                         "--limit" => {
-                            let val = args.get(i + 1).ok_or_else(|| {
-                                "`--limit` requires an integer".to_string()
-                            })?;
+                            let val = args
+                                .get(i + 1)
+                                .ok_or_else(|| "`--limit` requires an integer".to_string())?;
                             let parsed: usize = val.parse().map_err(|e| {
                                 format!(
                                     "invalid `--limit` value `{val}`: \
@@ -3820,11 +3735,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 )
                             })?;
                             if parsed == 0 {
-                                return Err(
-                                    "`--limit 0` would emit nothing — \
+                                return Err("`--limit 0` would emit nothing — \
                                      omit `--limit` for an unbounded export"
-                                        .to_string(),
-                                );
+                                    .to_string());
                             }
                             limit = Some(parsed);
                             i += 2;
@@ -3898,8 +3811,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // operator-facing surface.
     if !args.is_empty() && args[0] == "mcp" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx mcp` requires a subcommand. Supported: recipes, status"
-                .to_string()
+            "`aivyx mcp` requires a subcommand. Supported: recipes, status".to_string()
         })?;
         match sub.as_str() {
             "status" => {
@@ -4072,16 +3984,16 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 while idx < args.len() {
                     match args[idx].as_str() {
                         "--trigger" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--trigger` requires a value".to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--trigger` requires a value".to_string())?;
                             trigger = Some(v.clone());
                             idx += 2;
                         }
                         "--procedure" => {
-                            let v = args.get(idx + 1).ok_or_else(|| {
-                                "`--procedure` requires a value".to_string()
-                            })?;
+                            let v = args
+                                .get(idx + 1)
+                                .ok_or_else(|| "`--procedure` requires a value".to_string())?;
                             procedure = Some(v.clone());
                             idx += 2;
                         }
@@ -4094,11 +4006,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                 }
                 if trigger.is_none() && procedure.is_none() {
-                    return Err(
-                        "`aivyx skills update` needs at least --trigger or \
+                    return Err("`aivyx skills update` needs at least --trigger or \
                          --procedure."
-                            .into(),
-                    );
+                        .into());
                 }
                 SkillsSubcommand::Update {
                     name: name.clone(),
@@ -4107,9 +4017,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "forget" => {
-                let name = args.get(2).ok_or_else(|| {
-                    "`aivyx skills forget` requires a <name>".to_string()
-                })?;
+                let name = args
+                    .get(2)
+                    .ok_or_else(|| "`aivyx skills forget` requires a <name>".to_string())?;
                 if args.len() > 3 {
                     return Err(format!(
                         "`aivyx skills forget` accepts exactly one <name>. \
@@ -4181,11 +4091,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                 }
                 if seen_auto && seen_manual {
-                    return Err(
-                        "`aivyx persona list` --auto-only and --manual-only \
+                    return Err("`aivyx persona list` --auto-only and --manual-only \
                          are mutually exclusive."
-                            .into(),
-                    );
+                        .into());
                 }
                 PersonaSubcommand::List { filter }
             }
@@ -4228,8 +4136,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                     })?;
                                     let normalized = value.to_ascii_lowercase();
                                     match normalized.as_str() {
-                                        "pending" | "approved" | "rejected"
-                                        | "superseded" | "all" => {
+                                        "pending" | "approved" | "rejected" | "superseded"
+                                        | "all" => {
                                             status = normalized;
                                         }
                                         other => {
@@ -4298,12 +4206,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             match args[idx].as_str() {
                                 "--reason" => {
                                     idx += 1;
-                                    let value =
-                                        args.get(idx).ok_or_else(|| {
-                                            "`aivyx persona proposals reject \
+                                    let value = args.get(idx).ok_or_else(|| {
+                                        "`aivyx persona proposals reject \
                                              --reason` requires a value"
-                                                .to_string()
-                                        })?;
+                                            .to_string()
+                                    })?;
                                     reason = Some(value.clone());
                                 }
                                 other => {
@@ -4356,9 +4263,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             })?;
                             let c = v.chars().next().unwrap_or(' ').to_ascii_lowercase();
                             if c != 'a' && c != 'b' {
-                                return Err(format!(
-                                    "`--remove` must be `a` or `b`, got `{v}`"
-                                ));
+                                return Err(format!("`--remove` must be `a` or `b`, got `{v}`"));
                             }
                             remove = Some(c);
                         }
@@ -4375,7 +4280,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                      facet of the conflict to remove"
                         .to_string()
                 })?;
-                PersonaSubcommand::Resolve { id: id.clone(), remove }
+                PersonaSubcommand::Resolve {
+                    id: id.clone(),
+                    remove,
+                }
             }
             "dismiss" => {
                 let id = args.get(2).ok_or_else(|| {
@@ -4519,9 +4427,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     match args[i].as_str() {
                         "--yes" | "-y" => yes = true,
                         "--root" => {
-                            let v = args.get(i + 1).ok_or_else(|| {
-                                "`--root` needs a directory path".to_string()
-                            })?;
+                            let v = args
+                                .get(i + 1)
+                                .ok_or_else(|| "`--root` needs a directory path".to_string())?;
                             root = Some(v.clone());
                             i += 1;
                         }
@@ -4723,8 +4631,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Phase 119 Task 5 — `aivyx role <subcommand>`.
     if !args.is_empty() && args[0] == "role" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx role` requires a subcommand. Supported: import <id>"
-                .to_string()
+            "`aivyx role` requires a subcommand. Supported: import <id>".to_string()
         })?;
         let subcommand = match sub.as_str() {
             "import" => {
@@ -4960,13 +4867,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 i += 2;
             }
             "--mcp-server" => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or_else(|| {
-                        "`--mcp-server` requires a value in the format \
+                let value = args.get(i + 1).ok_or_else(|| {
+                    "`--mcp-server` requires a value in the format \
                          `name:command` or `name:command:arg1,arg2,...`"
-                            .to_string()
-                    })?;
+                        .to_string()
+                })?;
                 let parts: Vec<&str> = value.splitn(3, ':').collect();
                 if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
                     return Err(format!(
@@ -4987,13 +4892,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 i += 2;
             }
             "--mcp-sse" => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or_else(|| {
-                        "`--mcp-sse` requires a value in the format \
+                let value = args.get(i + 1).ok_or_else(|| {
+                    "`--mcp-sse` requires a value in the format \
                          `name:url`"
-                            .to_string()
-                    })?;
+                        .to_string()
+                })?;
                 let parts: Vec<&str> = value.splitn(2, ':').collect();
                 if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
                     return Err(format!(
@@ -5038,19 +4941,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     }
 
     if no_daemon && verify_only {
-        return Err(
-            "`--no-daemon` and `--verify-only` cannot be combined. \
+        return Err("`--no-daemon` and `--verify-only` cannot be combined. \
              `--verify-only` does not use the daemon."
-                .to_string(),
-        );
+            .to_string());
     }
 
     if no_daemon && print_role.is_some() {
-        return Err(
-            "`--no-daemon` and `--print-role` cannot be combined. \
+        return Err("`--no-daemon` and `--print-role` cannot be combined. \
              `--print-role` does not use the daemon."
-                .to_string(),
-        );
+            .to_string());
     }
 
     let mode = if verify_only {
@@ -5114,9 +5013,7 @@ fn select_passphrase_source(
     match aivyx_channel::keyring_store::retrieve() {
         Ok(Some(secret)) => return Ok(PassphraseSource::FromConfig(secret)),
         Ok(None) => {}
-        Err(e) => eprintln!(
-            "aivyx: OS keyring not usable ({e}); trying other passphrase sources"
-        ),
+        Err(e) => eprintln!("aivyx: OS keyring not usable ({e}); trying other passphrase sources"),
     }
     if io::stdin().is_terminal() {
         Ok(PassphraseSource::InteractivePrompt { confirm: new_store })
@@ -5157,8 +5054,7 @@ fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
             Ok(())
         }
         KeyringSubcommand::Clear => {
-            keyring_store::clear()
-                .map_err(|e| format!("could not clear the OS keyring: {e}"))?;
+            keyring_store::clear().map_err(|e| format!("could not clear the OS keyring: {e}"))?;
             println!("Removed the master passphrase from the OS keyring.");
             Ok(())
         }
@@ -5355,9 +5251,7 @@ async fn is_inside_git_work_tree(root: &std::path::Path) -> bool {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     match command.output().await {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim() == "true"
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "true",
         _ => false,
     }
 }
@@ -5396,7 +5290,9 @@ async fn checkpointer_for(
         walk_cache.insert(root.to_path_buf(), walked.clone());
         walked
     };
-    aivyx_core::GitCheckpointer::detect(root, deny_paths).await.map(std::sync::Arc::new)
+    aivyx_core::GitCheckpointer::detect(root, deny_paths)
+        .await
+        .map(std::sync::Arc::new)
 }
 
 // `run_async` sits right at the binary's composition root: it takes
@@ -5503,8 +5399,7 @@ fn compute_backcompat_floor(
     if let Some(s) = shell_exec_scope {
         backcompat_floor.push(s);
         // Bare-root shell cwd (the run-from-the-root case).
-        backcompat_floor
-            .push(Scope::parse(&format!("shell.exec:cwd:{root_str}")).unwrap());
+        backcompat_floor.push(Scope::parse(&format!("shell.exec:cwd:{root_str}")).unwrap());
     }
     if let Some(s) = fs_delete_scope {
         backcompat_floor.push(s);
@@ -5529,8 +5424,14 @@ fn compute_backcompat_floor(
     // times (Chapter Lattice, Phase 110, Phase 67, Chapter Chime, Vitrine)
     // before this fix generalized it.
     const EXPLICIT_BASES: &[&str] = &[
-        "fs.read", "fs.write", "fs.metadata", "fs.delete", "shell.exec",
-        "net.fetch", "net.post", "workspace",
+        "fs.read",
+        "fs.write",
+        "fs.metadata",
+        "fs.delete",
+        "shell.exec",
+        "net.fetch",
+        "net.post",
+        "workspace",
     ];
     let mut derived: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for scope in tool_scope_bases {
@@ -6074,48 +5975,47 @@ async fn run_async(
     // learning loop. Scheduled reflection turns append Pending
     // rows here; operators resolve them via the Web UI Proposals
     // pane / `aivyx persona proposals` CLI.
-    let persona_proposal_log = match aivyx_channel::persona_proposal::PersistentPersonaProposalLog::open(
-        storage.domain(KeyDomain::PersonaProposals),
-        persona_proposal_chain_key.to_vec(),
-    )
-    .await
-    {
-        Ok(log) => Arc::new(log),
-        Err(e) => {
-            return Err(format!(
-                "failed to open persona proposal chain \
+    let persona_proposal_log =
+        match aivyx_channel::persona_proposal::PersistentPersonaProposalLog::open(
+            storage.domain(KeyDomain::PersonaProposals),
+            persona_proposal_chain_key.to_vec(),
+        )
+        .await
+        {
+            Ok(log) => Arc::new(log),
+            Err(e) => {
+                return Err(format!(
+                    "failed to open persona proposal chain \
                  (KeyDomain::PersonaProposals): {e}"
-            ));
-        }
-    };
+                ));
+            }
+        };
     // Phase 173 — the autonomous-loop backlog. Always opened
     // (zero-config, like memory): the `aivyx loop add` CLI + the
     // loop tools need it even when no run is active. The driver
     // (armed only by `[loop]`) and both loop tools share this
     // one `Arc` so they see a single HMAC-chained backlog.
-    let loop_backlog: Arc<
-        aivyx_channel::loop_backlog::PersistentLoopBacklog,
-    > = match aivyx_channel::loop_backlog::PersistentLoopBacklog::open(
-        storage.domain(KeyDomain::LoopBacklog),
-        loop_backlog_chain_key.to_vec(),
-    )
-    .await
-    {
-        Ok(bl) => Arc::new(bl),
-        Err(e) => {
-            return Err(format!(
-                "failed to open loop backlog chain \
+    let loop_backlog: Arc<aivyx_channel::loop_backlog::PersistentLoopBacklog> =
+        match aivyx_channel::loop_backlog::PersistentLoopBacklog::open(
+            storage.domain(KeyDomain::LoopBacklog),
+            loop_backlog_chain_key.to_vec(),
+        )
+        .await
+        {
+            Ok(bl) => Arc::new(bl),
+            Err(e) => {
+                return Err(format!(
+                    "failed to open loop backlog chain \
                  (KeyDomain::LoopBacklog): {e}"
-            ));
-        }
-    };
+                ));
+            }
+        };
     // Phase 183 — the reminder store, shared between the remind.*
     // tools and the reminder driver. Zero-config (like the loop
     // backlog): always opened.
-    let reminder_store: Arc<aivyx_channel::reminder_store::ReminderStore> =
-        Arc::new(aivyx_channel::reminder_store::ReminderStore::new(
-            storage.domain(KeyDomain::Reminders),
-        ));
+    let reminder_store: Arc<aivyx_channel::reminder_store::ReminderStore> = Arc::new(
+        aivyx_channel::reminder_store::ReminderStore::new(storage.domain(KeyDomain::Reminders)),
+    );
 
     // Phase 173 — the shared loop run state, created iff the
     // `[loop]` section is armed. `Some` → the daemon spawns the
@@ -6131,43 +6031,37 @@ async fn run_async(
     // explicit `aivyx loop start`. It takes effect only when a `[loop]` section
     // exists, since that is where the iteration/budget caps live — without one,
     // the level's intent is reported but no uncapped loop is conjured.
-    let autonomy_posture = aivyx_config::resolve_posture(
-        autonomy_level.value,
-        &autonomy_overrides,
-        None,
-    );
-    let loop_state: Option<aivyx_channel::loop_driver::SharedLoopState> =
-        match &config_loop {
-            Some(c) if autonomy_posture.arms_loop(c.enabled) => {
-                if !c.enabled {
-                    eprintln!(
-                        "aivyx: autonomy level `{}` armed the loop (over `[loop]`'s \
-                         caps); start a run with `aivyx loop start`.",
-                        autonomy_level.value,
-                    );
-                }
-                let mut ls = aivyx_channel::loop_driver::SharedLoopState::new();
-                // Chapter Helm (Opp F) — attach the persisted run marker only
-                // when resume_on_boot is set, so the start/stop marker writes
-                // (and the boot-resume read) happen only for opt-in installs.
-                if c.resume_on_boot {
-                    ls = ls.with_resume_store(
-                        storage.domain(KeyDomain::LoopState),
-                    );
-                }
-                Some(ls)
-            }
-            None if autonomy_posture.loop_enabled => {
+    let autonomy_posture =
+        aivyx_config::resolve_posture(autonomy_level.value, &autonomy_overrides, None);
+    let loop_state: Option<aivyx_channel::loop_driver::SharedLoopState> = match &config_loop {
+        Some(c) if autonomy_posture.arms_loop(c.enabled) => {
+            if !c.enabled {
                 eprintln!(
-                    "aivyx: autonomy level `{}` would arm the loop, but there is no \
-                     `[loop]` section — add one (it carries the iteration/budget caps) \
-                     to enable autonomous runs.",
+                    "aivyx: autonomy level `{}` armed the loop (over `[loop]`'s \
+                         caps); start a run with `aivyx loop start`.",
                     autonomy_level.value,
                 );
-                None
             }
-            _ => None,
-        };
+            let mut ls = aivyx_channel::loop_driver::SharedLoopState::new();
+            // Chapter Helm (Opp F) — attach the persisted run marker only
+            // when resume_on_boot is set, so the start/stop marker writes
+            // (and the boot-resume read) happen only for opt-in installs.
+            if c.resume_on_boot {
+                ls = ls.with_resume_store(storage.domain(KeyDomain::LoopState));
+            }
+            Some(ls)
+        }
+        None if autonomy_posture.loop_enabled => {
+            eprintln!(
+                "aivyx: autonomy level `{}` would arm the loop, but there is no \
+                     `[loop]` section — add one (it carries the iteration/budget caps) \
+                     to enable autonomous runs.",
+                autonomy_level.value,
+            );
+            None
+        }
+        _ => None,
+    };
     let shared_persona = aivyx_channel::persona::shared_effective_persona(
         aivyx_channel::persona::compute_effective_persona(&persona_log.entries()),
     );
@@ -6188,7 +6082,9 @@ async fn run_async(
         {
             Ok(n) => {
                 if n > 0 {
-                    eprintln!("aivyx daemon: seeded persona chain with {n} delta(s) from [persona_seed]");
+                    eprintln!(
+                        "aivyx daemon: seeded persona chain with {n} delta(s) from [persona_seed]"
+                    );
                 }
                 n
             }
@@ -6209,7 +6105,9 @@ async fn run_async(
     // change for pre-Phase-57 configs that haven't started accumulating
     // Persona deltas yet.
     let system_prompt = {
-        let persona_snapshot = shared_persona.read().expect("persona lock not poisoned at startup");
+        let persona_snapshot = shared_persona
+            .read()
+            .expect("persona lock not poisoned at startup");
         aivyx_channel::assemble_session_prompt(
             &profile,
             Some(&*persona_snapshot),
@@ -6217,11 +6115,11 @@ async fn run_async(
             &role.system_prompt.value,
         )
     };
-    let tool_allowlist: Option<std::collections::BTreeSet<String>> =
-        match role.tool_allowlist.value {
-            ToolAllowlist::AllowAll => None,
-            ToolAllowlist::Only(list) => Some(list.into_iter().collect()),
-        };
+    let tool_allowlist: Option<std::collections::BTreeSet<String>> = match role.tool_allowlist.value
+    {
+        ToolAllowlist::AllowAll => None,
+        ToolAllowlist::Only(list) => Some(list.into_iter().collect()),
+    };
     let memory_topic_prefix: Option<String> = role.memory_topic_prefix.value;
 
     // ---- Provider -----------------------------------------------------
@@ -6282,8 +6180,8 @@ async fn run_async(
             // `provider = "ollama"` in aivyx.toml uses the new
             // adapter transparently.
             use aivyx_llm::ollama::{
-                OllamaConfig, OllamaOptions as LlmOllamaOptions,
-                OllamaProvider, DEFAULT_OLLAMA_BASE_URL as OLLAMA_BASE,
+                DEFAULT_OLLAMA_BASE_URL as OLLAMA_BASE, OllamaConfig,
+                OllamaOptions as LlmOllamaOptions, OllamaProvider,
             };
             let base_url = openai_base_url
                 .map(|s| s.value)
@@ -6402,9 +6300,9 @@ async fn run_async(
                 // Chapter Stencil (ST.3) — grammar-constrained
                 // tool-calling opt-in (default off).
                 mr_cfg = mr_cfg.with_constrain_tool_calls(opts.constrain_tool_calls);
-                let p = MistralRsProvider::new(mr_cfg).await.map_err(|e| {
-                    format!("failed to build mistralrs provider: {e}")
-                })?;
+                let p = MistralRsProvider::new(mr_cfg)
+                    .await
+                    .map_err(|e| format!("failed to build mistralrs provider: {e}"))?;
                 Arc::new(p)
             }
             #[cfg(not(feature = "provider-mistral-rs"))]
@@ -6444,7 +6342,6 @@ async fn run_async(
             // The API key is accepted if present but never required
             // (aivyx-broker is loopback-only with no auth, same trust
             // model as llama-server itself).
-            const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
             let base_url = config_broker_base_url
                 .clone()
                 .unwrap_or_else(|| DEFAULT_BROKER_BASE_URL.to_string());
@@ -6519,10 +6416,7 @@ async fn run_async(
     // tool-catalog surface natively.
     let ollama_prompt_strategy: aivyx_config::OllamaFamilyStrategy =
         if matches!(provider_kind.value, ProviderKind::Ollama) {
-            aivyx_config::resolve_ollama_prompt_strategy(
-                &model,
-                &config_ollama_prompt_strategies,
-            )
+            aivyx_config::resolve_ollama_prompt_strategy(&model, &config_ollama_prompt_strategies)
         } else {
             aivyx_config::OllamaFamilyStrategy::None
         };
@@ -6594,28 +6488,24 @@ async fn run_async(
     // Chapter Ward — the sensitive-path read guard (privacy-by-default). Built
     // once and shared by every read surface (fs.read, the data readers, the
     // Documents browser) so a credential store is off-limits everywhere.
-    let sensitive_policy = std::sync::Arc::new(
-        if guard_sensitive_paths.value {
-            aivyx_core::sensitive_paths::SensitivePolicy::new(
-                allow_sensitive_paths.clone(),
-                vec![kvcache_store_path.clone()],
-            )
-        } else {
-            aivyx_core::sensitive_paths::SensitivePolicy::disabled()
-        },
-    );
+    let sensitive_policy = std::sync::Arc::new(if guard_sensitive_paths.value {
+        aivyx_core::sensitive_paths::SensitivePolicy::new(
+            allow_sensitive_paths.clone(),
+            vec![kvcache_store_path.clone()],
+        )
+    } else {
+        aivyx_core::sensitive_paths::SensitivePolicy::disabled()
+    });
     let fs_read = FsReadToolConfig::new(fs_root.clone())
         .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy))
         .build()
         .map_err(|e| format!("failed to build fs.read tool: {e}"))?;
     // Chapter Rampart — the network egress guard (SSRF / private-network block
     // on by default + opt-in host allow-list), shared by the web tools.
-    let egress_policy = std::sync::Arc::new(
-        aivyx_core::egress::EgressPolicy::new(
-            !allow_private_egress.value,
-            allow_egress_hosts.clone(),
-        ),
-    );
+    let egress_policy = std::sync::Arc::new(aivyx_core::egress::EgressPolicy::new(
+        !allow_private_egress.value,
+        allow_egress_hosts.clone(),
+    ));
     // Chapter N — confirm-first posture (overwrites need `confirmed: true`).
     let confirm_destructive = confirm_destructive.value;
     // aivyx-confine — the operator's `[confine] require_enforcement`
@@ -6683,8 +6573,12 @@ async fn run_async(
         std::path::PathBuf,
         Vec<std::path::PathBuf>,
     > = std::collections::HashMap::new();
-    let checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>> =
-        checkpointer_for(&canonical_root, &sensitive_policy, &mut checkpoint_walk_cache).await;
+    let checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>> = checkpointer_for(
+        &canonical_root,
+        &sensitive_policy,
+        &mut checkpoint_walk_cache,
+    )
+    .await;
     // Chapter N — the enforced fs root, shared into every prompt-assembly
     // closure so the system prompt can name the actual sandbox boundary
     // (the model must know its real root to neither over-refuse a granted
@@ -6699,10 +6593,9 @@ async fn run_async(
     let fs_write_scope = Scope::parse(&format!("fs.write:{root_glob}")).ok_or_else(|| {
         format!("canonical fs.write sandbox scope not parseable from {canonical_root:?}")
     })?;
-    let fs_metadata_scope =
-        Scope::parse(&format!("fs.metadata:{root_glob}")).ok_or_else(|| {
-            format!("canonical fs.metadata sandbox scope not parseable from {canonical_root:?}")
-        })?;
+    let fs_metadata_scope = Scope::parse(&format!("fs.metadata:{root_glob}")).ok_or_else(|| {
+        format!("canonical fs.metadata sandbox scope not parseable from {canonical_root:?}")
+    })?;
 
     // Build the Phase 6 memory tools. `RedbMemory::open` clones an
     // `Arc<dyn Storage>` handle so the binary's already-open store
@@ -6725,26 +6618,22 @@ async fn run_async(
     // inherits the canonical topic form through the existing
     // pipeline. With the flag off (default), the memory is
     // byte-identical to pre-Phase-89.
-    let memory: Arc<dyn Memory> =
-        if config_memory_canonicalize_topics.value {
-            Arc::new(
-                aivyx_memory::CanonicalizingMemory::new(memory),
-            )
-        } else {
-            memory
-        };
+    let memory: Arc<dyn Memory> = if config_memory_canonicalize_topics.value {
+        Arc::new(aivyx_memory::CanonicalizingMemory::new(memory))
+    } else {
+        memory
+    };
     // Phase 75 — construct the embedding provider once iff
     // `[embedding]` is configured. Shared two ways: the write
     // tool's synchronous write-time hook, and the daemon's
     // hourly lazy-backfill timer (passed via DaemonConfig).
-    let embedding_provider: Option<
-        Arc<dyn aivyx_llm::embedding::EmbeddingProvider>,
-    > = match config_embedding.as_ref() {
-        Some(cfg) => Some(
-            aivyx_channel::memory_embedding::build_embedding_provider(cfg)?,
-        ),
-        None => None,
-    };
+    let embedding_provider: Option<Arc<dyn aivyx_llm::embedding::EmbeddingProvider>> =
+        match config_embedding.as_ref() {
+            Some(cfg) => Some(aivyx_channel::memory_embedding::build_embedding_provider(
+                cfg,
+            )?),
+            None => None,
+        };
 
     // Chapter Ember — the embedding-free "lite" recall tier. `[memory]
     // profile = lite` arms BM25 lexical + co-occurrence recall over EXISTING
@@ -6752,8 +6641,8 @@ async fn run_async(
     // Gated specifically on `Lite` (not `arms_recall_fusion()`): a `smart`
     // config with no `[embedding]` deliberately stays zero-recall + the
     // dead-memory warning (backlog #1) rather than silently downgrading.
-    let lite_recall = matches!(memory_profile, aivyx_config::MemoryProfile::Lite)
-        && embedding_provider.is_none();
+    let lite_recall =
+        matches!(memory_profile, aivyx_config::MemoryProfile::Lite) && embedding_provider.is_none();
 
     // Phase 76 — automatic semantic recall. Built once when both
     // a provider and the `[embedding]` config exist (the config
@@ -6766,30 +6655,27 @@ async fn run_async(
     // Chapter Ember — ALSO built for the lite tier so its recall events
     // feed the same fold/prune cadence (the co-occurrence ledger below is
     // derived from this handle, and the reflection fold needs no embeddings).
-    let recall_log: Option<
-        Arc<aivyx_channel::recall_log::PersistentRecallLog>,
-    > = match (&embedding_provider, config_embedding.as_ref()) {
-        (Some(_), Some(_)) => {
-            Some(Arc::new(aivyx_channel::recall_log::PersistentRecallLog::new(
-                storage.domain(KeyDomain::RecallEvents),
-            )))
-        }
-        _ if lite_recall => {
-            Some(Arc::new(aivyx_channel::recall_log::PersistentRecallLog::new(
-                storage.domain(KeyDomain::RecallEvents),
-            )))
-        }
-        _ => None,
-    };
+    let recall_log: Option<Arc<aivyx_channel::recall_log::PersistentRecallLog>> =
+        match (&embedding_provider, config_embedding.as_ref()) {
+            (Some(_), Some(_)) => Some(Arc::new(
+                aivyx_channel::recall_log::PersistentRecallLog::new(
+                    storage.domain(KeyDomain::RecallEvents),
+                ),
+            )),
+            _ if lite_recall => Some(Arc::new(
+                aivyx_channel::recall_log::PersistentRecallLog::new(
+                    storage.domain(KeyDomain::RecallEvents),
+                ),
+            )),
+            _ => None,
+        };
     // Phase 82 — the durable helpfulness ledger. Zero-config:
     // built under the same condition as the recall log (the
     // signal it folds only exists when auto-recall is on), no
     // `[…]` block. The reflection recall-feedback pass folds
     // each window into it and prunes on the same cadence.
     let helpfulness_ledger: Option<
-        Arc<
-            aivyx_channel::helpfulness_ledger::PersistentHelpfulnessLedger,
-        >,
+        Arc<aivyx_channel::helpfulness_ledger::PersistentHelpfulnessLedger>,
     > = recall_log.as_ref().map(|_| {
         Arc::new(
             aivyx_channel::helpfulness_ledger::PersistentHelpfulnessLedger::new(
@@ -6802,9 +6688,7 @@ async fn run_async(
     // helpfulness ledger (the pair signal only exists when
     // auto-recall is on). Folded + pruned on the same cadence.
     let cooccurrence_ledger: Option<
-        Arc<
-            aivyx_channel::cooccurrence_ledger::PersistentCooccurrenceLedger,
-        >,
+        Arc<aivyx_channel::cooccurrence_ledger::PersistentCooccurrenceLedger>,
     > = recall_log.as_ref().map(|_| {
         Arc::new(
             aivyx_channel::cooccurrence_ledger::PersistentCooccurrenceLedger::new(
@@ -6816,19 +6700,15 @@ async fn run_async(
     // (a cheap domain handle) so the read-only IPC (ListWikiPages /
     // GetWikiPage, CX.4) works even before/without generation; reads just
     // return an empty codex until a sweep populates it.
-    let wiki_store = Arc::new(
-        aivyx_channel::knowledge_wiki::PersistentWikiStore::new(
-            storage.domain(KeyDomain::KnowledgeWiki),
-        ),
-    );
+    let wiki_store = Arc::new(aivyx_channel::knowledge_wiki::PersistentWikiStore::new(
+        storage.domain(KeyDomain::KnowledgeWiki),
+    ));
     // CX.3 — the sweep. Armed only when `[wiki].enabled`: auto-summarizing
     // every topic with the LLM has a cost the operator opts into. Reuses
     // the same store, LLM provider, memory, and co-occurrence ledger the
     // rest of the daemon holds.
-    let wiki_sweep: Option<aivyx_channel::knowledge_wiki::WikiSweepConfig> = config_wiki
-        .as_ref()
-        .filter(|w| w.enabled)
-        .map(|w| {
+    let wiki_sweep: Option<aivyx_channel::knowledge_wiki::WikiSweepConfig> =
+        config_wiki.as_ref().filter(|w| w.enabled).map(|w| {
             let mut synth = aivyx_channel::knowledge_wiki::WikiSynthesizer::new(
                 Arc::clone(&memory),
                 Arc::clone(&provider),
@@ -6848,11 +6728,9 @@ async fn run_async(
     // unconditionally (a cheap domain handle) so the `graph.query` tool
     // (LT.4) can read it even before/without extraction; queries just
     // return nothing until a sweep populates it.
-    let graph_store = Arc::new(
-        aivyx_channel::knowledge_graph::PersistentGraphStore::new(
-            storage.domain(KeyDomain::KnowledgeGraph),
-        ),
-    );
+    let graph_store = Arc::new(aivyx_channel::knowledge_graph::PersistentGraphStore::new(
+        storage.domain(KeyDomain::KnowledgeGraph),
+    ));
     // Chapter Concord — the dismissed-conflict set (built whenever storage
     // is available; `memory conflicts` filters these, `memory dismiss`
     // records them).
@@ -6864,10 +6742,8 @@ async fn run_async(
     // LT.3 — the extraction sweep, armed only when `[graph].enabled`:
     // building a relation graph with the LLM has a cost the operator opts
     // into. Reuses the same store, LLM provider, and memory.
-    let graph_sweep: Option<aivyx_channel::knowledge_graph::GraphSweepConfig> = config_graph
-        .as_ref()
-        .filter(|g| g.enabled)
-        .map(|g| {
+    let graph_sweep: Option<aivyx_channel::knowledge_graph::GraphSweepConfig> =
+        config_graph.as_ref().filter(|g| g.enabled).map(|g| {
             let extractor = aivyx_channel::knowledge_graph::GraphExtractor::new(
                 Arc::clone(&memory),
                 Arc::clone(&provider),
@@ -6875,11 +6751,9 @@ async fn run_async(
                 model.clone(),
             )
             // Chapter Lexicon — operator `[graph.vocabulary]` extensions.
-            .with_vocabulary(
-                aivyx_channel::knowledge_graph::RelationVocabulary::new(
-                    g.vocabulary.clone(),
-                ),
-            );
+            .with_vocabulary(aivyx_channel::knowledge_graph::RelationVocabulary::new(
+                g.vocabulary.clone(),
+            ));
             aivyx_channel::knowledge_graph::GraphSweepConfig {
                 extractor: Arc::new(extractor),
                 interval_secs: g.interval_secs,
@@ -6892,9 +6766,7 @@ async fn run_async(
     // Folded + pruned on the same cadence; consumed by the Phase
     // 172 correction-consolidation pass.
     let correction_ledger: Option<
-        Arc<
-            aivyx_channel::correction_ledger::PersistentCorrectionLedger,
-        >,
+        Arc<aivyx_channel::correction_ledger::PersistentCorrectionLedger>,
     > = recall_log.as_ref().map(|_| {
         Arc::new(
             aivyx_channel::correction_ledger::PersistentCorrectionLedger::new(
@@ -6905,25 +6777,22 @@ async fn run_async(
     // Phase 80 — proactive dedup log, created when the
     // `[proactive]` section is armed (enabled). The reflection
     // cron pass uses it for cross-cycle dedup + the cap.
-    let proactive_log: Option<
-        Arc<aivyx_channel::proactive_log::PersistentProactiveLog>,
-    > = match &config_proactive {
-        Some(p) if p.enabled => Some(Arc::new(
-            aivyx_channel::proactive_log::PersistentProactiveLog::new(
-                storage.domain(KeyDomain::ProactiveLog),
-            ),
-        )),
-        _ => None,
-    };
+    let proactive_log: Option<Arc<aivyx_channel::proactive_log::PersistentProactiveLog>> =
+        match &config_proactive {
+            Some(p) if p.enabled => Some(Arc::new(
+                aivyx_channel::proactive_log::PersistentProactiveLog::new(
+                    storage.domain(KeyDomain::ProactiveLog),
+                ),
+            )),
+            _ => None,
+        };
     // Phase 84 (Q4a) — shared last-turn cluster-recall stat:
     // the recall provider writes it, GetLearningInsights reads
     // the *same* handle. `None` when [recall_cluster] is
     // absent (cluster expansion can never run).
     let recall_cluster_stat = config_recall_cluster
         .as_ref()
-        .map(|_| {
-            aivyx_channel::memory_recall::shared_recall_cluster_stat()
-        });
+        .map(|_| aivyx_channel::memory_recall::shared_recall_cluster_stat());
     // Phase 86 — daemon-scoped per-session conversation windows.
     // Originally built iff the embedding substrate was configured
     // (the only readers were recall + Persona selection). Chapter
@@ -6933,127 +6802,108 @@ async fn run_async(
     // attached to the relevance providers, the Thread seeder, and
     // `DaemonConfig` so the turn loop's write site and every read
     // site share state.
-    let conversation_windows = Some(
-        aivyx_channel::conversation_window::shared_conversation_windows(),
-    );
-    let recall_context: Option<
-        Arc<dyn aivyx_core::llm_planner::ContextProvider>,
-    > = match (&embedding_provider, config_embedding.as_ref()) {
-        (Some(provider), Some(cfg)) => {
-            let mut sc =
-                aivyx_channel::memory_recall::SemanticMemoryContext::new(
+    let conversation_windows =
+        Some(aivyx_channel::conversation_window::shared_conversation_windows());
+    let recall_context: Option<Arc<dyn aivyx_core::llm_planner::ContextProvider>> =
+        match (&embedding_provider, config_embedding.as_ref()) {
+            (Some(provider), Some(cfg)) => {
+                let mut sc = aivyx_channel::memory_recall::SemanticMemoryContext::new(
                     Arc::clone(&memory),
                     Arc::clone(provider),
                     cfg.rag_top_k,
                     cfg.rag_min_similarity,
                 );
-            if let Some(log) = &recall_log {
-                sc = sc.with_recall_log(Arc::clone(log));
-            }
-            // Phase 84 — arm cluster-aware co-recall iff the
-            // [recall_cluster] section is present and the
-            // co-occurrence ledger exists (built above under
-            // the same recall-substrate condition). The pass
-            // still no-ops unless `enabled = true`.
-            if let (Some(rc_cfg), Some(cooc)) =
-                (&config_recall_cluster, &cooccurrence_ledger)
-            {
-                sc = sc.with_cluster(
-                    Arc::clone(cooc),
-                    rc_cfg.clone(),
+                if let Some(log) = &recall_log {
+                    sc = sc.with_recall_log(Arc::clone(log));
+                }
+                // Phase 84 — arm cluster-aware co-recall iff the
+                // [recall_cluster] section is present and the
+                // co-occurrence ledger exists (built above under
+                // the same recall-substrate condition). The pass
+                // still no-ops unless `enabled = true`.
+                if let (Some(rc_cfg), Some(cooc)) = (&config_recall_cluster, &cooccurrence_ledger) {
+                    sc = sc.with_cluster(Arc::clone(cooc), rc_cfg.clone());
+                }
+                if let Some(stat) = &recall_cluster_stat {
+                    sc = sc.with_cluster_stat(stat.clone());
+                }
+                // Phase 86 — opt-in conversational-window relevance:
+                // when `[embedding].recall_window_turns > 1` the
+                // assembled prior-turns context (read from the shared
+                // handle the daemon turn loop writes) becomes the
+                // embedded query; otherwise byte-identical to
+                // pre-Phase-86.
+                if let Some(windows) = &conversation_windows {
+                    sc = sc.with_conversation_windows(windows.clone(), cfg.recall_window_turns);
+                }
+                // Phase 90 — heuristic recall gate. Default `0`
+                // (gate disabled) is byte-identical to
+                // pre-Phase-90.
+                sc = sc.with_recall_gate(cfg.recall_gate_min_chars);
+                // Phase 96 — ANN index opt-in. Default
+                // `false` is byte-identical to pre-Phase-96
+                // brute-force.
+                sc = sc.with_ann_index(cfg.ann_index, cfg.ann_rebuild_threshold);
+                // Phase 97 — token-budget. Default `0` is
+                // byte-identical to pre-Phase-97 count-based.
+                sc = sc.with_recall_token_budget(cfg.recall_token_budget);
+                // Phase 98 — hybrid keyword+semantic fusion.
+                // Default `false` is byte-identical to
+                // pre-Phase-98 semantic-only.
+                sc = sc.with_recall_hybrid(cfg.recall_hybrid);
+                // Chapter Loom (LM.4) — recall-fusion tuning. Defaults
+                // (lexical_weight 1.0, graph_hops 0) keep the hybrid path
+                // the pre-Loom two-ranker fusion; the graph source arms
+                // only when graph_hops >= 1 and a ledger is attached.
+                sc = sc.with_recall_fusion(
+                    cfg.recall_lexical_weight,
+                    cfg.recall_graph_hops,
+                    cfg.recall_graph_decay,
+                    cfg.recall_graph_weight,
                 );
-            }
-            if let Some(stat) = &recall_cluster_stat {
-                sc = sc.with_cluster_stat(stat.clone());
-            }
-            // Phase 86 — opt-in conversational-window relevance:
-            // when `[embedding].recall_window_turns > 1` the
-            // assembled prior-turns context (read from the shared
-            // handle the daemon turn loop writes) becomes the
-            // embedded query; otherwise byte-identical to
-            // pre-Phase-86.
-            if let Some(windows) = &conversation_windows {
-                sc = sc.with_conversation_windows(
-                    windows.clone(),
-                    cfg.recall_window_turns,
+                // Chapter Codex (CX.6) — the knowledge-wiki page ranker.
+                // Default weight 0.0 ⇒ off (byte-identical); shares the same
+                // wiki store the read IPC + sweep use.
+                sc = sc.with_recall_wiki(Arc::clone(&wiki_store), cfg.recall_wiki_weight);
+                // Chapter Lattice (LT.6) — the typed knowledge-graph ranker.
+                // Default weight 0.0 ⇒ off; shares the same graph store the
+                // tool + IPC + sweep use.
+                sc = sc.with_recall_typed_graph(
+                    Arc::clone(&graph_store),
+                    cfg.recall_graph_typed_weight,
                 );
+                Some(Arc::new(sc))
             }
-            // Phase 90 — heuristic recall gate. Default `0`
-            // (gate disabled) is byte-identical to
-            // pre-Phase-90.
-            sc = sc.with_recall_gate(cfg.recall_gate_min_chars);
-            // Phase 96 — ANN index opt-in. Default
-            // `false` is byte-identical to pre-Phase-96
-            // brute-force.
-            sc = sc.with_ann_index(
-                cfg.ann_index,
-                cfg.ann_rebuild_threshold,
-            );
-            // Phase 97 — token-budget. Default `0` is
-            // byte-identical to pre-Phase-97 count-based.
-            sc = sc.with_recall_token_budget(
-                cfg.recall_token_budget,
-            );
-            // Phase 98 — hybrid keyword+semantic fusion.
-            // Default `false` is byte-identical to
-            // pre-Phase-98 semantic-only.
-            sc = sc.with_recall_hybrid(cfg.recall_hybrid);
-            // Chapter Loom (LM.4) — recall-fusion tuning. Defaults
-            // (lexical_weight 1.0, graph_hops 0) keep the hybrid path
-            // the pre-Loom two-ranker fusion; the graph source arms
-            // only when graph_hops >= 1 and a ledger is attached.
-            sc = sc.with_recall_fusion(
-                cfg.recall_lexical_weight,
-                cfg.recall_graph_hops,
-                cfg.recall_graph_decay,
-                cfg.recall_graph_weight,
-            );
-            // Chapter Codex (CX.6) — the knowledge-wiki page ranker.
-            // Default weight 0.0 ⇒ off (byte-identical); shares the same
-            // wiki store the read IPC + sweep use.
-            sc = sc.with_recall_wiki(
-                Arc::clone(&wiki_store),
-                cfg.recall_wiki_weight,
-            );
-            // Chapter Lattice (LT.6) — the typed knowledge-graph ranker.
-            // Default weight 0.0 ⇒ off; shares the same graph store the
-            // tool + IPC + sweep use.
-            sc = sc.with_recall_typed_graph(
-                Arc::clone(&graph_store),
-                cfg.recall_graph_typed_weight,
-            );
-            Some(Arc::new(sc))
-        }
-        // Chapter Ember — the embedding-free lite tier. No provider, no
-        // `[embedding]` config; fuse BM25 lexical + a co-occurrence walk
-        // (seeded from the lexical hits) over existing memory. Tuning uses
-        // sensible defaults (lite = zero setup); the `[recall_cluster]`
-        // section — synthesized for any recall-fusion profile, including
-        // lite — supplies the walk's affinity floor / cap when present.
-        _ if lite_recall => {
-            // Lite arms a single co-occurrence hop, mirroring the smart
-            // profile's `SMART_RECALL_GRAPH_HOPS`.
-            const LITE_GRAPH_HOPS: u32 = 1;
-            let top_k = aivyx_config::DEFAULT_RAG_TOP_K;
-            let (min_aff, cap) = config_recall_cluster
-                .as_ref()
-                .map(|c| (c.min_affinity, c.max_siblings as usize))
-                .unwrap_or((0.0, top_k));
-            let mut lc = aivyx_channel::memory_recall::LiteRecallContext::new(
-                Arc::clone(&memory),
-                top_k,
-            )
-            .with_fusion(1.0, LITE_GRAPH_HOPS, 0.5, 1.0);
-            if let Some(cooc) = &cooccurrence_ledger {
-                lc = lc.with_cooccurrence(Arc::clone(cooc), min_aff, cap);
+            // Chapter Ember — the embedding-free lite tier. No provider, no
+            // `[embedding]` config; fuse BM25 lexical + a co-occurrence walk
+            // (seeded from the lexical hits) over existing memory. Tuning uses
+            // sensible defaults (lite = zero setup); the `[recall_cluster]`
+            // section — synthesized for any recall-fusion profile, including
+            // lite — supplies the walk's affinity floor / cap when present.
+            _ if lite_recall => {
+                // Lite arms a single co-occurrence hop, mirroring the smart
+                // profile's `SMART_RECALL_GRAPH_HOPS`.
+                const LITE_GRAPH_HOPS: u32 = 1;
+                let top_k = aivyx_config::DEFAULT_RAG_TOP_K;
+                let (min_aff, cap) = config_recall_cluster
+                    .as_ref()
+                    .map(|c| (c.min_affinity, c.max_siblings as usize))
+                    .unwrap_or((0.0, top_k));
+                let mut lc = aivyx_channel::memory_recall::LiteRecallContext::new(
+                    Arc::clone(&memory),
+                    top_k,
+                )
+                .with_fusion(1.0, LITE_GRAPH_HOPS, 0.5, 1.0);
+                if let Some(cooc) = &cooccurrence_ledger {
+                    lc = lc.with_cooccurrence(Arc::clone(cooc), min_aff, cap);
+                }
+                if let Some(log) = &recall_log {
+                    lc = lc.with_recall_log(Arc::clone(log));
+                }
+                Some(Arc::new(lc) as Arc<dyn aivyx_core::llm_planner::ContextProvider>)
             }
-            if let Some(log) = &recall_log {
-                lc = lc.with_recall_log(Arc::clone(log));
-            }
-            Some(Arc::new(lc) as Arc<dyn aivyx_core::llm_planner::ContextProvider>)
-        }
-        _ => None,
-    };
+            _ => None,
+        };
     // Phase 79 — adaptive Persona. Built once when an embedding
     // provider exists; attached by-Arc at every planner-factory
     // site below. `None` → no refiner → the full Persona is
@@ -7061,37 +6911,34 @@ async fn run_async(
     // Phase 79 (Q4a) — shared last-selection stat: the refiner
     // writes it, the daemon's GetLearningInsights handler reads
     // the *same* handle. `None` when adaptive Persona is off.
-    let persona_selection_stat = embedding_provider.as_ref().map(|_| {
-        aivyx_channel::persona_context::shared_persona_selection_stat()
-    });
+    let persona_selection_stat = embedding_provider
+        .as_ref()
+        .map(|_| aivyx_channel::persona_context::shared_persona_selection_stat());
     // Phase 80 (Q4a) — shared last-proactive-cycle stat: the
     // pass writes it, GetLearningInsights reads the same handle.
     // Created iff proactive is armed (enabled).
     let proactive_stat = match &config_proactive {
-        Some(p) if p.enabled => Some(
-            aivyx_channel::proactive_detect::shared_proactive_stat(),
-        ),
+        Some(p) if p.enabled => Some(aivyx_channel::proactive_detect::shared_proactive_stat()),
         _ => None,
     };
     // Phase 81 (Q4a) — shared last-lifecycle-cycle stat: the
     // pass writes it, GetLearningInsights reads the same
     // handle. Created iff the lifecycle pass is armed.
     let persona_lifecycle_stat = match &config_persona_lifecycle {
-        Some(p) if p.enabled => Some(
-            aivyx_channel::persona_lifecycle::shared_persona_lifecycle_stat(),
-        ),
+        Some(p) if p.enabled => {
+            Some(aivyx_channel::persona_lifecycle::shared_persona_lifecycle_stat())
+        }
         _ => None,
     };
     // Phase 87 (Q4a) — shared last-consolidation-cycle stat:
     // the pass writes it, GetLearningInsights reads the same
     // handle. Created iff the consolidation pass is armed.
-    let persona_consolidation_stat =
-        match &config_persona_consolidation {
-            Some(p) if p.enabled => Some(
-                aivyx_channel::persona_consolidation::shared_persona_consolidation_stat(),
-            ),
-            _ => None,
-        };
+    let persona_consolidation_stat = match &config_persona_consolidation {
+        Some(p) if p.enabled => {
+            Some(aivyx_channel::persona_consolidation::shared_persona_consolidation_stat())
+        }
+        _ => None,
+    };
     // Phase 87 — production `PairPhraser` adapting the same
     // `LlmProvider` the agent uses. Created iff the
     // consolidation pass is armed; the reflection-cron path
@@ -7111,13 +6958,12 @@ async fn run_async(
     // stat + production `TopicPhraser`. Created iff the
     // correction-consolidation pass is armed; the reflection-
     // cron path skips the pass when the phraser is None.
-    let correction_consolidation_stat =
-        match &config_correction_consolidation {
-            Some(c) if c.enabled => Some(
-                aivyx_channel::correction_consolidation::shared_correction_consolidation_stat(),
-            ),
-            _ => None,
-        };
+    let correction_consolidation_stat = match &config_correction_consolidation {
+        Some(c) if c.enabled => {
+            Some(aivyx_channel::correction_consolidation::shared_correction_consolidation_stat())
+        }
+        _ => None,
+    };
     let correction_consolidation_phraser: Option<
         Arc<dyn aivyx_channel::correction_consolidation::TopicPhraser>,
     > = match &config_correction_consolidation {
@@ -7159,89 +7005,76 @@ async fn run_async(
     // Phase 91 — `[recall_judgment]` config + stat + LLM
     // judge. Built when the section is enabled; the daemon
     // arms the pass only when every piece is present.
-    let recall_judgment_stat =
-        match &_config_recall_judgment {
-            Some(r) if r.enabled => Some(
-                aivyx_channel::recall_judgment::shared_recall_judgment_stat(),
-            ),
-            _ => None,
-        };
-    let recall_judge: Option<
-        Arc<dyn aivyx_channel::recall_judgment::RecallJudge>,
-    > = match &_config_recall_judgment {
-        Some(r) if r.enabled => Some(Arc::new(
-            aivyx_channel::recall_judgment::LlmRecallJudge::new(
-                Arc::clone(&provider),
-                model.clone(),
-            ),
-        )),
+    let recall_judgment_stat = match &_config_recall_judgment {
+        Some(r) if r.enabled => Some(aivyx_channel::recall_judgment::shared_recall_judgment_stat()),
         _ => None,
     };
+    let recall_judge: Option<Arc<dyn aivyx_channel::recall_judgment::RecallJudge>> =
+        match &_config_recall_judgment {
+            Some(r) if r.enabled => Some(Arc::new(
+                aivyx_channel::recall_judgment::LlmRecallJudge::new(
+                    Arc::clone(&provider),
+                    model.clone(),
+                ),
+            )),
+            _ => None,
+        };
     // Phase 178 — `[correction_judgment]` stat + LLM judge.
     // Built when the section is enabled; the reflection-cron
     // correction fold uses them only when armed.
-    let correction_judgment_stat =
-        match &config_correction_judgment {
-            Some(c) if c.enabled => Some(
-                aivyx_channel::correction_judgment::shared_correction_judgment_stat(),
-            ),
-            _ => None,
-        };
-    let correction_judge: Option<
-        Arc<dyn aivyx_channel::correction_judgment::CorrectionJudge>,
-    > = match &config_correction_judgment {
-        Some(c) if c.enabled => Some(Arc::new(
-            aivyx_channel::correction_judgment::LlmCorrectionJudge::new(
-                Arc::clone(&provider),
-                model.clone(),
-            ),
-        )),
+    let correction_judgment_stat = match &config_correction_judgment {
+        Some(c) if c.enabled => {
+            Some(aivyx_channel::correction_judgment::shared_correction_judgment_stat())
+        }
         _ => None,
     };
-    let persona_refiner: Option<
-        Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
-    > = match &embedding_provider {
-        Some(provider) => {
-            let mut r =
-                aivyx_channel::persona_context::PersonaContextRefiner::with_defaults(
+    let correction_judge: Option<Arc<dyn aivyx_channel::correction_judgment::CorrectionJudge>> =
+        match &config_correction_judgment {
+            Some(c) if c.enabled => Some(Arc::new(
+                aivyx_channel::correction_judgment::LlmCorrectionJudge::new(
+                    Arc::clone(&provider),
+                    model.clone(),
+                ),
+            )),
+            _ => None,
+        };
+    let persona_refiner: Option<Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>> =
+        match &embedding_provider {
+            Some(provider) => {
+                let mut r = aivyx_channel::persona_context::PersonaContextRefiner::with_defaults(
                     profile.clone(),
                     shared_persona.clone(),
                     active_role_name.clone(),
                     role_for_envelope.system_prompt.value.clone(),
                     Arc::clone(provider),
                 );
-            if let Some(stat) = &persona_selection_stat {
-                r = r.with_stat(stat.clone());
+                if let Some(stat) = &persona_selection_stat {
+                    r = r.with_stat(stat.clone());
+                }
+                // Phase 86 — same shared conversational-window
+                // handle the recall provider above uses; the
+                // adaptive Persona selection now considers the
+                // recent-turns context (same opt-in floor).
+                if let (Some(windows), Some(cfg)) =
+                    (&conversation_windows, config_embedding.as_ref())
+                {
+                    r = r.with_conversation_windows(windows.clone(), cfg.recall_window_turns);
+                }
+                // Phase 90 — heuristic recall gate. Same opt-in
+                // knob as the auto-recall provider above; with
+                // the default `0` the refiner is byte-identical
+                // to pre-Phase-90.
+                if let Some(cfg) = config_embedding.as_ref() {
+                    r = r.with_recall_gate(cfg.recall_gate_min_chars);
+                    // Phase 97 — token-budget for adaptive
+                    // Persona facet selection. Default `0` is
+                    // byte-identical to pre-Phase-97.
+                    r = r.with_recall_token_budget(cfg.recall_token_budget);
+                }
+                Some(Arc::new(r))
             }
-            // Phase 86 — same shared conversational-window
-            // handle the recall provider above uses; the
-            // adaptive Persona selection now considers the
-            // recent-turns context (same opt-in floor).
-            if let (Some(windows), Some(cfg)) =
-                (&conversation_windows, config_embedding.as_ref())
-            {
-                r = r.with_conversation_windows(
-                    windows.clone(),
-                    cfg.recall_window_turns,
-                );
-            }
-            // Phase 90 — heuristic recall gate. Same opt-in
-            // knob as the auto-recall provider above; with
-            // the default `0` the refiner is byte-identical
-            // to pre-Phase-90.
-            if let Some(cfg) = config_embedding.as_ref() {
-                r = r.with_recall_gate(cfg.recall_gate_min_chars);
-                // Phase 97 — token-budget for adaptive
-                // Persona facet selection. Default `0` is
-                // byte-identical to pre-Phase-97.
-                r = r.with_recall_token_budget(
-                    cfg.recall_token_budget,
-                );
-            }
-            Some(Arc::new(r))
-        }
-        None => None,
-    };
+            None => None,
+        };
 
     // Phase 117 Task 5 — when the operator has
     // `[tool_relevance] enabled = true`, construct a
@@ -7251,38 +7084,36 @@ async fn run_async(
     // Persona refiner as the inner so the operator gets
     // both adaptive Persona reduction AND the relevance
     // section augmentation from a single refiner slot.
-    let system_prompt_refiner: Option<
-        Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>,
-    > = match &config_tool_relevance {
-        Some(tr) if tr.enabled => {
-            // The ledger handle has already been constructed
-            // for DaemonConfig.tool_relevance_ledger below;
-            // re-derive it here from the storage domain to
-            // hand into the refiner. (Construction is cheap;
-            // sharing the Arc via `tool_relevance_ledger` is
-            // an option but the bin flow constructs both at
-            // the same site, so re-derivation keeps the
-            // dataflow legible.)
-            let ledger = Arc::new(
-                aivyx_channel::tool_relevance_ledger::PersistentToolRelevanceLedger::new(
-                    storage.domain(KeyDomain::ToolRelevanceLedger),
-                ),
-            );
-            let mut r = aivyx_channel::relevance_prompt_refiner::RelevancePromptRefiner::new(
-                ledger,
-                tr.clone(),
-            );
-            if let Some(inner) = &persona_refiner {
-                r = r.with_inner_refiner(Arc::clone(inner));
+    let system_prompt_refiner: Option<Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>> =
+        match &config_tool_relevance {
+            Some(tr) if tr.enabled => {
+                // The ledger handle has already been constructed
+                // for DaemonConfig.tool_relevance_ledger below;
+                // re-derive it here from the storage domain to
+                // hand into the refiner. (Construction is cheap;
+                // sharing the Arc via `tool_relevance_ledger` is
+                // an option but the bin flow constructs both at
+                // the same site, so re-derivation keeps the
+                // dataflow legible.)
+                let ledger = Arc::new(
+                    aivyx_channel::tool_relevance_ledger::PersistentToolRelevanceLedger::new(
+                        storage.domain(KeyDomain::ToolRelevanceLedger),
+                    ),
+                );
+                let mut r = aivyx_channel::relevance_prompt_refiner::RelevancePromptRefiner::new(
+                    ledger,
+                    tr.clone(),
+                );
+                if let Some(inner) = &persona_refiner {
+                    r = r.with_inner_refiner(Arc::clone(inner));
+                }
+                Some(Arc::new(r) as Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>)
             }
-            Some(Arc::new(r)
-                as Arc<dyn aivyx_core::llm_planner::SystemPromptRefiner>)
-        }
-        // No [tool_relevance] (or disabled): fall back to
-        // the Phase 79 persona refiner if armed; otherwise
-        // None.
-        _ => persona_refiner.clone(),
-    };
+            // No [tool_relevance] (or disabled): fall back to
+            // the Phase 79 persona refiner if armed; otherwise
+            // None.
+            _ => persona_refiner.clone(),
+        };
 
     let memory_read = MemoryReadTool::new(Arc::clone(&memory));
     // Phase 7 task 5 — per-topic GC tripwire. Phase 9 Task 3 moved
@@ -7290,15 +7121,12 @@ async fn run_async(
     // from env / TOML / default with typed `Invalid` errors if a
     // source supplied a non-usize value. Destructured above as
     // `memory_cap` from `config.memory_max_per_topic.value`.
-    let mut memory_write =
-        MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
+    let mut memory_write = MemoryWriteTool::new(Arc::clone(&memory)).set_max_per_topic(memory_cap);
     // Phase 75 — write-time embed hook (non-fatal; backfill is
     // the safety net). Only attached when a provider exists.
     if let Some(provider) = &embedding_provider {
         memory_write = memory_write.with_embedding_hook(Arc::new(
-            aivyx_channel::memory_embedding::LlmEmbeddingHook::new(
-                Arc::clone(provider),
-            ),
+            aivyx_channel::memory_embedding::LlmEmbeddingHook::new(Arc::clone(provider)),
         ));
     }
     let memory_forget = MemoryForgetTool::new(Arc::clone(&memory));
@@ -7308,9 +7136,7 @@ async fn run_async(
     // transparently fall back to keyword.
     if let Some(provider) = &embedding_provider {
         memory_search = memory_search.with_embedding_hook(Arc::new(
-            aivyx_channel::memory_embedding::LlmEmbeddingHook::new(
-                Arc::clone(provider),
-            ),
+            aivyx_channel::memory_embedding::LlmEmbeddingHook::new(Arc::clone(provider)),
         ));
     }
     let memory_gc = aivyx_channel::memory_gc_tool::MemoryGcTool::new(Arc::clone(&memory));
@@ -7365,36 +7191,34 @@ async fn run_async(
         Arc::new(memory_search) as Arc<dyn Tool>,
         Arc::new(memory_gc) as Arc<dyn Tool>,
     ];
-    let shell_exec_scope: Option<Scope> =
-        match build_shell_exec_for_channel(
-            channel_kind,
-            &fs_root,
-            std::sync::Arc::clone(&sensitive_policy),
-            require_enforcement,
-        )? {
-            Some((shell, scope)) => {
-                tool_list.push(shell);
-                Some(scope)
-            }
-            None => None,
-        };
+    let shell_exec_scope: Option<Scope> = match build_shell_exec_for_channel(
+        channel_kind,
+        &fs_root,
+        std::sync::Arc::clone(&sensitive_policy),
+        require_enforcement,
+    )? {
+        Some((shell, scope)) => {
+            tool_list.push(shell);
+            Some(scope)
+        }
+        None => None,
+    };
     // Phase 100 — destructive `fs.delete` behind the same Local-only
     // trust gate as `shell.exec` (PHASE_100.md Q3). Read-only
     // `fs.metadata` is already in `tool_list` above (every channel);
     // `fs.delete` is registered only when the gate returns it.
-    let fs_delete_scope: Option<Scope> =
-        match build_fs_delete_for_channel(
-            channel_kind,
-            &fs_root,
-            confirm_destructive,
-            &sensitive_policy,
-        )? {
-            Some((fs_delete, scope)) => {
-                tool_list.push(fs_delete);
-                Some(scope)
-            }
-            None => None,
-        };
+    let fs_delete_scope: Option<Scope> = match build_fs_delete_for_channel(
+        channel_kind,
+        &fs_root,
+        confirm_destructive,
+        &sensitive_policy,
+    )? {
+        Some((fs_delete, scope)) => {
+            tool_list.push(fs_delete);
+            Some(scope)
+        }
+        None => None,
+    };
     // Chapter O — the agent's personal workspace tools (read/write/list/
     // delete/note), rooted at `workspace_root` and always-on (independent of
     // fs_root / the access level). The held `workspace:<root>/**` + bare-root
@@ -7414,42 +7238,44 @@ async fn run_async(
     // dedupes the sensitive-path walk when that coincidence happens; it
     // deliberately does not try to dedupe the checkpointer instances
     // themselves.
-    let workspace_checkpointer: Option<Arc<aivyx_core::GitCheckpointer>> =
-        if let Some(root) = &workspace_root {
-            match std::fs::canonicalize(root) {
-                Ok(canonical) => {
-                    checkpointer_for(&canonical, &sensitive_policy, &mut checkpoint_walk_cache)
-                        .await
-                }
-                // build_workspace_tools below performs the same
-                // canonicalize call and will surface this as a real
-                // "failed to build tools" error there; no checkpointer
-                // for an unresolvable root either way.
-                Err(_) => None,
+    let workspace_checkpointer: Option<Arc<aivyx_core::GitCheckpointer>> = if let Some(root) =
+        &workspace_root
+    {
+        match std::fs::canonicalize(root) {
+            Ok(canonical) => {
+                checkpointer_for(&canonical, &sensitive_policy, &mut checkpoint_walk_cache).await
             }
-        } else {
-            None
-        };
+            // build_workspace_tools below performs the same
+            // canonicalize call and will surface this as a real
+            // "failed to build tools" error there; no checkpointer
+            // for an unresolvable root either way.
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let workspace_scopes: Vec<Scope> = match &workspace_root {
-        Some(root) => match aivyx_core::tools::workspace::build_workspace_tools(
-            root,
-            workspace_checkpointer,
-        ) {
-            Ok((tools, canonical)) => {
-                for t in tools {
-                    tool_list.push(t);
+        Some(root) => {
+            match aivyx_core::tools::workspace::build_workspace_tools(root, workspace_checkpointer)
+            {
+                Ok((tools, canonical)) => {
+                    for t in tools {
+                        tool_list.push(t);
+                    }
+                    let r = canonical.display();
+                    [format!("workspace:{r}/**"), format!("workspace:{r}")]
+                        .iter()
+                        .filter_map(|s| Scope::parse(s))
+                        .collect()
                 }
-                let r = canonical.display();
-                [format!("workspace:{r}/**"), format!("workspace:{r}")]
-                    .iter()
-                    .filter_map(|s| Scope::parse(s))
-                    .collect()
+                Err(e) => {
+                    eprintln!(
+                        "aivyx workspace: failed to build tools: {e} (workspace tools disabled)"
+                    );
+                    Vec::new()
+                }
             }
-            Err(e) => {
-                eprintln!("aivyx workspace: failed to build tools: {e} (workspace tools disabled)");
-                Vec::new()
-            }
-        },
+        }
         None => Vec::new(),
     };
     // Phase 12 Task 2 — `web.fetch` is registered for both
@@ -7513,14 +7339,10 @@ async fn run_async(
                 .unwrap_or_default()
         })
     };
-    tool_list.push(
-        Arc::new(aivyx_core::SkillsListTool::new(skills_reader.clone()))
-            as Arc<dyn Tool>,
-    );
-    tool_list.push(
-        Arc::new(aivyx_core::SkillsInvokeTool::new(skills_reader.clone()))
-            as Arc<dyn Tool>,
-    );
+    tool_list
+        .push(Arc::new(aivyx_core::SkillsListTool::new(skills_reader.clone())) as Arc<dyn Tool>);
+    tool_list
+        .push(Arc::new(aivyx_core::SkillsInvokeTool::new(skills_reader.clone())) as Arc<dyn Tool>);
 
     // Vitrine §5 fix — structural skill use. Compose the trigger-
     // injection provider with auto-recall into the single planner
@@ -7555,9 +7377,7 @@ async fn run_async(
             0 => None,
             1 => Some(providers.into_iter().next().expect("len checked")),
             _ => Some(Arc::new(
-                aivyx_channel::skill_trigger_context::ComposedContextProvider::new(
-                    providers,
-                ),
+                aivyx_channel::skill_trigger_context::ComposedContextProvider::new(providers),
             )),
         }
     };
@@ -7582,20 +7402,15 @@ async fn run_async(
     // landing-site is intentional but the consumer is
     // role-config-driven.
     let _git_read_scope: Option<Scope> = if let Some(gc) = config_git {
-        let repos: Vec<std::path::PathBuf> =
-            gc.repos.into_iter().map(|s| s.value).collect();
-        let (git_status, git_diff) =
-            aivyx_core::GitReadToolConfig::new(repos.clone())
-                .with_require_enforcement(require_enforcement)
-                .build()
-                .map_err(|e| {
-                    format!("failed to build git.read tool pair: {e}")
-                })?;
+        let repos: Vec<std::path::PathBuf> = gc.repos.into_iter().map(|s| s.value).collect();
+        let (git_status, git_diff) = aivyx_core::GitReadToolConfig::new(repos.clone())
+            .with_require_enforcement(require_enforcement)
+            .build()
+            .map_err(|e| format!("failed to build git.read tool pair: {e}"))?;
         // The canonical allow-set is the same for both tools;
         // construct one scope per canonical path so the
         // operator-held capability set includes them all.
-        let canonical_repos: Vec<std::path::PathBuf> =
-            git_status.repos().to_vec();
+        let canonical_repos: Vec<std::path::PathBuf> = git_status.repos().to_vec();
         tool_list.push(Arc::new(git_status) as Arc<dyn Tool>);
         tool_list.push(Arc::new(git_diff) as Arc<dyn Tool>);
 
@@ -7647,9 +7462,9 @@ async fn run_async(
         // `git.read:<first_repo>/**`. Role-scoped grants in
         // `aivyx.toml` can name per-repo scopes for finer
         // control.
-        canonical_repos.first().and_then(|p| {
-            Scope::parse(&format!("git.read:{}", p.display()))
-        })
+        canonical_repos
+            .first()
+            .and_then(|p| Scope::parse(&format!("git.read:{}", p.display())))
     } else {
         None
     };
@@ -7723,7 +7538,8 @@ async fn run_async(
     let turn_history_tool: Arc<TurnHistoryTool> = Arc::new(TurnHistoryTool::new());
     tool_list.push(Arc::clone(&turn_history_tool) as Arc<dyn Tool>);
 
-    let reflection_propose_tool: Arc<ReflectionProposeTool> = Arc::new(ReflectionProposeTool::new());
+    let reflection_propose_tool: Arc<ReflectionProposeTool> =
+        Arc::new(ReflectionProposeTool::new());
     tool_list.push(Arc::clone(&reflection_propose_tool) as Arc<dyn Tool>);
     let reflection_apply_tool: Arc<ReflectionApplyTool> = Arc::new(ReflectionApplyTool::new());
     tool_list.push(Arc::clone(&reflection_apply_tool) as Arc<dyn Tool>);
@@ -7739,14 +7555,17 @@ async fn run_async(
         Arc::new(aivyx_channel::loop_tool::LoopNextTool::new());
     let _ = loop_next_tool.set_backlog(Arc::clone(&loop_backlog));
     tool_list.push(Arc::clone(&loop_next_tool) as Arc<dyn Tool>);
-    let loop_complete_tool: Arc<
-        aivyx_channel::loop_tool::LoopCompleteTool,
-    > = Arc::new(aivyx_channel::loop_tool::LoopCompleteTool::new());
+    let loop_complete_tool: Arc<aivyx_channel::loop_tool::LoopCompleteTool> =
+        Arc::new(aivyx_channel::loop_tool::LoopCompleteTool::new());
     let _ = loop_complete_tool.set_backlog(Arc::clone(&loop_backlog));
     // Chapter Verdict (Opp E) — when `[loop] verify_completion` is on, wire an
     // LLM acceptance judge (the daemon's provider/model) so loop.complete is
     // gated against each story's acceptance criteria instead of self-reported.
-    if config_loop.as_ref().map(|c| c.verify_completion).unwrap_or(false) {
+    if config_loop
+        .as_ref()
+        .map(|c| c.verify_completion)
+        .unwrap_or(false)
+    {
         let mut judge_builder = aivyx_channel::completion_judge::CompletionJudge::new(
             Arc::clone(&provider),
             model.clone(),
@@ -7763,9 +7582,7 @@ async fn run_async(
         }
         let judge = Arc::new(judge_builder);
         let _ = loop_complete_tool.set_judge(judge);
-        eprintln!(
-            "aivyx loop: completion verification ON — an LLM judge gates loop.complete"
-        );
+        eprintln!("aivyx loop: completion verification ON — an LLM judge gates loop.complete");
     }
     tool_list.push(Arc::clone(&loop_complete_tool) as Arc<dyn Tool>);
     // Phase 175 — loop.note appends a learning to the reserved
@@ -7786,16 +7603,13 @@ async fn run_async(
 
     // Phase 183 — the remind.* channel-tier tools, sharing the
     // reminder store with the driver.
-    let remind_set_tool =
-        Arc::new(aivyx_channel::reminder_tool::RemindSetTool::new());
+    let remind_set_tool = Arc::new(aivyx_channel::reminder_tool::RemindSetTool::new());
     let _ = remind_set_tool.set_store(Arc::clone(&reminder_store));
     tool_list.push(Arc::clone(&remind_set_tool) as Arc<dyn Tool>);
-    let remind_list_tool =
-        Arc::new(aivyx_channel::reminder_tool::RemindListTool::new());
+    let remind_list_tool = Arc::new(aivyx_channel::reminder_tool::RemindListTool::new());
     let _ = remind_list_tool.set_store(Arc::clone(&reminder_store));
     tool_list.push(Arc::clone(&remind_list_tool) as Arc<dyn Tool>);
-    let remind_cancel_tool =
-        Arc::new(aivyx_channel::reminder_tool::RemindCancelTool::new());
+    let remind_cancel_tool = Arc::new(aivyx_channel::reminder_tool::RemindCancelTool::new());
     let _ = remind_cancel_tool.set_store(Arc::clone(&reminder_store));
     tool_list.push(Arc::clone(&remind_cancel_tool) as Arc<dyn Tool>);
 
@@ -7803,9 +7617,7 @@ async fn run_async(
     // append LearnedSkill deltas to the persona chain after the
     // agent confirms the drafted skill with the operator.
     {
-        use aivyx_channel::skill_tool::{
-            SkillForgetTool, SkillTeachTool, SkillUpdateTool,
-        };
+        use aivyx_channel::skill_tool::{SkillForgetTool, SkillTeachTool, SkillUpdateTool};
         let teach = Arc::new(SkillTeachTool::new());
         let _ = teach.set_persona_log(Arc::clone(&persona_log));
         let _ = teach.set_effective_persona(shared_persona.clone());
@@ -7844,23 +7656,18 @@ async fn run_async(
                 let resolved_cmd: String = if mcp_cfg.bundled {
                     std::env::current_exe()
                         .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_else(|_| {
-                            mcp_cfg.command.clone().unwrap_or_default()
-                        })
+                        .unwrap_or_else(|_| mcp_cfg.command.clone().unwrap_or_default())
                 } else {
                     mcp_cfg.command.clone().unwrap_or_default()
                 };
-                let args_ref: Vec<&str> =
-                    mcp_cfg.args.iter().map(|s| s.as_str()).collect();
+                let args_ref: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
                 // Phase 55 — translate the operator's
                 // [mcp_server.sandbox] config into the runtime
                 // aivyx_mcp::SandboxConfig (parallel type per Phase
                 // 55 Q1 resolution).
-                let mcp_sandbox = mcp_cfg.sandbox.as_ref().map(|s| {
-                    aivyx_mcp::SandboxConfig {
-                        wrapper: s.wrapper.clone(),
-                        args: s.args.clone(),
-                    }
+                let mcp_sandbox = mcp_cfg.sandbox.as_ref().map(|s| aivyx_mcp::SandboxConfig {
+                    wrapper: s.wrapper.clone(),
+                    args: s.args.clone(),
                 });
                 // Chapter Conduit (CD.3) — capture this server's stderr
                 // so a misconfiguration (bad token, crash on start) is
@@ -7929,11 +7736,13 @@ async fn run_async(
                             "aivyx: MCP server {:?} ({transport_label}) — {} tool(s) registered",
                             mcp_cfg.name, count,
                         );
-                        mcp_status_entries.push(aivyx_channel::mcp_status::McpServerStatusView::connected(
-                            &mcp_cfg.name,
-                            transport_label,
-                            count,
-                        ));
+                        mcp_status_entries.push(
+                            aivyx_channel::mcp_status::McpServerStatusView::connected(
+                                &mcp_cfg.name,
+                                transport_label,
+                                count,
+                            ),
+                        );
                     }
                     Err(e) => {
                         let tail = stderr_tail();
@@ -7942,12 +7751,14 @@ async fn run_async(
                             mcp_cfg.name,
                             format_stderr_tail(&tail),
                         );
-                        mcp_status_entries.push(aivyx_channel::mcp_status::McpServerStatusView::failed(
-                            &mcp_cfg.name,
-                            transport_label,
-                            format!("tool discovery failed: {e}"),
-                            tail,
-                        ));
+                        mcp_status_entries.push(
+                            aivyx_channel::mcp_status::McpServerStatusView::failed(
+                                &mcp_cfg.name,
+                                transport_label,
+                                format!("tool discovery failed: {e}"),
+                                tail,
+                            ),
+                        );
                     }
                 }
                 mcp_bridges.push(std::sync::Arc::new(bridge));
@@ -7980,9 +7791,7 @@ async fn run_async(
     // daemon restart). The snapshot represents daemon state, so only the daemon
     // owns it.
     if matches!(mode, CliMode::DaemonRun) {
-        if let Err(e) =
-            aivyx_channel::mcp_status::write_snapshot(&mcp_status_entries)
-        {
+        if let Err(e) = aivyx_channel::mcp_status::write_snapshot(&mcp_status_entries) {
             eprintln!("aivyx: could not write MCP status snapshot: {e}");
         }
     }
@@ -7994,15 +7803,14 @@ async fn run_async(
     // key: `None` when no such server is configured (the Gallery screen
     // and `/studio-asset` route both no-op), else the env value or the
     // bridge's own `localhost:8188` default.
-    let comfyui_base_url: Option<String> = mcp_servers.iter().find(|c| c.name == "comfyui").map(
-        |c| {
+    let comfyui_base_url: Option<String> =
+        mcp_servers.iter().find(|c| c.name == "comfyui").map(|c| {
             c.env
                 .iter()
                 .find(|(k, _)| k == "COMFYUI_URL")
                 .map(|(_, v)| v.clone())
                 .unwrap_or_else(|| "http://localhost:8188".to_string())
-        },
-    );
+        });
 
     // ---- Phase 49: tool processes (PRODUCT.md P12) ----------------------
     // Same shape as the MCP block above. One ToolProcessBridge per
@@ -8020,21 +7828,13 @@ async fn run_async(
     // detects bwrap/firejail on PATH; an unresolved `auto` warns
     // and falls back to no sandbox (no worse than pre-Phase-180).
     let sandbox_choice = match config_sandbox_default_backend {
-        aivyx_config::SandboxDefaultBackend::None => {
-            aivyx_tool::SandboxChoice::None
-        }
-        aivyx_config::SandboxDefaultBackend::Auto => {
-            aivyx_tool::SandboxChoice::Auto
-        }
+        aivyx_config::SandboxDefaultBackend::None => aivyx_tool::SandboxChoice::None,
+        aivyx_config::SandboxDefaultBackend::Auto => aivyx_tool::SandboxChoice::Auto,
         aivyx_config::SandboxDefaultBackend::Bubblewrap => {
-            aivyx_tool::SandboxChoice::Backend(
-                aivyx_tool::SandboxBackend::Bubblewrap,
-            )
+            aivyx_tool::SandboxChoice::Backend(aivyx_tool::SandboxBackend::Bubblewrap)
         }
         aivyx_config::SandboxDefaultBackend::Firejail => {
-            aivyx_tool::SandboxChoice::Backend(
-                aivyx_tool::SandboxBackend::Firejail,
-            )
+            aivyx_tool::SandboxChoice::Backend(aivyx_tool::SandboxBackend::Firejail)
         }
     };
     let detected_backend = aivyx_tool::detect_sandbox_backend();
@@ -8060,10 +7860,9 @@ async fn run_async(
         // Phase 182 — if a Google productivity tool is configured
         // but not yet authenticated, name its own remedy.
         if let Some(home) = std::env::var_os("HOME") {
-            if let Some(hint) = connect::unauthenticated_hint(
-                &tp_cfg.command,
-                std::path::Path::new(&home),
-            ) {
+            if let Some(hint) =
+                connect::unauthenticated_hint(&tp_cfg.command, std::path::Path::new(&home))
+            {
                 eprintln!("aivyx: {hint}");
             }
         }
@@ -8076,17 +7875,18 @@ async fn run_async(
         // Phase 180 — read-only bind the command-binary dir (a
         // bundled tool may live outside /usr) and writable-bind the
         // per-tool data dir (where its OAuth token lives).
-        let ro_extra: Vec<std::path::PathBuf> =
-            std::path::Path::new(&tp_cfg.command)
-                .parent()
-                .map(|p| vec![p.to_path_buf()])
-                .unwrap_or_default();
+        let ro_extra: Vec<std::path::PathBuf> = std::path::Path::new(&tp_cfg.command)
+            .parent()
+            .map(|p| vec![p.to_path_buf()])
+            .unwrap_or_default();
         let writable: Vec<std::path::PathBuf> = std::env::var_os("HOME")
             .map(|home| {
-                vec![std::path::PathBuf::from(home)
-                    .join(".aivyx")
-                    .join("tool-processes")
-                    .join(&tp_cfg.name)]
+                vec![
+                    std::path::PathBuf::from(home)
+                        .join(".aivyx")
+                        .join("tool-processes")
+                        .join(&tp_cfg.name),
+                ]
             })
             .unwrap_or_default();
         let spawn_sandbox = aivyx_tool::resolve_sandbox(
@@ -8131,10 +7931,7 @@ async fn run_async(
         let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
             Ok(b) => std::sync::Arc::new(b),
             Err(e) => {
-                eprintln!(
-                    "aivyx: tool process {:?} failed to start: {e}",
-                    tp_cfg.name,
-                );
+                eprintln!("aivyx: tool process {:?} failed to start: {e}", tp_cfg.name,);
                 continue;
             }
         };
@@ -8173,10 +7970,7 @@ async fn run_async(
                         eprintln!(
                             "aivyx: tool process {:?} tool {:?} scope_override {:?} is not \
                              narrower than declared {:?} — skipped",
-                            tp_cfg.name,
-                            descriptor.name,
-                            override_str,
-                            descriptor.required_scope,
+                            tp_cfg.name, descriptor.name, override_str, descriptor.required_scope,
                         );
                         continue;
                     }
@@ -8206,7 +8000,7 @@ async fn run_async(
     // Registered only when provider = "ollama". Uses the same base URL
     // resolved during provider construction.
     if let Some(ref ollama_url) = ollama_base_url_for_tools {
-        use aivyx_channel::ollama_tools::{OllamaListTool, OllamaShowTool, OllamaPullTool};
+        use aivyx_channel::ollama_tools::{OllamaListTool, OllamaPullTool, OllamaShowTool};
         let list_tool = OllamaListTool::new(ollama_url)
             .map_err(|e| format!("failed to build ollama.list tool: {e}"))?;
         tool_list.push(Arc::new(list_tool) as Arc<dyn Tool>);
@@ -8256,10 +8050,10 @@ async fn run_async(
     // learns from the tool's `unknown_target` error_kind that no
     // targets exist).
     let notify_telegram_transport: Option<Arc<dyn aivyx_telegram::transport::TelegramTransport>> =
-        if config_notify_targets.iter().any(|t| matches!(
-            t.kind,
-            aivyx_config::NotifyTargetKind::Telegram { .. }
-        )) {
+        if config_notify_targets
+            .iter()
+            .any(|t| matches!(t.kind, aivyx_config::NotifyTargetKind::Telegram { .. }))
+        {
             // Build a transport iff there's at least one telegram
             // notify_target. The token is sourced from the same
             // `[telegram] token` slot the channel-mode adapter
@@ -8267,11 +8061,9 @@ async fn run_async(
             // returns a descriptive error.
             if let Some(token) = telegram.as_ref().and_then(|t| t.token.as_ref()) {
                 use secrecy::ExposeSecret;
-                Some(Arc::new(
-                    aivyx_telegram::transport::ReqwestTransport::new(
-                        token.value.expose_secret(),
-                    ),
-                ))
+                Some(Arc::new(aivyx_telegram::transport::ReqwestTransport::new(
+                    token.value.expose_secret(),
+                )))
             } else {
                 None
             }
@@ -8282,10 +8074,10 @@ async fn run_async(
     // email notify_target exists. Mirrors the Telegram pattern
     // above: shared client, Arc-cloned into each email backend.
     let email_context: Option<aivyx_channel::notify_dispatcher::EmailDispatchContext> =
-        if config_notify_targets.iter().any(|t| matches!(
-            t.kind,
-            aivyx_config::NotifyTargetKind::Email { .. }
-        )) {
+        if config_notify_targets
+            .iter()
+            .any(|t| matches!(t.kind, aivyx_config::NotifyTargetKind::Email { .. }))
+        {
             // The config loader already rejected
             // email-target-without-[email]-section, so `email`
             // is guaranteed Some here. Defense-in-depth fall-
@@ -8294,12 +8086,10 @@ async fn run_async(
             // an email target is present.
             email.as_ref().and_then(|cfg| {
                 match aivyx_channel::notify_email::LettreEmailSender::from_config(cfg) {
-                    Ok(sender) => Some(
-                        aivyx_channel::notify_dispatcher::EmailDispatchContext {
-                            sender: Arc::new(sender),
-                            from: cfg.from.clone(),
-                        },
-                    ),
+                    Ok(sender) => Some(aivyx_channel::notify_dispatcher::EmailDispatchContext {
+                        sender: Arc::new(sender),
+                        from: cfg.from.clone(),
+                    }),
                     Err(e) => {
                         eprintln!(
                             "aivyx: failed to build SMTP transport from \
@@ -8321,7 +8111,9 @@ async fn run_async(
     // Chapter Herald default-target synthesis.)
     let web_ui_broadcaster: Option<Arc<aivyx_channel::notify_webui::WebUiBroadcaster>> =
         if web_ui_enabled {
-            Some(Arc::new(aivyx_channel::notify_webui::WebUiBroadcaster::new()))
+            Some(Arc::new(
+                aivyx_channel::notify_webui::WebUiBroadcaster::new(),
+            ))
         } else {
             None
         };
@@ -8336,19 +8128,17 @@ async fn run_async(
     // every registered target (the operator configured them).
     {
         use aivyx_channel::reminder_driver::{
-            run_reminder_driver, DispatcherNotifier, ReminderNotifier,
-            DEFAULT_CHECK_INTERVAL_SECS,
+            DEFAULT_CHECK_INTERVAL_SECS, DispatcherNotifier, ReminderNotifier, run_reminder_driver,
         };
         let default_targets: Vec<String> = notify_dispatcher
             .list_targets()
             .into_iter()
             .map(|(name, _kind)| name.to_string())
             .collect();
-        let notifier: Arc<dyn ReminderNotifier> =
-            Arc::new(DispatcherNotifier::new(
-                Arc::clone(&notify_dispatcher),
-                default_targets,
-            ));
+        let notifier: Arc<dyn ReminderNotifier> = Arc::new(DispatcherNotifier::new(
+            Arc::clone(&notify_dispatcher),
+            default_targets,
+        ));
         let interval = std::time::Duration::from_secs(
             config_reminders_check_interval_secs
                 .filter(|s| *s > 0)
@@ -8378,8 +8168,10 @@ async fn run_async(
     // avoids a reference cycle: the tool can't hold the registry that contains it.
     {
         use aivyx_channel::tools_list_tool::{ToolInfo, ToolsListTool};
-        let mut infos: Vec<ToolInfo> =
-            tool_list.iter().map(|t| ToolInfo::from_tool(t.as_ref())).collect();
+        let mut infos: Vec<ToolInfo> = tool_list
+            .iter()
+            .map(|t| ToolInfo::from_tool(t.as_ref()))
+            .collect();
         infos.push(ToolsListTool::self_info());
         tool_list.push(Arc::new(ToolsListTool::new(infos)) as Arc<dyn Tool>);
     }
@@ -8412,8 +8204,10 @@ async fn run_async(
     // `tool_list` and returns here rather than falling through to the
     // session/daemon wiring.
     if let CliMode::Team(TeamSubcommand::Run { mission, config }) = &mode {
-        let cli_lead_scopes: Vec<String> =
-            backcompat_floor.iter().map(|s| s.as_str().to_string()).collect();
+        let cli_lead_scopes: Vec<String> = backcompat_floor
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect();
         return team::run_mission(
             Arc::clone(&provider),
             &model,
@@ -8466,10 +8260,8 @@ async fn run_async(
                         Ok(new_tools) => {
                             let new_ids: Vec<aivyx_core::ToolId> =
                                 new_tools.iter().map(|t| t.id()).collect();
-                            let old_ids =
-                                server_tool_ids.get(&name).cloned().unwrap_or_default();
-                            let (removed, added) =
-                                registry.replace_tools(&old_ids, new_tools);
+                            let old_ids = server_tool_ids.get(&name).cloned().unwrap_or_default();
+                            let (removed, added) = registry.replace_tools(&old_ids, new_tools);
                             server_tool_ids.insert(name.clone(), new_ids);
                             eprintln!(
                                 "aivyx: MCP server {name:?} signalled {changed:?} — \
@@ -8498,10 +8290,7 @@ async fn run_async(
         .map(|t| ToolDescriptor {
             name: t.name().to_string(),
             description: t.description().to_string(),
-            scope_base: t
-                .required_scope(&serde_json::json!({}))
-                .base()
-                .to_string(),
+            scope_base: t.required_scope(&serde_json::json!({})).base().to_string(),
         })
         .collect();
 
@@ -8514,28 +8303,27 @@ async fn run_async(
     // mirrors what the model can actually invoke (an allowlist
     // role shouldn't see tools it'll be denied). `AllowAll`
     // roles see every registered tool.
-    let prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> =
-        if matches!(
-            ollama_prompt_strategy,
-            aivyx_config::OllamaFamilyStrategy::StructuredInjection
-                | aivyx_config::OllamaFamilyStrategy::FewShotExamples
-        ) {
-            tools
-                .snapshot()
-                .into_iter()
-                .filter(|t| match &tool_allowlist {
-                    None => true,
-                    Some(set) => set.contains(t.name()),
-                })
-                .map(|t| aivyx_llm::LlmToolDescriptor {
-                    name: t.name().to_string(),
-                    description: t.description().to_string(),
-                    input_schema: t.input_schema().clone(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> = if matches!(
+        ollama_prompt_strategy,
+        aivyx_config::OllamaFamilyStrategy::StructuredInjection
+            | aivyx_config::OllamaFamilyStrategy::FewShotExamples
+    ) {
+        tools
+            .snapshot()
+            .into_iter()
+            .filter(|t| match &tool_allowlist {
+                None => true,
+                Some(set) => set.contains(t.name()),
+            })
+            .map(|t| aivyx_llm::LlmToolDescriptor {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema().clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Phase 124 Task 3 — apply the per-family strategy via
     // the dispatcher. `None` returns the base prompt
@@ -8578,7 +8366,10 @@ async fn run_async(
     // deliberately doesn't unwrap/panic on it: a startup-path panic over
     // a notify-dispatch wiring detail would be a worse failure mode than
     // silently keeping the first-set value.
-    let _ = notify_deps.set((capabilities.clone(), std::sync::Arc::clone(&notify_dispatcher)));
+    let _ = notify_deps.set((
+        capabilities.clone(),
+        std::sync::Arc::clone(&notify_dispatcher),
+    ));
 
     // ---- Phase 37 Task 4 — wire effective capabilities for redirect
     //      scope re-checks on web.fetch and web.post tools. The
@@ -8734,41 +8525,38 @@ async fn run_async(
                 ToolAllowlist::AllowAll => None,
                 ToolAllowlist::Only(list) => Some(list.into_iter().collect()),
             };
-        let child_memory_topic_prefix: Option<String> =
-            target_role.memory_topic_prefix.value;
+        let child_memory_topic_prefix: Option<String> = target_role.memory_topic_prefix.value;
         // Phase 122 Task 4 / Phase 124 Task 3 — child agents
         // get their own catalog snapshot filtered by the child
         // role's allowlist. Built for any non-`None` strategy;
         // empty otherwise → dispatcher is a no-op.
-        let child_prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> =
-            if matches!(
-                ollama_prompt_strategy,
-                aivyx_config::OllamaFamilyStrategy::StructuredInjection
-                    | aivyx_config::OllamaFamilyStrategy::FewShotExamples
-            ) {
-                tools_for_factory
-                    .snapshot()
-                    .into_iter()
-                    .filter(|t| match &child_tool_allowlist {
-                        None => true,
-                        Some(set) => set.contains(t.name()),
-                    })
-                    .map(|t| aivyx_llm::LlmToolDescriptor {
-                        name: t.name().to_string(),
-                        description: t.description().to_string(),
-                        input_schema: t.input_schema().clone(),
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        let child_system_prompt =
-            aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
-                &child_assembled,
-                &child_prompt_tool_catalog,
-                ollama_prompt_strategy,
-                Some(&*prompt_fs_root_cf),
-            );
+        let child_prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> = if matches!(
+            ollama_prompt_strategy,
+            aivyx_config::OllamaFamilyStrategy::StructuredInjection
+                | aivyx_config::OllamaFamilyStrategy::FewShotExamples
+        ) {
+            tools_for_factory
+                .snapshot()
+                .into_iter()
+                .filter(|t| match &child_tool_allowlist {
+                    None => true,
+                    Some(set) => set.contains(t.name()),
+                })
+                .map(|t| aivyx_llm::LlmToolDescriptor {
+                    name: t.name().to_string(),
+                    description: t.description().to_string(),
+                    input_schema: t.input_schema().clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let child_system_prompt = aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+            &child_assembled,
+            &child_prompt_tool_catalog,
+            ollama_prompt_strategy,
+            Some(&*prompt_fs_root_cf),
+        );
 
         // Build the child's planner factory. Same shape as the
         // parent's `run_session` planner factory: captures the
@@ -8781,23 +8569,19 @@ async fn run_async(
             .with_max_tokens(max_tokens_for_factory)
             .with_tool_allowlist(child_tool_allowlist.clone())
             .with_context_window(planner_context_window)
-            .with_prune_sink(Arc::new(
-                aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory_for_factory)),
-            ))
+            .with_prune_sink(Arc::new(aivyx_channel::prune_sink::MemoryPruneSink::new(
+                Arc::clone(&memory_for_factory),
+            )))
             // Phase 120 — operator-configured fuzzy-match threshold
             // for the planner's tool-name recovery path.
-            .with_tool_name_auto_correct_threshold(
-                config_tool_name_auto_correct_threshold.value,
-            );
+            .with_tool_name_auto_correct_threshold(config_tool_name_auto_correct_threshold.value);
         // Phase 76 — same auto-recall hook as the parent.
         if let Some(rc) = &recall_context_for_factory {
-            planner_config =
-                planner_config.with_context_provider(Arc::clone(rc));
+            planner_config = planner_config.with_context_provider(Arc::clone(rc));
         }
         // Phase 79 — same adaptive-Persona refiner as the parent.
         if let Some(pr) = &persona_refiner_for_factory {
-            planner_config = planner_config
-                .with_system_prompt_refiner(Arc::clone(pr));
+            planner_config = planner_config.with_system_prompt_refiner(Arc::clone(pr));
         }
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_tools = Arc::clone(&tools_for_factory);
@@ -8826,14 +8610,12 @@ async fn run_async(
                 &child_refresher_role_name,
                 &child_refresher_role_prompt,
             );
-            cfg.system_prompt = Some(
-                aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
-                    &assembled,
-                    &child_refresher_catalog,
-                    ollama_prompt_strategy,
-                    Some(&*prompt_fs_root_cpf),
-                ),
-            );
+            cfg.system_prompt = Some(aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+                &assembled,
+                &child_refresher_catalog,
+                ollama_prompt_strategy,
+                Some(&*prompt_fs_root_cpf),
+            ));
             drop(snap);
             Box::new(LlmPlanner::new(
                 Arc::clone(&planner_provider),
@@ -8941,12 +8723,9 @@ async fn run_async(
     // gradient (resolved with the "schedules" domain so a per-domain
     // [autonomy.overrides] entry can pin it independently): below
     // policy_auto agent creations land disabled pending Studio approval.
-    let schedule_growth = aivyx_config::resolve_posture(
-        autonomy_level.value,
-        &autonomy_overrides,
-        Some("schedules"),
-    )
-    .growth;
+    let schedule_growth =
+        aivyx_config::resolve_posture(autonomy_level.value, &autonomy_overrides, Some("schedules"))
+            .growth;
     schedule_create_tool
         .set_growth(schedule_growth)
         .map_err(|_| "schedule.create growth already set".to_string())?;
@@ -9099,25 +8878,21 @@ async fn run_async(
             .with_max_tokens(DEFAULT_MAX_TOKENS)
             .with_tool_allowlist(tool_allowlist)
             .with_context_window(planner_context_window)
-            .with_prune_sink(Arc::new(
-                aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
-            ))
+            .with_prune_sink(Arc::new(aivyx_channel::prune_sink::MemoryPruneSink::new(
+                Arc::clone(&memory),
+            )))
             // Phase 120 — daemon path mirror of the in-process
             // factory above.
-            .with_tool_name_auto_correct_threshold(
-                config_tool_name_auto_correct_threshold.value,
-            );
+            .with_tool_name_auto_correct_threshold(config_tool_name_auto_correct_threshold.value);
         // Phase 76 — automatic recall (Q1a). Carried by-Arc
         // through the per-turn `planner_config.clone()` in the
         // factory below, exactly like the prune sink.
         if let Some(rc) = &turn_context {
-            planner_config =
-                planner_config.with_context_provider(Arc::clone(rc));
+            planner_config = planner_config.with_context_provider(Arc::clone(rc));
         }
         // Phase 79 — adaptive Persona refiner (daemon path).
         if let Some(pr) = &persona_refiner {
-            planner_config = planner_config
-                .with_system_prompt_refiner(Arc::clone(pr));
+            planner_config = planner_config.with_system_prompt_refiner(Arc::clone(pr));
         }
         // Chapter Thread — conversation-history replay. The seeder
         // reads the same shared windows the daemon turn loop writes
@@ -9128,14 +8903,12 @@ async fn run_async(
         // `0` disables replay entirely.
         if conversation_history_turns > 0 {
             if let Some(windows) = &conversation_windows {
-                planner_config = planner_config.with_conversation_seeder(
-                    Arc::new(
-                        aivyx_channel::conversation_window::WindowConversationSeeder::new(
-                            windows.clone(),
-                            conversation_history_turns,
-                        ),
+                planner_config = planner_config.with_conversation_seeder(Arc::new(
+                    aivyx_channel::conversation_window::WindowConversationSeeder::new(
+                        windows.clone(),
+                        conversation_history_turns,
                     ),
-                );
+                ));
             }
         }
         let planner_provider = Arc::clone(&provider);
@@ -9167,21 +8940,16 @@ async fn run_async(
                 &daemon_refresher_role_name,
                 &daemon_refresher_role_prompt,
             );
-            cfg.system_prompt = Some(
-                aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
-                    &assembled,
-                    &daemon_refresher_catalog,
-                    ollama_prompt_strategy,
-                    Some(&*prompt_fs_root_pf),
-                ),
-            );
+            cfg.system_prompt = Some(aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+                &assembled,
+                &daemon_refresher_catalog,
+                ollama_prompt_strategy,
+                Some(&*prompt_fs_root_pf),
+            ));
             drop(snap);
             if let Ok(overrides) = daemon_overrides.read() {
                 if !overrides.is_empty() {
-                    aivyx_channel::role_overrides::apply_to_planner_config(
-                        &overrides,
-                        &mut cfg,
-                    );
+                    aivyx_channel::role_overrides::apply_to_planner_config(&overrides, &mut cfg);
                 }
             }
             let planner = LlmPlanner::new(
@@ -9268,12 +9036,8 @@ async fn run_async(
                 // Chapter Ballast (Opp D) — price + cap loop-delegated team
                 // missions. `[budget] per_mission_*` (default None) ⇒ unbounded,
                 // so missions run byte-identically unless the operator opts in.
-                pricing: Arc::new(aivyx_cost::Pricing::with_overrides(
-                    config_pricing.clone(),
-                )),
-                mission_budget: aivyx_cost::MissionBudget::from_config(
-                    &config_budget,
-                ),
+                pricing: Arc::new(aivyx_cost::Pricing::with_overrides(config_pricing.clone())),
+                mission_budget: aivyx_cost::MissionBudget::from_config(&config_budget),
                 // Chapter Ensemble — per-role endpoint builder (same provider
                 // kind). v1 supports Ollama (the local/multi-GPU case where a
                 // per-role `base_url` buys true parallelism): build a fresh
@@ -9281,10 +9045,7 @@ async fn run_async(
                 // use default Ollama options (not the operator's `[ollama]`
                 // tuning) — a documented v1 simplification. Other kinds → None
                 // (a per-role `base_url` falls back to the shared provider).
-                member_provider_builder: if matches!(
-                    provider_kind.value,
-                    ProviderKind::Ollama
-                ) {
+                member_provider_builder: if matches!(provider_kind.value, ProviderKind::Ollama) {
                     Some(std::sync::Arc::new(
                         |url: &str| -> Result<Arc<dyn aivyx_llm::LlmProvider>, String> {
                             let cfg = aivyx_llm::ollama::OllamaConfig::default_local()
@@ -9307,7 +9068,10 @@ async fn run_async(
                 // Chapter Ensemble — the daemon's real authority, so the team
                 // lead can grant specialists the concrete scopes their tools
                 // need (bare roster scopes can't match the qualified floor).
-                lead_scopes: backcompat_floor.iter().map(|s| s.as_str().to_string()).collect(),
+                lead_scopes: backcompat_floor
+                    .iter()
+                    .map(|s| s.as_str().to_string())
+                    .collect(),
                 // Chapter Herald — a mission reaching Done/Rejected/Halted
                 // notifies through the same dispatcher schedules use.
                 notify_dispatcher: Some(Arc::clone(&notify_dispatcher)),
@@ -9343,8 +9107,10 @@ async fn run_async(
                 .filter(|p| !p.as_os_str().is_empty())
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
-            let startup_team =
-                team::resolve_daemon_team_config(config_team_config_path.as_deref(), &team_base_dir);
+            let startup_team = team::resolve_daemon_team_config(
+                config_team_config_path.as_deref(),
+                &team_base_dir,
+            );
             let service = aivyx_channel::team_mission_driver::TeamMissionService::new(
                 state,
                 deps,
@@ -9365,18 +9131,13 @@ async fn run_async(
         // (`cycle_detection`). These were previously applied only in
         // `build_agent_stack` (REPL/voice), so the daemon always ran the 120s
         // default and no cycle breaker — closed here.
-        let daemon_agent = ConcreteAgent::new(
-            AgentId::new(),
-            capabilities,
-            tools,
-            audit,
-            planner_factory,
-        )
-        .with_tool_allowlist(daemon_tool_allowlist)
-        .with_memory_topic_prefix(memory_topic_prefix)
-        .with_budget_gate(daemon_budget_gate)
-        .with_rate_gate(daemon_rate_gate)
-        .with_checkpointer(checkpointer.clone());
+        let daemon_agent =
+            ConcreteAgent::new(AgentId::new(), capabilities, tools, audit, planner_factory)
+                .with_tool_allowlist(daemon_tool_allowlist)
+                .with_memory_topic_prefix(memory_topic_prefix)
+                .with_budget_gate(daemon_budget_gate)
+                .with_rate_gate(daemon_rate_gate)
+                .with_checkpointer(checkpointer.clone());
         let daemon_agent = aivyx_core::TurnSafety::interactive(
             turn_timeout_secs,
             cycle_detection,
@@ -9426,20 +9187,20 @@ async fn run_async(
             // shutdown token and let the daemon unwind cleanly.
             #[cfg(unix)]
             {
-                let mut sigterm = match tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::terminate(),
-                ) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        // No SIGTERM stream — fall back to Ctrl-C only.
-                        if tokio::signal::ctrl_c().await.is_err() {
-                            std::process::exit(130);
+                let mut sigterm =
+                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    {
+                        Ok(s) => s,
+                        Err(_) => {
+                            // No SIGTERM stream — fall back to Ctrl-C only.
+                            if tokio::signal::ctrl_c().await.is_err() {
+                                std::process::exit(130);
+                            }
+                            eprintln!("\naivyx daemon: shutting down.");
+                            shutdown_for_signal.cancel();
+                            return;
                         }
-                        eprintln!("\naivyx daemon: shutting down.");
-                        shutdown_for_signal.cancel();
-                        return;
-                    }
-                };
+                    };
                 tokio::select! {
                     r = tokio::signal::ctrl_c() => {
                         if r.is_err() {
@@ -9508,11 +9269,13 @@ async fn run_async(
                         record.notify_target = wh_cfg.notify_target.clone();
                         record.notify_targets = wh_cfg.notify_targets.clone();
                         record.notify_when = wh_cfg.notify_when;
-                        if let Err(e) = aivyx_channel::webhook::create_webhook(
-                            &webhook_domain,
-                            &record,
-                        ).await {
-                            eprintln!("aivyx daemon: failed to sync webhook {:?}: {e}", wh_cfg.name);
+                        if let Err(e) =
+                            aivyx_channel::webhook::create_webhook(&webhook_domain, &record).await
+                        {
+                            eprintln!(
+                                "aivyx daemon: failed to sync webhook {:?}: {e}",
+                                wh_cfg.name
+                            );
                         } else {
                             synced += 1;
                         }
@@ -9572,17 +9335,19 @@ async fn run_async(
                 (None, Some(s)) => Some(s.into()),
                 (None, None) => None,
             }
-            .map(|mut cfg: aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig| {
-                // Vitrine §6 — an unset judge_model follows the
-                // planner's configured model on the same provider
-                // (the configured-provider invariant). The old
-                // hardcoded "claude-haiku-4-5" default 404'd after
-                // every tool-heavy turn on an Ollama-only install.
-                if cfg.judge_model.is_empty() {
-                    cfg.judge_model = model.clone();
-                }
-                cfg
-            });
+            .map(
+                |mut cfg: aivyx_channel::skill_auto_proposer::SkillAutoProposeConfig| {
+                    // Vitrine §6 — an unset judge_model follows the
+                    // planner's configured model on the same provider
+                    // (the configured-provider invariant). The old
+                    // hardcoded "claude-haiku-4-5" default 404'd after
+                    // every tool-heavy turn on an Ollama-only install.
+                    if cfg.judge_model.is_empty() {
+                        cfg.judge_model = model.clone();
+                    }
+                    cfg
+                },
+            );
         let skill_auto_proposer_ctx = runtime_cfg.map(|cfg| {
             Arc::new(
                 aivyx_channel::skill_auto_proposer::SkillAutoProposerContext {
@@ -9620,15 +9385,13 @@ async fn run_async(
             // ledger. Built iff `[skill_refinement]` is present, so the
             // default config stays byte-identical (no fold, no domain
             // writes). The WH.3c reflection pass reads it.
-            skill_effectiveness_ledger: config_skill_refinement
-                .as_ref()
-                .map(|_| {
-                    Arc::new(
-                        aivyx_channel::skill_effectiveness::SkillEffectivenessLedger::new(
-                            storage.domain(KeyDomain::SkillHelpfulnessLedger),
-                        ),
-                    )
-                }),
+            skill_effectiveness_ledger: config_skill_refinement.as_ref().map(|_| {
+                Arc::new(
+                    aivyx_channel::skill_effectiveness::SkillEffectivenessLedger::new(
+                        storage.domain(KeyDomain::SkillHelpfulnessLedger),
+                    ),
+                )
+            }),
             // Chapter Whetstone (WH.3c) — config + drafter for the
             // reflection-cadence refinement pass.
             skill_refinement_config: config_skill_refinement.clone(),
@@ -9667,9 +9430,7 @@ async fn run_async(
             // K.4.2 — the override-aware rate table the autonomous loop's
             // dollar cap prices with. Built once from the built-in defaults
             // plus any `[pricing.<model>]` overrides the operator declared.
-            pricing: aivyx_cost::Pricing::with_overrides(
-                config_pricing.clone(),
-            ),
+            pricing: aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
             // Chapter U — the config file the daemon loaded from, so the
             // Settings IPC handlers can re-read + rewrite `[access]`/`[budget]`
             // sections via the shared `aivyx_config::config_write` helper. Only
@@ -9820,10 +9581,8 @@ async fn run_async(
             // stat. The persona/proposal chains + embedding
             // are already on DaemonConfig; the pass picks them
             // up there.
-            persona_lifecycle_config: config_persona_lifecycle
-                .clone(),
-            persona_lifecycle_stat: persona_lifecycle_stat
-                .clone(),
+            persona_lifecycle_config: config_persona_lifecycle.clone(),
+            persona_lifecycle_stat: persona_lifecycle_stat.clone(),
             // Phase 86 — shared per-session windows. The daemon
             // turn loop writes `(user, assistant)` pairs into
             // this on every `TurnOutcome::Completed`; both
@@ -9835,49 +9594,37 @@ async fn run_async(
             // All three are `Some` iff the section is enabled
             // (the daemon arms the pass only when every piece
             // is present).
-            persona_consolidation_config:
-                config_persona_consolidation.clone(),
-            persona_consolidation_stat:
-                persona_consolidation_stat.clone(),
-            persona_consolidation_phraser:
-                persona_consolidation_phraser.clone(),
+            persona_consolidation_config: config_persona_consolidation.clone(),
+            persona_consolidation_stat: persona_consolidation_stat.clone(),
+            persona_consolidation_phraser: persona_consolidation_phraser.clone(),
             // Phase 172 — correction-driven Persona consolidation
             // config + Phase 78 surface stat + LLM topic phraser.
             // All three are `Some` iff the section is enabled.
-            correction_consolidation_config:
-                config_correction_consolidation.clone(),
-            correction_consolidation_stat:
-                correction_consolidation_stat.clone(),
-            correction_consolidation_phraser:
-                correction_consolidation_phraser.clone(),
+            correction_consolidation_config: config_correction_consolidation.clone(),
+            correction_consolidation_stat: correction_consolidation_stat.clone(),
+            correction_consolidation_phraser: correction_consolidation_phraser.clone(),
             // Phase 91 — `[recall_judgment]` config + stat +
             // LLM judge. All three are `Some` iff the
             // section is enabled.
-            recall_judgment_config:
-                _config_recall_judgment.clone(),
-            recall_judgment_stat:
-                recall_judgment_stat.clone(),
+            recall_judgment_config: _config_recall_judgment.clone(),
+            recall_judgment_stat: recall_judgment_stat.clone(),
             recall_judge: recall_judge.clone(),
             // Phase 178 — correction judgment config + judge +
             // stat (Some iff `[correction_judgment].enabled`).
-            correction_judgment_config:
-                config_correction_judgment.clone(),
+            correction_judgment_config: config_correction_judgment.clone(),
             correction_judge: correction_judge.clone(),
-            correction_judgment_stat:
-                correction_judgment_stat.clone(),
+            correction_judgment_stat: correction_judgment_stat.clone(),
             // Phase 179 — `[correction_signal]` config.
-            correction_signal_config:
-                config_correction_signal.clone(),
+            correction_signal_config: config_correction_signal.clone(),
             // Phase 93 — `[recall_feedback]` config threaded
             // into the daemon. Drives `correlate_detailed` in
             // both the reflection-cron recall-feedback pass
             // AND the `GetLearningInsights` IPC surface so
             // the operator's insights view reflects the same
             // signal source the actuator uses.
-            recall_feedback_config:
-                config_recall_feedback.clone(),
+            recall_feedback_config: config_recall_feedback.clone(),
         })
-            .await;
+        .await;
 
         for bridge in &mcp_bridges {
             let _ = bridge.shutdown().await;
@@ -9916,13 +9663,13 @@ async fn run_async(
                     &sp,
                     Some(active_role_name.clone()),
                     Some(aivyx_channel::daemon_ipc::FrontendType::Local),
-                ).await;
+                )
+                .await;
 
                 if let Ok(session) = session {
                     let cancel_handle = session.cancel_handle();
-                    let cancelled_once = std::sync::Arc::new(
-                        std::sync::atomic::AtomicBool::new(false),
-                    );
+                    let cancelled_once =
+                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let flag_for_signal = std::sync::Arc::clone(&cancelled_once);
 
                     // Signal task (daemon mode): first ctrl-C sends
@@ -9938,9 +9685,7 @@ async fn run_async(
                                 eprintln!("\naivyx: interrupted, exiting.");
                                 std::process::exit(130);
                             }
-                            eprintln!(
-                                "\naivyx: cancelling in-flight turn (ctrl-C again to exit)."
-                            );
+                            eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
                             cancel_handle.cancel().await;
                             flag_for_signal.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
@@ -9970,9 +9715,9 @@ async fn run_async(
 
                     let stdin = io::stdin();
                     let reader = stdin.lock();
-                    match run_daemon_session_connected(
-                        session, daemon_config, reader, io::stdout(),
-                    ).await {
+                    match run_daemon_session_connected(session, daemon_config, reader, io::stdout())
+                        .await
+                    {
                         Ok(_report) => return Ok(()),
                         Err(e) => {
                             eprintln!(
@@ -10024,24 +9769,23 @@ async fn run_async(
             // block on every per-turn re-assembly.
             let refresher_catalog = prompt_tool_catalog.clone();
             let prompt_fs_root_r1 = prompt_fs_root.clone();
-            let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
-                Arc::new(move || {
-                    let snap = refresher_shared
-                        .read()
-                        .expect("persona lock not poisoned at turn build");
-                    let assembled = aivyx_channel::assemble_session_prompt(
-                        &refresher_profile,
-                        Some(&*snap),
-                        &refresher_role_name,
-                        &refresher_role_prompt,
-                    );
-                    aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
-                        &assembled,
-                        &refresher_catalog,
-                        ollama_prompt_strategy,
-                        Some(&*prompt_fs_root_r1),
-                    )
-                });
+            let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
+                let snap = refresher_shared
+                    .read()
+                    .expect("persona lock not poisoned at turn build");
+                let assembled = aivyx_channel::assemble_session_prompt(
+                    &refresher_profile,
+                    Some(&*snap),
+                    &refresher_role_name,
+                    &refresher_role_prompt,
+                );
+                aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+                    &assembled,
+                    &refresher_catalog,
+                    ollama_prompt_strategy,
+                    Some(&*prompt_fs_root_r1),
+                )
+            });
 
             let session_config = SessionConfig {
                 model,
@@ -10067,9 +9811,9 @@ async fn run_async(
                 role_overrides: Some(shared_role_overrides),
                 prompt_refresher: Some(prompt_refresher),
                 context_window_tokens: Some(planner_context_window),
-                prune_sink: Some(Arc::new(
-                    aivyx_channel::prune_sink::MemoryPruneSink::new(Arc::clone(&memory)),
-                )),
+                prune_sink: Some(Arc::new(aivyx_channel::prune_sink::MemoryPruneSink::new(
+                    Arc::clone(&memory),
+                ))),
                 // Phase 76 — automatic recall (Q1a). `None` when
                 // `[embedding]` is unconfigured → no auto-recall.
                 context_provider: turn_context.clone(),
@@ -10092,14 +9836,20 @@ async fn run_async(
 
             let stdin = io::stdin();
             let reader = stdin.lock();
-            run_session(provider, audit, checkpointer.clone(), session_config, channel, reader)
-                .await
-                .map(|_report| ())
+            run_session(
+                provider,
+                audit,
+                checkpointer.clone(),
+                session_config,
+                channel,
+                reader,
+            )
+            .await
+            .map(|_report| ())
         }
 
         ChannelKind::Telegram => {
-            let tg = telegram
-                .expect("telegram config validated for ChannelKind::Telegram");
+            let tg = telegram.expect("telegram config validated for ChannelKind::Telegram");
             let token_secret = tg
                 .token
                 .expect("telegram.token validated non-None before run_async")
@@ -10219,8 +9969,7 @@ async fn run_async(
         // routes per `channel_id` straight from
         // `MessageCreate` events.
         ChannelKind::Discord => {
-            let dc = discord
-                .expect("discord config validated for ChannelKind::Discord");
+            let dc = discord.expect("discord config validated for ChannelKind::Discord");
             let token_secret = dc
                 .token
                 .expect("discord.token validated non-None before run_async")
@@ -10235,9 +9984,7 @@ async fn run_async(
                 if tokio::signal::ctrl_c().await.is_err() {
                     std::process::exit(130);
                 }
-                eprintln!(
-                    "\naivyx: shutting down discord bot after current event drains."
-                );
+                eprintln!("\naivyx: shutting down discord bot after current event drains.");
                 shutdown_for_signal.cancel();
             });
 
@@ -10363,9 +10110,7 @@ async fn run_async(
                 if tokio::signal::ctrl_c().await.is_err() {
                     std::process::exit(130);
                 }
-                eprintln!(
-                    "\naivyx: shutting down slack bot after current event drains."
-                );
+                eprintln!("\naivyx: shutting down slack bot after current event drains.");
                 shutdown_for_signal.cancel();
             });
 
@@ -10379,12 +10124,11 @@ async fn run_async(
             // closed too; the live Socket Mode wiring lands
             // through Task 4 of Phase 111.
             if !no_daemon && let Ok(sp) = default_socket_path() {
-                let transport_result =
-                    aivyx_slack::transport::SlackMorphismTransport::connect(
-                        bot_token_str,
-                        app_token_str,
-                    )
-                    .await;
+                let transport_result = aivyx_slack::transport::SlackMorphismTransport::connect(
+                    bot_token_str,
+                    app_token_str,
+                )
+                .await;
                 match transport_result {
                     Ok(transport) => {
                         let transport = std::sync::Arc::new(transport);
@@ -10499,7 +10243,7 @@ async fn run_async(
                 use aivyx_voice::asr::whisper_rs::WhisperRsEngine;
                 use aivyx_voice::tts::kokoro;
                 use aivyx_voice::{
-                    run_push_to_talk_loop_streaming, VoiceChannel, VoiceChannelConfig,
+                    VoiceChannel, VoiceChannelConfig, run_push_to_talk_loop_streaming,
                 };
 
                 eprintln!(
@@ -10524,29 +10268,27 @@ async fn run_async(
                 // this up into a small helper.
                 let refresher_profile = profile.clone();
                 let refresher_role_name = active_role_name.clone();
-                let refresher_role_prompt =
-                    role_for_envelope.system_prompt.value.clone();
+                let refresher_role_prompt = role_for_envelope.system_prompt.value.clone();
                 let refresher_shared = shared_persona.clone();
                 let refresher_catalog = prompt_tool_catalog.clone();
                 let prompt_fs_root_r2 = prompt_fs_root.clone();
-                let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> =
-                    Arc::new(move || {
-                        let snap = refresher_shared
-                            .read()
-                            .expect("persona lock not poisoned at turn build");
-                        let assembled = aivyx_channel::assemble_session_prompt(
-                            &refresher_profile,
-                            Some(&*snap),
-                            &refresher_role_name,
-                            &refresher_role_prompt,
-                        );
-                        aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
-                            &assembled,
-                            &refresher_catalog,
-                            ollama_prompt_strategy,
-                            Some(&*prompt_fs_root_r2),
-                        )
-                    });
+                let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
+                    let snap = refresher_shared
+                        .read()
+                        .expect("persona lock not poisoned at turn build");
+                    let assembled = aivyx_channel::assemble_session_prompt(
+                        &refresher_profile,
+                        Some(&*snap),
+                        &refresher_role_name,
+                        &refresher_role_prompt,
+                    );
+                    aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
+                        &assembled,
+                        &refresher_catalog,
+                        ollama_prompt_strategy,
+                        Some(&*prompt_fs_root_r2),
+                    )
+                });
 
                 let agent_spec = aivyx_channel::AgentStackSpec {
                     model: model.clone(),
@@ -10559,11 +10301,9 @@ async fn run_async(
                     role_overrides: Some(shared_role_overrides.clone()),
                     prompt_refresher: Some(prompt_refresher),
                     context_window_tokens: Some(planner_context_window),
-                    prune_sink: Some(Arc::new(
-                        aivyx_channel::prune_sink::MemoryPruneSink::new(
-                            Arc::clone(&memory),
-                        ),
-                    )),
+                    prune_sink: Some(Arc::new(aivyx_channel::prune_sink::MemoryPruneSink::new(
+                        Arc::clone(&memory),
+                    ))),
                     context_provider: turn_context.clone(),
                     system_prompt_refiner: system_prompt_refiner.clone(),
                     // Chapter K (K.4.2) — the voice channel writes to the same
@@ -10606,9 +10346,8 @@ async fn run_async(
                     language: v.asr_language.clone(),
                     beam_size: v.asr_beam_size,
                 };
-                let asr_engine = WhisperRsEngine::new(asr_cfg).map_err(|e| {
-                    format!("voice: build WhisperRsEngine: {e}")
-                })?;
+                let asr_engine = WhisperRsEngine::new(asr_cfg)
+                    .map_err(|e| format!("voice: build WhisperRsEngine: {e}"))?;
                 // Chapter Timbre — the TTS engine is the permissive
                 // Kokoro stack. `[voice] tts_engine` may be unset or
                 // "kokoro"; any other value is rejected (Piper was
@@ -10697,7 +10436,11 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    fn nt(name: &str, is_default: bool, kind: aivyx_config::NotifyTargetKind) -> aivyx_config::NotifyTargetConfig {
+    fn nt(
+        name: &str,
+        is_default: bool,
+        kind: aivyx_config::NotifyTargetKind,
+    ) -> aivyx_config::NotifyTargetConfig {
         aivyx_config::NotifyTargetConfig {
             name: name.to_string(),
             kind,
@@ -10736,7 +10479,9 @@ mod tests {
 
     #[test]
     fn notify_dispatch_granted_false_for_empty_capability_set() {
-        assert!(!notify_dispatch_granted(&aivyx_capability::CapabilitySet::empty()));
+        assert!(!notify_dispatch_granted(
+            &aivyx_capability::CapabilitySet::empty()
+        ));
     }
 
     /// End-to-end coverage of `ToolkitNotifySink::dispatch` itself, not
@@ -10815,23 +10560,39 @@ mod tests {
     fn synthesizes_a_default_webui_target_when_none_configured_and_no_other_default() {
         let synthesized = synthesize_default_webui_target(&[]).expect("must synthesize");
         assert_eq!(synthesized.name, "studio");
-        assert!(matches!(synthesized.kind, aivyx_config::NotifyTargetKind::WebUi));
-        assert!(synthesized.is_default, "no prior default ⇒ studio claims it");
+        assert!(matches!(
+            synthesized.kind,
+            aivyx_config::NotifyTargetKind::WebUi
+        ));
+        assert!(
+            synthesized.is_default,
+            "no prior default ⇒ studio claims it"
+        );
     }
 
     #[test]
     fn does_not_claim_default_when_operator_already_declared_one() {
-        let existing = vec![nt("telegram-ops", true, aivyx_config::NotifyTargetKind::Telegram {
-            chat_id: "123".to_string(),
-        })];
-        let synthesized =
-            synthesize_default_webui_target(&existing).expect("still synthesized");
-        assert!(!synthesized.is_default, "never overrides an operator's own default");
+        let existing = vec![nt(
+            "telegram-ops",
+            true,
+            aivyx_config::NotifyTargetKind::Telegram {
+                chat_id: "123".to_string(),
+            },
+        )];
+        let synthesized = synthesize_default_webui_target(&existing).expect("still synthesized");
+        assert!(
+            !synthesized.is_default,
+            "never overrides an operator's own default"
+        );
     }
 
     #[test]
     fn never_duplicates_an_existing_webui_target() {
-        let existing = vec![nt("my-studio", false, aivyx_config::NotifyTargetKind::WebUi)];
+        let existing = vec![nt(
+            "my-studio",
+            false,
+            aivyx_config::NotifyTargetKind::WebUi,
+        )];
         assert!(
             synthesize_default_webui_target(&existing).is_none(),
             "an operator-declared webui target is never duplicated"
@@ -10847,8 +10608,7 @@ mod tests {
             let tmp = std::env::var("TMPDIR")
                 .or_else(|_| std::env::var("TEMP"))
                 .unwrap_or_else(|_| "/tmp".to_string());
-            let dir = PathBuf::from(tmp)
-                .join(format!("aivyx-bin-test-{}", uuid::Uuid::new_v4()));
+            let dir = PathBuf::from(tmp).join(format!("aivyx-bin-test-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
             let canonical = std::fs::canonicalize(&dir).expect("canonicalize scratch");
             Scratch { dir: canonical }
@@ -10928,8 +10688,7 @@ mod tests {
         let real_dir = scratch.dir.join("real");
         std::fs::create_dir(&real_dir).unwrap();
         std::fs::write(real_dir.join(".env"), b"API_KEY=secret\n").unwrap();
-        symlink(&real_dir, scratch.dir.join("link_to_real"))
-            .expect("create symlink to real dir");
+        symlink(&real_dir, scratch.dir.join("link_to_real")).expect("create symlink to real dir");
 
         let policy = aivyx_core::sensitive_paths::SensitivePolicy::new(vec![], vec![]);
         let hits = collect_sensitive_paths_under(&scratch.dir, &policy);
@@ -10965,11 +10724,10 @@ mod tests {
             let _ = tx.send(hits);
         });
 
-        rx.recv_timeout(std::time::Duration::from_secs(5))
-            .expect(
-                "collect_sensitive_paths_under must return promptly instead of \
+        rx.recv_timeout(std::time::Duration::from_secs(5)).expect(
+            "collect_sensitive_paths_under must return promptly instead of \
                  looping forever on a symlink cycle",
-            );
+        );
     }
 
     #[test]
@@ -11028,8 +10786,7 @@ mod tests {
 
     #[test]
     fn tui_subcommand_parses_to_tui_mode() {
-        let parsed =
-            parse_cli_args_from(&argv(&["tui"])).expect("`tui` must parse");
+        let parsed = parse_cli_args_from(&argv(&["tui"])).expect("`tui` must parse");
         assert_eq!(parsed.mode, CliMode::Tui);
         assert_eq!(parsed.channel, ChannelKind::Local);
         assert!(parsed.role.is_none());
@@ -11060,8 +10817,8 @@ mod tests {
 
     #[test]
     fn tui_rejects_unknown_argument() {
-        let err = parse_cli_args_from(&argv(&["tui", "--bogus"]))
-            .expect_err("`tui --bogus` must error");
+        let err =
+            parse_cli_args_from(&argv(&["tui", "--bogus"])).expect_err("`tui --bogus` must error");
         assert!(
             err.contains("tui") && err.contains("--bogus"),
             "error names the subcommand and the bad arg: {err}"
@@ -11079,12 +10836,9 @@ mod tests {
 
     #[test]
     fn role_flag_missing_value_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["--role"]))
-            .expect_err("`--role` with no value must error");
-        assert!(
-            err.contains("--role"),
-            "error must mention the flag: {err}"
-        );
+        let err =
+            parse_cli_args_from(&argv(&["--role"])).expect_err("`--role` with no value must error");
+        assert!(err.contains("--role"), "error must mention the flag: {err}");
     }
 
     #[test]
@@ -11093,8 +10847,7 @@ mod tests {
         // we catch at the binary rather than forwarding as a "role not
         // found" error from the config layer — closer to the operator,
         // clearer message.
-        let err = parse_cli_args_from(&argv(&["--role", ""]))
-            .expect_err("`--role ''` must error");
+        let err = parse_cli_args_from(&argv(&["--role", ""])).expect_err("`--role ''` must error");
         assert!(
             err.contains("non-empty"),
             "error must call out non-empty: {err}"
@@ -11191,8 +10944,7 @@ mod tests {
 
     #[test]
     fn tools_subcommand_parses_with_no_window() {
-        let parsed = parse_cli_args_from(&argv(&["tools"]))
-            .expect("`tools` must parse");
+        let parsed = parse_cli_args_from(&argv(&["tools"])).expect("`tools` must parse");
         assert!(matches!(parsed.mode, CliMode::Tools { window_secs: None }));
     }
 
@@ -11237,9 +10989,8 @@ mod tests {
 
     #[test]
     fn tool_init_force_flag_parses() {
-        let parsed =
-            parse_cli_args_from(&argv(&["tool", "init", "/tmp/x", "--force"]))
-                .expect("`tool init ... --force` must parse");
+        let parsed = parse_cli_args_from(&argv(&["tool", "init", "/tmp/x", "--force"]))
+            .expect("`tool init ... --force` must parse");
         match parsed.mode {
             CliMode::Tool(ToolSubcommand::Init { force, .. }) => {
                 assert!(force);
@@ -11257,8 +11008,7 @@ mod tests {
 
     #[test]
     fn tool_with_no_subcommand_is_error() {
-        let err = parse_cli_args_from(&argv(&["tool"]))
-            .expect_err("`tool` alone must error");
+        let err = parse_cli_args_from(&argv(&["tool"])).expect_err("`tool` alone must error");
         assert!(err.contains("subcommand"), "got: {err}");
     }
 
@@ -11275,8 +11025,8 @@ mod tests {
 
     #[test]
     fn audit_export_bare_parses() {
-        let parsed = parse_cli_args_from(&argv(&["audit", "export"]))
-            .expect("`audit export` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["audit", "export"])).expect("`audit export` must parse");
         assert!(matches!(
             parsed.mode,
             CliMode::Audit(AuditSubcommand::Export {
@@ -11289,9 +11039,8 @@ mod tests {
 
     #[test]
     fn audit_export_from_flag_parses() {
-        let parsed =
-            parse_cli_args_from(&argv(&["audit", "export", "--from", "42"]))
-                .expect("`audit export --from 42` must parse");
+        let parsed = parse_cli_args_from(&argv(&["audit", "export", "--from", "42"]))
+            .expect("`audit export --from 42` must parse");
         match parsed.mode {
             CliMode::Audit(AuditSubcommand::Export { from, limit, .. }) => {
                 assert_eq!(from, Some(42));
@@ -11303,9 +11052,8 @@ mod tests {
 
     #[test]
     fn audit_export_limit_flag_parses() {
-        let parsed =
-            parse_cli_args_from(&argv(&["audit", "export", "--limit", "100"]))
-                .expect("`audit export --limit 100` must parse");
+        let parsed = parse_cli_args_from(&argv(&["audit", "export", "--limit", "100"]))
+            .expect("`audit export --limit 100` must parse");
         match parsed.mode {
             CliMode::Audit(AuditSubcommand::Export { from, limit, .. }) => {
                 assert_eq!(from, None);
@@ -11317,10 +11065,9 @@ mod tests {
 
     #[test]
     fn audit_export_both_flags_parse_in_either_order() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "audit", "export", "--from", "7", "--limit", "13",
-        ]))
-        .expect("`audit export --from 7 --limit 13` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["audit", "export", "--from", "7", "--limit", "13"]))
+                .expect("`audit export --from 7 --limit 13` must parse");
         match parsed.mode {
             CliMode::Audit(AuditSubcommand::Export { from, limit, .. }) => {
                 assert_eq!(from, Some(7));
@@ -11329,10 +11076,9 @@ mod tests {
             other => panic!("expected Audit(Export), got {other:?}"),
         }
 
-        let parsed = parse_cli_args_from(&argv(&[
-            "audit", "export", "--limit", "13", "--from", "7",
-        ]))
-        .expect("flag order must not matter");
+        let parsed =
+            parse_cli_args_from(&argv(&["audit", "export", "--limit", "13", "--from", "7"]))
+                .expect("flag order must not matter");
         assert!(matches!(
             parsed.mode,
             CliMode::Audit(AuditSubcommand::Export {
@@ -11345,10 +11091,8 @@ mod tests {
 
     #[test]
     fn audit_export_invalid_from_is_error() {
-        let err = parse_cli_args_from(&argv(&[
-            "audit", "export", "--from", "notanumber",
-        ]))
-        .expect_err("non-integer `--from` must error at parse time");
+        let err = parse_cli_args_from(&argv(&["audit", "export", "--from", "notanumber"]))
+            .expect_err("non-integer `--from` must error at parse time");
         assert!(err.contains("--from"), "got: {err}");
     }
 
@@ -11356,16 +11100,14 @@ mod tests {
     fn audit_export_zero_limit_is_error() {
         // `--limit 0` would emit zero entries — almost certainly
         // operator error. Reject with a hint to omit the flag.
-        let err =
-            parse_cli_args_from(&argv(&["audit", "export", "--limit", "0"]))
-                .expect_err("`--limit 0` must error");
+        let err = parse_cli_args_from(&argv(&["audit", "export", "--limit", "0"]))
+            .expect_err("`--limit 0` must error");
         assert!(err.contains("--limit"), "got: {err}");
     }
 
     #[test]
     fn audit_with_no_subcommand_is_error() {
-        let err = parse_cli_args_from(&argv(&["audit"]))
-            .expect_err("`audit` alone must error");
+        let err = parse_cli_args_from(&argv(&["audit"])).expect_err("`audit` alone must error");
         assert!(err.contains("subcommand"), "got: {err}");
     }
 
@@ -11382,8 +11124,8 @@ mod tests {
 
     #[test]
     fn mcp_recipes_bare_parses() {
-        let parsed = parse_cli_args_from(&argv(&["mcp", "recipes"]))
-            .expect("`mcp recipes` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["mcp", "recipes"])).expect("`mcp recipes` must parse");
         assert!(matches!(
             parsed.mode,
             CliMode::Mcp(McpSubcommand::Recipes { name: None })
@@ -11394,8 +11136,8 @@ mod tests {
 
     #[test]
     fn mcp_status_subcommand_parses() {
-        let parsed = parse_cli_args_from(&argv(&["mcp", "status"]))
-            .expect("`mcp status` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["mcp", "status"])).expect("`mcp status` must parse");
         assert!(matches!(parsed.mode, CliMode::Mcp(McpSubcommand::Status)));
     }
 
@@ -11421,9 +11163,8 @@ mod tests {
 
     #[test]
     fn mcp_recipes_with_name_parses() {
-        let parsed =
-            parse_cli_args_from(&argv(&["mcp", "recipes", "filesystem"]))
-                .expect("`mcp recipes filesystem` must parse");
+        let parsed = parse_cli_args_from(&argv(&["mcp", "recipes", "filesystem"]))
+            .expect("`mcp recipes filesystem` must parse");
         match parsed.mode {
             CliMode::Mcp(McpSubcommand::Recipes { name }) => {
                 assert_eq!(name.as_deref(), Some("filesystem"));
@@ -11444,16 +11185,14 @@ mod tests {
 
     #[test]
     fn mcp_recipes_extra_argument_is_error() {
-        let err =
-            parse_cli_args_from(&argv(&["mcp", "recipes", "filesystem", "junk"]))
-                .expect_err("trailing extra arg must error");
+        let err = parse_cli_args_from(&argv(&["mcp", "recipes", "filesystem", "junk"]))
+            .expect_err("trailing extra arg must error");
         assert!(err.contains("junk"), "got: {err}");
     }
 
     #[test]
     fn mcp_with_no_subcommand_is_error() {
-        let err = parse_cli_args_from(&argv(&["mcp"]))
-            .expect_err("`mcp` alone must error");
+        let err = parse_cli_args_from(&argv(&["mcp"])).expect_err("`mcp` alone must error");
         assert!(err.contains("subcommand"), "got: {err}");
     }
 
@@ -11564,10 +11303,7 @@ mod tests {
                     .collect(),
                 FieldSource::Default,
             ),
-            trust_ceiling: Sourced::new(
-                aivyx_capability::TrustTier::Trusted,
-                FieldSource::Default,
-            ),
+            trust_ceiling: Sourced::new(aivyx_capability::TrustTier::Trusted, FieldSource::Default),
             parent_role: Sourced::new(parent.map(String::from), FieldSource::Default),
         }
     }
@@ -11811,8 +11547,14 @@ mod tests {
     #[test]
     fn tool_scope_bases_for_floor_excludes_tools_that_do_not_opt_in() {
         let tool_list: Vec<Arc<dyn Tool>> = vec![
-            Arc::new(FakeFloorTool { scope: "kitchen.read", auto_grantable: true }),
-            Arc::new(FakeFloorTool { scope: "git.write", auto_grantable: false }),
+            Arc::new(FakeFloorTool {
+                scope: "kitchen.read",
+                auto_grantable: true,
+            }),
+            Arc::new(FakeFloorTool {
+                scope: "git.write",
+                auto_grantable: false,
+            }),
         ];
         let bases = tool_scope_bases_for_floor(&tool_list);
         let strings: Vec<&str> = bases.iter().map(|s| s.as_str()).collect();
@@ -11827,8 +11569,14 @@ mod tests {
     #[test]
     fn tool_scope_bases_for_floor_includes_every_opted_in_tool() {
         let tool_list: Vec<Arc<dyn Tool>> = vec![
-            Arc::new(FakeFloorTool { scope: "kitchen.read", auto_grantable: true }),
-            Arc::new(FakeFloorTool { scope: "ollama.list", auto_grantable: true }),
+            Arc::new(FakeFloorTool {
+                scope: "kitchen.read",
+                auto_grantable: true,
+            }),
+            Arc::new(FakeFloorTool {
+                scope: "ollama.list",
+                auto_grantable: true,
+            }),
         ];
         let bases = tool_scope_bases_for_floor(&tool_list);
         let strings: Vec<&str> = bases.iter().map(|s| s.as_str()).collect();
@@ -11846,7 +11594,8 @@ mod tests {
     /// covers that, separately, with a fake Tool). Together the two
     /// tests cover the full real pipeline: filter -> sweep -> bind.
     #[test]
-    fn compute_backcompat_floor_flows_a_configured_verticals_domain_scopes_through_bind_lead_scopes() {
+    fn compute_backcompat_floor_flows_a_configured_verticals_domain_scopes_through_bind_lead_scopes()
+     {
         let canonical_root = PathBuf::from("/tmp/proj");
         let tool_scope_bases: Vec<Scope> = vec![
             Scope::parse("kitchen.read").unwrap(),
@@ -11895,22 +11644,33 @@ mod tests {
                         "team.message",
                     ],
                 ),
-                member("stocktake", &["kitchen.read", "kitchen.write", "team.message"]),
+                member(
+                    "stocktake",
+                    &["kitchen.read", "kitchen.write", "team.message"],
+                ),
             ],
             dialogue: DialogueConfig::default(),
         };
 
         aivyx_channel::team_mission_driver::bind_lead_scopes(&mut config, &lead_scopes);
 
-        let stocktake = config.members.iter().find(|m| m.name == "stocktake").unwrap();
+        let stocktake = config
+            .members
+            .iter()
+            .find(|m| m.name == "stocktake")
+            .unwrap();
         assert!(
-            stocktake.capability_scopes.contains(&"kitchen.read".to_string()),
+            stocktake
+                .capability_scopes
+                .contains(&"kitchen.read".to_string()),
             "the real, computed floor must carry kitchen.read through to a \
              specialist declaring it: {:?}",
             stocktake.capability_scopes
         );
         assert!(
-            stocktake.capability_scopes.contains(&"kitchen.write".to_string()),
+            stocktake
+                .capability_scopes
+                .contains(&"kitchen.write".to_string()),
             "and kitchen.write: {:?}",
             stocktake.capability_scopes
         );
@@ -11930,11 +11690,7 @@ mod tests {
     #[test]
     fn child_attenuates_parents_substituted_floor_at_runtime() {
         let parent = make_role("parent", vec![], None);
-        let child = make_role(
-            "child",
-            vec!["memory.read:topic:secrets"],
-            Some("parent"),
-        );
+        let child = make_role("child", vec!["memory.read:topic:secrets"], Some("parent"));
         let mut roles = BTreeMap::new();
         roles.insert("parent".to_string(), parent);
         roles.insert("child".to_string(), child.clone());
@@ -11958,11 +11714,7 @@ mod tests {
     #[test]
     fn multi_level_inheritance_preserves_child_attenuation() {
         let parent = make_role("parent", vec!["fs.read", "fs.write"], None);
-        let child = make_role(
-            "child",
-            vec!["fs.read:/etc/**"],
-            Some("parent"),
-        );
+        let child = make_role("child", vec!["fs.read:/etc/**"], Some("parent"));
         let mut roles = BTreeMap::new();
         roles.insert("parent".to_string(), parent);
         roles.insert("child".to_string(), child.clone());
@@ -12026,8 +11778,7 @@ mod tests {
         // never gets shell execution per D5. The role declared
         // `SemiTrusted` so this attenuation happens *here*, not
         // in the per-turn channel ceiling intersection.
-        let scope_strings: Vec<&str> =
-            capabilities.iter().map(|s| s.as_str()).collect();
+        let scope_strings: Vec<&str> = capabilities.iter().map(|s| s.as_str()).collect();
         assert!(
             scope_strings.contains(&"net.fetch"),
             "net.fetch must survive SemiTrusted ceiling: {scope_strings:?}"
@@ -12197,7 +11948,10 @@ mod tests {
     #[test]
     fn example_aivyx_toml_researcher_envelope_matches_documented_set() {
         let cfg = load_example_config();
-        let researcher = cfg.roles.get("researcher").expect("researcher role declared");
+        let researcher = cfg
+            .roles
+            .get("researcher")
+            .expect("researcher role declared");
         let floor = local_channel_floor_with_sandbox("/tmp/sandbox");
 
         let envelope = assemble_role_envelope(researcher, &cfg.roles, &floor);
@@ -12249,7 +12003,10 @@ mod tests {
     #[test]
     fn example_aivyx_toml_junior_researcher_envelope_demonstrates_floor_substitution() {
         let cfg = load_example_config();
-        let junior = cfg.roles.get("junior_researcher").expect("junior_researcher role declared");
+        let junior = cfg
+            .roles
+            .get("junior_researcher")
+            .expect("junior_researcher role declared");
         let floor = local_channel_floor_with_sandbox("/tmp/sandbox");
 
         let envelope = assemble_role_envelope(junior, &cfg.roles, &floor);
@@ -12286,7 +12043,10 @@ mod tests {
         // has `fs.read` (unqualified). Same base, same tier
         // ceiling, but different envelopes — entirely because the
         // floor was substituted in for junior's empty level.
-        let researcher = cfg.roles.get("researcher").expect("researcher role declared");
+        let researcher = cfg
+            .roles
+            .get("researcher")
+            .expect("researcher role declared");
         let researcher_envelope = assemble_role_envelope(researcher, &cfg.roles, &floor)
             .intersect(researcher.trust_ceiling.value.default_ceiling());
         let mut researcher_strs: Vec<&str> =
@@ -12364,8 +12124,8 @@ mod tests {
         // Chapter Wire — bare `--headless` parses to the piped-stdin
         // multi-turn session (the TTY guard lives at run time, where
         // stdin's nature is knowable).
-        let parsed = parse_cli_args_from(&argv(&["--headless"]))
-            .expect("bare `--headless` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["--headless"])).expect("bare `--headless` must parse");
         assert_eq!(parsed.mode, CliMode::Headless(None));
     }
 
@@ -12423,15 +12183,14 @@ mod tests {
 
     #[test]
     fn daemon_run_parses_to_daemon_mode() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "run"]))
-            .expect("`daemon run` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["daemon", "run"])).expect("`daemon run` must parse");
         assert_eq!(parsed.mode, CliMode::DaemonRun);
     }
 
     #[test]
     fn daemon_without_run_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["daemon"]))
-            .expect_err("`daemon` alone must error");
+        let err = parse_cli_args_from(&argv(&["daemon"])).expect_err("`daemon` alone must error");
         assert!(
             err.contains("daemon run"),
             "error must suggest `daemon run`: {err}"
@@ -12460,15 +12219,15 @@ mod tests {
 
     #[test]
     fn daemon_status_parses_to_daemon_status_mode() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "status"]))
-            .expect("`daemon status` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["daemon", "status"])).expect("`daemon status` must parse");
         assert_eq!(parsed.mode, CliMode::DaemonStatus);
     }
 
     #[test]
     fn daemon_stop_parses_to_daemon_stop_mode() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "stop"]))
-            .expect("`daemon stop` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["daemon", "stop"])).expect("`daemon stop` must parse");
         assert_eq!(parsed.mode, CliMode::DaemonStop);
     }
 
@@ -12476,21 +12235,36 @@ mod tests {
     fn daemon_install_parses_with_defaults() {
         let parsed = parse_cli_args_from(&argv(&["daemon", "install"]))
             .expect("`daemon install` must parse");
-        assert_eq!(parsed.mode, CliMode::DaemonInstall { web_ui: false, start: true });
+        assert_eq!(
+            parsed.mode,
+            CliMode::DaemonInstall {
+                web_ui: false,
+                start: true
+            }
+        );
     }
 
     #[test]
     fn daemon_install_parses_web_ui_and_no_start_flags() {
         let parsed = parse_cli_args_from(&argv(&["daemon", "install", "--web-ui", "--no-start"]))
             .expect("`daemon install --web-ui --no-start` must parse");
-        assert_eq!(parsed.mode, CliMode::DaemonInstall { web_ui: true, start: false });
+        assert_eq!(
+            parsed.mode,
+            CliMode::DaemonInstall {
+                web_ui: true,
+                start: false
+            }
+        );
     }
 
     #[test]
     fn daemon_install_rejects_unknown_flag() {
         let err = parse_cli_args_from(&argv(&["daemon", "install", "--bogus"]))
             .expect_err("an unknown install flag must error");
-        assert!(err.contains("unrecognized"), "error must mention unrecognized: {err}");
+        assert!(
+            err.contains("unrecognized"),
+            "error must mention unrecognized: {err}"
+        );
     }
 
     #[test]
@@ -12529,7 +12303,9 @@ mod tests {
         let err = parse_cli_args_from(&argv(&["daemon", "restart"]))
             .expect_err("`daemon restart` must error");
         assert!(
-            err.contains("daemon run") && err.contains("daemon status") && err.contains("daemon stop"),
+            err.contains("daemon run")
+                && err.contains("daemon status")
+                && err.contains("daemon stop"),
             "error must list all subcommands: {err}"
         );
     }
@@ -12540,8 +12316,8 @@ mod tests {
 
     #[test]
     fn no_daemon_flag_sets_no_daemon_true() {
-        let parsed = parse_cli_args_from(&argv(&["--no-daemon"]))
-            .expect("`--no-daemon` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["--no-daemon"])).expect("`--no-daemon` must parse");
         assert!(parsed.no_daemon, "no_daemon must be true");
         assert_eq!(parsed.mode, CliMode::Session);
     }
@@ -12549,7 +12325,11 @@ mod tests {
     #[test]
     fn no_daemon_combines_with_channel_and_role() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--no-daemon", "--channel", "telegram", "--role", "coder",
+            "--no-daemon",
+            "--channel",
+            "telegram",
+            "--role",
+            "coder",
         ]))
         .expect("orthogonal flags must compose");
         assert!(parsed.no_daemon);
@@ -12561,20 +12341,25 @@ mod tests {
     fn no_daemon_with_verify_only_is_an_error() {
         let err = parse_cli_args_from(&argv(&["--no-daemon", "--verify-only"]))
             .expect_err("`--no-daemon --verify-only` must error");
-        assert!(err.contains("--no-daemon"), "error must mention flag: {err}");
+        assert!(
+            err.contains("--no-daemon"),
+            "error must mention flag: {err}"
+        );
     }
 
     #[test]
     fn no_daemon_with_print_role_is_an_error() {
         let err = parse_cli_args_from(&argv(&["--no-daemon", "--print-role", "coder"]))
             .expect_err("`--no-daemon --print-role` must error");
-        assert!(err.contains("--no-daemon"), "error must mention flag: {err}");
+        assert!(
+            err.contains("--no-daemon"),
+            "error must mention flag: {err}"
+        );
     }
 
     #[test]
     fn default_args_have_no_daemon_false() {
-        let parsed = parse_cli_args_from(&argv(&[]))
-            .expect("empty argv must parse");
+        let parsed = parse_cli_args_from(&argv(&[])).expect("empty argv must parse");
         assert!(!parsed.no_daemon, "no_daemon must default to false");
     }
 
@@ -12610,8 +12395,10 @@ mod tests {
     #[test]
     fn mcp_server_flag_repeatable() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-server", "a:cmd-a",
-            "--mcp-server", "b:cmd-b:arg1,arg2",
+            "--mcp-server",
+            "a:cmd-a",
+            "--mcp-server",
+            "b:cmd-b:arg1,arg2",
         ]))
         .expect("repeated --mcp-server must parse");
         assert_eq!(parsed.mcp_servers.len(), 2);
@@ -12624,7 +12411,10 @@ mod tests {
     fn mcp_server_flag_missing_value_is_an_error() {
         let err = parse_cli_args_from(&argv(&["--mcp-server"]))
             .expect_err("`--mcp-server` with no value must error");
-        assert!(err.contains("--mcp-server"), "error must mention flag: {err}");
+        assert!(
+            err.contains("--mcp-server"),
+            "error must mention flag: {err}"
+        );
     }
 
     #[test]
@@ -12643,8 +12433,7 @@ mod tests {
 
     #[test]
     fn default_args_have_empty_mcp_servers() {
-        let parsed = parse_cli_args_from(&argv(&[]))
-            .expect("empty argv must parse");
+        let parsed = parse_cli_args_from(&argv(&[])).expect("empty argv must parse");
         assert!(parsed.mcp_servers.is_empty());
         assert!(parsed.mcp_sse_servers.is_empty());
     }
@@ -12655,11 +12444,8 @@ mod tests {
 
     #[test]
     fn mcp_sse_flag_parses_name_and_url() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-sse",
-            "remote:http://host:8080/sse",
-        ]))
-        .expect("`--mcp-sse remote:url` must parse");
+        let parsed = parse_cli_args_from(&argv(&["--mcp-sse", "remote:http://host:8080/sse"]))
+            .expect("`--mcp-sse remote:url` must parse");
         assert_eq!(parsed.mcp_sse_servers.len(), 1);
         assert_eq!(parsed.mcp_sse_servers[0].name, "remote");
         assert_eq!(parsed.mcp_sse_servers[0].url, "http://host:8080/sse");
@@ -12668,8 +12454,10 @@ mod tests {
     #[test]
     fn mcp_sse_flag_repeatable() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-sse", "a:http://a/sse",
-            "--mcp-sse", "b:https://b/sse",
+            "--mcp-sse",
+            "a:http://a/sse",
+            "--mcp-sse",
+            "b:https://b/sse",
         ]))
         .expect("repeated --mcp-sse must parse");
         assert_eq!(parsed.mcp_sse_servers.len(), 2);
@@ -12694,8 +12482,10 @@ mod tests {
     #[test]
     fn mcp_sse_and_stdio_flags_combine() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-server", "local:npx",
-            "--mcp-sse", "remote:http://host/sse",
+            "--mcp-server",
+            "local:npx",
+            "--mcp-sse",
+            "remote:http://host/sse",
         ]))
         .expect("combining --mcp-server and --mcp-sse must parse");
         assert_eq!(parsed.mcp_servers.len(), 1);
@@ -12706,15 +12496,13 @@ mod tests {
 
     #[test]
     fn provider_flag_anthropic() {
-        let parsed = parse_cli_args_from(&argv(&["--provider", "anthropic"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["--provider", "anthropic"])).expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Anthropic));
     }
 
     #[test]
     fn provider_flag_openai() {
-        let parsed = parse_cli_args_from(&argv(&["--provider", "openai"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["--provider", "openai"])).expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::OpenAi));
     }
 
@@ -12727,29 +12515,26 @@ mod tests {
 
     #[test]
     fn provider_flag_missing_value_is_error() {
-        let err = parse_cli_args_from(&argv(&["--provider"]))
-            .expect_err("missing value must error");
+        let err =
+            parse_cli_args_from(&argv(&["--provider"])).expect_err("missing value must error");
         assert!(err.contains("requires a value"), "error: {err}");
     }
 
     #[test]
     fn no_provider_flag_defaults_to_none() {
-        let parsed = parse_cli_args_from(&argv(&[]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&[])).expect("must parse");
         assert!(parsed.provider.is_none());
     }
 
     #[test]
     fn provider_flag_ollama() {
-        let parsed = parse_cli_args_from(&argv(&["--provider", "ollama"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["--provider", "ollama"])).expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Ollama));
     }
 
     #[test]
     fn provider_flag_broker() {
-        let parsed = parse_cli_args_from(&argv(&["--provider", "broker"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["--provider", "broker"])).expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Broker));
     }
 
@@ -12759,8 +12544,8 @@ mod tests {
 
     #[test]
     fn web_ui_flag_sets_default_port() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"]))
-            .expect("must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"])).expect("must parse");
         assert_eq!(
             parsed.web_ui_port,
             Some(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT)
@@ -12783,8 +12568,7 @@ mod tests {
 
     #[test]
     fn no_web_ui_flag_means_none() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "run"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["daemon", "run"])).expect("must parse");
         assert_eq!(parsed.web_ui_port, None);
     }
 
@@ -12794,39 +12578,32 @@ mod tests {
 
     #[test]
     fn parse_version_long_flag() {
-        let parsed = parse_cli_args_from(&argv(&["--version"]))
-            .expect("--version must parse");
+        let parsed = parse_cli_args_from(&argv(&["--version"])).expect("--version must parse");
         assert_eq!(parsed.mode, CliMode::Version);
     }
 
     #[test]
     fn parse_connect_no_service_lists() {
-        let parsed = parse_cli_args_from(&argv(&["connect"]))
-            .expect("connect must parse");
+        let parsed = parse_cli_args_from(&argv(&["connect"])).expect("connect must parse");
         assert_eq!(parsed.mode, CliMode::Connect(None));
     }
 
     #[test]
     fn parse_connect_with_service() {
-        let parsed = parse_cli_args_from(&argv(&["connect", "gmail"]))
-            .expect("connect gmail must parse");
-        assert_eq!(
-            parsed.mode,
-            CliMode::Connect(Some("gmail".to_string()))
-        );
+        let parsed =
+            parse_cli_args_from(&argv(&["connect", "gmail"])).expect("connect gmail must parse");
+        assert_eq!(parsed.mode, CliMode::Connect(Some("gmail".to_string())));
     }
 
     #[test]
     fn parse_connect_rejects_flag_and_extra_args() {
         assert!(parse_cli_args_from(&argv(&["connect", "--foo"])).is_err());
-        assert!(parse_cli_args_from(&argv(&["connect", "gmail", "x"]))
-            .is_err());
+        assert!(parse_cli_args_from(&argv(&["connect", "gmail", "x"])).is_err());
     }
 
     #[test]
     fn parse_version_short_flag() {
-        let parsed = parse_cli_args_from(&argv(&["-V"]))
-            .expect("-V must parse");
+        let parsed = parse_cli_args_from(&argv(&["-V"])).expect("-V must parse");
         assert_eq!(parsed.mode, CliMode::Version);
     }
 
@@ -12846,8 +12623,7 @@ mod tests {
 
     #[test]
     fn parse_init_subcommand() {
-        let parsed = parse_cli_args_from(&argv(&["init"]))
-            .expect("init must parse");
+        let parsed = parse_cli_args_from(&argv(&["init"])).expect("init must parse");
         assert_eq!(parsed.mode, CliMode::Init(InitMode::Interactive));
     }
 
@@ -12855,10 +12631,7 @@ mod tests {
     fn parse_init_rejects_extra_args() {
         let err = parse_cli_args_from(&argv(&["init", "--channel", "local"]))
             .expect_err("init with flags must error");
-        assert!(
-            err.contains("unrecognized argument"),
-            "error: {err}"
-        );
+        assert!(err.contains("unrecognized argument"), "error: {err}");
     }
 
     #[test]
@@ -12893,19 +12666,15 @@ mod tests {
         // flag follows immediately, so --template has no name and
         // routes to list mode. Cleaner than erroring; intent is
         // recoverable.
-        let parsed = parse_cli_args_from(&argv(&[
-            "init",
-            "--template",
-            "--list-templates",
-        ]))
-        .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["init", "--template", "--list-templates"]))
+            .expect("must parse");
         assert_eq!(parsed.mode, CliMode::Init(InitMode::ListTemplates));
     }
 
     #[test]
     fn parse_init_is_not_daemon_subcommand() {
-        let err = parse_cli_args_from(&argv(&["daemon", "init"]))
-            .expect_err("daemon init is not valid");
+        let err =
+            parse_cli_args_from(&argv(&["daemon", "init"])).expect_err("daemon init is not valid");
         assert!(
             err.contains("unrecognized daemon subcommand"),
             "error: {err}"
@@ -12927,20 +12696,14 @@ mod tests {
     fn parse_mcp_server_missing_name() {
         let err = parse_cli_args_from(&argv(&["mcp-server"]))
             .expect_err("mcp-server without name must error");
-        assert!(
-            err.contains("requires a server name"),
-            "error: {err}"
-        );
+        assert!(err.contains("requires a server name"), "error: {err}");
     }
 
     #[test]
     fn parse_mcp_server_unknown_name() {
         let err = parse_cli_args_from(&argv(&["mcp-server", "bogus"]))
             .expect_err("unknown server name must error");
-        assert!(
-            err.contains("unknown MCP server name"),
-            "error: {err}"
-        );
+        assert!(err.contains("unknown MCP server name"), "error: {err}");
     }
 
     #[test]
@@ -12959,22 +12722,21 @@ mod tests {
 
     #[test]
     fn profile_show_parses_to_profile_show_mode() {
-        let parsed = parse_cli_args_from(&argv(&["profile", "show"]))
-            .expect("`profile show` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["profile", "show"])).expect("`profile show` must parse");
         assert_eq!(parsed.mode, CliMode::Profile(ProfileSubcommand::Show));
     }
 
     #[test]
     fn profile_edit_parses_to_profile_edit_mode() {
-        let parsed = parse_cli_args_from(&argv(&["profile", "edit"]))
-            .expect("`profile edit` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["profile", "edit"])).expect("`profile edit` must parse");
         assert_eq!(parsed.mode, CliMode::Profile(ProfileSubcommand::Edit));
     }
 
     #[test]
     fn profile_without_subcommand_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["profile"]))
-            .expect_err("`profile` alone must error");
+        let err = parse_cli_args_from(&argv(&["profile"])).expect_err("`profile` alone must error");
         assert!(
             err.contains("show") && err.contains("edit"),
             "error must list both subcommands: {err}"
@@ -13005,17 +12767,10 @@ mod tests {
 
     #[test]
     fn profile_apply_hint_parses_proposal_id() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "profile",
-            "apply-hint",
-            "pp-abc",
-        ]))
-        .expect("`profile apply-hint pp-abc` must parse");
+        let parsed = parse_cli_args_from(&argv(&["profile", "apply-hint", "pp-abc"]))
+            .expect("`profile apply-hint pp-abc` must parse");
         match parsed.mode {
-            CliMode::Profile(ProfileSubcommand::ApplyHint {
-                proposal_id,
-                yes,
-            }) => {
+            CliMode::Profile(ProfileSubcommand::ApplyHint { proposal_id, yes }) => {
                 assert_eq!(proposal_id, "pp-abc");
                 assert!(!yes, "default yes must be false");
             }
@@ -13025,13 +12780,8 @@ mod tests {
 
     #[test]
     fn profile_apply_hint_parses_yes_flag() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "profile",
-            "apply-hint",
-            "pp-abc",
-            "--yes",
-        ]))
-        .expect("--yes flag must parse");
+        let parsed = parse_cli_args_from(&argv(&["profile", "apply-hint", "pp-abc", "--yes"]))
+            .expect("--yes flag must parse");
         match parsed.mode {
             CliMode::Profile(ProfileSubcommand::ApplyHint { yes, .. }) => {
                 assert!(yes);
@@ -13042,13 +12792,8 @@ mod tests {
 
     #[test]
     fn profile_apply_hint_accepts_short_y_flag() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "profile",
-            "apply-hint",
-            "pp-abc",
-            "-y",
-        ]))
-        .expect("-y flag must parse");
+        let parsed = parse_cli_args_from(&argv(&["profile", "apply-hint", "pp-abc", "-y"]))
+            .expect("-y flag must parse");
         match parsed.mode {
             CliMode::Profile(ProfileSubcommand::ApplyHint { yes, .. }) => {
                 assert!(yes);
@@ -13061,10 +12806,7 @@ mod tests {
     fn profile_apply_hint_without_id_is_an_error() {
         let err = parse_cli_args_from(&argv(&["profile", "apply-hint"]))
             .expect_err("missing id must error");
-        assert!(
-            err.contains("requires a proposal id"),
-            "error: {err}"
-        );
+        assert!(err.contains("requires a proposal id"), "error: {err}");
     }
 
     // ---- Chapter Freight — `aivyx pack` parsing ----------------
@@ -13072,7 +12814,13 @@ mod tests {
     #[test]
     fn pack_build_parses_staging_key_and_out() {
         let parsed = parse_cli_args_from(&argv(&[
-            "pack", "build", "stage/", "--key", "k.bin", "--out", "p.aivyxpack",
+            "pack",
+            "build",
+            "stage/",
+            "--key",
+            "k.bin",
+            "--out",
+            "p.aivyxpack",
         ]))
         .expect("pack build must parse");
         assert_eq!(
@@ -13095,7 +12843,10 @@ mod tests {
     #[test]
     fn pack_inspect_parses_allow_untrusted() {
         let parsed = parse_cli_args_from(&argv(&[
-            "pack", "inspect", "p.aivyxpack", "--allow-untrusted",
+            "pack",
+            "inspect",
+            "p.aivyxpack",
+            "--allow-untrusted",
         ]))
         .expect("pack inspect must parse");
         assert_eq!(
@@ -13113,17 +12864,24 @@ mod tests {
             parse_cli_args_from(&argv(&["pack", "install", "p.aivyxpack"]))
                 .unwrap()
                 .mode,
-            CliMode::Pack(PackSubcommand::Install { file: "p.aivyxpack".into() })
+            CliMode::Pack(PackSubcommand::Install {
+                file: "p.aivyxpack".into()
+            })
         );
         assert_eq!(
             parse_cli_args_from(&argv(&["pack", "keygen", "k.bin"]))
                 .unwrap()
                 .mode,
-            CliMode::Pack(PackSubcommand::Keygen { keyfile: "k.bin".into() })
+            CliMode::Pack(PackSubcommand::Keygen {
+                keyfile: "k.bin".into()
+            })
         );
         let err = parse_cli_args_from(&argv(&["pack", "frobnicate"]))
             .expect_err("unknown subcommand must error");
-        assert!(err.contains("keygen, build, inspect, install"), "error: {err}");
+        assert!(
+            err.contains("keygen, build, inspect, install"),
+            "error: {err}"
+        );
     }
 
     // ---- Phase 177 — `aivyx loop skip` parsing ----------------
@@ -13131,8 +12889,7 @@ mod tests {
     #[test]
     fn loop_skip_parses_story_id() {
         let parsed =
-            parse_cli_args_from(&argv(&["loop", "skip", "ls-abc"]))
-                .expect("loop skip must parse");
+            parse_cli_args_from(&argv(&["loop", "skip", "ls-abc"])).expect("loop skip must parse");
         match parsed.mode {
             CliMode::Loop(LoopSubcommand::Skip { story_id }) => {
                 assert_eq!(story_id, "ls-abc");
@@ -13143,8 +12900,8 @@ mod tests {
 
     #[test]
     fn loop_skip_without_id_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["loop", "skip"]))
-            .expect_err("missing story id must error");
+        let err =
+            parse_cli_args_from(&argv(&["loop", "skip"])).expect_err("missing story id must error");
         assert!(err.contains("requires a <story-id>"), "error: {err}");
     }
 
@@ -13195,9 +12952,12 @@ mod tests {
 
     #[test]
     fn team_roster_parses() {
-        let parsed = parse_cli_args_from(&argv(&["team", "roster"]))
-            .expect("team roster must parse");
-        assert_eq!(parsed.mode, CliMode::Team(TeamSubcommand::Roster { config: None }));
+        let parsed =
+            parse_cli_args_from(&argv(&["team", "roster"])).expect("team roster must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Team(TeamSubcommand::Roster { config: None })
+        );
     }
 
     #[test]
@@ -13215,7 +12975,11 @@ mod tests {
     #[test]
     fn team_run_parses_the_mission_and_optional_config() {
         let parsed = parse_cli_args_from(&argv(&[
-            "team", "run", "close the kitchen", "--config", "kitchen.toml",
+            "team",
+            "run",
+            "close the kitchen",
+            "--config",
+            "kitchen.toml",
         ]))
         .expect("team run must parse");
         match parsed.mode {
@@ -13236,8 +13000,8 @@ mod tests {
 
     #[test]
     fn team_run_without_a_mission_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["team", "run"]))
-            .expect_err("missing mission must error");
+        let err =
+            parse_cli_args_from(&argv(&["team", "run"])).expect_err("missing mission must error");
         assert!(err.contains("requires a"), "error: {err}");
     }
 
@@ -13245,7 +13009,10 @@ mod tests {
     fn team_unknown_subcommand_lists_roster_and_run() {
         let err = parse_cli_args_from(&argv(&["team", "frobnicate"]))
             .expect_err("unknown subcommand must error");
-        assert!(err.contains("roster") && err.contains("run"), "error: {err}");
+        assert!(
+            err.contains("roster") && err.contains("run"),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -13263,7 +13030,10 @@ mod tests {
             .expect("team start must parse");
         assert_eq!(
             parsed.mode,
-            CliMode::Team(TeamSubcommand::Start { plan_path: "p.json".into(), config: None })
+            CliMode::Team(TeamSubcommand::Start {
+                plan_path: "p.json".into(),
+                config: None
+            })
         );
     }
 
@@ -13283,7 +13053,11 @@ mod tests {
     #[test]
     fn team_start_goal_with_config_parses_the_pack() {
         let parsed = parse_cli_args_from(&argv(&[
-            "team", "start", "close the kitchen", "--config", "kitchen.toml",
+            "team",
+            "start",
+            "close the kitchen",
+            "--config",
+            "kitchen.toml",
         ]))
         .expect("team start <goal> --config must parse");
         assert_eq!(
@@ -13297,10 +13071,8 @@ mod tests {
 
     #[test]
     fn team_start_rejects_both_goal_and_plan() {
-        let err = parse_cli_args_from(&argv(&[
-            "team", "start", "a goal", "--plan", "p.json",
-        ]))
-        .expect_err("goal + --plan is ambiguous");
+        let err = parse_cli_args_from(&argv(&["team", "start", "a goal", "--plan", "p.json"]))
+            .expect_err("goal + --plan is ambiguous");
         assert!(err.contains("not both"), "error: {err}");
     }
 
@@ -13308,7 +13080,10 @@ mod tests {
     fn team_start_with_no_args_is_an_error() {
         let err = parse_cli_args_from(&argv(&["team", "start"]))
             .expect_err("start needs a goal or --plan");
-        assert!(err.contains("goal") && err.contains("--plan"), "error: {err}");
+        assert!(
+            err.contains("goal") && err.contains("--plan"),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -13318,12 +13093,18 @@ mod tests {
             CliMode::Team(TeamSubcommand::List)
         );
         assert_eq!(
-            parse_cli_args_from(&argv(&["team", "status"])).unwrap().mode,
+            parse_cli_args_from(&argv(&["team", "status"]))
+                .unwrap()
+                .mode,
             CliMode::Team(TeamSubcommand::Status { mission_id: None })
         );
         assert_eq!(
-            parse_cli_args_from(&argv(&["team", "status", "m-1"])).unwrap().mode,
-            CliMode::Team(TeamSubcommand::Status { mission_id: Some("m-1".into()) })
+            parse_cli_args_from(&argv(&["team", "status", "m-1"]))
+                .unwrap()
+                .mode,
+            CliMode::Team(TeamSubcommand::Status {
+                mission_id: Some("m-1".into())
+            })
         );
     }
 
@@ -13360,7 +13141,10 @@ mod tests {
     fn team_unknown_subcommand_lists_the_daemon_verbs() {
         let err = parse_cli_args_from(&argv(&["team", "frobnicate"]))
             .expect_err("unknown subcommand must error");
-        assert!(err.contains("status") && err.contains("approve"), "error: {err}");
+        assert!(
+            err.contains("status") && err.contains("approve"),
+            "error: {err}"
+        );
     }
 
     // ---- Chapter K — `aivyx cost` parsing ---------------------
@@ -13372,7 +13156,9 @@ mod tests {
             CliMode::Cost { today: false }
         );
         assert_eq!(
-            parse_cli_args_from(&argv(&["cost", "--today"])).unwrap().mode,
+            parse_cli_args_from(&argv(&["cost", "--today"]))
+                .unwrap()
+                .mode,
             CliMode::Cost { today: true }
         );
     }
@@ -13386,28 +13172,15 @@ mod tests {
 
     #[test]
     fn profile_apply_hint_rejects_unknown_flag() {
-        let err = parse_cli_args_from(&argv(&[
-            "profile",
-            "apply-hint",
-            "pp-abc",
-            "--force",
-        ]))
-        .expect_err("--force is not supported on apply-hint");
-        assert!(
-            err.contains("unrecognized flag"),
-            "error: {err}"
-        );
+        let err = parse_cli_args_from(&argv(&["profile", "apply-hint", "pp-abc", "--force"]))
+            .expect_err("--force is not supported on apply-hint");
+        assert!(err.contains("unrecognized flag"), "error: {err}");
     }
 
     #[test]
     fn profile_apply_hint_rejects_extra_positional_args() {
-        let err = parse_cli_args_from(&argv(&[
-            "profile",
-            "apply-hint",
-            "pp-abc",
-            "pp-def",
-        ]))
-        .expect_err("two ids must error");
+        let err = parse_cli_args_from(&argv(&["profile", "apply-hint", "pp-abc", "pp-def"]))
+            .expect_err("two ids must error");
         assert!(err.contains("exactly one proposal id"), "error: {err}");
     }
 
@@ -13415,12 +13188,8 @@ mod tests {
 
     #[test]
     fn role_import_parses_proposal_id() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "role",
-            "import",
-            "pp-xyz",
-        ]))
-        .expect("`role import pp-xyz` must parse");
+        let parsed = parse_cli_args_from(&argv(&["role", "import", "pp-xyz"]))
+            .expect("`role import pp-xyz` must parse");
         match parsed.mode {
             CliMode::Role(RoleSubcommand::Import {
                 proposal_id,
@@ -13437,14 +13206,10 @@ mod tests {
 
     #[test]
     fn role_import_parses_yes_and_force_flags_in_either_order() {
-        let parsed_a = parse_cli_args_from(&argv(&[
-            "role", "import", "pp-1", "--yes", "--force",
-        ]))
-        .expect("`--yes --force` must parse");
-        let parsed_b = parse_cli_args_from(&argv(&[
-            "role", "import", "pp-1", "--force", "--yes",
-        ]))
-        .expect("`--force --yes` must parse");
+        let parsed_a = parse_cli_args_from(&argv(&["role", "import", "pp-1", "--yes", "--force"]))
+            .expect("`--yes --force` must parse");
+        let parsed_b = parse_cli_args_from(&argv(&["role", "import", "pp-1", "--force", "--yes"]))
+            .expect("`--force --yes` must parse");
         for parsed in [parsed_a, parsed_b] {
             match parsed.mode {
                 CliMode::Role(RoleSubcommand::Import { yes, force, .. }) => {
@@ -13458,53 +13223,39 @@ mod tests {
 
     #[test]
     fn role_import_without_id_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["role", "import"]))
-            .expect_err("missing id must error");
-        assert!(
-            err.contains("requires a proposal id"),
-            "error: {err}"
-        );
+        let err =
+            parse_cli_args_from(&argv(&["role", "import"])).expect_err("missing id must error");
+        assert!(err.contains("requires a proposal id"), "error: {err}");
     }
 
     #[test]
     fn role_import_rejects_unknown_flag() {
-        let err = parse_cli_args_from(&argv(&[
-            "role", "import", "pp-1", "--dry-run",
-        ]))
-        .expect_err("--dry-run is not supported");
+        let err = parse_cli_args_from(&argv(&["role", "import", "pp-1", "--dry-run"]))
+            .expect_err("--dry-run is not supported");
         assert!(err.contains("unrecognized flag"), "error: {err}");
     }
 
     #[test]
     fn role_without_subcommand_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["role"]))
-            .expect_err("`role` alone must error");
+        let err = parse_cli_args_from(&argv(&["role"])).expect_err("`role` alone must error");
         assert!(err.contains("import"), "error must list import: {err}");
     }
 
     #[test]
     fn role_unknown_subcommand_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["role", "delete"]))
-            .expect_err("`role delete` must error");
-        assert!(
-            err.contains("unrecognized role subcommand"),
-            "error: {err}"
-        );
+        let err =
+            parse_cli_args_from(&argv(&["role", "delete"])).expect_err("`role delete` must error");
+        assert!(err.contains("unrecognized role subcommand"), "error: {err}");
     }
 
     // ----- Phase 119 Task 6 — `tool-relevance dump` parser -----
 
     #[test]
     fn tool_relevance_dump_parses_without_filter() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "tool-relevance",
-            "dump",
-        ]))
-        .expect("`tool-relevance dump` must parse");
+        let parsed = parse_cli_args_from(&argv(&["tool-relevance", "dump"]))
+            .expect("`tool-relevance dump` must parse");
         match parsed.mode {
-            CliMode::ToolRelevance(ToolRelevanceSubcommand::Dump {
-                keyword_key_filter,
-            }) => {
+            CliMode::ToolRelevance(ToolRelevanceSubcommand::Dump { keyword_key_filter }) => {
                 assert!(keyword_key_filter.is_none());
             }
             other => panic!("unexpected mode: {other:?}"),
@@ -13521,9 +13272,7 @@ mod tests {
         ]))
         .expect("`--keyword-key research+deploy` must parse");
         match parsed.mode {
-            CliMode::ToolRelevance(ToolRelevanceSubcommand::Dump {
-                keyword_key_filter,
-            }) => {
+            CliMode::ToolRelevance(ToolRelevanceSubcommand::Dump { keyword_key_filter }) => {
                 assert_eq!(keyword_key_filter.as_deref(), Some("research+deploy"));
             }
             other => panic!("unexpected mode: {other:?}"),
@@ -13532,35 +13281,22 @@ mod tests {
 
     #[test]
     fn tool_relevance_dump_requires_value_after_keyword_key_flag() {
-        let err = parse_cli_args_from(&argv(&[
-            "tool-relevance",
-            "dump",
-            "--keyword-key",
-        ]))
-        .expect_err("--keyword-key without value must error");
+        let err = parse_cli_args_from(&argv(&["tool-relevance", "dump", "--keyword-key"]))
+            .expect_err("--keyword-key without value must error");
         assert!(err.contains("requires a value"), "error: {err}");
     }
 
     #[test]
     fn tool_relevance_dump_rejects_unknown_flag() {
-        let err = parse_cli_args_from(&argv(&[
-            "tool-relevance",
-            "dump",
-            "--limit",
-            "10",
-        ]))
-        .expect_err("--limit is not supported");
+        let err = parse_cli_args_from(&argv(&["tool-relevance", "dump", "--limit", "10"]))
+            .expect_err("--limit is not supported");
         assert!(err.contains("unrecognized flag"), "error: {err}");
     }
 
     #[test]
     fn tool_relevance_dump_rejects_positional_args() {
-        let err = parse_cli_args_from(&argv(&[
-            "tool-relevance",
-            "dump",
-            "some-key",
-        ]))
-        .expect_err("positional args not supported (use --keyword-key)");
+        let err = parse_cli_args_from(&argv(&["tool-relevance", "dump", "some-key"]))
+            .expect_err("positional args not supported (use --keyword-key)");
         assert!(
             err.contains("does not accept positional arguments"),
             "error: {err}"
@@ -13590,8 +13326,8 @@ mod tests {
 
     #[test]
     fn persona_show_parses_to_persona_show_mode() {
-        let parsed = parse_cli_args_from(&argv(&["persona", "show"]))
-            .expect("`persona show` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["persona", "show"])).expect("`persona show` must parse");
         assert_eq!(parsed.mode, CliMode::Persona(PersonaSubcommand::Show));
     }
 
@@ -13600,7 +13336,11 @@ mod tests {
     #[test]
     fn skills_teach_parses_positional_args() {
         let parsed = parse_cli_args_from(&argv(&[
-            "skills", "teach", "summarize-doc", "when asked", "read then condense",
+            "skills",
+            "teach",
+            "summarize-doc",
+            "when asked",
+            "read then condense",
         ]))
         .expect("`skills teach` must parse");
         assert_eq!(
@@ -13621,7 +13361,11 @@ mod tests {
     #[test]
     fn skills_update_parses_optional_flags() {
         let parsed = parse_cli_args_from(&argv(&[
-            "skills", "update", "summarize-doc", "--trigger", "new trigger",
+            "skills",
+            "update",
+            "summarize-doc",
+            "--trigger",
+            "new trigger",
         ]))
         .expect("`skills update` must parse");
         assert_eq!(
@@ -13658,8 +13402,8 @@ mod tests {
 
     #[test]
     fn persona_list_parses_to_persona_list_mode() {
-        let parsed = parse_cli_args_from(&argv(&["persona", "list"]))
-            .expect("`persona list` must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["persona", "list"])).expect("`persona list` must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Persona(PersonaSubcommand::List {
@@ -13670,9 +13414,8 @@ mod tests {
 
     #[test]
     fn persona_list_auto_only_flag_parses() {
-        let parsed =
-            parse_cli_args_from(&argv(&["persona", "list", "--auto-only"]))
-                .expect("`persona list --auto-only` must parse");
+        let parsed = parse_cli_args_from(&argv(&["persona", "list", "--auto-only"]))
+            .expect("`persona list --auto-only` must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Persona(PersonaSubcommand::List {
@@ -13683,9 +13426,8 @@ mod tests {
 
     #[test]
     fn persona_list_manual_only_flag_parses() {
-        let parsed =
-            parse_cli_args_from(&argv(&["persona", "list", "--manual-only"]))
-                .expect("`persona list --manual-only` must parse");
+        let parsed = parse_cli_args_from(&argv(&["persona", "list", "--manual-only"]))
+            .expect("`persona list --manual-only` must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Persona(PersonaSubcommand::List {
@@ -13696,21 +13438,15 @@ mod tests {
 
     #[test]
     fn persona_list_both_filter_flags_is_an_error() {
-        let err = parse_cli_args_from(&argv(&[
-            "persona",
-            "list",
-            "--auto-only",
-            "--manual-only",
-        ]))
-        .expect_err("mutually-exclusive flags must error");
+        let err = parse_cli_args_from(&argv(&["persona", "list", "--auto-only", "--manual-only"]))
+            .expect_err("mutually-exclusive flags must error");
         assert!(err.contains("mutually exclusive"), "{err}");
     }
 
     #[test]
     fn persona_list_unknown_arg_is_an_error() {
-        let err =
-            parse_cli_args_from(&argv(&["persona", "list", "--what"]))
-                .expect_err("unknown flag must error");
+        let err = parse_cli_args_from(&argv(&["persona", "list", "--what"]))
+            .expect_err("unknown flag must error");
         assert!(err.contains("--what"), "{err}");
     }
 
@@ -13730,26 +13466,19 @@ mod tests {
     fn persona_revert_without_target_is_an_error() {
         let err = parse_cli_args_from(&argv(&["persona", "revert"]))
             .expect_err("`persona revert` without id must error");
-        assert!(
-            err.contains("requires a delta id"),
-            "error: {err}"
-        );
+        assert!(err.contains("requires a delta id"), "error: {err}");
     }
 
     #[test]
     fn persona_revert_with_extra_args_is_an_error() {
         let err = parse_cli_args_from(&argv(&["persona", "revert", "pd-1", "pd-2"]))
             .expect_err("extra revert args must error");
-        assert!(
-            err.contains("exactly one delta id"),
-            "error: {err}"
-        );
+        assert!(err.contains("exactly one delta id"), "error: {err}");
     }
 
     #[test]
     fn persona_without_subcommand_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["persona"]))
-            .expect_err("`persona` alone must error");
+        let err = parse_cli_args_from(&argv(&["persona"])).expect_err("`persona` alone must error");
         assert!(
             err.contains("show") && err.contains("list") && err.contains("revert"),
             "error must list all subcommands: {err}"
@@ -13766,34 +13495,38 @@ mod tests {
             .expect("`persona proposals list` must parse");
         assert_eq!(
             parsed.mode,
-            CliMode::Persona(PersonaSubcommand::Proposals(
-                ProposalsSubcommand::List {
-                    status: "pending".into(),
-                }
-            ))
+            CliMode::Persona(PersonaSubcommand::Proposals(ProposalsSubcommand::List {
+                status: "pending".into(),
+            }))
         );
     }
 
     #[test]
     fn proposals_list_status_flag_normalizes_case() {
         let parsed = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "list", "--status", "APPROVED",
+            "persona",
+            "proposals",
+            "list",
+            "--status",
+            "APPROVED",
         ]))
         .expect("must parse");
         assert_eq!(
             parsed.mode,
-            CliMode::Persona(PersonaSubcommand::Proposals(
-                ProposalsSubcommand::List {
-                    status: "approved".into(),
-                }
-            ))
+            CliMode::Persona(PersonaSubcommand::Proposals(ProposalsSubcommand::List {
+                status: "approved".into(),
+            }))
         );
     }
 
     #[test]
     fn proposals_list_unknown_status_errors() {
         let err = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "list", "--status", "bogus",
+            "persona",
+            "proposals",
+            "list",
+            "--status",
+            "bogus",
         ]))
         .expect_err("must error");
         assert!(err.contains("unknown --status"), "{err}");
@@ -13802,80 +13535,68 @@ mod tests {
 
     #[test]
     fn proposals_show_parses_with_id() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "show", "pp-xyz",
-        ]))
-        .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["persona", "proposals", "show", "pp-xyz"]))
+            .expect("must parse");
         assert_eq!(
             parsed.mode,
-            CliMode::Persona(PersonaSubcommand::Proposals(
-                ProposalsSubcommand::Show {
-                    proposal_id: "pp-xyz".into(),
-                }
-            ))
+            CliMode::Persona(PersonaSubcommand::Proposals(ProposalsSubcommand::Show {
+                proposal_id: "pp-xyz".into(),
+            }))
         );
     }
 
     #[test]
     fn proposals_approve_parses_with_id() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "approve", "pp-xyz",
-        ]))
-        .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["persona", "proposals", "approve", "pp-xyz"]))
+            .expect("must parse");
         assert_eq!(
             parsed.mode,
-            CliMode::Persona(PersonaSubcommand::Proposals(
-                ProposalsSubcommand::Approve {
-                    proposal_id: "pp-xyz".into(),
-                }
-            ))
+            CliMode::Persona(PersonaSubcommand::Proposals(ProposalsSubcommand::Approve {
+                proposal_id: "pp-xyz".into(),
+            }))
         );
     }
 
     #[test]
     fn proposals_reject_parses_with_optional_reason() {
-        let no_reason = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "reject", "pp-1",
-        ]))
-        .expect("must parse");
+        let no_reason = parse_cli_args_from(&argv(&["persona", "proposals", "reject", "pp-1"]))
+            .expect("must parse");
         assert_eq!(
             no_reason.mode,
-            CliMode::Persona(PersonaSubcommand::Proposals(
-                ProposalsSubcommand::Reject {
-                    proposal_id: "pp-1".into(),
-                    reason: None,
-                }
-            ))
+            CliMode::Persona(PersonaSubcommand::Proposals(ProposalsSubcommand::Reject {
+                proposal_id: "pp-1".into(),
+                reason: None,
+            }))
         );
 
         let with_reason = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "reject", "pp-2", "--reason", "too aggressive",
+            "persona",
+            "proposals",
+            "reject",
+            "pp-2",
+            "--reason",
+            "too aggressive",
         ]))
         .expect("must parse");
         assert_eq!(
             with_reason.mode,
-            CliMode::Persona(PersonaSubcommand::Proposals(
-                ProposalsSubcommand::Reject {
-                    proposal_id: "pp-2".into(),
-                    reason: Some("too aggressive".into()),
-                }
-            ))
+            CliMode::Persona(PersonaSubcommand::Proposals(ProposalsSubcommand::Reject {
+                proposal_id: "pp-2".into(),
+                reason: Some("too aggressive".into()),
+            }))
         );
     }
 
     #[test]
     fn proposals_without_subcommand_errors() {
-        let err = parse_cli_args_from(&argv(&["persona", "proposals"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["persona", "proposals"])).expect_err("must error");
         assert!(err.contains("requires a subcommand"), "{err}");
     }
 
     #[test]
     fn proposals_unknown_subcommand_errors() {
-        let err = parse_cli_args_from(&argv(&[
-            "persona", "proposals", "delete",
-        ]))
-        .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["persona", "proposals", "delete"]))
+            .expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
     }
 
@@ -13905,9 +13626,8 @@ mod tests {
 
     #[test]
     fn identity_export_parses_with_path() {
-        let parsed =
-            parse_cli_args_from(&argv(&["identity", "export", "/tmp/snap.json"]))
-                .expect("`identity export /tmp/snap.json` must parse");
+        let parsed = parse_cli_args_from(&argv(&["identity", "export", "/tmp/snap.json"]))
+            .expect("`identity export /tmp/snap.json` must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Identity(IdentitySubcommand::Export {
@@ -13932,9 +13652,8 @@ mod tests {
 
     #[test]
     fn identity_export_rejects_extra_args() {
-        let err =
-            parse_cli_args_from(&argv(&["identity", "export", "/tmp/x", "--verbose"]))
-                .expect_err("extra args must error");
+        let err = parse_cli_args_from(&argv(&["identity", "export", "/tmp/x", "--verbose"]))
+            .expect_err("extra args must error");
         assert!(err.contains("extra args"), "error: {err}");
     }
 
@@ -13954,9 +13673,8 @@ mod tests {
 
     #[test]
     fn identity_import_parses_with_force_flag() {
-        let parsed =
-            parse_cli_args_from(&argv(&["identity", "import", "/tmp/x.json", "--force"]))
-                .expect("`identity import --force` must parse");
+        let parsed = parse_cli_args_from(&argv(&["identity", "import", "/tmp/x.json", "--force"]))
+            .expect("`identity import --force` must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Identity(IdentitySubcommand::Import {
@@ -13984,10 +13702,8 @@ mod tests {
 
     #[test]
     fn identity_import_rejects_unknown_trailing_arg() {
-        let err = parse_cli_args_from(&argv(&[
-            "identity", "import", "/tmp/x", "--bogus",
-        ]))
-        .expect_err("unknown trailing arg must error");
+        let err = parse_cli_args_from(&argv(&["identity", "import", "/tmp/x", "--bogus"]))
+            .expect_err("unknown trailing arg must error");
         assert!(err.contains("unexpected arg"), "error: {err}");
     }
 
@@ -14007,8 +13723,7 @@ mod tests {
 
     #[test]
     fn notify_history_default_limit_no_target() {
-        let parsed =
-            parse_cli_args_from(&argv(&["notify", "history"])).expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["notify", "history"])).expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Notify(NotifySubcommand::History {
@@ -14035,34 +13750,28 @@ mod tests {
 
     #[test]
     fn notify_history_zero_limit_errors() {
-        let err = parse_cli_args_from(&argv(&[
-            "notify", "history", "--limit", "0",
-        ]))
-        .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["notify", "history", "--limit", "0"]))
+            .expect_err("must error");
         assert!(err.contains("must be ≥ 1"), "{err}");
     }
 
     #[test]
     fn notify_history_non_numeric_limit_errors() {
-        let err = parse_cli_args_from(&argv(&[
-            "notify", "history", "--limit", "many",
-        ]))
-        .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["notify", "history", "--limit", "many"]))
+            .expect_err("must error");
         assert!(err.contains("positive integer"), "{err}");
     }
 
     #[test]
     fn notify_without_subcommand_errors() {
-        let err = parse_cli_args_from(&argv(&["notify"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["notify"])).expect_err("must error");
         assert!(err.contains("requires a subcommand"), "{err}");
         assert!(err.contains("history"), "{err}");
     }
 
     #[test]
     fn notify_unknown_subcommand_errors() {
-        let err = parse_cli_args_from(&argv(&["notify", "wat"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["notify", "wat"])).expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
     }
 
@@ -14072,22 +13781,19 @@ mod tests {
 
     #[test]
     fn memory_list_parses() {
-        let parsed = parse_cli_args_from(&argv(&["memory", "list"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["memory", "list"])).expect("must parse");
         assert_eq!(parsed.mode, CliMode::Memory(MemorySubcommand::List));
     }
 
     #[test]
     fn memory_list_with_args_errors() {
-        let err = parse_cli_args_from(&argv(&["memory", "list", "extra"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["memory", "list", "extra"])).expect_err("must error");
         assert!(err.contains("takes no arguments"), "{err}");
     }
 
     #[test]
     fn memory_show_parses_with_default_limit() {
-        let parsed = parse_cli_args_from(&argv(&["memory", "show", "notes"]))
-            .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["memory", "show", "notes"])).expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Memory(MemorySubcommand::Show {
@@ -14099,10 +13805,8 @@ mod tests {
 
     #[test]
     fn memory_show_parses_with_limit_flag() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "memory", "show", "notes", "--limit", "5",
-        ]))
-        .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["memory", "show", "notes", "--limit", "5"]))
+            .expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Memory(MemorySubcommand::Show {
@@ -14114,17 +13818,14 @@ mod tests {
 
     #[test]
     fn memory_show_without_topic_errors() {
-        let err = parse_cli_args_from(&argv(&["memory", "show"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["memory", "show"])).expect_err("must error");
         assert!(err.contains("requires a topic"), "{err}");
     }
 
     #[test]
     fn memory_search_parses() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "memory", "search", "foo", "--limit", "10",
-        ]))
-        .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["memory", "search", "foo", "--limit", "10"]))
+            .expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Memory(MemorySubcommand::Search {
@@ -14139,7 +13840,12 @@ mod tests {
     fn memory_search_semantic_flag_parses() {
         // `--semantic` in either order relative to `--limit`.
         let parsed = parse_cli_args_from(&argv(&[
-            "memory", "search", "foo", "--semantic", "--limit", "7",
+            "memory",
+            "search",
+            "foo",
+            "--semantic",
+            "--limit",
+            "7",
         ]))
         .expect("must parse");
         assert_eq!(
@@ -14150,10 +13856,8 @@ mod tests {
                 semantic: true,
             })
         );
-        let parsed2 = parse_cli_args_from(&argv(&[
-            "memory", "search", "bar", "--semantic",
-        ]))
-        .expect("must parse");
+        let parsed2 = parse_cli_args_from(&argv(&["memory", "search", "bar", "--semantic"]))
+            .expect("must parse");
         assert_eq!(
             parsed2.mode,
             CliMode::Memory(MemorySubcommand::Search {
@@ -14166,19 +13870,14 @@ mod tests {
 
     #[test]
     fn memory_search_zero_limit_errors() {
-        let err = parse_cli_args_from(&argv(&[
-            "memory", "search", "foo", "--limit", "0",
-        ]))
-        .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["memory", "search", "foo", "--limit", "0"]))
+            .expect_err("must error");
         assert!(err.contains("must be ≥ 1"), "{err}");
     }
 
     #[test]
     fn memory_evict_parses_without_yes() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "memory", "evict", "stale",
-        ]))
-        .expect("must parse");
+        let parsed = parse_cli_args_from(&argv(&["memory", "evict", "stale"])).expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Memory(MemorySubcommand::Evict {
@@ -14190,10 +13889,8 @@ mod tests {
 
     #[test]
     fn memory_evict_parses_with_yes() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "memory", "evict", "stale", "--yes",
-        ]))
-        .expect("must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["memory", "evict", "stale", "--yes"])).expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Memory(MemorySubcommand::Evict {
@@ -14205,15 +13902,13 @@ mod tests {
 
     #[test]
     fn memory_without_subcommand_errors() {
-        let err = parse_cli_args_from(&argv(&["memory"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["memory"])).expect_err("must error");
         assert!(err.contains("requires a subcommand"), "{err}");
     }
 
     #[test]
     fn memory_unknown_subcommand_errors() {
-        let err = parse_cli_args_from(&argv(&["memory", "wat"]))
-            .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["memory", "wat"])).expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
     }
 
@@ -14223,20 +13918,14 @@ mod tests {
 
     #[test]
     fn learning_parses_without_window() {
-        let parsed = parse_cli_args_from(&argv(&["learning"]))
-            .expect("must parse");
-        assert_eq!(
-            parsed.mode,
-            CliMode::Learning { window_secs: None }
-        );
+        let parsed = parse_cli_args_from(&argv(&["learning"])).expect("must parse");
+        assert_eq!(parsed.mode, CliMode::Learning { window_secs: None });
     }
 
     #[test]
     fn learning_parses_with_window() {
-        let parsed = parse_cli_args_from(&argv(&[
-            "learning", "--window", "604800",
-        ]))
-        .expect("must parse");
+        let parsed =
+            parse_cli_args_from(&argv(&["learning", "--window", "604800"])).expect("must parse");
         assert_eq!(
             parsed.mode,
             CliMode::Learning {
@@ -14247,18 +13936,14 @@ mod tests {
 
     #[test]
     fn learning_window_zero_errors() {
-        let err = parse_cli_args_from(&argv(&[
-            "learning", "--window", "0",
-        ]))
-        .expect_err("must error");
+        let err =
+            parse_cli_args_from(&argv(&["learning", "--window", "0"])).expect_err("must error");
         assert!(err.contains("must be >= 1"), "{err}");
     }
 
     #[test]
     fn learning_unknown_arg_errors() {
-        let err =
-            parse_cli_args_from(&argv(&["learning", "--bogus"]))
-                .expect_err("must error");
+        let err = parse_cli_args_from(&argv(&["learning", "--bogus"])).expect_err("must error");
         assert!(err.contains("unrecognized"), "{err}");
     }
 
@@ -14325,7 +14010,8 @@ mod tests {
         let cfg = load_phase_122_config("");
         let path = effective_kvcache_store_path(&cfg);
         assert!(
-            path.to_string_lossy().contains(".local/share/aivyx/kvcache"),
+            path.to_string_lossy()
+                .contains(".local/share/aivyx/kvcache"),
             "default kvcache path must be unchanged when no override is configured, got {path:?}"
         );
     }
@@ -14380,11 +14066,9 @@ mod tests {
     fn phase_124_banner_line_shows_default_for_detected_family() {
         // qwen3.6 → family "qwen3" → default FewShotExamples
         // (Phase 124 upgrade from Phase 122's StructuredInjection).
-        let cfg = load_phase_122_config(
-            "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n",
-        );
-        let line =
-            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        let cfg =
+            load_phase_122_config("[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n");
+        let line = format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
         assert!(line.contains("\"few_shot_examples\""), "{line}");
         assert!(line.contains("family: qwen3"), "{line}");
         assert!(line.contains("default"), "{line}");
@@ -14404,8 +14088,7 @@ mod tests {
              [ollama.prompt_strategies]\n\
              qwen3 = \"none\"\n",
         );
-        let line =
-            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        let line = format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
         assert!(line.contains("\"none\""), "{line}");
         assert!(line.contains("family: qwen3"), "{line}");
         assert!(line.contains("override"), "{line}");
@@ -14414,11 +14097,9 @@ mod tests {
     #[test]
     fn phase_122_banner_line_shows_undetected_family_for_unknown_model() {
         // Made-up model name that doesn't parse to any Ollama family.
-        let cfg = load_phase_122_config(
-            "[agent]\nprovider = \"ollama\"\nmodel = \"madeup-99:latest\"\n",
-        );
-        let line =
-            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        let cfg =
+            load_phase_122_config("[agent]\nprovider = \"ollama\"\nmodel = \"madeup-99:latest\"\n");
+        let line = format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
         assert!(line.contains("family: undetected"), "{line}");
         // Undetected families always get strategy "none"
         // (operator-conservative).
@@ -14429,11 +14110,8 @@ mod tests {
     fn phase_124_banner_line_default_for_gemma4() {
         // Pin gemma4 → "gemma4" → FewShotExamples (Phase 124
         // default upgrade from Phase 122's StructuredInjection).
-        let cfg = load_phase_122_config(
-            "[agent]\nprovider = \"ollama\"\nmodel = \"gemma4:31b\"\n",
-        );
-        let line =
-            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        let cfg = load_phase_122_config("[agent]\nprovider = \"ollama\"\nmodel = \"gemma4:31b\"\n");
+        let line = format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
         assert!(line.contains("\"few_shot_examples\""), "{line}");
         assert!(line.contains("family: gemma4"), "{line}");
         assert!(line.contains("default"), "{line}");
@@ -14446,32 +14124,22 @@ mod tests {
         // the TOML wire form so an operator copy-pasting from
         // the banner into their `[ollama.prompt_strategies]`
         // section gets a valid string.
-        let cfg = load_phase_122_config(
-            "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n",
-        );
-        let line =
-            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        let cfg =
+            load_phase_122_config("[agent]\nprovider = \"ollama\"\nmodel = \"qwen3.6:27b\"\n");
+        let line = format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
         // Spot-pinned exact wire label.
         assert!(line.contains("\"few_shot_examples\""), "{line}");
         // Confirm wire round-trip: parse the label back.
-        let parsed = aivyx_config::OllamaFamilyStrategy::parse(
-            "few_shot_examples",
-        )
-        .expect("parse");
-        assert_eq!(
-            parsed,
-            aivyx_config::OllamaFamilyStrategy::FewShotExamples
-        );
+        let parsed = aivyx_config::OllamaFamilyStrategy::parse("few_shot_examples").expect("parse");
+        assert_eq!(parsed, aivyx_config::OllamaFamilyStrategy::FewShotExamples);
     }
 
     #[test]
     fn phase_122_banner_line_default_for_llama3() {
         // Pin llama3 → "llama3" → None (default; protocol-only).
-        let cfg = load_phase_122_config(
-            "[agent]\nprovider = \"ollama\"\nmodel = \"llama3.1:latest\"\n",
-        );
-        let line =
-            format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
+        let cfg =
+            load_phase_122_config("[agent]\nprovider = \"ollama\"\nmodel = \"llama3.1:latest\"\n");
+        let line = format_ollama_prompt_strategy_banner_line(&cfg).expect("Ollama line");
         assert!(line.contains("\"none\""), "{line}");
         assert!(line.contains("family: llama3"), "{line}");
         assert!(line.contains("default"), "{line}");
@@ -14521,10 +14189,7 @@ mod early_validate_message_tests {
             || Ok(()),
         );
         let err = result.expect_err("diagnostic mode must always error when the gate fires");
-        assert!(
-            err.contains("nothing to verify/export/report on"),
-            "{err}"
-        );
+        assert!(err.contains("nothing to verify/export/report on"), "{err}");
         assert!(
             !err.starts_with("aivyx: "),
             "early_validate_message must return a prefix-free message: {err}"
@@ -14538,35 +14203,45 @@ mod early_validate_message_tests {
 
     #[test]
     fn audit_export_mode_errors_even_when_validate_would_pass() {
-        let result = early_validate_message(false, true, false, Path::new("/nonexistent/path"), || Ok(()));
+        let result = early_validate_message(
+            false,
+            true,
+            false,
+            Path::new("/nonexistent/path"),
+            || Ok(()),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn cost_mode_errors_even_when_validate_would_pass() {
-        let result = early_validate_message(false, false, true, Path::new("/nonexistent/path"), || Ok(()));
+        let result = early_validate_message(
+            false,
+            false,
+            true,
+            Path::new("/nonexistent/path"),
+            || Ok(()),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn default_mode_passes_through_validate_ok() {
-        let result = early_validate_message(false, false, false, Path::new("/nonexistent/path"), || Ok(()));
+        let result =
+            early_validate_message(false, false, false, Path::new("/nonexistent/path"), || {
+                Ok(())
+            });
         assert!(result.is_ok());
     }
 
     #[test]
     fn default_mode_passes_through_validate_err() {
-        let result = early_validate_message(
-            false,
-            false,
-            false,
-            Path::new("/nonexistent/path"),
-            || {
+        let result =
+            early_validate_message(false, false, false, Path::new("/nonexistent/path"), || {
                 Err(aivyx_config::ConfigError::Missing {
                     field: "anthropic_api_key",
                 })
-            },
-        );
+            });
         let err = result.expect_err("default mode must surface validate()'s own error");
         assert!(err.contains("anthropic_api_key"), "{err}");
         assert!(

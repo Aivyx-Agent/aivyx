@@ -37,7 +37,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 use aivyx_capability::Scope;
@@ -72,7 +72,9 @@ pub struct SkillsListTool {
 
 impl std::fmt::Debug for SkillsListTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SkillsListTool").field("id", &self.id).finish()
+        f.debug_struct("SkillsListTool")
+            .field("id", &self.id)
+            .finish()
     }
 }
 
@@ -111,9 +113,8 @@ impl Tool for SkillsListTool {
     }
 
     fn required_scope(&self, _input: &Value) -> Scope {
-        Scope::parse("skills.list").expect(
-            "skills.list must parse — it is in KNOWN_BASES from Phase 110",
-        )
+        Scope::parse("skills.list")
+            .expect("skills.list must parse — it is in KNOWN_BASES from Phase 110")
     }
 
     async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
@@ -155,7 +156,9 @@ pub struct SkillsInvokeTool {
 
 impl std::fmt::Debug for SkillsInvokeTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SkillsInvokeTool").field("id", &self.id).finish()
+        f.debug_struct("SkillsInvokeTool")
+            .field("id", &self.id)
+            .finish()
     }
 }
 
@@ -193,9 +196,8 @@ impl Tool for SkillsInvokeTool {
     }
 
     fn required_scope(&self, _input: &Value) -> Scope {
-        Scope::parse("skills.invoke").expect(
-            "skills.invoke must parse — it is in KNOWN_BASES from Phase 110",
-        )
+        Scope::parse("skills.invoke")
+            .expect("skills.invoke must parse — it is in KNOWN_BASES from Phase 110")
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
@@ -221,8 +223,7 @@ impl Tool for SkillsInvokeTool {
             };
             if entry_name == name {
                 let trigger = v.get("trigger").and_then(|t| t.as_str()).unwrap_or("");
-                let procedure =
-                    v.get("procedure").and_then(|p| p.as_str()).unwrap_or("");
+                let procedure = v.get("procedure").and_then(|p| p.as_str()).unwrap_or("");
                 // Phase 117 — emit a dedicated SkillInvocation
                 // audit entry alongside the regular ToolCall the
                 // planner will write. The ToolCall's input_hash
@@ -328,10 +329,7 @@ mod skills_tests {
         ) -> Result<(), crate::ChannelError> {
             Ok(())
         }
-        async fn finalize(
-            &self,
-            _outcome: &crate::TurnOutcome,
-        ) -> Result<(), crate::ChannelError> {
+        async fn finalize(&self, _outcome: &crate::TurnOutcome) -> Result<(), crate::ChannelError> {
             Ok(())
         }
         fn cancellation_token(&self) -> CancellationToken {
@@ -362,8 +360,16 @@ mod skills_tests {
     #[tokio::test]
     async fn skills_list_returns_name_and_trigger_for_each_entry() {
         let reader = fixed_reader(vec![
-            json_skill("code-review", "When asked to review code", "Read every line..."),
-            json_skill("debug-flow", "When debugging a crash", "Start with the stack trace..."),
+            json_skill(
+                "code-review",
+                "When asked to review code",
+                "Read every line...",
+            ),
+            json_skill(
+                "debug-flow",
+                "When debugging a crash",
+                "Start with the stack trace...",
+            ),
         ]);
         let tool = SkillsListTool::new(reader);
         let outcome = run_execute(&tool, json!({})).await;
@@ -428,13 +434,11 @@ mod skills_tests {
 
     #[tokio::test]
     async fn skills_invoke_returns_full_procedure_for_existing_skill() {
-        let reader = fixed_reader(vec![
-            json_skill(
-                "code-review",
-                "When asked to review code",
-                "1. Read every line.\n2. Check tests.\n3. Suggest improvements.",
-            ),
-        ]);
+        let reader = fixed_reader(vec![json_skill(
+            "code-review",
+            "When asked to review code",
+            "1. Read every line.\n2. Check tests.\n3. Suggest improvements.",
+        )]);
         let tool = SkillsInvokeTool::new(reader);
         let outcome = run_execute(&tool, json!({ "name": "code-review" })).await;
         match outcome {

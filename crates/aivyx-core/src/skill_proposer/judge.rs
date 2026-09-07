@@ -325,9 +325,7 @@ impl ProposedDraft {
             ProposedDraft::ListAppend { .. } => "ListAppend",
             ProposedDraft::ScalarSet { .. } => "ScalarSet",
             ProposedDraft::ProfileHint { .. } => "ProfileHint",
-            ProposedDraft::RoleDefinitionSuggestion { .. } => {
-                "RoleDefinitionSuggestion"
-            }
+            ProposedDraft::RoleDefinitionSuggestion { .. } => "RoleDefinitionSuggestion",
         }
     }
 
@@ -343,10 +341,8 @@ impl ProposedDraft {
     pub fn display_name(&self) -> String {
         match self {
             ProposedDraft::LearnedSkill { name, .. } => name.clone(),
-            ProposedDraft::ListAppend { value }
-            | ProposedDraft::ScalarSet { value } => {
-                let mut truncated: String =
-                    value.chars().take(80).collect();
+            ProposedDraft::ListAppend { value } | ProposedDraft::ScalarSet { value } => {
+                let mut truncated: String = value.chars().take(80).collect();
                 if value.chars().count() > 80 {
                     truncated.push('…');
                 }
@@ -618,16 +614,8 @@ to false.",
             s.push_str(&format!("- **CommunicationStyle** (scalar): {v}\n"));
         }
         render_list(&mut s, "PrimaryUseCases", &p.primary_use_cases);
-        render_list(
-            &mut s,
-            "BehavioralPreferences",
-            &p.behavioral_preferences,
-        );
-        render_list(
-            &mut s,
-            "BehavioralConstraints",
-            &p.behavioral_constraints,
-        );
+        render_list(&mut s, "BehavioralPreferences", &p.behavioral_preferences);
+        render_list(&mut s, "BehavioralConstraints", &p.behavioral_constraints);
         render_list(&mut s, "LearnedContext", &p.learned_context);
         render_list(
             &mut s,
@@ -635,11 +623,7 @@ to false.",
             &p.communication_adaptations,
         );
         render_list(&mut s, "CharacterTraits", &p.character_traits);
-        render_list(
-            &mut s,
-            "RelationshipMilestones",
-            &p.relationship_milestones,
-        );
+        render_list(&mut s, "RelationshipMilestones", &p.relationship_milestones);
         if !p.learned_skills.is_empty() {
             s.push_str("- **LearnedSkill** (list of named procedures):\n");
             for skill in &p.learned_skills {
@@ -667,9 +651,7 @@ to false.",
             }
         }
         if !p.role_drafts.is_empty() {
-            s.push_str(
-                "- **RoleDefinitionSuggestion** (Phase 118 — staged new-Role drafts):\n",
-            );
+            s.push_str("- **RoleDefinitionSuggestion** (Phase 118 — staged new-Role drafts):\n");
             for blob in &p.role_drafts {
                 let summary = summarize_role_draft_blob(blob);
                 s.push_str(&format!("  - {summary}\n"));
@@ -688,10 +670,7 @@ to false.",
 /// the judge still sees something to dedup against).
 fn summarize_profile_hint_blob(blob: &str) -> String {
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(blob) {
-        let field = parsed
-            .get("field")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
+        let field = parsed.get("field").and_then(|v| v.as_str()).unwrap_or("?");
         let value = parsed
             .get("suggested_value")
             .and_then(|v| v.as_str())
@@ -710,10 +689,7 @@ fn summarize_profile_hint_blob(blob: &str) -> String {
 /// summary bullet for the judge prompt.
 fn summarize_role_draft_blob(blob: &str) -> String {
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(blob) {
-        let name = parsed
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
+        let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("?");
         let parent = parsed
             .get("parent")
             .and_then(|v| v.as_str())
@@ -785,10 +761,13 @@ fn extract_first_json_object(s: &str) -> Option<&str> {
 /// Parse a raw LLM response into a [`JudgeResponse`]. Tolerant
 /// of markdown fences and short preamble per the module doc.
 pub fn parse_judge_response(raw: &str) -> Result<JudgeResponse, JudgeError> {
-    let json = extract_first_json_object(raw)
-        .ok_or_else(|| JudgeError::ParseFailure { raw: raw.to_string() })?;
-    let parsed: JudgeResponse = serde_json::from_str(json)
-        .map_err(|_| JudgeError::ParseFailure { raw: raw.to_string() })?;
+    let json = extract_first_json_object(raw).ok_or_else(|| JudgeError::ParseFailure {
+        raw: raw.to_string(),
+    })?;
+    let parsed: JudgeResponse =
+        serde_json::from_str(json).map_err(|_| JudgeError::ParseFailure {
+            raw: raw.to_string(),
+        })?;
     if !(0.0..=1.0).contains(&parsed.confidence) {
         return Err(JudgeError::ConfidenceOutOfRange(parsed.confidence));
     }
@@ -828,8 +807,8 @@ pub async fn judge(
         tools: &[],
         max_tokens: request.max_tokens,
         temperature: Some(0.2), // low temp for stable judgment
-    id_slot: None,
-    slot_hint: None,
+        id_slot: None,
+        slot_hint: None,
     };
 
     let mut stream = provider.chat_stream(llm_request, cancellation).await?;
@@ -870,9 +849,7 @@ mod tests {
     impl ScriptedProvider {
         fn new(responses: Vec<&str>) -> Arc<Self> {
             Arc::new(ScriptedProvider {
-                responses: Mutex::new(
-                    responses.into_iter().map(|s| s.to_string()).collect(),
-                ),
+                responses: Mutex::new(responses.into_iter().map(|s| s.to_string()).collect()),
             })
         }
     }
@@ -889,9 +866,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .ok_or_else(|| {
-                    LlmError::Config("ScriptedProvider exhausted".to_string())
-                })?;
+                .ok_or_else(|| LlmError::Config("ScriptedProvider exhausted".to_string()))?;
             Ok(Box::new(ScriptedStream { text: Some(text) }))
         }
     }
@@ -902,9 +877,7 @@ mod tests {
 
     #[async_trait]
     impl aivyx_llm::LlmStream for ScriptedStream {
-        async fn next_event(
-            &mut self,
-        ) -> Result<Option<aivyx_llm::LlmStreamEvent>, LlmError> {
+        async fn next_event(&mut self) -> Result<Option<aivyx_llm::LlmStreamEvent>, LlmError> {
             Ok(None) // skip mid-stream events; jump to terminal
         }
         async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
@@ -1494,8 +1467,7 @@ that's my call."#;
             ..ExistingPersonaSnapshot::default()
         };
         let s = serde_json::to_string(&original).unwrap();
-        let back: ExistingPersonaSnapshot =
-            serde_json::from_str(&s).unwrap();
+        let back: ExistingPersonaSnapshot = serde_json::from_str(&s).unwrap();
         assert_eq!(back, original);
     }
 
@@ -1625,31 +1597,39 @@ that's my call."#;
         assert_eq!(sd.trigger, "y");
         assert_eq!(sd.procedure, "z");
 
-        assert!(ProposedDraft::ListAppend { value: "v".into() }
-            .as_skill_draft()
-            .is_none());
-        assert!(ProposedDraft::ScalarSet { value: "v".into() }
-            .as_skill_draft()
-            .is_none());
+        assert!(
+            ProposedDraft::ListAppend { value: "v".into() }
+                .as_skill_draft()
+                .is_none()
+        );
+        assert!(
+            ProposedDraft::ScalarSet { value: "v".into() }
+                .as_skill_draft()
+                .is_none()
+        );
 
         // Phase 118 — new variants also return None for the
         // skill-draft backward-compat helper.
-        assert!(ProposedDraft::ProfileHint {
-            field: super::super::profile_proposer::ProfileField::OperatorProfile,
-            suggested_value: "v".into(),
-            rationale: "r".into(),
-        }
-        .as_skill_draft()
-        .is_none());
-        assert!(ProposedDraft::RoleDefinitionSuggestion {
-            name: "n".into(),
-            parent: None,
-            system_prompt_addendum: "p".into(),
-            tool_allowlist_additions: vec![],
-            rationale: "r".into(),
-        }
-        .as_skill_draft()
-        .is_none());
+        assert!(
+            ProposedDraft::ProfileHint {
+                field: super::super::profile_proposer::ProfileField::OperatorProfile,
+                suggested_value: "v".into(),
+                rationale: "r".into(),
+            }
+            .as_skill_draft()
+            .is_none()
+        );
+        assert!(
+            ProposedDraft::RoleDefinitionSuggestion {
+                name: "n".into(),
+                parent: None,
+                system_prompt_addendum: "p".into(),
+                tool_allowlist_additions: vec![],
+                rationale: "r".into(),
+            }
+            .as_skill_draft()
+            .is_none()
+        );
     }
 
     // ----- Phase 118 — ProfileHint + RoleDefinitionSuggestion parsing -----

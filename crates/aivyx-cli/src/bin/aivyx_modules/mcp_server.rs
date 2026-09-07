@@ -337,7 +337,11 @@ fn parse_brave_json(json: &str) -> Vec<SearchResult> {
                     .and_then(|d| d.as_str())
                     .unwrap_or("")
                     .to_string();
-                Some(SearchResult { title, url, snippet })
+                Some(SearchResult {
+                    title,
+                    url,
+                    snippet,
+                })
             })
             .collect(),
         None => Vec::new(),
@@ -356,9 +360,7 @@ fn parse_serpapi_json(json: &str) -> Vec<SearchResult> {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    let results = value
-        .get("organic_results")
-        .and_then(|r| r.as_array());
+    let results = value.get("organic_results").and_then(|r| r.as_array());
     match results {
         Some(arr) => arr
             .iter()
@@ -370,7 +372,11 @@ fn parse_serpapi_json(json: &str) -> Vec<SearchResult> {
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string();
-                Some(SearchResult { title, url, snippet })
+                Some(SearchResult {
+                    title,
+                    url,
+                    snippet,
+                })
             })
             .collect(),
         None => Vec::new(),
@@ -490,15 +496,11 @@ async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<Strin
 
     let results: Vec<SearchResult> = all_results.into_iter().take(max_results).collect();
 
-    serde_json::to_string_pretty(&results)
-        .map_err(|e| format!("serialize results: {e}"))
+    serde_json::to_string_pretty(&results).map_err(|e| format!("serialize results: {e}"))
 }
 
 fn handle_echo(args: Value) -> Result<String, String> {
-    let message = args
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
     Ok(message.to_string())
 }
 
@@ -561,8 +563,7 @@ async fn handle_web_read(args: Value) -> Result<String, String> {
         "url": url,
         "content": content
     });
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("serialize result: {e}"))
+    serde_json::to_string_pretty(&result).map_err(|e| format!("serialize result: {e}"))
 }
 
 /// Extract `<title>` text from an HTML document.
@@ -574,9 +575,7 @@ fn extract_html_title(html: &str) -> String {
         if let Some(gt) = rest.find('>') {
             let after_tag = &rest[gt + 1..];
             if let Some(end) = after_tag.to_lowercase().find("</title") {
-                return strip_html_tags(&after_tag[..end])
-                    .trim()
-                    .to_string();
+                return strip_html_tags(&after_tag[..end]).trim().to_string();
             }
         }
     }
@@ -616,10 +615,34 @@ fn html_to_text(html: &str) -> String {
 /// Insert newline markers before/after block-level HTML elements.
 fn insert_block_breaks(html: &str) -> String {
     let block_tags = [
-        "<p", "</p", "<div", "</div", "<br", "<h1", "</h1", "<h2", "</h2",
-        "<h3", "</h3", "<h4", "</h4", "<h5", "</h5", "<h6", "</h6",
-        "<li", "</li", "<ul", "</ul", "<ol", "</ol", "<tr", "</tr",
-        "<blockquote", "</blockquote", "<hr",
+        "<p",
+        "</p",
+        "<div",
+        "</div",
+        "<br",
+        "<h1",
+        "</h1",
+        "<h2",
+        "</h2",
+        "<h3",
+        "</h3",
+        "<h4",
+        "</h4",
+        "<h5",
+        "</h5",
+        "<h6",
+        "</h6",
+        "<li",
+        "</li",
+        "<ul",
+        "</ul",
+        "<ol",
+        "</ol",
+        "<tr",
+        "</tr",
+        "<blockquote",
+        "</blockquote",
+        "<hr",
     ];
     let mut result = html.to_string();
     let lower = html.to_lowercase();
@@ -716,7 +739,7 @@ pub async fn run_mcp_server(name: &str) -> Result<(), String> {
         other => {
             return Err(format!(
                 "unknown MCP server name: `{other}`. Supported: web-search"
-            ))
+            ));
         }
     };
 
@@ -825,15 +848,16 @@ async fn dispatch(
     }
 }
 
-async fn dispatch_tool_call(id: u64, params: Option<Value>, backend: &SearchBackend) -> JsonRpcResponse {
+async fn dispatch_tool_call(
+    id: u64,
+    params: Option<Value>,
+    backend: &SearchBackend,
+) -> JsonRpcResponse {
     let params = match params {
         Some(p) => p,
         None => return JsonRpcResponse::err(id, -32602, "missing params"),
     };
-    let tool_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params
         .get("arguments")
         .cloned()
@@ -868,8 +892,7 @@ async fn write_response(
     stdout: &mut tokio::io::Stdout,
     resp: &JsonRpcResponse,
 ) -> Result<(), String> {
-    let mut line =
-        serde_json::to_string(resp).map_err(|e| format!("serialize response: {e}"))?;
+    let mut line = serde_json::to_string(resp).map_err(|e| format!("serialize response: {e}"))?;
     line.push('\n');
     stdout
         .write_all(line.as_bytes())
@@ -932,7 +955,14 @@ mod tests {
             "name": "echo",
             "arguments": {"message": "hello world"}
         });
-        let resp = dispatch(3, "tools/call", Some(params), &schemas, &SearchBackend::DuckDuckGo).await;
+        let resp = dispatch(
+            3,
+            "tools/call",
+            Some(params),
+            &schemas,
+            &SearchBackend::DuckDuckGo,
+        )
+        .await;
         let result = resp.result.unwrap();
         assert_eq!(result["isError"], false);
         let content = result["content"].as_array().unwrap();
@@ -950,7 +980,14 @@ mod tests {
     #[tokio::test]
     async fn dispatch_unknown_method_returns_error() {
         let schemas = web_search_tool_schemas();
-        let resp = dispatch(5, "bogus/method", None, &schemas, &SearchBackend::DuckDuckGo).await;
+        let resp = dispatch(
+            5,
+            "bogus/method",
+            None,
+            &schemas,
+            &SearchBackend::DuckDuckGo,
+        )
+        .await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -962,7 +999,14 @@ mod tests {
             "name": "nonexistent",
             "arguments": {}
         });
-        let resp = dispatch(6, "tools/call", Some(params), &schemas, &SearchBackend::DuckDuckGo).await;
+        let resp = dispatch(
+            6,
+            "tools/call",
+            Some(params),
+            &schemas,
+            &SearchBackend::DuckDuckGo,
+        )
+        .await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32602);
     }
@@ -1061,7 +1105,10 @@ mod tests {
 
     #[test]
     fn url_decode_basic() {
-        assert_eq!(url_decode("https%3A%2F%2Fexample.com"), "https://example.com");
+        assert_eq!(
+            url_decode("https%3A%2F%2Fexample.com"),
+            "https://example.com"
+        );
         assert_eq!(url_decode("hello+world"), "hello world");
     }
 

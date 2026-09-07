@@ -41,25 +41,18 @@ const MIN_TOKEN_LENGTH: usize = 3;
 /// up in every turn."
 const STOPWORDS: &[&str] = &[
     // articles + determiners
-    "the", "a", "an", "this", "that", "these", "those", "some", "any",
-    "all", "each", "every", "no",
+    "the", "a", "an", "this", "that", "these", "those", "some", "any", "all", "each", "every", "no",
     // pronouns
-    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her",
-    "us", "them", "my", "your", "his", "its", "our", "their",
-    // be / have / do
-    "is", "are", "was", "were", "be", "been", "being", "am",
-    "have", "has", "had", "having", "do", "does", "did", "doing",
-    // modals + auxiliaries
-    "will", "would", "shall", "should", "can", "could", "may", "might",
-    "must", "ought",
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "my", "your",
+    "his", "its", "our", "their", // be / have / do
+    "is", "are", "was", "were", "be", "been", "being", "am", "have", "has", "had", "having", "do",
+    "does", "did", "doing", // modals + auxiliaries
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must", "ought",
     // common prepositions
-    "of", "in", "on", "at", "to", "from", "with", "by", "for", "as",
-    "into", "onto", "upon", "about", "over", "under",
-    // conjunctions
-    "and", "or", "but", "if", "then", "else", "so", "because",
-    "while", "when", "where", "what", "which", "who", "how", "why",
-    "here", "there",
-    // other high-frequency
+    "of", "in", "on", "at", "to", "from", "with", "by", "for", "as", "into", "onto", "upon",
+    "about", "over", "under", // conjunctions
+    "and", "or", "but", "if", "then", "else", "so", "because", "while", "when", "where", "what",
+    "which", "who", "how", "why", "here", "there", // other high-frequency
     "not", "no", "yes", "ok", "okay",
 ];
 
@@ -88,8 +81,7 @@ pub fn extract_keywords(input: &str, max: usize) -> Vec<String> {
         .map(str::to_string)
         .collect();
     // Dedup preserving first-seen order.
-    let mut seen: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut unique: Vec<String> = Vec::new();
     for tok in raw {
         if seen.insert(tok.clone()) {
@@ -187,10 +179,7 @@ mod tests {
 
     #[test]
     fn extract_handles_punctuation_and_special_chars() {
-        let kw = extract_keywords(
-            "research-the_repo's API @ https://github.com/aivyx",
-            10,
-        );
+        let kw = extract_keywords("research-the_repo's API @ https://github.com/aivyx", 10);
         assert!(kw.contains(&"research".to_string()));
         // "the" gets dropped (stopword); "repo" survives.
         assert!(kw.contains(&"repo".to_string()));

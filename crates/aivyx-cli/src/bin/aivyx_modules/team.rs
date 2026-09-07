@@ -21,7 +21,7 @@ use aivyx_core::{
     ToolRegistry, TurnOutcome, TurnSafety,
 };
 use aivyx_llm::LlmProvider;
-use aivyx_team::{default_nonagon, TeamAssembly, TeamConfig};
+use aivyx_team::{TeamAssembly, TeamConfig, default_nonagon};
 use async_trait::async_trait;
 
 /// Render the team roster as an operator-readable block. Pure — the unit of
@@ -31,13 +31,21 @@ pub fn render_roster(config: &TeamConfig) -> String {
     let mut out = format!(
         "Team: {} — {}\n  lead: {} ({} specialist{})\n",
         config.name,
-        if config.description.is_empty() { "(no description)" } else { &config.description },
+        if config.description.is_empty() {
+            "(no description)"
+        } else {
+            &config.description
+        },
         config.lead,
         specialists,
         if specialists == 1 { "" } else { "s" },
     );
     for m in &config.members {
-        let tag = if m.name == config.lead { "lead " } else { "spec " };
+        let tag = if m.name == config.lead {
+            "lead "
+        } else {
+            "spec "
+        };
         let scopes = if m.capability_scopes.is_empty() {
             "(none)".to_string()
         } else {
@@ -159,9 +167,8 @@ pub fn run_roster(config: Option<&str>) -> Result<(), String> {
 fn init_source(pack: Option<&str>) -> Result<TeamConfig, String> {
     match pack {
         None | Some("default") => Ok(default_nonagon()),
-        Some(path) => {
-            TeamConfig::load(path).map_err(|e| format!("failed to load team pack from {path:?}: {e}"))
-        }
+        Some(path) => TeamConfig::load(path)
+            .map_err(|e| format!("failed to load team pack from {path:?}: {e}")),
     }
 }
 
@@ -179,14 +186,16 @@ pub fn run_init(pack: Option<&str>, out: Option<&str>, force: bool) -> Result<()
             out_path.display()
         ));
     }
-    aivyx_channel::team_config_write::write_team_config(&out_path, &roster).map_err(|e| match e {
-        aivyx_channel::team_config_write::TeamConfigWriteError::Invalid(m) => {
-            format!("the team is invalid: {m}")
-        }
-        aivyx_channel::team_config_write::TeamConfigWriteError::Write(m) => {
-            format!("failed to write {}: {m}", out_path.display())
-        }
-    })?;
+    aivyx_channel::team_config_write::write_team_config(&out_path, &roster).map_err(
+        |e| match e {
+            aivyx_channel::team_config_write::TeamConfigWriteError::Invalid(m) => {
+                format!("the team is invalid: {m}")
+            }
+            aivyx_channel::team_config_write::TeamConfigWriteError::Write(m) => {
+                format!("failed to write {}: {m}", out_path.display())
+            }
+        },
+    )?;
     println!(
         "Wrote team {:?} ({} members) to {}.\n\
          The daemon adopts it on the next start; edit it in the file or the Studio's Teams screen.",
@@ -222,10 +231,7 @@ pub async fn run_mission(
 ) -> Result<(), String> {
     let config = load_and_clamp_team(config, lead_scopes)?;
     let team_name = config.name.clone();
-    let lead = config
-        .lead_member()
-        .ok_or("team has no lead")?
-        .clone();
+    let lead = config.lead_member().ok_or("team has no lead")?.clone();
     // The lead's own operational capabilities -- what its own ConcreteAgent
     // is mounted with below. It grants team.delegate + team.message, so
     // the lead's orchestration/dialogue tools are callable. NOT what
@@ -240,8 +246,7 @@ pub async fn run_mission(
     // lead itself declared for its own direct use, defeating
     // bind_lead_scopes' own already-correct per-specialist floor
     // computation one hop downstream.
-    let ceiling =
-        CapabilitySet::from_scopes(lead_scopes.iter().filter_map(|s| Scope::parse(s)));
+    let ceiling = CapabilitySet::from_scopes(lead_scopes.iter().filter_map(|s| Scope::parse(s)));
 
     let assembly = TeamAssembly::build(
         config,
@@ -280,42 +285,36 @@ pub async fn run_mission(
     let soul = lead.soul.clone();
     let planner_kv_cache_handles = kv_cache_handles.clone();
     let planner_broker_slot_hint_mode = broker_slot_hint_mode;
-    let agent = ConcreteAgent::new(
-        AgentId::new(),
-        lead_caps,
-        registry,
-        audit,
-        move || {
-            let cfg = LlmPlannerConfig::new(&model_owned)
-                .with_system_prompt(&soul)
-                .with_max_tokens(max_tokens);
-            let planner = LlmPlanner::new(
-                Arc::clone(&planner_provider),
-                Arc::clone(&planner_registry),
-                cfg,
-            );
-            let planner = match &planner_kv_cache_handles {
-                Some((pool, store, build_hash)) => planner.with_kv_cache(
-                    Arc::clone(pool),
-                    Arc::clone(store),
-                    "llama-server".to_string(),
-                    model_owned.clone(),
-                    build_hash.clone(),
-                ),
-                None => planner,
-            };
-            // GPU-slot broker coordination — mutually exclusive with the
-            // `with_kv_cache` call above (see `SpecialistFactory`'s own
-            // `broker_slot_hint_mode` doc comment): at most one of the two
-            // ever fires.
-            let planner = if planner_broker_slot_hint_mode {
-                planner.with_broker_slot_hint()
-            } else {
-                planner
-            };
-            Box::new(planner)
-        },
-    )
+    let agent = ConcreteAgent::new(AgentId::new(), lead_caps, registry, audit, move || {
+        let cfg = LlmPlannerConfig::new(&model_owned)
+            .with_system_prompt(&soul)
+            .with_max_tokens(max_tokens);
+        let planner = LlmPlanner::new(
+            Arc::clone(&planner_provider),
+            Arc::clone(&planner_registry),
+            cfg,
+        );
+        let planner = match &planner_kv_cache_handles {
+            Some((pool, store, build_hash)) => planner.with_kv_cache(
+                Arc::clone(pool),
+                Arc::clone(store),
+                "llama-server".to_string(),
+                model_owned.clone(),
+                build_hash.clone(),
+            ),
+            None => planner,
+        };
+        // GPU-slot broker coordination — mutually exclusive with the
+        // `with_kv_cache` call above (see `SpecialistFactory`'s own
+        // `broker_slot_hint_mode` doc comment): at most one of the two
+        // ever fires.
+        let planner = if planner_broker_slot_hint_mode {
+            planner.with_broker_slot_hint()
+        } else {
+            planner
+        };
+        Box::new(planner)
+    })
     .with_checkpointer(checkpointer);
     // The lead orchestrates the mission autonomously (delegating to specialists
     // via team.delegate), so it takes the same autonomous safety posture as the
@@ -327,7 +326,10 @@ pub async fn run_mission(
 
     let channel = MissionChannel::new();
     let msg = Message::text(channel.session_id(), mission);
-    eprintln!("team: running mission on {} (lead: {})…", team_name, lead.name);
+    eprintln!(
+        "team: running mission on {} (lead: {})…",
+        team_name, lead.name
+    );
     match agent.turn(msg, &channel).await {
         TurnOutcome::Completed { final_message, .. } => {
             println!("{final_message}");
@@ -396,8 +398,15 @@ mod tests {
         assert!(out.contains("lead: coordinator (8 specialists)"));
         // Every role is listed.
         for name in [
-            "coordinator", "researcher", "analyst", "coder", "writer", "reviewer", "planner",
-            "verifier", "archivist",
+            "coordinator",
+            "researcher",
+            "analyst",
+            "coder",
+            "writer",
+            "reviewer",
+            "planner",
+            "verifier",
+            "archivist",
         ] {
             assert!(out.contains(name), "roster missing {name}");
         }
@@ -503,11 +512,17 @@ mod tests {
     #[test]
     fn init_source_defaults_to_nonagon_and_loads_a_pack_path() {
         assert_eq!(init_source(None).unwrap().name, "default-nonagon");
-        assert_eq!(init_source(Some("default")).unwrap().name, "default-nonagon");
+        assert_eq!(
+            init_source(Some("default")).unwrap().name,
+            "default-nonagon"
+        );
         let dir = scratch("init-src");
         let p = dir.join("pack.toml");
         write_custom_team(&p);
-        assert_eq!(init_source(Some(p.to_str().unwrap())).unwrap().name, "custom-team");
+        assert_eq!(
+            init_source(Some(p.to_str().unwrap())).unwrap().name,
+            "custom-team"
+        );
         assert!(init_source(Some("/no/such.toml")).is_err());
     }
 
@@ -548,7 +563,10 @@ mod tests {
             dialogue: DialogueConfig::default(),
         };
         let out = render_roster(&cfg);
-        assert!(out.contains("1 specialist)"), "singular, not '1 specialists'");
+        assert!(
+            out.contains("1 specialist)"),
+            "singular, not '1 specialists'"
+        );
         assert!(out.contains("(no description)"));
         assert!(out.contains("scopes: (none)"));
     }
@@ -599,12 +617,16 @@ mod tests {
         let lead = clamped.lead_member().unwrap();
 
         assert!(
-            !lead.capability_scopes.iter().any(|s| s.starts_with("shell.exec")),
+            !lead
+                .capability_scopes
+                .iter()
+                .any(|s| s.starts_with("shell.exec")),
             "lead scopes should not include the out-of-floor domain scope: {:?}",
             lead.capability_scopes
         );
         assert!(
-            lead.capability_scopes.contains(&"team.delegate".to_string()),
+            lead.capability_scopes
+                .contains(&"team.delegate".to_string()),
             "the legitimate orchestration marker must still flow through: {:?}",
             lead.capability_scopes
         );

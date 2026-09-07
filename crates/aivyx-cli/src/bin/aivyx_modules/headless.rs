@@ -22,8 +22,8 @@
 
 use std::path::Path;
 
-use aivyx_channel::daemon_client::{daemon_is_running, DaemonSession};
-use aivyx_channel::daemon_ipc::{default_socket_path, FrontendType};
+use aivyx_channel::daemon_client::{DaemonSession, daemon_is_running};
+use aivyx_channel::daemon_ipc::{FrontendType, default_socket_path};
 
 /// Entry point for `aivyx --headless "<task>"`.
 ///
@@ -88,13 +88,11 @@ pub async fn run_headless_stdin() -> Result<(), String> {
     use std::io::{BufRead, IsTerminal};
 
     if std::io::stdin().is_terminal() {
-        return Err(
-            "`aivyx --headless` without a task reads turns from piped \
+        return Err("`aivyx --headless` without a task reads turns from piped \
              stdin — pipe newline-delimited turns in (e.g. `printf \
              \"first\\nsecond\\n\" | aivyx --headless`) or pass a single \
              task: `aivyx --headless \"<task>\"`"
-                .to_string(),
-        );
+            .to_string());
     }
 
     let socket_path = default_socket_path()?;
@@ -111,8 +109,7 @@ pub async fn run_headless_stdin() -> Result<(), String> {
 
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
-        let line =
-            line.map_err(|e| format!("aivyx --headless: stdin read failed — {e}"))?;
+        let line = line.map_err(|e| format!("aivyx --headless: stdin read failed — {e}"))?;
         let task = line.trim();
         if task.is_empty() {
             continue;

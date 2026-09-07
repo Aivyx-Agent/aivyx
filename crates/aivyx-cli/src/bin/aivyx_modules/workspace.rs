@@ -95,7 +95,13 @@ fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, String> {
 fn display_rel(root: &Path, target: &Path) -> String {
     target
         .strip_prefix(root)
-        .map(|p| if p.as_os_str().is_empty() { ".".into() } else { p.display().to_string() })
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                ".".into()
+            } else {
+                p.display().to_string()
+            }
+        })
         .unwrap_or_else(|_| target.display().to_string())
 }
 

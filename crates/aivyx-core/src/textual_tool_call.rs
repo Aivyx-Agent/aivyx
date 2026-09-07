@@ -290,9 +290,7 @@ fn try_bare_json(text: &str) -> Option<ExtractedToolCall> {
     if !value.is_object() {
         return None;
     }
-    if let Some(call) =
-        parse_json_name_arguments(&value, "(bare)", "json-name-arguments")
-    {
+    if let Some(call) = parse_json_name_arguments(&value, "(bare)", "json-name-arguments") {
         return Some(call);
     }
     parse_json_tool_parameters(&value, "(bare)")
@@ -373,11 +371,9 @@ fn parse_inner(inner: &str, wrapper_tag: &str, bias: FamilyBias) -> Vec<Extracte
     if wrapper_tag == "|tool_call|" {
         if let Ok(arr) = serde_json::from_str::<Vec<Value>>(inner) {
             for elem in arr {
-                if let Some(call) = parse_json_name_arguments(
-                    &elem,
-                    wrapper_tag,
-                    "json-list-name-arguments",
-                ) {
+                if let Some(call) =
+                    parse_json_name_arguments(&elem, wrapper_tag, "json-list-name-arguments")
+                {
                     out.push(call);
                 }
             }
@@ -414,9 +410,7 @@ fn parse_inner(inner: &str, wrapper_tag: &str, bias: FamilyBias) -> Vec<Extracte
     // JSON shapes for `<tool_code>` and `<tool_call>` (and
     // for `tool_code_fence` fall-through).
     if let Ok(value) = serde_json::from_str::<Value>(inner) {
-        if let Some(call) =
-            parse_json_name_arguments(&value, wrapper_tag, "json-name-arguments")
-        {
+        if let Some(call) = parse_json_name_arguments(&value, wrapper_tag, "json-name-arguments") {
             out.push(call);
             return out;
         }
@@ -473,10 +467,7 @@ fn parse_json_name_arguments(
 /// Match the `{"tool", "parameters"}` JSON shape on a
 /// single `Value`. Same `None` conditions as the
 /// `name`/`arguments` matcher.
-fn parse_json_tool_parameters(
-    value: &Value,
-    wrapper_tag: &str,
-) -> Option<ExtractedToolCall> {
+fn parse_json_tool_parameters(value: &Value, wrapper_tag: &str) -> Option<ExtractedToolCall> {
     let obj = value.as_object()?;
     let Value::String(tool) = obj.get("tool")? else {
         return None;
@@ -1136,10 +1127,7 @@ mod tests {
     fn drops_unclosed_wrapper() {
         let text = "<tool_code>{\"name\": \"x\", \"arguments\": {}}";
         let calls = extract_tool_calls(text);
-        assert!(
-            calls.is_empty(),
-            "unclosed wrapper produces no extraction"
-        );
+        assert!(calls.is_empty(), "unclosed wrapper produces no extraction");
     }
 
     #[test]
@@ -1199,7 +1187,8 @@ mod tests {
 
     #[test]
     fn tolerates_inner_whitespace_around_json() {
-        let text = "<tool_code>\n  \n  {\"name\": \"fs.read\", \"arguments\": {}}\n  \n</tool_code>";
+        let text =
+            "<tool_code>\n  \n  {\"name\": \"fs.read\", \"arguments\": {}}\n  \n</tool_code>";
         let calls = extract_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.read");
@@ -1290,8 +1279,7 @@ mod tests {
 
     #[test]
     fn phase_127_qwen3_coder_xml_no_params() {
-        let text =
-            r#"<tool_call><function=time.now></function></tool_call>"#;
+        let text = r#"<tool_call><function=time.now></function></tool_call>"#;
         let calls = extract_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "time.now");
@@ -1424,8 +1412,7 @@ mod tests {
         // (including leading/trailing whitespace) is what
         // lands.
         assert_eq!(
-            calls[0].arguments["path"],
-            "  spaced.txt  ",
+            calls[0].arguments["path"], "  spaced.txt  ",
             "raw value preserved when not JSON-parseable"
         );
     }
@@ -1493,10 +1480,7 @@ mod tests {
     fn phase_127_qwen3_coder_xml_drops_empty_function_name() {
         let text = r#"<tool_call><function=><parameter=path>x</parameter></function></tool_call>"#;
         let calls = extract_tool_calls(text);
-        assert!(
-            calls.is_empty(),
-            "empty function name dropped"
-        );
+        assert!(calls.is_empty(), "empty function name dropped");
     }
 
     #[test]
@@ -1504,7 +1488,8 @@ mod tests {
         // Same XML inner inside `<tool_code>` MUST NOT
         // extract — Phase 127's parser is restricted to
         // `<tool_call>` per the empirical literature.
-        let text = r#"<tool_code><function=fs.write><parameter=path>x</parameter></function></tool_code>"#;
+        let text =
+            r#"<tool_code><function=fs.write><parameter=path>x</parameter></function></tool_code>"#;
         let calls = extract_tool_calls(text);
         assert!(
             calls.is_empty(),
@@ -1599,7 +1584,8 @@ mod tests {
 
     #[test]
     fn phase_127_phi4_mini_single_call_in_list() {
-        let text = r#"<|tool_call|>[{"name": "fs.write", "arguments": {"path": "x.txt"}}]<|/tool_call|>"#;
+        let text =
+            r#"<|tool_call|>[{"name": "fs.write", "arguments": {"path": "x.txt"}}]<|/tool_call|>"#;
         let calls = extract_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.write");
@@ -1761,8 +1747,7 @@ mod tests {
 
     #[test]
     fn phase_127_gemma3_python_fence_single_call() {
-        let text =
-            "```tool_code\nfs.write(path='test.txt', content='hi')\n```";
+        let text = "```tool_code\nfs.write(path='test.txt', content='hi')\n```";
         let calls = extract_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.write");
@@ -1847,8 +1832,7 @@ mod tests {
 
     #[test]
     fn phase_127_gemma3_python_fence_nested_dict_arg() {
-        let text =
-            r#"```tool_code
+        let text = r#"```tool_code
 task.set(meta={"size": 42, "owner": "alice"})
 ```"#;
         let calls = extract_tool_calls(text);
@@ -1876,8 +1860,7 @@ task.set(meta={"size": 42, "owner": "alice"})
     #[test]
     fn phase_127_gemma3_python_fence_string_with_escapes() {
         // Escape sequences inside string literals.
-        let text =
-            r#"```tool_code
+        let text = r#"```tool_code
 fs.write(content='line one\nline two\t\\tabbed')
 ```"#;
         let calls = extract_tool_calls(text);
@@ -1916,8 +1899,7 @@ fs.write(content='line one\nline two\t\\tabbed')
     fn phase_127_gemma3_python_fence_multi_call_with_semicolons() {
         // Tolerates `;` as a separator (Gemma 3 usually
         // uses newlines, but defensive).
-        let text =
-            "```tool_code\nfs.write(path='a'); fs.read(path='b')\n```";
+        let text = "```tool_code\nfs.write(path='a'); fs.read(path='b')\n```";
         let calls = extract_tool_calls(text);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].tool_name, "fs.write");
@@ -1987,8 +1969,7 @@ fs.write(
         // Operators sometimes paste JSON into a tool_code
         // fence; the wrapper falls back to JSON shapes
         // when Python-call doesn't match.
-        let text =
-            r#"```tool_code
+        let text = r#"```tool_code
 {"name": "fs.write", "arguments": {"path": "x"}}
 ```"#;
         let calls = extract_tool_calls(text);
@@ -2067,8 +2048,7 @@ fs.write(
 
     #[test]
     fn phase_127_bare_json_after_think_block() {
-        let text =
-            r#"<think>
+        let text = r#"<think>
 I should call fs.write to save that.
 </think>
 {"name": "fs.write", "arguments": {"path": "out.txt"}}"#;
@@ -2094,7 +2074,8 @@ I should call fs.write to save that.
     fn phase_127_bare_json_embedded_in_prose_drops() {
         // Load-bearing FP guard: model says "The answer is
         // {...}" with prose surrounding JSON — drop.
-        let text = r#"The answer is {"name": "fs.write", "arguments": {}}, in case you were wondering."#;
+        let text =
+            r#"The answer is {"name": "fs.write", "arguments": {}}, in case you were wondering."#;
         let calls = extract_tool_calls(text);
         assert!(
             calls.is_empty(),
@@ -2104,8 +2085,7 @@ I should call fs.write to save that.
 
     #[test]
     fn phase_127_bare_json_followed_by_prose_drops() {
-        let text =
-            r#"{"name": "fs.write", "arguments": {}} — I think that's the right call."#;
+        let text = r#"{"name": "fs.write", "arguments": {}} — I think that's the right call."#;
         let calls = extract_tool_calls(text);
         assert!(
             calls.is_empty(),
@@ -2182,7 +2162,11 @@ I should call fs.write to save that.
         // fallback.
         let text = r#"<tool_call>{"name":"wrapped","arguments":{}}</tool_call> Then {"name":"bare","arguments":{}}"#;
         let calls = extract_tool_calls(text);
-        assert_eq!(calls.len(), 1, "only the wrapped call extracts; bare suffix is ignored");
+        assert_eq!(
+            calls.len(),
+            1,
+            "only the wrapped call extracts; bare suffix is ignored"
+        );
         assert_eq!(calls[0].tool_name, "wrapped");
         assert_eq!(calls[0].wrapper_tag, "tool_call");
     }
@@ -2211,7 +2195,8 @@ I should call fs.write to save that.
         // routed via the hint-aware entry point with the
         // qwen35 family hint. Confirms the family-hint path
         // also produces the expected extraction.
-        let text = r#"<tool_call><function=fs.write><parameter=path>x</parameter></function></tool_call>"#;
+        let text =
+            r#"<tool_call><function=fs.write><parameter=path>x</parameter></function></tool_call>"#;
         let calls = extract_tool_calls_with_hint(text, Some("qwen35"));
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.write");
@@ -2224,7 +2209,8 @@ I should call fs.write to save that.
         // fallback path still picks up XML (after JSON
         // shapes fail). Confirms the no-hint default
         // behavior is unchanged.
-        let text = r#"<tool_call><function=fs.write><parameter=path>x</parameter></function></tool_call>"#;
+        let text =
+            r#"<tool_call><function=fs.write><parameter=path>x</parameter></function></tool_call>"#;
         let calls = extract_tool_calls_with_hint(text, None);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.write");
@@ -2270,9 +2256,7 @@ I should call fs.write to save that.
         // All `qwen*` family strings route to QwenCoder
         // bias. Confirms the prefix-match classifier.
         let xml = r#"<tool_call><function=fs.write></function></tool_call>"#;
-        for variant in [
-            "qwen", "qwen3", "qwen35", "qwen3-coder", "Qwen35", "QWEN3",
-        ] {
+        for variant in ["qwen", "qwen3", "qwen35", "qwen3-coder", "Qwen35", "QWEN3"] {
             let calls = extract_tool_calls_with_hint(xml, Some(variant));
             assert_eq!(
                 calls.len(),
@@ -2315,8 +2299,7 @@ I should call fs.write to save that.
     fn phase_127_bare_json_unclosed_think_block_falls_through() {
         // Unclosed `<think>` block — don't strip; the
         // remaining text isn't pure JSON, so we drop.
-        let text =
-            r#"<think>thinking forever {"name": "fs.write", "arguments": {}}"#;
+        let text = r#"<think>thinking forever {"name": "fs.write", "arguments": {}}"#;
         let calls = extract_tool_calls(text);
         assert!(calls.is_empty());
     }
@@ -2336,9 +2319,6 @@ health.check.add(url='https://example.com', interval_minutes=15, enabled=True, a
         assert_eq!(calls[0].arguments["enabled"], true);
         assert!(calls[0].arguments["alert"].is_null());
         assert_eq!(calls[0].arguments["tags"], json!(["critical", "oncall"]));
-        assert_eq!(
-            calls[0].arguments["thresholds"]["latency_ms"],
-            500
-        );
+        assert_eq!(calls[0].arguments["thresholds"]["latency_ms"], 500);
     }
 }

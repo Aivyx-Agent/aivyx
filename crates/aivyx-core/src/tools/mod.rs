@@ -38,9 +38,7 @@ pub use fs::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig,
 };
-pub use git::{
-    GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig,
-};
+pub use git::{GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig};
 pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
@@ -70,7 +68,9 @@ pub fn check_tool_quality(tool: &dyn crate::Tool) -> Vec<String> {
     if name.trim().is_empty() {
         issues.push("name is empty".to_string());
     } else if !name.contains('.') {
-        issues.push(format!("name {name:?} is not dotted (expected domain.verb)"));
+        issues.push(format!(
+            "name {name:?} is not dotted (expected domain.verb)"
+        ));
     }
 
     let desc = tool.description().trim();
@@ -123,11 +123,27 @@ mod quality_tests {
             Arc::new(git_status),
             Arc::new(git_diff),
             Arc::new(git_commit),
-            Arc::new(ShellExecToolConfig::new(dir.clone()).build().expect("shell")),
+            Arc::new(
+                ShellExecToolConfig::new(dir.clone())
+                    .build()
+                    .expect("shell"),
+            ),
             Arc::new(FsReadToolConfig::new(dir.clone()).build().expect("fs.read")),
-            Arc::new(FsWriteToolConfig::new(dir.clone()).build().expect("fs.write")),
-            Arc::new(FsMetadataToolConfig::new(dir.clone()).build().expect("fs.metadata")),
-            Arc::new(FsDeleteToolConfig::new(dir.clone()).build().expect("fs.delete")),
+            Arc::new(
+                FsWriteToolConfig::new(dir.clone())
+                    .build()
+                    .expect("fs.write"),
+            ),
+            Arc::new(
+                FsMetadataToolConfig::new(dir.clone())
+                    .build()
+                    .expect("fs.metadata"),
+            ),
+            Arc::new(
+                FsDeleteToolConfig::new(dir.clone())
+                    .build()
+                    .expect("fs.delete"),
+            ),
             Arc::new(RoleSwitchTool::default()),
         ];
         if let Ok((ws_tools, _)) = workspace::build_workspace_tools(&dir, None) {
@@ -140,7 +156,11 @@ mod quality_tests {
                 all.push(issue);
             }
         }
-        assert!(all.is_empty(), "substrate tool quality issues:\n  {}", all.join("\n  "));
+        assert!(
+            all.is_empty(),
+            "substrate tool quality issues:\n  {}",
+            all.join("\n  ")
+        );
     }
 
     #[test]
@@ -177,8 +197,17 @@ mod quality_tests {
             }
         }
         let issues = check_tool_quality(&Bad);
-        assert!(issues.iter().any(|i| i.contains("not dotted")), "{issues:?}");
-        assert!(issues.iter().any(|i| i.contains("description too short")), "{issues:?}");
-        assert!(issues.iter().any(|i| i.contains("not a JSON object")), "{issues:?}");
+        assert!(
+            issues.iter().any(|i| i.contains("not dotted")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.contains("description too short")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.contains("not a JSON object")),
+            "{issues:?}"
+        );
     }
 }

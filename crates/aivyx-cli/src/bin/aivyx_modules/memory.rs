@@ -9,15 +9,15 @@
 use std::io::Write;
 use std::path::Path;
 
+use aivyx_channel::contradiction::MemoryConflict;
 use aivyx_channel::daemon_client::{
     daemon_is_running, dismiss_memory_conflict, evict_memory_topic, get_knowledge_graph,
     get_memory_conflicts, get_memory_topic_entries, get_wiki_page, list_memory_topics,
     list_wiki_pages, resolve_memory_conflict, search_memory,
 };
-use aivyx_channel::contradiction::MemoryConflict;
+use aivyx_channel::daemon_ipc::{MemoryEntrySummary, default_socket_path};
 use aivyx_channel::knowledge_graph::{GraphEntity, GraphTriple};
 use aivyx_channel::knowledge_wiki::{WikiPage, WikiPageSummary};
-use aivyx_channel::daemon_ipc::{default_socket_path, MemoryEntrySummary};
 
 /// `aivyx memory list`
 pub async fn run_memory_list() -> Result<(), String> {
@@ -42,17 +42,12 @@ pub async fn run_memory_show(topic: &str, limit: u32) -> Result<(), String> {
 }
 
 /// `aivyx memory search <query> [--semantic] [--limit N]`
-pub async fn run_memory_search(
-    query: &str,
-    limit: u32,
-    semantic: bool,
-) -> Result<(), String> {
+pub async fn run_memory_search(query: &str, limit: u32, semantic: bool) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
-    let (matches, fell_back) =
-        search_memory(&socket_path, query, limit, semantic)
-            .await
-            .map_err(|e| format!("failed to search memory: {e}"))?;
+    let (matches, fell_back) = search_memory(&socket_path, query, limit, semantic)
+        .await
+        .map_err(|e| format!("failed to search memory: {e}"))?;
     let label = if semantic && !fell_back {
         format!("semantic search \"{query}\"")
     } else {
@@ -92,9 +87,7 @@ pub async fn run_memory_evict(topic: &str, yes: bool) -> Result<(), String> {
     let deleted = evict_memory_topic(&socket_path, topic)
         .await
         .map_err(|e| format!("evict failed: {e}"))?;
-    eprintln!(
-        "aivyx memory evict: ok — deleted {deleted} entries from `{topic}`"
-    );
+    eprintln!("aivyx memory evict: ok — deleted {deleted} entries from `{topic}`");
     Ok(())
 }
 
@@ -169,9 +162,7 @@ pub async fn run_memory_dismiss(id: &str) -> Result<(), String> {
     dismiss_memory_conflict(&socket_path, id)
         .await
         .map_err(|e| format!("failed to dismiss conflict: {e}"))?;
-    println!(
-        "Dismissed conflict {id} — it won't be flagged again (both entries kept)."
-    );
+    println!("Dismissed conflict {id} — it won't be flagged again (both entries kept).");
     Ok(())
 }
 
@@ -270,7 +261,10 @@ fn render_wiki_list(pages: &[WikiPageSummary]) -> String {
             p.snippet.trim(),
         ));
     }
-    out.push_str(&format!("\n({} page(s)) — `aivyx memory wiki <topic>` for the full page\n", pages.len()));
+    out.push_str(&format!(
+        "\n({} page(s)) — `aivyx memory wiki <topic>` for the full page\n",
+        pages.len()
+    ));
     out
 }
 
@@ -295,18 +289,17 @@ fn render_wiki_page(topic: &str, page: Option<&WikiPage>) -> String {
                 }
                 out.push('\n');
             }
-            out.push_str(&format!("(consolidated from {} entr{})\n",
-                p.entry_count, if p.entry_count == 1 { "y" } else { "ies" }));
+            out.push_str(&format!(
+                "(consolidated from {} entr{})\n",
+                p.entry_count,
+                if p.entry_count == 1 { "y" } else { "ies" }
+            ));
         }
     }
     out
 }
 
-fn render_graph(
-    entities: &[GraphEntity],
-    triples: &[GraphTriple],
-    filter: Option<&str>,
-) -> String {
+fn render_graph(entities: &[GraphEntity], triples: &[GraphTriple], filter: Option<&str>) -> String {
     let mut out = String::from("Knowledge graph\n===============\n\n");
     if entities.is_empty() && triples.is_empty() {
         out.push_str(
@@ -341,7 +334,11 @@ fn render_graph(
         entities.len(),
         if entities.len() == 1 { "y" } else { "ies" },
         shown.len(),
-        if filter.is_some() { format!(" of {}", triples.len()) } else { String::new() },
+        if filter.is_some() {
+            format!(" of {}", triples.len())
+        } else {
+            String::new()
+        },
     ));
     out
 }
@@ -457,10 +454,7 @@ mod tests {
 
     #[test]
     fn render_topics_lists_each_with_count() {
-        let s = render_topics(&[
-            "notes".to_string(),
-            "project/x".to_string(),
-        ]);
+        let s = render_topics(&["notes".to_string(), "project/x".to_string()]);
         assert!(s.contains("  notes"));
         assert!(s.contains("  project/x"));
         assert!(s.contains("(2 topic(s))"));
@@ -537,8 +531,16 @@ mod tests {
     fn render_graph_empty_full_and_filtered() {
         assert!(render_graph(&[], &[], None).contains("No knowledge graph yet"));
         let entities = vec![
-            GraphEntity { name: "aviation".into(), degree: 2, kind: String::new() },
-            GraphEntity { name: "YPPH".into(), degree: 1, kind: "airport".into() },
+            GraphEntity {
+                name: "aviation".into(),
+                degree: 2,
+                kind: String::new(),
+            },
+            GraphEntity {
+                name: "YPPH".into(),
+                degree: 1,
+                kind: "airport".into(),
+            },
         ];
         let triples = vec![
             GraphTriple {

@@ -10,11 +10,10 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{
-    daemon_is_running, loop_add, loop_list, loop_log, loop_skip,
-    loop_start, loop_status, loop_stop,
+    daemon_is_running, loop_add, loop_list, loop_log, loop_skip, loop_start, loop_status, loop_stop,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
-use aivyx_channel::loop_backlog::{Story, StoryStatus, MAX_TITLE_LEN};
+use aivyx_channel::loop_backlog::{MAX_TITLE_LEN, Story, StoryStatus};
 use aivyx_channel::loop_driver::LoopRunState;
 
 use crate::LoopSubcommand;
@@ -166,8 +165,10 @@ fn render_log(notes: &[String]) -> String {
                 learnings with `loop.note` during a run.\n"
             .to_string();
     }
-    let mut out =
-        format!("Loop progress log ({} note(s), oldest first):\n", notes.len());
+    let mut out = format!(
+        "Loop progress log ({} note(s), oldest first):\n",
+        notes.len()
+    );
     for note in notes.iter().rev() {
         out.push_str("  - ");
         out.push_str(note.trim());
@@ -210,8 +211,10 @@ fn render_backlog(stories: &[Story]) -> String {
             .cmp(&b.priority)
             .then(a.created_seq.cmp(&b.created_seq))
     });
-    let pending =
-        stories.iter().filter(|s| status_label(&s.status) == "pending").count();
+    let pending = stories
+        .iter()
+        .filter(|s| status_label(&s.status) == "pending")
+        .count();
     let mut out = format!(
         "Loop backlog ({} stor{}, {pending} pending):\n",
         stories.len(),
@@ -311,9 +314,7 @@ fn render_status(
             if max_idle_iterations == 0 {
                 "off".to_string()
             } else {
-                format!(
-                    "stop after {max_idle_iterations} idle iteration(s)"
-                )
+                format!("stop after {max_idle_iterations} idle iteration(s)")
             },
         ));
         // Phase 177 — live spend, once a run has had an iteration.
@@ -348,13 +349,7 @@ fn render_status(
 mod tests {
     use super::*;
 
-    fn story(
-        id: &str,
-        priority: u32,
-        seq: u64,
-        title: &str,
-        status: StoryStatus,
-    ) -> Story {
+    fn story(id: &str, priority: u32, seq: u64, title: &str, status: StoryStatus) -> Story {
         Story {
             id: id.into(),
             priority,
@@ -368,8 +363,7 @@ mod tests {
 
     #[test]
     fn short_title_passes_through_unsplit() {
-        let (title, body, split) =
-            split_overlong_title("fix the thing", "details");
+        let (title, body, split) = split_overlong_title("fix the thing", "details");
         assert_eq!(title, "fix the thing");
         assert_eq!(body, "details");
         assert!(!split);
@@ -438,8 +432,16 @@ mod tests {
 
     #[test]
     fn status_not_armed() {
-        let out =
-            render_status(&LoopRunState::default(), 3, false, false, None, None, None, 0);
+        let out = render_status(
+            &LoopRunState::default(),
+            3,
+            false,
+            false,
+            None,
+            None,
+            None,
+            0,
+        );
         assert!(out.contains("not armed"));
         assert!(out.contains("3 pending"));
         // Safety config is only shown when armed.
@@ -458,8 +460,16 @@ mod tests {
             spent_cents: 250,
             consecutive_idle: 2,
         };
-        let out =
-            render_status(&state, 7, true, true, Some(3600), Some(500000), Some(5.0), 3);
+        let out = render_status(
+            &state,
+            7,
+            true,
+            true,
+            Some(3600),
+            Some(500000),
+            Some(5.0),
+            3,
+        );
         assert!(out.contains("RUNNING — iteration 4 of max 25"));
         assert!(out.contains("7 pending"));
         assert!(out.contains("gate verification: on"));

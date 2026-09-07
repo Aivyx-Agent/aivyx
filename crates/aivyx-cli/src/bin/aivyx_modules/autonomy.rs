@@ -16,8 +16,8 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use aivyx_config::{
-    write_autonomy_section, AivyxConfig, AutonomyLevel, AutonomyPosture, FieldSource, GatePosture,
-    GrowthAdoption, LoadOptions,
+    AivyxConfig, AutonomyLevel, AutonomyPosture, FieldSource, GatePosture, GrowthAdoption,
+    LoadOptions, write_autonomy_section,
 };
 
 /// Module-local copy of the default config path (mirrors the other subcommand
@@ -159,7 +159,10 @@ fn confirm(question: &str) -> Result<bool, String> {
         .lock()
         .read_line(&mut line)
         .map_err(|e| format!("failed to read confirmation: {e}"))?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn load_config_for_inspection(path: &Path) -> Result<AivyxConfig, String> {
@@ -182,7 +185,10 @@ mod tests {
     #[test]
     fn parse_level_accepts_known_levels() {
         assert_eq!(parse_level("assisted").unwrap(), AutonomyLevel::Assisted);
-        assert_eq!(parse_level("autonomous").unwrap(), AutonomyLevel::Autonomous);
+        assert_eq!(
+            parse_level("autonomous").unwrap(),
+            AutonomyLevel::Autonomous
+        );
         assert_eq!(parse_level("unleashed").unwrap(), AutonomyLevel::Unleashed);
         assert!(parse_level("bogus").is_err());
     }
@@ -215,7 +221,10 @@ mod tests {
         run_autonomy_set_at(&toml, AutonomyLevel::Supervised, true).unwrap();
         let written = std::fs::read_to_string(&toml).unwrap();
         assert!(written.contains("level = \"supervised\""), "{written}");
-        assert!(written.contains("[access]"), "other sections preserved: {written}");
+        assert!(
+            written.contains("[access]"),
+            "other sections preserved: {written}"
+        );
         assert!(
             written.contains("[[autonomy.override]]") && written.contains("email"),
             "overrides must survive a level rewrite: {written}"
@@ -224,8 +233,7 @@ mod tests {
 
     #[test]
     fn show_renders_level_posture_and_overrides() {
-        let dir = std::env::temp_dir()
-            .join(format!("aivyx-autonomy-show-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("aivyx-autonomy-show-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let toml = dir.join("aivyx.toml");
         std::fs::write(
@@ -237,8 +245,14 @@ mod tests {
         .unwrap();
         let out = render_autonomy_for_show(&load_config_for_inspection(&toml).unwrap());
         assert!(out.contains("level     = supervised"), "{out}");
-        assert!(out.contains("loop:armed"), "supervised arms the loop: {out}");
-        assert!(out.contains("[shell] → autonomous"), "override shown: {out}");
+        assert!(
+            out.contains("loop:armed"),
+            "supervised arms the loop: {out}"
+        );
+        assert!(
+            out.contains("[shell] → autonomous"),
+            "override shown: {out}"
+        );
         assert!(out.contains("fs.write"), "allowlist shown: {out}");
     }
 }

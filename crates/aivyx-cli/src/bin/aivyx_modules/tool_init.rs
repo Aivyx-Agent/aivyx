@@ -54,21 +54,16 @@ pub fn run_tool_init(target: &Path, force: bool) -> Result<(), String> {
             ));
         }
     } else {
-        fs::create_dir_all(target).map_err(|e| {
-            format!("cannot create {target:?}: {e}")
-        })?;
+        fs::create_dir_all(target).map_err(|e| format!("cannot create {target:?}: {e}"))?;
     }
 
     for (rel, content) in FILES {
         let path = target.join(rel);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                format!("cannot create parent of {path:?}: {e}")
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create parent of {path:?}: {e}"))?;
         }
-        fs::write(&path, content).map_err(|e| {
-            format!("cannot write {path:?}: {e}")
-        })?;
+        fs::write(&path, content).map_err(|e| format!("cannot write {path:?}: {e}"))?;
     }
 
     println!(
@@ -397,12 +392,9 @@ mod tests {
     struct ScratchDir(std::path::PathBuf);
     impl ScratchDir {
         fn new() -> Self {
-            let base = std::env::var("TMPDIR")
-                .unwrap_or_else(|_| "/tmp".to_string());
-            let dir = std::path::PathBuf::from(base).join(format!(
-                "aivyx-tool-init-test-{}",
-                uuid::Uuid::new_v4()
-            ));
+            let base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+            let dir = std::path::PathBuf::from(base)
+                .join(format!("aivyx-tool-init-test-{}", uuid::Uuid::new_v4()));
             ScratchDir(dir)
         }
     }
@@ -419,19 +411,14 @@ mod tests {
         run_tool_init(&target, false).expect("init must succeed");
         for (rel, _) in FILES {
             let p = target.join(rel);
-            assert!(
-                p.exists(),
-                "scaffold must produce {rel} at {p:?}"
-            );
+            assert!(p.exists(), "scaffold must produce {rel} at {p:?}");
         }
         // The Cargo.toml carries the documented placeholder so
         // an operator knows where to edit.
-        let cargo = fs::read_to_string(target.join("Cargo.toml"))
-            .expect("read Cargo.toml");
+        let cargo = fs::read_to_string(target.join("Cargo.toml")).expect("read Cargo.toml");
         assert!(cargo.contains("REPLACE_WITH_PATH_TO_AIVYX"));
         // src/main.rs has the handler the author edits.
-        let main_rs = fs::read_to_string(target.join("src/main.rs"))
-            .expect("read main.rs");
+        let main_rs = fs::read_to_string(target.join("src/main.rs")).expect("read main.rs");
         assert!(main_rs.contains("fn handle_invocation"));
     }
 
@@ -441,8 +428,7 @@ mod tests {
         let target = scratch.0.join("non-empty");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("squatter.txt"), b"squat").unwrap();
-        let err = run_tool_init(&target, false)
-            .expect_err("non-empty target must refuse");
+        let err = run_tool_init(&target, false).expect_err("non-empty target must refuse");
         assert!(err.contains("not empty"), "got: {err}");
         // The squatter file is untouched.
         assert!(target.join("squatter.txt").exists());
@@ -454,8 +440,7 @@ mod tests {
         let target = scratch.0.join("forced");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("squatter.txt"), b"squat").unwrap();
-        run_tool_init(&target, true)
-            .expect("--force must write into a non-empty target");
+        run_tool_init(&target, true).expect("--force must write into a non-empty target");
         assert!(target.join("Cargo.toml").exists());
         assert!(target.join("src/main.rs").exists());
         // The pre-existing squatter file survives (force
@@ -469,8 +454,7 @@ mod tests {
         let _ = fs::create_dir_all(&scratch.0);
         let target = scratch.0.join("not-a-dir");
         fs::write(&target, b"file").unwrap();
-        let err = run_tool_init(&target, true)
-            .expect_err("target-as-file must refuse");
+        let err = run_tool_init(&target, true).expect_err("target-as-file must refuse");
         assert!(err.contains("not a"), "got: {err}");
     }
 }

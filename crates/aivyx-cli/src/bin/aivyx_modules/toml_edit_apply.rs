@@ -109,29 +109,23 @@ pub fn apply_profile_hint_to_doc(
 
     let key = hint.field.label();
     if hint.field.is_scalar() {
-        profile_table.insert(
-            key,
-            toml_edit::value(hint.suggested_value.clone()),
-        );
+        profile_table.insert(key, toml_edit::value(hint.suggested_value.clone()));
     } else {
         // List field — append if absent.
         let array = match profile_table.get_mut(key) {
             Some(toml_edit::Item::Value(toml_edit::Value::Array(arr))) => arr,
             _ => {
-                profile_table.insert(
-                    key,
-                    toml_edit::value(toml_edit::Array::new()),
-                );
+                profile_table.insert(key, toml_edit::value(toml_edit::Array::new()));
                 match profile_table.get_mut(key).unwrap() {
-                    toml_edit::Item::Value(toml_edit::Value::Array(arr)) => {
-                        arr
-                    }
+                    toml_edit::Item::Value(toml_edit::Value::Array(arr)) => arr,
                     _ => unreachable!("just inserted an Array"),
                 }
             }
         };
         let already_present = array.iter().any(|v| {
-            v.as_str().map(|s| s == hint.suggested_value).unwrap_or(false)
+            v.as_str()
+                .map(|s| s == hint.suggested_value)
+                .unwrap_or(false)
         });
         if !already_present {
             array.push(hint.suggested_value.clone());
@@ -253,16 +247,12 @@ fn read_or_empty(path: &Path) -> Result<String, TomlApplyError> {
     })
 }
 
-fn parse_document(
-    path: &Path,
-    text: &str,
-) -> Result<toml_edit::DocumentMut, TomlApplyError> {
-    text.parse::<toml_edit::DocumentMut>().map_err(|e| {
-        TomlApplyError::Parse {
+fn parse_document(path: &Path, text: &str) -> Result<toml_edit::DocumentMut, TomlApplyError> {
+    text.parse::<toml_edit::DocumentMut>()
+        .map_err(|e| TomlApplyError::Parse {
             path: path.display().to_string(),
             reason: e.to_string(),
-        }
-    })
+        })
 }
 
 /// Atomic write to `path`: create a sibling tmp file with `0o600`
@@ -275,10 +265,7 @@ fn parse_document(
 /// clobber each other's tmp files. The destination's parent
 /// directory is the tmp file's directory so the rename stays
 /// same-filesystem.
-fn write_atomic_with_0600(
-    path: &Path,
-    contents: &str,
-) -> Result<(), TomlApplyError> {
+fn write_atomic_with_0600(path: &Path, contents: &str) -> Result<(), TomlApplyError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
@@ -456,15 +443,11 @@ mod tests {
             name: "research-deploy".into(),
             parent: Some("research".into()),
             system_prompt_addendum: "After research, summarize the diff.".into(),
-            tool_allowlist_additions: vec![
-                "git.commit".into(),
-                "shell.deploy".into(),
-            ],
+            tool_allowlist_additions: vec!["git.commit".into(), "shell.deploy".into()],
             rationale: "...".into(),
         };
         let applied =
-            apply_role_draft_to_doc(&mut doc, &role, false, "test.toml")
-                .expect("applies");
+            apply_role_draft_to_doc(&mut doc, &role, false, "test.toml").expect("applies");
         assert_eq!(applied.role_name, "research-deploy");
         assert_eq!(applied.parent.as_deref(), Some("research"));
         let out = doc.to_string();
@@ -486,8 +469,7 @@ mod tests {
             rationale: "...".into(),
         };
         let applied =
-            apply_role_draft_to_doc(&mut doc, &role, false, "test.toml")
-                .expect("applies");
+            apply_role_draft_to_doc(&mut doc, &role, false, "test.toml").expect("applies");
         assert_eq!(applied.parent, None);
         let out = doc.to_string();
         assert!(out.contains("[roles.operator-mode]"));
@@ -504,8 +486,7 @@ mod tests {
             tool_allowlist_additions: vec![],
             rationale: "...".into(),
         };
-        apply_role_draft_to_doc(&mut doc, &role, false, "test.toml")
-            .expect("applies");
+        apply_role_draft_to_doc(&mut doc, &role, false, "test.toml").expect("applies");
         let out = doc.to_string();
         assert!(out.contains("system_prompt"));
         assert!(!out.contains("tool_allowlist"));
@@ -524,9 +505,7 @@ mod tests {
             tool_allowlist_additions: vec![],
             rationale: "...".into(),
         };
-        let err =
-            apply_role_draft_to_doc(&mut doc, &role, false, "aivyx.toml")
-                .unwrap_err();
+        let err = apply_role_draft_to_doc(&mut doc, &role, false, "aivyx.toml").unwrap_err();
         match err {
             TomlApplyError::RoleExists { name, path } => {
                 assert_eq!(name, "research-deploy");
@@ -553,8 +532,7 @@ mod tests {
             tool_allowlist_additions: vec!["git.commit".into()],
             rationale: "...".into(),
         };
-        apply_role_draft_to_doc(&mut doc, &role, true, "aivyx.toml")
-            .expect("applies with force");
+        apply_role_draft_to_doc(&mut doc, &role, true, "aivyx.toml").expect("applies with force");
         let out = doc.to_string();
         assert!(out.contains("inherits_from = \"research\""));
         assert!(out.contains("\"git.commit\""));
@@ -578,8 +556,7 @@ mod tests {
             tool_allowlist_additions: vec!["web.fetch".into()],
             rationale: "...".into(),
         };
-        apply_role_draft_to_doc(&mut doc, &role, false, "test.toml")
-            .expect("applies");
+        apply_role_draft_to_doc(&mut doc, &role, false, "test.toml").expect("applies");
         let out = doc.to_string();
         assert!(out.contains("[profile]"));
         assert!(out.contains("\"Aivyx\""));
@@ -592,10 +569,8 @@ mod tests {
     // ----- Atomic I/O wrapper -----
 
     fn tempdir(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "aivyx-phase119-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let p =
+            std::env::temp_dir().join(format!("aivyx-phase119-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&p).unwrap();
         p
     }

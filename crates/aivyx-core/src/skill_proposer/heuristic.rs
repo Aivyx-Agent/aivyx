@@ -215,10 +215,8 @@ impl Default for HeuristicConfig {
             duration_ms_min: 5000,
             require_gate_resolve: false,
             mode: MatchMode::Any,
-            profile_pattern_recurrence_min:
-                default_profile_pattern_recurrence_min(),
-            role_shape_scope_denied_min:
-                default_role_shape_scope_denied_min(),
+            profile_pattern_recurrence_min: default_profile_pattern_recurrence_min(),
+            role_shape_scope_denied_min: default_role_shape_scope_denied_min(),
         }
     }
 }
@@ -303,10 +301,7 @@ impl Default for FailureHeuristicConfig {
 /// correction LLM-judge call from? Pure function; same
 /// shape as `is_candidate` but for the negative-feedback
 /// path.
-pub fn is_failure_candidate(
-    kind: FailureKind,
-    config: &FailureHeuristicConfig,
-) -> bool {
+pub fn is_failure_candidate(kind: FailureKind, config: &FailureHeuristicConfig) -> bool {
     match kind {
         FailureKind::Failed => config.failed,
         FailureKind::Cancelled => config.cancelled,
@@ -637,8 +632,7 @@ mod tests {
             role_shape_scope_denied_min: 4,
         };
         let s = serde_json::to_string(&original).expect("serialize");
-        let back: HeuristicConfig =
-            serde_json::from_str(&s).expect("deserialize");
+        let back: HeuristicConfig = serde_json::from_str(&s).expect("deserialize");
         assert_eq!(back, original);
     }
 
@@ -742,8 +736,7 @@ mod tests {
             escalated: false,
         };
         let s = serde_json::to_string(&original).unwrap();
-        let back: FailureHeuristicConfig =
-            serde_json::from_str(&s).unwrap();
+        let back: FailureHeuristicConfig = serde_json::from_str(&s).unwrap();
         assert_eq!(back, original);
     }
 
@@ -861,8 +854,7 @@ mod tests {
             "require_gate_resolve": false,
             "mode": "any"
         }"#;
-        let config: HeuristicConfig =
-            serde_json::from_str(pre_118).expect("pre-118 TOML parses");
+        let config: HeuristicConfig = serde_json::from_str(pre_118).expect("pre-118 TOML parses");
         assert_eq!(config.profile_pattern_recurrence_min, 5);
         assert_eq!(config.role_shape_scope_denied_min, 2);
     }

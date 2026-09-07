@@ -116,10 +116,7 @@ mod tests {
         // {memory, gc} ∩ {memory, gcollect} = {memory}; union = 3;
         // Jaccard = 1/3.
         let sim = title_similarity("memory.gc", "memory.gcollect");
-        assert!(
-            (sim - 1.0 / 3.0).abs() < 1e-6,
-            "expected 1/3, got {sim}"
-        );
+        assert!((sim - 1.0 / 3.0).abs() < 1e-6, "expected 1/3, got {sim}");
     }
 
     #[test]
@@ -136,10 +133,7 @@ mod tests {
     fn token_reorder_scores_one() {
         // The Phase 112 token-reorder case still works for the
         // Phase 120 hallucination shapes.
-        assert_eq!(
-            title_similarity("research-topic", "topic-research"),
-            1.0
-        );
+        assert_eq!(title_similarity("research-topic", "topic-research"), 1.0);
     }
 
     #[test]

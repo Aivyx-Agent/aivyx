@@ -75,8 +75,7 @@ const BUNDLED_PERSONAL: &str =
 // (docs/VERTICAL_PACKS.md). Richer than the personal-assistant
 // archetypes: it wires the `aivyx-kitchen` tool process + a BOH role
 // + the opt-in nightly reorder schedule.
-const BUNDLED_KITCHEN: &str =
-    include_str!("../../../../../examples/templates/aivyx-kitchen.toml");
+const BUNDLED_KITCHEN: &str = include_str!("../../../../../examples/templates/aivyx-kitchen.toml");
 // Chapter N — the full personal-assistant posture: home-directory access
 // with the confirm-first seatbelt on destructive ops.
 const BUNDLED_FULL_ACCESS: &str =
@@ -191,7 +190,10 @@ pub fn list_templates() -> Vec<Template> {
     // Append user-only templates (those without a bundled counterpart).
     let bundled_names: std::collections::HashSet<&str> =
         bundled_specs().iter().map(|(n, _)| *n).collect();
-    for t in user.into_iter().filter(|t| !bundled_names.contains(t.name.as_str())) {
+    for t in user
+        .into_iter()
+        .filter(|t| !bundled_names.contains(t.name.as_str()))
+    {
         if user_names.contains(&t.name) && !bundled_names.contains(t.name.as_str()) {
             out.push(t);
         }
@@ -366,8 +368,7 @@ mod tests {
         // Uses `toml_edit` (already a workspace dep) rather
         // than the `toml` crate to avoid adding a new dependency.
         for t in bundled_templates() {
-            let parsed: Result<toml_edit::DocumentMut, _> =
-                t.toml_content.parse();
+            let parsed: Result<toml_edit::DocumentMut, _> = t.toml_content.parse();
             assert!(
                 parsed.is_ok(),
                 "{}.toml failed to parse: {:?}",

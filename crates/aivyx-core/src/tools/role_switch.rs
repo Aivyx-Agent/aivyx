@@ -82,12 +82,12 @@
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use aivyx_capability::Scope;
 
 use crate::{
-    AivyxError, Agent, Message, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome, Verification,
+    Agent, AivyxError, Message, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome, Verification,
 };
 
 /// The type of the closure that builds a child agent for a given
@@ -106,8 +106,7 @@ use crate::{
 ///
 /// The closure is `Send + Sync` so it can live behind an `Arc` and
 /// be cloned across turn boundaries safely.
-pub type ChildAgentFactory =
-    dyn Fn(&str) -> Result<Box<dyn Agent>, String> + Send + Sync;
+pub type ChildAgentFactory = dyn Fn(&str) -> Result<Box<dyn Agent>, String> + Send + Sync;
 
 /// The Phase 14 sub-agent role-switching tool. See the module docs
 /// for the full picture.
@@ -240,8 +239,7 @@ impl Tool for RoleSwitchTool {
             return role_switch_deny_scope();
         }
 
-        Scope::parse(&format!("role.switch:{target}"))
-            .unwrap_or_else(role_switch_deny_scope)
+        Scope::parse(&format!("role.switch:{target}")).unwrap_or_else(role_switch_deny_scope)
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
@@ -522,8 +520,7 @@ mod tests {
         // held set's `role.switch:researcher` does NOT grant it
         // (SimpleGlob equality mismatch, Rule 3). The CapabilitySet
         // intersection therefore reports no grant.
-        let held =
-            CapabilitySet::from_scopes([scope("role.switch:researcher")]);
+        let held = CapabilitySet::from_scopes([scope("role.switch:researcher")]);
         let t = RoleSwitchTool::new();
         let input = json!({ "target": "scribe", "task": "x" });
         let needed = t.required_scope(&input);
@@ -536,8 +533,7 @@ mod tests {
 
     #[test]
     fn scope_gate_allows_when_role_holds_matching_qualified_scope() {
-        let held =
-            CapabilitySet::from_scopes([scope("role.switch:researcher")]);
+        let held = CapabilitySet::from_scopes([scope("role.switch:researcher")]);
         let t = RoleSwitchTool::new();
         let input = json!({ "target": "researcher", "task": "x" });
         let needed = t.required_scope(&input);
@@ -593,10 +589,8 @@ mod tests {
         // and surface it as a configuration error rather than
         // silently overwriting the first factory.
         let t = RoleSwitchTool::new();
-        let factory_a: Arc<ChildAgentFactory> =
-            Arc::new(|_target: &str| Err("a".to_string()));
-        let factory_b: Arc<ChildAgentFactory> =
-            Arc::new(|_target: &str| Err("b".to_string()));
+        let factory_a: Arc<ChildAgentFactory> = Arc::new(|_target: &str| Err("a".to_string()));
+        let factory_b: Arc<ChildAgentFactory> = Arc::new(|_target: &str| Err("b".to_string()));
 
         assert!(t.set_child_factory(factory_a).is_ok(), "first set ok");
         match t.set_child_factory(factory_b) {

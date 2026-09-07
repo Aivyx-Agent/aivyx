@@ -43,9 +43,8 @@ use serde_json::json;
 
 use aivyx_kvcache::{CacheKey, CacheMeta, LlamaServerSlotStore};
 use aivyx_llm::{
-    ContentBlock, KvSlotPool, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd,
-    LlmStream, LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, SlotHint,
-    ToolCallEnd,
+    ContentBlock, KvSlotPool, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream,
+    LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, SlotHint, ToolCallEnd,
 };
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
@@ -383,10 +382,7 @@ impl LlmPlannerConfig {
     /// the config layer (`aivyx-config`) rejects out-of-range
     /// values at TOML-parse time so the planner never sees a
     /// malformed value in practice.
-    pub fn with_tool_name_auto_correct_threshold(
-        mut self,
-        threshold: f32,
-    ) -> Self {
+    pub fn with_tool_name_auto_correct_threshold(mut self, threshold: f32) -> Self {
         self.tool_name_auto_correct_threshold = threshold;
         self
     }
@@ -424,10 +420,7 @@ impl LlmPlannerConfig {
     /// Attach a [`ContextProvider`] for per-turn automatic recall.
     /// `None` (the default) preserves pre-Phase-76 behavior. Mirrors
     /// [`Self::with_prune_sink`].
-    pub fn with_context_provider(
-        mut self,
-        provider: Arc<dyn ContextProvider>,
-    ) -> Self {
+    pub fn with_context_provider(mut self, provider: Arc<dyn ContextProvider>) -> Self {
         self.context_provider = Some(provider);
         self
     }
@@ -435,10 +428,7 @@ impl LlmPlannerConfig {
     /// Phase 79 — attach a per-turn [`SystemPromptRefiner`].
     /// Mirrors [`Self::with_context_provider`]; `None` (the
     /// default) preserves pre-Phase-79 behavior.
-    pub fn with_system_prompt_refiner(
-        mut self,
-        refiner: Arc<dyn SystemPromptRefiner>,
-    ) -> Self {
+    pub fn with_system_prompt_refiner(mut self, refiner: Arc<dyn SystemPromptRefiner>) -> Self {
         self.system_prompt_refiner = Some(refiner);
         self
     }
@@ -446,10 +436,7 @@ impl LlmPlannerConfig {
     /// Chapter Thread — attach a [`ConversationSeeder`] for prior-turn
     /// history replay. Mirrors [`Self::with_context_provider`]; `None`
     /// (the default) preserves fresh-context turns exactly.
-    pub fn with_conversation_seeder(
-        mut self,
-        seeder: Arc<dyn ConversationSeeder>,
-    ) -> Self {
+    pub fn with_conversation_seeder(mut self, seeder: Arc<dyn ConversationSeeder>) -> Self {
         self.conversation_seeder = Some(seeder);
         self
     }
@@ -714,7 +701,13 @@ impl LlmPlanner {
             !self.broker_slot_hint,
             "with_kv_cache called on a planner already in broker_slot_hint mode"
         );
-        self.kv_cache = Some(KvCacheConfig { pool, store, backend_id, model_id, build_hash });
+        self.kv_cache = Some(KvCacheConfig {
+            pool,
+            store,
+            backend_id,
+            model_id,
+            build_hash,
+        });
         self
     }
 
@@ -830,7 +823,8 @@ impl LlmPlanner {
             // Record so a later checkout of this same slot for this same
             // prefix (still live from this restore) can skip the redundant
             // restore above.
-            kv.pool.record_loaded_prefix(slot_id, key.prefix_hash.clone());
+            kv.pool
+                .record_loaded_prefix(slot_id, key.prefix_hash.clone());
         }
 
         if !restored {
@@ -908,9 +902,13 @@ impl LlmPlanner {
                     // a system-only prompt that TRUNCATES the slot's KV
                     // back to just the prefix and destroying whatever
                     // the intervening turns had built up.
-                    kv.pool.record_loaded_prefix(slot_id, key.prefix_hash.clone());
+                    kv.pool
+                        .record_loaded_prefix(slot_id, key.prefix_hash.clone());
 
-                    let meta = CacheMeta { size_bytes: 1, token_count: 1 };
+                    let meta = CacheMeta {
+                        size_bytes: 1,
+                        token_count: 1,
+                    };
                     // Bounded like restore_into_slot above and the
                     // chat_stream+drain round trip: this POSTs to
                     // llama-server (serializing a full KV slot to disk)
@@ -968,19 +966,14 @@ impl LlmPlanner {
     fn accumulate(&mut self, usage: LlmUsage) {
         self.accumulated_usage.input_tokens += usage.input_tokens;
         self.accumulated_usage.output_tokens += usage.output_tokens;
-        self.accumulated_usage.cache_creation_input_tokens +=
-            usage.cache_creation_input_tokens;
-        self.accumulated_usage.cache_read_input_tokens +=
-            usage.cache_read_input_tokens;
+        self.accumulated_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
+        self.accumulated_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
     }
 
     /// Build one `LlmRequest` from the current history + config and
     /// drain the provider's stream, returning the terminal value.
     /// Relays every `TextChunk` to the channel as a `StreamEvent::Text`.
-    async fn one_step(
-        &self,
-        channel: &dyn ChannelContext,
-    ) -> Result<LlmStepEnd, LlmError> {
+    async fn one_step(&self, channel: &dyn ChannelContext) -> Result<LlmStepEnd, LlmError> {
         // Broker mode (`broker_slot_hint`) attaches `slot_hint` instead
         // of pinning `id_slot` directly -- `aivyx-broker` picks the
         // physical slot itself, server-side, using this as a
@@ -1073,10 +1066,8 @@ impl LlmPlanner {
             ) {
                 Some(matched_id) => (matched_id, Some(call.tool_name.clone())),
                 None => {
-                    let suggestions =
-                        top_n_similar_tools(&self.registry, &call.tool_name, 3);
-                    let message =
-                        build_unknown_tool_message(&call.tool_name, &suggestions);
+                    let suggestions = top_n_similar_tools(&self.registry, &call.tool_name, 3);
+                    let message = build_unknown_tool_message(&call.tool_name, &suggestions);
                     let mut body = json!({
                         "error": "unknown_tool",
                         "message": message,
@@ -1101,9 +1092,7 @@ impl LlmPlanner {
 
         if validate_enabled {
             if let Some(tool) = self.registry.get(tool_id) {
-                if let Err(summary) =
-                    validate_tool_input(tool.input_schema(), &call.input)
-                {
+                if let Err(summary) = validate_tool_input(tool.input_schema(), &call.input) {
                     let schema = tool.input_schema().clone();
                     self.history.push(LlmMessage::ToolResult {
                         call_id: call.call_id,
@@ -1220,11 +1209,7 @@ impl TurnPlanner for LlmPlanner {
                 // base from scratch. Refiners that ignore the
                 // arg (Phase 79 adaptive Persona) behave
                 // identically to pre-Phase-117.
-                let base_prompt = self
-                    .config
-                    .system_prompt
-                    .clone()
-                    .unwrap_or_default();
+                let base_prompt = self.config.system_prompt.clone().unwrap_or_default();
                 if let Some(refined) = refiner
                     .refine(&query_text, message.session_id, &base_prompt)
                     .await
@@ -1276,15 +1261,13 @@ impl TurnPlanner for LlmPlanner {
         // and insert a sentinel so the model knows context was lost.
         if let Some(window) = self.config.context_window_tokens {
             let budget = window * 4 / 5; // 80% threshold
-            let system_tokens = aivyx_llm::estimate_system_tokens(
-                self.config.system_prompt.as_deref(),
-            );
+            let system_tokens =
+                aivyx_llm::estimate_system_tokens(self.config.system_prompt.as_deref());
             let history_tokens = aivyx_llm::estimate_tokens(&self.history);
             let total = system_tokens + history_tokens;
             if total > budget && self.history.len() > 1 {
                 // Record pre-pruning token count.
-                self.accumulated_usage.context_tokens_before_pruning =
-                    total as u32;
+                self.accumulated_usage.context_tokens_before_pruning = total as u32;
 
                 // Keep at least the last message (the most recent user
                 // turn or tool result). Prune from the front until we
@@ -1334,17 +1317,14 @@ impl TurnPlanner for LlmPlanner {
                     } else if let Some(idx) = self.task_message_index {
                         // Survived the drain — shift for the removed
                         // prefix plus the inserted sentinel.
-                        self.task_message_index =
-                            Some(idx - pruned_count + 1);
+                        self.task_message_index = Some(idx - pruned_count + 1);
                     }
                     self.pruned_message_count += pruned_count;
                 }
 
                 // Record post-pruning token count.
-                let after = system_tokens
-                    + aivyx_llm::estimate_tokens(&self.history);
-                self.accumulated_usage.context_tokens_after_pruning =
-                    after as u32;
+                let after = system_tokens + aivyx_llm::estimate_tokens(&self.history);
+                self.accumulated_usage.context_tokens_after_pruning = after as u32;
             }
         }
 
@@ -1424,14 +1404,10 @@ impl TurnPlanner for LlmPlanner {
                             .map(|ext| {
                                 let wrapper = ext.wrapper_tag.clone();
                                 let call = ToolCallEnd {
-                                    call_id: format!(
-                                        "extracted-{}",
-                                        uuid::Uuid::new_v4()
-                                    ),
+                                    call_id: format!("extracted-{}", uuid::Uuid::new_v4()),
                                     tool_name: ext.tool_name,
                                     input: ext.arguments,
-                                    name_resolution:
-                                        aivyx_llm::NameResolution::Known,
+                                    name_resolution: aivyx_llm::NameResolution::Known,
                                 };
                                 (call, wrapper)
                             })
@@ -1465,11 +1441,8 @@ impl TurnPlanner for LlmPlanner {
                         let mut batch: Vec<ToolCallRequest> = Vec::new();
                         let mut had_invalid_input = false;
                         for (call, wrapper_tag) in synthesized {
-                            let (req_opt, invalid) = self.process_one_call(
-                                call,
-                                Some(wrapper_tag),
-                                validate_enabled,
-                            );
+                            let (req_opt, invalid) =
+                                self.process_one_call(call, Some(wrapper_tag), validate_enabled);
                             if invalid {
                                 had_invalid_input = true;
                             }
@@ -1595,11 +1568,7 @@ impl TurnPlanner for LlmPlanner {
         }
     }
 
-    async fn observe_tool_outcome(
-        &mut self,
-        tool_id: ToolId,
-        outcome: &ToolOutcome,
-    ) {
+    async fn observe_tool_outcome(&mut self, tool_id: ToolId, outcome: &ToolOutcome) {
         // `pending_call_ids` is populated by the most recent ToolCall(s)
         // return; if empty, either `begin_turn` wasn't called or the turn
         // loop invoked us out of order. Synthesize a stable id so the
@@ -1617,10 +1586,7 @@ impl TurnPlanner for LlmPlanner {
         // request past the real context window — the provider then
         // truncated server-side, silently, from the front, where the
         // system prompt lives.
-        let mut content = cap_tool_result_content(
-            content,
-            self.config.context_window_tokens,
-        );
+        let mut content = cap_tool_result_content(content, self.config.context_window_tokens);
 
         // POLISH_WAVES.md sub-project 4, item A — tool-failure thrash
         // nudge. Live repro: web_search down, the model pivoted once
@@ -1733,21 +1699,16 @@ const TOOL_RESULT_CAP_FLOOR_CHARS: usize = 4_000;
 /// Truncation keeps the head (where structured output and page
 /// content start) and appends an explicit marker so the model knows
 /// it saw a partial result rather than a complete one.
-fn cap_tool_result_content(
-    content: String,
-    window_tokens: Option<usize>,
-) -> String {
+fn cap_tool_result_content(content: String, window_tokens: Option<usize>) -> String {
     let Some(window) = window_tokens else {
         return content;
     };
-    let max_chars =
-        (window * 2).max(TOOL_RESULT_CAP_FLOOR_CHARS);
+    let max_chars = (window * 2).max(TOOL_RESULT_CAP_FLOOR_CHARS);
     let total = content.chars().count();
     if total <= max_chars {
         return content;
     }
-    let mut capped: String =
-        content.chars().take(max_chars).collect();
+    let mut capped: String = content.chars().take(max_chars).collect();
     capped.push_str(&format!(
         "\n…[tool output truncated: showing {max_chars} of {total} \
          chars — the result was too large for the model's context; \
@@ -1853,10 +1814,7 @@ fn fuzzy_recover_tool_name(
     let mut best: Option<(crate::ToolId, f32)> = None;
     let snapshot = registry.snapshot();
     for tool in &snapshot {
-        let score = crate::skill_proposer::title_similarity(
-            emitted_name,
-            tool.name(),
-        );
+        let score = crate::skill_proposer::title_similarity(emitted_name, tool.name());
         if score >= threshold {
             // Find the id for this tool by name (cheap — the
             // registry's `find_by_name` is the canonical lookup).
@@ -1893,10 +1851,7 @@ fn top_n_similar_tools(
         .snapshot()
         .into_iter()
         .map(|tool| {
-            let score = crate::skill_proposer::title_similarity(
-                emitted_name,
-                tool.name(),
-            );
+            let score = crate::skill_proposer::title_similarity(emitted_name, tool.name());
             (tool.name().to_string(), score)
         })
         .collect();
@@ -1918,20 +1873,14 @@ fn top_n_similar_tools(
 /// - Empty registry: `"tool 'X' is not registered. (no tools
 ///   available in this role)"` — neutral fallback rather than a
 ///   misleading "did you mean?" with no suggestions.
-fn build_unknown_tool_message(
-    emitted_name: &str,
-    suggestions: &[(String, f32)],
-) -> String {
+fn build_unknown_tool_message(emitted_name: &str, suggestions: &[(String, f32)]) -> String {
     if suggestions.is_empty() {
         return format!(
             "tool '{}' is not registered. (no tools available in this role)",
             emitted_name
         );
     }
-    let names: Vec<String> = suggestions
-        .iter()
-        .map(|(n, _)| format!("'{n}'"))
-        .collect();
+    let names: Vec<String> = suggestions.iter().map(|(n, _)| format!("'{n}'")).collect();
     format!(
         "tool '{}' is not registered. Did you mean {}?",
         emitted_name,
@@ -2056,15 +2005,15 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use aivyx_capability::{Scope, TrustTier};
     use aivyx_llm::LlmUsage;
 
     use crate::planner::NextStep;
     use crate::{
-        AivyxError, ChannelError, ChannelPlatform, SessionId, Tool, ToolContext, ToolId, TurnId,
-        ToolOutcome, TurnOutcome, Verification,
+        AivyxError, ChannelError, ChannelPlatform, SessionId, Tool, ToolContext, ToolId,
+        ToolOutcome, TurnId, TurnOutcome, Verification,
     };
 
     // -----------------------------------------------------------------------
@@ -2337,13 +2286,14 @@ mod tests {
         let provider = FakeContextProvider::new(Some(
             "## Relevant context (auto-recalled)\n- [notes] purple",
         ));
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m")
-                .with_context_provider(provider.clone()),
-        );
+        let mut planner =
+            bare_planner(LlmPlannerConfig::new("m").with_context_provider(provider.clone()));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "what's my color?"), TurnId::new())
+            .begin_turn(
+                &Message::text(channel.session, "what's my color?"),
+                TurnId::new(),
+            )
             .await;
 
         // The query handed to recall is the raw user text.
@@ -2370,10 +2320,7 @@ mod tests {
                          - [notes] purple"
                     )
                 );
-                assert_eq!(
-                    content[1],
-                    ContentBlock::text("what's my color?")
-                );
+                assert_eq!(content[1], ContentBlock::text("what's my color?"));
             }
             other => panic!("expected User, got {other:?}"),
         }
@@ -2382,10 +2329,8 @@ mod tests {
     #[tokio::test]
     async fn context_provider_none_leaves_turn_unchanged() {
         let provider = FakeContextProvider::new(None);
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m")
-                .with_context_provider(provider.clone()),
-        );
+        let mut planner =
+            bare_planner(LlmPlannerConfig::new("m").with_context_provider(provider.clone()));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "hi there"), TurnId::new())
@@ -2420,10 +2365,8 @@ mod tests {
         // point embedding empty input) and must not inject a block
         // even if the provider would return one.
         let provider = FakeContextProvider::new(Some("SHOULD-NOT-APPEAR"));
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m")
-                .with_context_provider(provider.clone()),
-        );
+        let mut planner =
+            bare_planner(LlmPlannerConfig::new("m").with_context_provider(provider.clone()));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "   "), TurnId::new())
@@ -2441,27 +2384,20 @@ mod tests {
     #[test]
     fn tool_result_cap_none_window_is_untouched() {
         let big = "x".repeat(1_000_000);
-        assert_eq!(
-            cap_tool_result_content(big.clone(), None),
-            big
-        );
+        assert_eq!(cap_tool_result_content(big.clone(), None), big);
     }
 
     #[test]
     fn tool_result_cap_under_budget_is_untouched() {
         let s = "small output".to_string();
-        assert_eq!(
-            cap_tool_result_content(s.clone(), Some(16_384)),
-            s
-        );
+        assert_eq!(cap_tool_result_content(s.clone(), Some(16_384)), s);
     }
 
     #[test]
     fn tool_result_cap_truncates_with_marker() {
         // window 16384 → budget 32768 chars.
         let big = "y".repeat(100_000);
-        let capped =
-            cap_tool_result_content(big, Some(16_384));
+        let capped = cap_tool_result_content(big, Some(16_384));
         assert!(capped.starts_with("yyy"));
         assert!(capped.contains("tool output truncated"));
         assert!(capped.contains("100000"));
@@ -2473,19 +2409,22 @@ mod tests {
     fn tool_result_cap_floor_protects_tiny_windows() {
         // window 100 → raw budget 200, floored to 4000.
         let content = "z".repeat(3_000);
-        assert_eq!(
-            cap_tool_result_content(content.clone(), Some(100)),
-            content
-        );
+        assert_eq!(cap_tool_result_content(content.clone(), Some(100)), content);
     }
 
     // ---- Chapter Thread — ConversationSeeder hook --------------
 
     fn u(text: &str) -> PriorTurn {
-        PriorTurn { is_user: true, text: text.to_string() }
+        PriorTurn {
+            is_user: true,
+            text: text.to_string(),
+        }
     }
     fn a(text: &str) -> PriorTurn {
-        PriorTurn { is_user: false, text: text.to_string() }
+        PriorTurn {
+            is_user: false,
+            text: text.to_string(),
+        }
     }
 
     #[test]
@@ -2506,8 +2445,7 @@ mod tests {
     #[test]
     fn seeded_messages_drops_leading_assistant() {
         // Providers require the first message to be a user turn.
-        let msgs =
-            seeded_history_messages(vec![a("orphan"), u("q"), a("r")]);
+        let msgs = seeded_history_messages(vec![a("orphan"), u("q"), a("r")]);
         assert_eq!(msgs.len(), 2);
         assert!(matches!(
             &msgs[0],
@@ -2518,11 +2456,7 @@ mod tests {
     #[test]
     fn seeded_messages_coalesces_consecutive_same_role() {
         // Strict-alternation providers must never see user,user.
-        let msgs = seeded_history_messages(vec![
-            u("part one"),
-            u("part two"),
-            a("answer"),
-        ]);
+        let msgs = seeded_history_messages(vec![u("part one"), u("part two"), a("answer")]);
         assert_eq!(msgs.len(), 2);
         assert!(matches!(
             &msgs[0],
@@ -2567,10 +2501,7 @@ mod tests {
 
     #[async_trait]
     impl ConversationSeeder for FakeSeeder {
-        async fn prior_turns(
-            &self,
-            session_id: crate::SessionId,
-        ) -> Vec<PriorTurn> {
+        async fn prior_turns(&self, session_id: crate::SessionId) -> Vec<PriorTurn> {
             self.seen_sessions.lock().unwrap().push(session_id);
             self.prior.clone()
         }
@@ -2578,12 +2509,9 @@ mod tests {
 
     #[tokio::test]
     async fn conversation_seeder_replays_prior_before_current() {
-        let seeder =
-            FakeSeeder::new(vec![u("first question"), a("first answer")]);
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m")
-                .with_conversation_seeder(seeder.clone()),
-        );
+        let seeder = FakeSeeder::new(vec![u("first question"), a("first answer")]);
+        let mut planner =
+            bare_planner(LlmPlannerConfig::new("m").with_conversation_seeder(seeder.clone()));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "follow-up?"), TurnId::new())
@@ -2615,10 +2543,8 @@ mod tests {
     #[tokio::test]
     async fn conversation_seeder_empty_is_byte_identical() {
         let seeder = FakeSeeder::new(vec![]);
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m")
-                .with_conversation_seeder(seeder.clone()),
-        );
+        let mut planner =
+            bare_planner(LlmPlannerConfig::new("m").with_conversation_seeder(seeder.clone()));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "hello"), TurnId::new())
@@ -2698,7 +2624,10 @@ mod tests {
         );
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "help me ship"), TurnId::new())
+            .begin_turn(
+                &Message::text(channel.session, "help me ship"),
+                TurnId::new(),
+            )
             .await;
         assert_eq!(
             refiner.seen.lock().unwrap().clone(),
@@ -2724,26 +2653,18 @@ mod tests {
             .await;
         // Consulted, returned None → base byte-identical.
         assert_eq!(refiner.seen.lock().unwrap().len(), 1);
-        assert_eq!(
-            planner.config.system_prompt.as_deref(),
-            Some("BASE PROMPT")
-        );
+        assert_eq!(planner.config.system_prompt.as_deref(), Some("BASE PROMPT"));
     }
 
     #[tokio::test]
     async fn no_refiner_is_unchanged() {
         // Regression guard: the default path must not change.
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m").with_system_prompt("BASE"),
-        );
+        let mut planner = bare_planner(LlmPlannerConfig::new("m").with_system_prompt("BASE"));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "hello"), TurnId::new())
             .await;
-        assert_eq!(
-            planner.config.system_prompt.as_deref(),
-            Some("BASE")
-        );
+        assert_eq!(planner.config.system_prompt.as_deref(), Some("BASE"));
     }
 
     #[tokio::test]
@@ -2761,10 +2682,7 @@ mod tests {
             .begin_turn(&Message::text(channel.session, "   "), TurnId::new())
             .await;
         assert!(refiner.seen.lock().unwrap().is_empty());
-        assert_eq!(
-            planner.config.system_prompt.as_deref(),
-            Some("BASE")
-        );
+        assert_eq!(planner.config.system_prompt.as_deref(), Some("BASE"));
     }
 
     #[tokio::test]
@@ -2917,13 +2835,18 @@ mod tests {
 
         let last = planner.history().last().unwrap();
         match last {
-            LlmMessage::ToolResult { content, is_error, .. } => {
+            LlmMessage::ToolResult {
+                content, is_error, ..
+            } => {
                 assert!(*is_error);
                 assert!(
                     content.contains("failed 3 times in a row"),
                     "3rd consecutive failure must carry the nudge: {content}"
                 );
-                assert!(content.contains("web_search"), "nudge names the tool: {content}");
+                assert!(
+                    content.contains("web_search"),
+                    "nudge names the tool: {content}"
+                );
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
@@ -3179,14 +3102,13 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![fs_read]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("local-qwen"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("local-qwen"));
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "read a file"), TurnId::new())
+            .begin_turn(
+                &Message::text(channel.session, "read a file"),
+                TurnId::new(),
+            )
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -3198,9 +3120,7 @@ mod tests {
                 assert_eq!(tool_id, fs_read_id);
                 assert_eq!(auto_corrected_from.as_deref(), Some("fs_read"));
             }
-            other => panic!(
-                "expected ToolCall with auto-correction, got {other:?}"
-            ),
+            other => panic!("expected ToolCall with auto-correction, got {other:?}"),
         }
     }
 
@@ -3237,11 +3157,7 @@ mod tests {
         ];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![memory_read]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("local-qwen"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("local-qwen"));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "do it"), TurnId::new())
@@ -3257,7 +3173,10 @@ mod tests {
             } => *is_error && content.contains("unknown_tool"),
             _ => false,
         });
-        assert!(has_unknown, "below-threshold path must synthesize unknown_tool");
+        assert!(
+            has_unknown,
+            "below-threshold path must synthesize unknown_tool"
+        );
     }
 
     #[tokio::test]
@@ -3281,11 +3200,7 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![fs_read]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("m"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "read"), TurnId::new())
@@ -3322,8 +3237,7 @@ mod tests {
 
     #[test]
     fn phase_120_fuzzy_recover_returns_none_when_no_match_clears_threshold() {
-        let memory_read =
-            Arc::new(FakeTool::new("memory.read")) as Arc<dyn Tool>;
+        let memory_read = Arc::new(FakeTool::new("memory.read")) as Arc<dyn Tool>;
         let registry = ToolRegistry::new(vec![memory_read]);
         // do_the_thing vs memory.read → Jaccard 0/5 = 0 < 0.80.
         let resolved = fuzzy_recover_tool_name(&registry, "do_the_thing", 0.80);
@@ -3343,21 +3257,13 @@ mod tests {
         // FUZZY_TOOL_NAME_THRESHOLD const; the config layer's
         // DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD is the same value.
         let config = LlmPlannerConfig::new("m");
-        assert!(
-            (config.tool_name_auto_correct_threshold
-                - FUZZY_TOOL_NAME_THRESHOLD)
-                .abs()
-                < 1e-6
-        );
+        assert!((config.tool_name_auto_correct_threshold - FUZZY_TOOL_NAME_THRESHOLD).abs() < 1e-6);
     }
 
     #[test]
     fn phase_120_with_tool_name_auto_correct_threshold_overrides() {
-        let config = LlmPlannerConfig::new("m")
-            .with_tool_name_auto_correct_threshold(0.55);
-        assert!(
-            (config.tool_name_auto_correct_threshold - 0.55).abs() < 1e-6
-        );
+        let config = LlmPlannerConfig::new("m").with_tool_name_auto_correct_threshold(0.55);
+        assert!((config.tool_name_auto_correct_threshold - 0.55).abs() < 1e-6);
     }
 
     // ----- Phase 120 Task 6 — "Did you mean?" suggestions -----
@@ -3473,11 +3379,7 @@ mod tests {
         ];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![fs_read, web_fetch]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("m"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
         let channel = RecChannel::new();
         planner
             .begin_turn(&Message::text(channel.session, "do it"), TurnId::new())
@@ -3489,11 +3391,9 @@ mod tests {
             .history()
             .iter()
             .find_map(|m| match m {
-                LlmMessage::ToolResult { content, is_error, .. }
-                    if *is_error && content.contains("unknown_tool") =>
-                {
-                    Some(content.clone())
-                }
+                LlmMessage::ToolResult {
+                    content, is_error, ..
+                } if *is_error && content.contains("unknown_tool") => Some(content.clone()),
                 _ => None,
             })
             .expect("expected synthetic unknown_tool entry");
@@ -3551,8 +3451,7 @@ mod tests {
         let mut planner = LlmPlanner::new(
             provider,
             registry,
-            LlmPlannerConfig::new("m")
-                .with_tool_name_auto_correct_threshold(1.0),
+            LlmPlannerConfig::new("m").with_tool_name_auto_correct_threshold(1.0),
         );
         let channel = RecChannel::new();
         planner
@@ -3560,9 +3459,7 @@ mod tests {
             .await;
         let step = planner.next_step(&[], &channel).await;
         // Partial match doesn't clear threshold 1.0 → unknown_tool.
-        assert!(
-            matches!(step, NextStep::FinalMessage(ref m) if m == "giving up")
-        );
+        assert!(matches!(step, NextStep::FinalMessage(ref m) if m == "giving up"));
         let has_unknown = planner.history().iter().any(|m| match m {
             LlmMessage::ToolResult {
                 content, is_error, ..
@@ -3637,7 +3534,9 @@ mod tests {
         async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
             // finish() shouldn't be reached on the cancel path, but if
             // it is, report it loudly so the test catches the misroute.
-            Err(LlmError::StreamEnded("BlockingStream::finish reached".into()))
+            Err(LlmError::StreamEnded(
+                "BlockingStream::finish reached".into(),
+            ))
         }
     }
 
@@ -3856,8 +3755,7 @@ mod tests {
 
     #[test]
     fn context_window_builder() {
-        let config = LlmPlannerConfig::new("test-model")
-            .with_context_window(200_000);
+        let config = LlmPlannerConfig::new("test-model").with_context_window(200_000);
         assert_eq!(config.context_window_tokens, Some(200_000));
     }
 
@@ -3882,8 +3780,7 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![]));
-        let config = LlmPlannerConfig::new("test")
-            .with_context_window(window_tokens);
+        let config = LlmPlannerConfig::new("test").with_context_window(window_tokens);
         let mut planner = LlmPlanner::new(provider, registry, config);
         planner.history = messages;
         (planner, RecChannel::new())
@@ -3934,7 +3831,7 @@ mod tests {
         // (plus sentinel).
         let msgs = vec![
             LlmMessage::user_text("a]".repeat(50)), // ~25 tokens
-            LlmMessage::user_text("b".repeat(200)),  // ~50 tokens
+            LlmMessage::user_text("b".repeat(200)), // ~50 tokens
         ];
         let (mut planner, ch) = make_pruning_planner(10, msgs, "ok");
         planner.next_step(&[], &ch).await;
@@ -3950,8 +3847,7 @@ mod tests {
         // so naive oldest-first pruning discarded the turn's own
         // question and the model reset to a greeter reply. The pin
         // re-inserts the task right after the sentinel.
-        let mut msgs =
-            vec![LlmMessage::user_text("what is the cruise speed?")];
+        let mut msgs = vec![LlmMessage::user_text("what is the cruise speed?")];
         for i in 0..6 {
             msgs.push(LlmMessage::ToolResult {
                 call_id: format!("c{i}"),
@@ -3966,10 +3862,7 @@ mod tests {
         // Sentinel first, the rescued task right after it.
         match &planner.history()[1] {
             LlmMessage::User { content } => {
-                assert_eq!(
-                    content[0],
-                    ContentBlock::text("what is the cruise speed?")
-                );
+                assert_eq!(content[0], ContentBlock::text("what is the cruise speed?"));
             }
             other => panic!("expected pinned task, got {other:?}"),
         }
@@ -4057,14 +3950,14 @@ mod tests {
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![tool]));
         // Tiny window ensures pruning fires on both calls.
-        let config = LlmPlannerConfig::new("test")
-            .with_context_window(60);
+        let config = LlmPlannerConfig::new("test").with_context_window(60);
         let mut planner = LlmPlanner::new(provider, registry, config);
         // Seed with enough bulk to trigger pruning.
         for i in 0..8 {
-            planner.history.push(LlmMessage::user_text(
-                format!("bulk-{i}-{}", "y".repeat(80)),
-            ));
+            planner.history.push(LlmMessage::user_text(format!(
+                "bulk-{i}-{}",
+                "y".repeat(80)
+            )));
         }
         let ch = RecChannel::new();
         // First call — tool call.
@@ -4073,13 +3966,15 @@ mod tests {
         let first_pruned = planner.pruned_message_count();
         assert!(first_pruned > 0, "should have pruned on first step");
         // Observe tool result, adding more content.
-        planner.observe_tool_outcome(
-            tool_id,
-            &ToolOutcome::Completed {
-                output: json!({"data": "x".repeat(100)}),
-                verified: Verification::NotApplicable,
-            },
-        ).await;
+        planner
+            .observe_tool_outcome(
+                tool_id,
+                &ToolOutcome::Completed {
+                    output: json!({"data": "x".repeat(100)}),
+                    verified: Verification::NotApplicable,
+                },
+            )
+            .await;
         // Second call — final message.
         let step = planner.next_step(&[], &ch).await;
         assert!(matches!(step, NextStep::FinalMessage(_)));
@@ -4186,7 +4081,9 @@ mod tests {
         match &hist[0] {
             LlmMessage::User { content } => {
                 assert_eq!(content.len(), 2);
-                assert!(matches!(&content[0], ContentBlock::Text { text } if text == "describe this"));
+                assert!(
+                    matches!(&content[0], ContentBlock::Text { text } if text == "describe this")
+                );
                 assert!(content[1].is_image());
             }
             other => panic!("expected User, got {other:?}"),
@@ -4207,11 +4104,7 @@ mod tests {
 
     #[test]
     fn validate_accepts_well_formed_input() {
-        assert!(validate_tool_input(
-            &req_path_schema(),
-            &json!({"path": "notes.txt"}),
-        )
-        .is_ok());
+        assert!(validate_tool_input(&req_path_schema(), &json!({"path": "notes.txt"}),).is_ok());
     }
 
     #[test]
@@ -4235,11 +4128,13 @@ mod tests {
     fn validate_tolerates_extra_unschemad_field() {
         // Tool schemas do not set `additionalProperties: false`, so an
         // extra field the model invented is tolerated, not rejected.
-        assert!(validate_tool_input(
-            &req_path_schema(),
-            &json!({"path": "x", "hallucinated": true}),
-        )
-        .is_ok());
+        assert!(
+            validate_tool_input(
+                &req_path_schema(),
+                &json!({"path": "x", "hallucinated": true}),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -4328,7 +4223,11 @@ mod tests {
             .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
             .await;
         match planner.next_step(&[], &channel).await {
-            NextStep::ToolCall { tool_id: got, input, .. } => {
+            NextStep::ToolCall {
+                tool_id: got,
+                input,
+                ..
+            } => {
                 assert_eq!(got, tool_id);
                 assert_eq!(input, json!({"path": "fixed.txt"}));
             }
@@ -4337,10 +4236,12 @@ mod tests {
         let repairs = planner
             .history()
             .iter()
-            .filter(|m| matches!(
-                m,
-                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
-            ))
+            .filter(|m| {
+                matches!(
+                    m,
+                    LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+                )
+            })
             .count();
         assert_eq!(repairs, 1, "exactly one repair round expected");
     }
@@ -4362,9 +4263,18 @@ mod tests {
             usage: zero_usage(),
         };
         let script = vec![
-            FakeStep { events: vec![], terminal: bad() },
-            FakeStep { events: vec![], terminal: bad() },
-            FakeStep { events: vec![], terminal: bad() },
+            FakeStep {
+                events: vec![],
+                terminal: bad(),
+            },
+            FakeStep {
+                events: vec![],
+                terminal: bad(),
+            },
+            FakeStep {
+                events: vec![],
+                terminal: bad(),
+            },
         ];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![tool]));
@@ -4381,10 +4291,12 @@ mod tests {
         let repairs = planner
             .history()
             .iter()
-            .filter(|m| matches!(
-                m,
-                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
-            ))
+            .filter(|m| {
+                matches!(
+                    m,
+                    LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+                )
+            })
             .count();
         assert_eq!(repairs, 2, "repair attempts are capped at two");
     }
@@ -4431,12 +4343,17 @@ mod tests {
         let repairs = planner
             .history()
             .iter()
-            .filter(|m| matches!(
-                m,
-                LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
-            ))
+            .filter(|m| {
+                matches!(
+                    m,
+                    LlmMessage::ToolResult { content, .. } if content.contains("invalid_input")
+                )
+            })
             .count();
-        assert_eq!(repairs, 1, "the one invalid call produced one repair result");
+        assert_eq!(
+            repairs, 1,
+            "the one invalid call produced one repair result"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4470,14 +4387,12 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_read)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "read x.txt"), TurnId::new()).await;
+        planner
+            .begin_turn(&Message::text(channel.session, "read x.txt"), TurnId::new())
+            .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
             NextStep::ToolCall {
@@ -4498,9 +4413,7 @@ mod tests {
                     "wrapper-tag identifier threaded through to the audit field"
                 );
             }
-            other => panic!(
-                "expected NextStep::ToolCall from extraction; got {other:?}"
-            ),
+            other => panic!("expected NextStep::ToolCall from extraction; got {other:?}"),
         }
     }
 
@@ -4523,14 +4436,15 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(memory_read)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "read memory"), TurnId::new()).await;
+        planner
+            .begin_turn(
+                &Message::text(channel.session, "read memory"),
+                TurnId::new(),
+            )
+            .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
             NextStep::ToolCall {
@@ -4550,8 +4464,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase_126_extraction_falls_through_to_final_message_when_no_blocks()
-    {
+    async fn phase_126_extraction_falls_through_to_final_message_when_no_blocks() {
         // Plain-text response (no `<tool_code>` blocks). Extraction
         // returns empty; existing FinalMessage path runs unchanged.
         let script = vec![FakeStep {
@@ -4563,14 +4476,12 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "say hi"), TurnId::new()).await;
+        planner
+            .begin_turn(&Message::text(channel.session, "say hi"), TurnId::new())
+            .await;
         let step = planner.next_step(&[], &channel).await;
         assert!(matches!(
             step,
@@ -4603,8 +4514,7 @@ mod tests {
         let mut planner = LlmPlanner::new(
             provider,
             registry,
-            LlmPlannerConfig::new("test-model")
-                .with_tool_name_auto_correct_threshold(0.5),
+            LlmPlannerConfig::new("test-model").with_tool_name_auto_correct_threshold(0.5),
         );
 
         let channel = RecChannel::new();
@@ -4636,8 +4546,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase_126_unknown_tool_in_extracted_call_below_threshold_loops_with_error()
-    {
+    async fn phase_126_unknown_tool_in_extracted_call_below_threshold_loops_with_error() {
         // Extracted tool name not registered AND no fuzzy match
         // (threshold too high). The planner records an unknown_tool
         // error in history and loops; the next-step result is
@@ -4665,14 +4574,12 @@ mod tests {
         ];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "do thing"), TurnId::new()).await;
+        planner
+            .begin_turn(&Message::text(channel.session, "do thing"), TurnId::new())
+            .await;
         let step = planner.next_step(&[], &channel).await;
         // Round 1 produced an unknown_tool error in history; the
         // planner looped to round 2 which returned a clean
@@ -4681,10 +4588,12 @@ mod tests {
         let hist = planner.history();
         let unknown_tool_errors = hist
             .iter()
-            .filter(|m| matches!(
-                m,
-                LlmMessage::ToolResult { content, .. } if content.contains("unknown_tool")
-            ))
+            .filter(|m| {
+                matches!(
+                    m,
+                    LlmMessage::ToolResult { content, .. } if content.contains("unknown_tool")
+                )
+            })
             .count();
         assert_eq!(
             unknown_tool_errors, 1,
@@ -4716,14 +4625,12 @@ mod tests {
             Arc::new(fs_read),
             Arc::new(memory_read),
         ]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "two tasks"), TurnId::new()).await;
+        planner
+            .begin_turn(&Message::text(channel.session, "two tasks"), TurnId::new())
+            .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
             NextStep::ToolCalls(batch) => {
@@ -4732,14 +4639,8 @@ mod tests {
                 assert_eq!(batch[0].tool_id, fs_read_id);
                 assert_eq!(batch[1].tool_id, memory_read_id);
                 // Both carry the extraction marker.
-                assert_eq!(
-                    batch[0].extracted_from_text.as_deref(),
-                    Some("tool_code")
-                );
-                assert_eq!(
-                    batch[1].extracted_from_text.as_deref(),
-                    Some("tool_code")
-                );
+                assert_eq!(batch[0].extracted_from_text.as_deref(), Some("tool_code"));
+                assert_eq!(batch[1].extracted_from_text.as_deref(), Some("tool_code"));
             }
             other => panic!("expected ToolCalls(batch); got {other:?}"),
         }
@@ -4759,14 +4660,12 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "x"), TurnId::new()).await;
+        planner
+            .begin_turn(&Message::text(channel.session, "x"), TurnId::new())
+            .await;
         let step = planner.next_step(&[], &channel).await;
         // Malformed → no extraction → falls through to FinalMessage
         // with the original raw text.
@@ -4795,14 +4694,12 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_read)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
-        planner.begin_turn(&Message::text(channel.session, "x"), TurnId::new()).await;
+        planner
+            .begin_turn(&Message::text(channel.session, "x"), TurnId::new())
+            .await;
         let _ = planner.next_step(&[], &channel).await;
 
         let hist = planner.history();
@@ -4871,15 +4768,14 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
         planner
-            .begin_turn(&Message::text(channel.session, "write a file"), TurnId::new())
+            .begin_turn(
+                &Message::text(channel.session, "write a file"),
+                TurnId::new(),
+            )
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
@@ -4921,11 +4817,7 @@ mod tests {
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
         planner
@@ -4962,18 +4854,13 @@ mod tests {
         let script = vec![FakeStep {
             events: vec![],
             terminal: LlmStepEnd::FinalMessage {
-                text: "```tool_code\nfs.write(path='gemma.txt', content='hi')\n```"
-                    .to_string(),
+                text: "```tool_code\nfs.write(path='gemma.txt', content='hi')\n```".to_string(),
                 usage: zero_usage(),
             },
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_write)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
         planner
@@ -5013,18 +4900,13 @@ mod tests {
         let script = vec![FakeStep {
             events: vec![],
             terminal: LlmStepEnd::FinalMessage {
-                text: r#"{"name": "fs.read", "arguments": {"path": "x"}}"#
-                    .to_string(),
+                text: r#"{"name": "fs.read", "arguments": {"path": "x"}}"#.to_string(),
                 usage: zero_usage(),
             },
         }];
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![Arc::new(fs_read)]));
-        let mut planner = LlmPlanner::new(
-            provider,
-            registry,
-            LlmPlannerConfig::new("test-model"),
-        );
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
 
         let channel = RecChannel::new();
         planner
@@ -5083,13 +4965,19 @@ mod tests {
             description: "writes".to_string(),
             input_schema: serde_json::json!({}),
         }];
-        assert_ne!(compute_prefix_hash(system, &tools_a), compute_prefix_hash(system, &tools_b));
+        assert_ne!(
+            compute_prefix_hash(system, &tools_a),
+            compute_prefix_hash(system, &tools_b)
+        );
     }
 
     #[test]
     fn compute_prefix_hash_treats_none_system_distinctly_from_empty_string() {
         let tools: Vec<LlmToolDescriptor> = vec![];
-        assert_ne!(compute_prefix_hash(None, &tools), compute_prefix_hash(Some(""), &tools));
+        assert_ne!(
+            compute_prefix_hash(None, &tools),
+            compute_prefix_hash(Some(""), &tools)
+        );
     }
 
     // ---- kvcache Fix 1 / Fix 2 regression tests -----------------
@@ -5127,9 +5015,8 @@ mod tests {
         // doc comment for why warming pre-refined content would
         // silently defeat the cache forever).
         let refiner = FakeRefiner::new(Some("REFINED"));
-        let mut planner = bare_planner(
-            LlmPlannerConfig::new("m").with_system_prompt_refiner(refiner),
-        );
+        let mut planner =
+            bare_planner(LlmPlannerConfig::new("m").with_system_prompt_refiner(refiner));
         let (kv, _dir) = kv_cache_config_for_test();
         let pool = kv.pool.clone();
         planner.kv_cache = Some(kv);
@@ -5360,7 +5247,7 @@ mod tests {
         // Inverse of the test above: an ordinary planner (no
         // `with_broker_slot_hint` call -- every existing provider's
         // shape today) must never send `slot_hint`, byte-identical to
-        // pre-Task-6 behavior.
+        // behavior before broker-mode slot hinting existed.
         let script = vec![FakeStep {
             events: vec![],
             terminal: LlmStepEnd::FinalMessage {

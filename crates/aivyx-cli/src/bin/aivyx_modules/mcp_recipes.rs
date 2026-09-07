@@ -74,8 +74,7 @@ impl std::fmt::Display for RecipeError {
 pub const RECIPES: &[Recipe] = &[
     Recipe {
         name: "filesystem",
-        description:
-            "Read/write files inside a configured directory. Official npm package.",
+        description: "Read/write files inside a configured directory. Official npm package.",
         toml_snippet: r#"# Filesystem MCP server — read/write inside a single directory.
 # The path argument scopes the server; the sandbox config is
 # what *enforces* that scope at the OS level.
@@ -104,8 +103,7 @@ args = [
     },
     Recipe {
         name: "github",
-        description:
-            "Read/write GitHub repos, issues, PRs via the GitHub REST API.",
+        description: "Read/write GitHub repos, issues, PRs via the GitHub REST API.",
         toml_snippet: r#"# GitHub MCP server — issue / PR / repo operations.
 #
 # Required env: GITHUB_PERSONAL_ACCESS_TOKEN with the scopes
@@ -421,8 +419,7 @@ args = [
     },
     Recipe {
         name: "aivyx-coder",
-        description:
-            "Delegate bounded coding tasks to a local aivyx-coder process over MCP.",
+        description: "Delegate bounded coding tasks to a local aivyx-coder process over MCP.",
         toml_snippet: r#"# aivyx-coder MCP server -- delegates bounded coding tasks to a
 # local `aivyx-coder --mcp-server` process. Unlike every other
 # recipe in this catalog, aivyx-coder is not third-party code: it
@@ -642,8 +639,7 @@ mod tests {
 
     #[test]
     fn render_recipe_unknown_name_errors_with_candidate_list() {
-        let err = render_recipe("does-not-exist")
-            .expect_err("unknown recipe must error");
+        let err = render_recipe("does-not-exist").expect_err("unknown recipe must error");
         assert!(err.message.contains("does-not-exist"));
         assert!(
             err.candidates.contains(&"filesystem"),

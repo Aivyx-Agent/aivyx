@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use aivyx_capability::Scope;
 
@@ -78,8 +78,7 @@ const MAX_WORKSPACE_BYTES: usize = 256 * 1024;
 const WORKSPACE_SCOPE_BASE: &str = "workspace";
 
 fn deny_scope() -> Scope {
-    Scope::parse("workspace:/aivyx/__deny__/invalid-input")
-        .expect("static deny scope parses")
+    Scope::parse("workspace:/aivyx/__deny__/invalid-input").expect("static deny scope parses")
 }
 
 /// Resolve `path` (relative to the workspace root) inside the root, or `None`
@@ -136,8 +135,7 @@ fn canonical_fence_parent(root: &Path, lexical_abs: &Path) -> Result<PathBuf, St
 
 /// `workspace:<abs>` scope for a resolved path, or the deny scope.
 fn scope_for(abs: &Path) -> Scope {
-    Scope::parse(&format!("{WORKSPACE_SCOPE_BASE}:{}", abs.display()))
-        .unwrap_or_else(deny_scope)
+    Scope::parse(&format!("{WORKSPACE_SCOPE_BASE}:{}", abs.display())).unwrap_or_else(deny_scope)
 }
 
 fn tool_fail(id: ToolId, detail: impl Into<String>) -> ToolOutcome {
@@ -169,7 +167,9 @@ pub fn build_workspace_tools(
     checkpointer: Option<Arc<GitCheckpointer>>,
 ) -> Result<(Vec<Arc<dyn Tool>>, PathBuf), AivyxError> {
     let canonical = std::fs::canonicalize(root).map_err(|e| {
-        AivyxError::Config(format!("workspace root {root:?} cannot be canonicalized: {e}"))
+        AivyxError::Config(format!(
+            "workspace root {root:?} cannot be canonicalized: {e}"
+        ))
     })?;
     if !canonical.is_dir() {
         return Err(AivyxError::Config(format!(
@@ -197,7 +197,11 @@ macro_rules! ws_tool {
         }
         impl $name {
             pub fn new(root: Arc<Path>) -> Self {
-                Self { id: ToolId::new(), root, schema: $schema }
+                Self {
+                    id: ToolId::new(),
+                    root,
+                    schema: $schema,
+                }
             }
         }
     };
@@ -221,7 +225,12 @@ pub struct WorkspaceWriteTool {
 }
 impl WorkspaceWriteTool {
     pub fn new(root: Arc<Path>, checkpointer: Option<Arc<GitCheckpointer>>) -> Self {
-        Self { id: ToolId::new(), root, schema: write_schema(), checkpointer }
+        Self {
+            id: ToolId::new(),
+            root,
+            schema: write_schema(),
+            checkpointer,
+        }
     }
 }
 impl std::fmt::Debug for WorkspaceWriteTool {
@@ -243,7 +252,12 @@ pub struct WorkspaceDeleteTool {
 }
 impl WorkspaceDeleteTool {
     pub fn new(root: Arc<Path>, checkpointer: Option<Arc<GitCheckpointer>>) -> Self {
-        Self { id: ToolId::new(), root, schema: delete_schema(), checkpointer }
+        Self {
+            id: ToolId::new(),
+            root,
+            schema: delete_schema(),
+            checkpointer,
+        }
     }
 }
 impl std::fmt::Debug for WorkspaceDeleteTool {
@@ -265,7 +279,12 @@ pub struct WorkspaceNoteTool {
 }
 impl WorkspaceNoteTool {
     pub fn new(root: Arc<Path>, checkpointer: Option<Arc<GitCheckpointer>>) -> Self {
-        Self { id: ToolId::new(), root, schema: note_schema(), checkpointer }
+        Self {
+            id: ToolId::new(),
+            root,
+            schema: note_schema(),
+            checkpointer,
+        }
     }
 }
 impl std::fmt::Debug for WorkspaceNoteTool {
@@ -305,13 +324,19 @@ fn note_schema() -> Value {
 
 #[async_trait]
 impl Tool for WorkspaceReadTool {
-    fn id(&self) -> ToolId { self.id }
-    fn name(&self) -> &str { "workspace.read" }
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "workspace.read"
+    }
     fn description(&self) -> &str {
         "Read a file from YOUR workspace (your own private space for notes, \
          ideas, plans, and projects). Input: `{ path }`."
     }
-    fn input_schema(&self) -> &Value { &self.schema }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
     fn required_scope(&self, input: &Value) -> Scope {
         match input.get("path").and_then(|v| v.as_str()) {
             Some(p) => match resolve_in_workspace(&self.root, p) {
@@ -350,13 +375,19 @@ impl Tool for WorkspaceReadTool {
 
 #[async_trait]
 impl Tool for WorkspaceWriteTool {
-    fn id(&self) -> ToolId { self.id }
-    fn name(&self) -> &str { "workspace.write" }
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "workspace.write"
+    }
     fn description(&self) -> &str {
         "Write (create or overwrite) a file in YOUR workspace. Parent dirs are \
          created as needed. Input: `{ path, content }`."
     }
-    fn input_schema(&self) -> &Value { &self.schema }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
     fn required_scope(&self, input: &Value) -> Scope {
         match input.get("path").and_then(|v| v.as_str()) {
             Some(p) => match resolve_in_workspace(&self.root, p) {
@@ -376,7 +407,10 @@ impl Tool for WorkspaceWriteTool {
             Err(e) => return tool_fail(self.id, e),
         };
         if content.len() > MAX_WORKSPACE_BYTES {
-            return tool_fail(self.id, format!("content exceeds {MAX_WORKSPACE_BYTES} bytes"));
+            return tool_fail(
+                self.id,
+                format!("content exceeds {MAX_WORKSPACE_BYTES} bytes"),
+            );
         }
         let Some(lexical_abs) = resolve_in_workspace(&self.root, &path) else {
             return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
@@ -427,13 +461,19 @@ impl Tool for WorkspaceWriteTool {
 
 #[async_trait]
 impl Tool for WorkspaceListTool {
-    fn id(&self) -> ToolId { self.id }
-    fn name(&self) -> &str { "workspace.list" }
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "workspace.list"
+    }
     fn description(&self) -> &str {
         "List YOUR workspace (or a sub-path). Input: `{ path? }` — omit `path` \
          for the workspace root."
     }
-    fn input_schema(&self) -> &Value { &self.schema }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
     fn required_scope(&self, input: &Value) -> Scope {
         let p = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         match resolve_in_workspace(&self.root, p) {
@@ -474,12 +514,18 @@ impl Tool for WorkspaceListTool {
 
 #[async_trait]
 impl Tool for WorkspaceDeleteTool {
-    fn id(&self) -> ToolId { self.id }
-    fn name(&self) -> &str { "workspace.delete" }
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "workspace.delete"
+    }
     fn description(&self) -> &str {
         "Delete a file or empty directory from YOUR workspace. Input: `{ path }`."
     }
-    fn input_schema(&self) -> &Value { &self.schema }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
     fn required_scope(&self, input: &Value) -> Scope {
         match input.get("path").and_then(|v| v.as_str()) {
             Some(p) => match resolve_in_workspace(&self.root, p) {
@@ -528,14 +574,20 @@ impl Tool for WorkspaceDeleteTool {
 
 #[async_trait]
 impl Tool for WorkspaceNoteTool {
-    fn id(&self) -> ToolId { self.id }
-    fn name(&self) -> &str { "workspace.note" }
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "workspace.note"
+    }
     fn description(&self) -> &str {
         "Append a timestamped entry to your journal (or another bucket) — the \
          quick way to jot a thought, idea, or plan. Input: `{ content, \
          category? }` (category: 'journal' default, 'ideas', 'plans')."
     }
-    fn input_schema(&self) -> &Value { &self.schema }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
     fn required_scope(&self, _input: &Value) -> Scope {
         // Always writes under the workspace root; the bare-root grant covers it.
         scope_for(&self.root)
@@ -545,10 +597,18 @@ impl Tool for WorkspaceNoteTool {
             Ok(c) => c,
             Err(e) => return tool_fail(self.id, e),
         };
-        let category = input.get("category").and_then(|v| v.as_str()).unwrap_or("journal");
+        let category = input
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("journal");
         // Sanitize category to a single path component.
-        let category = category.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
-        let category = if category.is_empty() { "journal" } else { category };
+        let category =
+            category.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+        let category = if category.is_empty() {
+            "journal"
+        } else {
+            category
+        };
         let (date, secs) = current_date_and_unix();
         let rel = format!("{category}/{date}.md");
         let Some(lexical_abs) = resolve_in_workspace(&self.root, &rel) else {
@@ -624,8 +684,7 @@ mod tests {
     use crate::MessageOrigin;
 
     fn tmp(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("aivyx-ws-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!("aivyx-ws-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -668,17 +727,35 @@ mod tests {
         }
         #[async_trait]
         impl crate::ChannelContext for NoopChannel {
-            fn channel_name(&self) -> &str { "test" }
-            fn platform(&self) -> crate::ChannelPlatform { crate::ChannelPlatform::Local }
+            fn channel_name(&self) -> &str {
+                "test"
+            }
+            fn platform(&self) -> crate::ChannelPlatform {
+                crate::ChannelPlatform::Local
+            }
             fn trust_tier(&self) -> aivyx_capability::TrustTier {
                 aivyx_capability::TrustTier::Trusted
             }
-            fn session_id(&self) -> SessionId { self.session }
-            async fn stream_event(&self, _e: crate::StreamEvent<'_>) -> Result<(), crate::ChannelError> { Ok(()) }
-            async fn finalize(&self, _o: &crate::TurnOutcome) -> Result<(), crate::ChannelError> { Ok(()) }
-            fn cancellation_token(&self) -> CancellationToken { self.token.clone() }
+            fn session_id(&self) -> SessionId {
+                self.session
+            }
+            async fn stream_event(
+                &self,
+                _e: crate::StreamEvent<'_>,
+            ) -> Result<(), crate::ChannelError> {
+                Ok(())
+            }
+            async fn finalize(&self, _o: &crate::TurnOutcome) -> Result<(), crate::ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> CancellationToken {
+                self.token.clone()
+            }
         }
-        let channel = NoopChannel { session: SessionId::new(), token: CancellationToken::new() };
+        let channel = NoopChannel {
+            session: SessionId::new(),
+            token: CancellationToken::new(),
+        };
         let audit = NullAuditHook;
         let ctx = ToolContext {
             agent_id: AgentId::new(),
@@ -690,7 +767,9 @@ mod tests {
             message_origin: MessageOrigin::Operator,
         };
         tokio::runtime::Builder::new_current_thread()
-            .enable_all().build().unwrap()
+            .enable_all()
+            .build()
+            .unwrap()
             .block_on(tool.execute(input, &ctx))
     }
 
@@ -711,7 +790,11 @@ mod tests {
         (root, tools)
     }
     fn named<'a>(tools: &'a [Arc<dyn Tool>], name: &str) -> &'a dyn Tool {
-        tools.iter().find(|t| t.name() == name).expect("tool present").as_ref()
+        tools
+            .iter()
+            .find(|t| t.name() == name)
+            .expect("tool present")
+            .as_ref()
     }
 
     /// Extract the ref name (third whitespace-separated field) from the
@@ -731,11 +814,16 @@ mod tests {
     #[test]
     fn write_then_read_roundtrips() {
         let (root, tools) = tools_at("rw");
-        let w = run_execute(named(&tools, "workspace.write"),
-            json!({"path":"ideas/spark.md","content":"a bright idea"}));
+        let w = run_execute(
+            named(&tools, "workspace.write"),
+            json!({"path":"ideas/spark.md","content":"a bright idea"}),
+        );
         assert!(matches!(w, ToolOutcome::Completed { .. }));
         assert!(root.join("ideas/spark.md").is_file());
-        let r = run_execute(named(&tools, "workspace.read"), json!({"path":"ideas/spark.md"}));
+        let r = run_execute(
+            named(&tools, "workspace.read"),
+            json!({"path":"ideas/spark.md"}),
+        );
         match r {
             ToolOutcome::Completed { output, .. } => assert_eq!(output["content"], "a bright idea"),
             other => panic!("expected Completed, got {other:?}"),
@@ -746,17 +834,24 @@ mod tests {
     #[test]
     fn note_appends_to_a_dated_journal_file() {
         let (root, tools) = tools_at("note");
-        let n = run_execute(named(&tools, "workspace.note"),
-            json!({"content":"today I learned X"}));
+        let n = run_execute(
+            named(&tools, "workspace.note"),
+            json!({"content":"today I learned X"}),
+        );
         let appended = match n {
-            ToolOutcome::Completed { output, .. } => output["appended_to"].as_str().unwrap().to_string(),
+            ToolOutcome::Completed { output, .. } => {
+                output["appended_to"].as_str().unwrap().to_string()
+            }
             other => panic!("expected Completed, got {other:?}"),
         };
         assert!(appended.starts_with("journal/") && appended.ends_with(".md"));
         let body = std::fs::read_to_string(root.join(&appended)).unwrap();
         assert!(body.contains("today I learned X"));
         // A second note appends rather than clobbers.
-        run_execute(named(&tools, "workspace.note"), json!({"content":"second thought"}));
+        run_execute(
+            named(&tools, "workspace.note"),
+            json!({"content":"second thought"}),
+        );
         let body2 = std::fs::read_to_string(root.join(&appended)).unwrap();
         assert!(body2.contains("today I learned X") && body2.contains("second thought"));
         std::fs::remove_dir_all(&root).ok();
@@ -768,8 +863,12 @@ mod tests {
         let l = run_execute(named(&tools, "workspace.list"), json!({}));
         match l {
             ToolOutcome::Completed { output, .. } => {
-                let names: Vec<&str> = output["entries"].as_array().unwrap()
-                    .iter().map(|e| e["name"].as_str().unwrap()).collect();
+                let names: Vec<&str> = output["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| e["name"].as_str().unwrap())
+                    .collect();
                 assert!(names.contains(&"journal") && names.contains(&"README.md"));
             }
             other => panic!("expected Completed, got {other:?}"),
@@ -781,7 +880,10 @@ mod tests {
     fn delete_removes_a_file() {
         let (root, tools) = tools_at("del");
         std::fs::write(root.join("ideas/tmp.md"), "x").unwrap();
-        let d = run_execute(named(&tools, "workspace.delete"), json!({"path":"ideas/tmp.md"}));
+        let d = run_execute(
+            named(&tools, "workspace.delete"),
+            json!({"path":"ideas/tmp.md"}),
+        );
         assert!(matches!(d, ToolOutcome::Completed { .. }));
         assert!(!root.join("ideas/tmp.md").exists());
         std::fs::remove_dir_all(&root).ok();
@@ -793,7 +895,11 @@ mod tests {
         let read = named(&tools, "workspace.read");
         // A `..` escape must yield the deny scope (not a real workspace path).
         let scope = read.required_scope(&json!({"path":"../../etc/passwd"}));
-        assert!(scope.as_str().contains("__deny__"), "got: {}", scope.as_str());
+        assert!(
+            scope.as_str().contains("__deny__"),
+            "got: {}",
+            scope.as_str()
+        );
         // And an in-workspace path yields a real workspace scope.
         let ok = read.required_scope(&json!({"path":"journal/x.md"}));
         assert!(ok.as_str().starts_with("workspace:") && !ok.as_str().contains("__deny__"));
@@ -839,7 +945,10 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         symlink(&outside, root.join("escape_dir")).unwrap();
 
-        let outcome = run_execute(named(&tools, "workspace.list"), json!({"path":"escape_dir"}));
+        let outcome = run_execute(
+            named(&tools, "workspace.list"),
+            json!({"path":"escape_dir"}),
+        );
         match outcome {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
                 assert!(detail.contains("escapes workspace root"), "{detail}");
@@ -912,7 +1021,11 @@ mod tests {
         // workspace.note would write to.
         let (date, _) = current_date_and_unix();
         std::fs::create_dir_all(root.join("journal")).unwrap();
-        symlink(outside.join("clobbered.md"), root.join("journal").join(format!("{date}.md"))).unwrap();
+        symlink(
+            outside.join("clobbered.md"),
+            root.join("journal").join(format!("{date}.md")),
+        )
+        .unwrap();
 
         let outcome = run_execute(named(&tools, "workspace.note"), json!({"content":"pwned"}));
         match outcome {
@@ -935,13 +1048,15 @@ mod tests {
     fn write_checkpoints_before_writing_when_configured() {
         let root = tmp("write-checkpoint");
         provision_workspace(&root).unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(aivyx_checkpoint::test_support::init_repo(&root));
         let checkpointer = rt
             .block_on(GitCheckpointer::detect(&root, Vec::new()))
             .expect("root is a real git repo");
-        let (tools, _) =
-            build_workspace_tools(&root, Some(Arc::new(checkpointer))).unwrap();
+        let (tools, _) = build_workspace_tools(&root, Some(Arc::new(checkpointer))).unwrap();
 
         let w = run_execute(
             named(&tools, "workspace.write"),
@@ -953,7 +1068,10 @@ mod tests {
             &root,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
-        assert!(!refs.trim().is_empty(), "a checkpoint ref must exist before the write");
+        assert!(
+            !refs.trim().is_empty(),
+            "a checkpoint ref must exist before the write"
+        );
 
         // Prove the checkpoint captured PRE-mutation state: the write
         // target didn't exist on disk until `workspace.write`'s own
@@ -977,13 +1095,15 @@ mod tests {
         let root = tmp("delete-checkpoint");
         provision_workspace(&root).unwrap();
         std::fs::write(root.join("ideas/tmp.md"), "x").unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(aivyx_checkpoint::test_support::init_repo(&root));
         let checkpointer = rt
             .block_on(GitCheckpointer::detect(&root, Vec::new()))
             .expect("root is a real git repo");
-        let (tools, _) =
-            build_workspace_tools(&root, Some(Arc::new(checkpointer))).unwrap();
+        let (tools, _) = build_workspace_tools(&root, Some(Arc::new(checkpointer))).unwrap();
 
         let d = run_execute(
             named(&tools, "workspace.delete"),
@@ -995,7 +1115,10 @@ mod tests {
             &root,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
-        assert!(!refs.trim().is_empty(), "a checkpoint ref must exist before the delete");
+        assert!(
+            !refs.trim().is_empty(),
+            "a checkpoint ref must exist before the delete"
+        );
 
         // Prove the checkpoint captured PRE-mutation state: the deleted
         // file was written to disk before the tool call and the
@@ -1018,13 +1141,15 @@ mod tests {
     fn note_checkpoints_before_appending_when_configured() {
         let root = tmp("note-checkpoint");
         provision_workspace(&root).unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(aivyx_checkpoint::test_support::init_repo(&root));
         let checkpointer = rt
             .block_on(GitCheckpointer::detect(&root, Vec::new()))
             .expect("root is a real git repo");
-        let (tools, _) =
-            build_workspace_tools(&root, Some(Arc::new(checkpointer))).unwrap();
+        let (tools, _) = build_workspace_tools(&root, Some(Arc::new(checkpointer))).unwrap();
 
         let n = run_execute(
             named(&tools, "workspace.note"),
@@ -1041,7 +1166,10 @@ mod tests {
             &root,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
-        assert!(!refs.trim().is_empty(), "a checkpoint ref must exist before the note append");
+        assert!(
+            !refs.trim().is_empty(),
+            "a checkpoint ref must exist before the note append"
+        );
 
         // Prove the checkpoint captured PRE-mutation state: the dated
         // journal file didn't exist on disk until `workspace.note`'s own
@@ -1064,7 +1192,10 @@ mod tests {
     fn write_skips_checkpoint_when_no_checkpointer_configured() {
         let root = tmp("write-no-checkpoint");
         provision_workspace(&root).unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(aivyx_checkpoint::test_support::init_repo(&root));
         // Root IS a real git repo, but no checkpointer was wired in --
         // proves workspace.rs's own gate is `self.checkpointer.is_some()`,
@@ -1082,7 +1213,10 @@ mod tests {
             &root,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         ));
-        assert!(refs.trim().is_empty(), "no checkpointer configured -- no ref should exist");
+        assert!(
+            refs.trim().is_empty(),
+            "no checkpointer configured -- no ref should exist"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

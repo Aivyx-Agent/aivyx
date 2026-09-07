@@ -141,13 +141,8 @@ pub fn write_oauth_config(
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = service.config_path(home);
-    let body = render_oauth_config_toml(
-        client_id,
-        client_secret,
-        &service.redirect_uri(),
-    );
-    std::fs::write(&path, body)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    let body = render_oauth_config_toml(client_id, client_secret, &service.redirect_uri());
+    std::fs::write(&path, body).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     set_file_0600(&path);
     Ok(path)
 }
@@ -155,10 +150,7 @@ pub fn write_oauth_config(
 #[cfg(unix)]
 pub(crate) fn set_file_0600(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(
-        path,
-        std::fs::Permissions::from_mode(0o600),
-    );
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
 #[cfg(not(unix))]
@@ -200,12 +192,8 @@ pub(crate) fn prompt_yes_no(
 
 /// `aivyx connect` (no service) — list the connectable services
 /// and their connection status.
-pub fn list_services(
-    writer: &mut dyn Write,
-    home: &Path,
-) -> Result<(), String> {
-    writeln!(writer, "Connectable services:\n")
-        .map_err(|e| format!("write error: {e}"))?;
+pub fn list_services(writer: &mut dyn Write, home: &Path) -> Result<(), String> {
+    writeln!(writer, "Connectable services:\n").map_err(|e| format!("write error: {e}"))?;
     for s in SERVICES {
         let status = if s.is_connected(home) {
             "connected"
@@ -216,8 +204,12 @@ pub fn list_services(
             .map_err(|e| format!("write error: {e}"))?;
     }
     // Chapter Mise — the kitchen vertical (non-OAuth: KitchenDB connection).
-    writeln!(writer, "  {:<16} Kitchen / BOH — vertical pack (KitchenDB)", "kitchen")
-        .map_err(|e| format!("write error: {e}"))?;
+    writeln!(
+        writer,
+        "  {:<16} Kitchen / BOH — vertical pack (KitchenDB)",
+        "kitchen"
+    )
+    .map_err(|e| format!("write error: {e}"))?;
     writeln!(
         writer,
         "\nRun `aivyx connect <service>` to set one up.\n\
@@ -238,7 +230,10 @@ pub fn collect_credentials(
         writeln!(writer, "{s}").map_err(|e| format!("write error: {e}"))
     };
     w(writer, &format!("\n— Connect {} —\n", svc.display))?;
-    w(writer, "You'll need an OAuth app from Google Cloud Console:")?;
+    w(
+        writer,
+        "You'll need an OAuth app from Google Cloud Console:",
+    )?;
     w(
         writer,
         "  1. Open https://console.cloud.google.com/ and pick (or \
@@ -288,10 +283,7 @@ pub fn collect_credentials(
 /// running `aivyx` binary first (covers both from-source
 /// `target/release` and packaged `/usr/bin` installs), then a
 /// `PATH` lookup. `None` → the caller prompts.
-pub fn resolve_service_binary(
-    svc: &ConnectService,
-    exe_dir: Option<&Path>,
-) -> Option<PathBuf> {
+pub fn resolve_service_binary(svc: &ConnectService, exe_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(dir) = exe_dir {
         let sibling = dir.join(svc.binary);
         if sibling.exists() {
@@ -363,11 +355,9 @@ async fn run_onboarding(
         return Ok(());
     }
 
-    let (client_id, client_secret) =
-        collect_credentials(reader, writer, svc)?;
+    let (client_id, client_secret) = collect_credentials(reader, writer, svc)?;
     let path = write_oauth_config(svc, home, &client_id, &client_secret)?;
-    writeln!(writer, "\nWrote {}.", path.display())
-        .map_err(|e| format!("write error: {e}"))?;
+    writeln!(writer, "\nWrote {}.", path.display()).map_err(|e| format!("write error: {e}"))?;
 
     let exe_dir = std::env::current_exe()
         .ok()
@@ -376,10 +366,7 @@ async fn run_onboarding(
         Some(b) => b,
         None => {
             let typed = prompt_line(
-                &format!(
-                    "Couldn't find `{}` automatically. Path to it: ",
-                    svc.binary
-                ),
+                &format!("Couldn't find `{}` automatically. Path to it: ", svc.binary),
                 reader,
                 writer,
             )?;
@@ -435,24 +422,16 @@ pub fn find_aivyx_toml(home: &Path) -> Option<PathBuf> {
         }
     }
     let xdg = home.join(".config").join("aivyx").join("aivyx.toml");
-    if xdg.exists() {
-        Some(xdg)
-    } else {
-        None
-    }
+    if xdg.exists() { Some(xdg) } else { None }
 }
 
 /// Is a `[[tool_process]]` with this `name` already present?
-pub fn tool_process_present(
-    doc: &toml_edit::DocumentMut,
-    name: &str,
-) -> bool {
+pub fn tool_process_present(doc: &toml_edit::DocumentMut, name: &str) -> bool {
     doc.get("tool_process")
         .and_then(|i| i.as_array_of_tables())
         .map(|arr| {
-            arr.iter().any(|t| {
-                t.get("name").and_then(|v| v.as_str()) == Some(name)
-            })
+            arr.iter()
+                .any(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
         })
         .unwrap_or(false)
 }
@@ -460,12 +439,8 @@ pub fn tool_process_present(
 /// Append a `[[tool_process]]` entry (name + command) to the doc,
 /// preserving everything else. Caller checks
 /// [`tool_process_present`] first.
-pub fn append_tool_process(
-    doc: &mut toml_edit::DocumentMut,
-    name: &str,
-    command: &str,
-) {
-    use toml_edit::{value, Item, Table};
+pub fn append_tool_process(doc: &mut toml_edit::DocumentMut, name: &str, command: &str) {
+    use toml_edit::{Item, Table, value};
     let mut t = Table::new();
     t["name"] = value(name);
     t["command"] = value(command);
@@ -544,8 +519,7 @@ fn offer_tool_process_wiring(
 /// Map a `[[tool_process]]` `command` to a known connectable
 /// service by binary file name (e.g. `/opt/bin/aivyx-gmail` →
 /// gmail).
-pub fn service_for_command(command: &str) -> Option<&'static ConnectService>
-{
+pub fn service_for_command(command: &str) -> Option<&'static ConnectService> {
     let file = Path::new(command)
         .file_name()
         .and_then(|s| s.to_str())
@@ -577,15 +551,11 @@ mod tests {
     fn registry_lookup_is_case_insensitive_and_total() {
         assert_eq!(find_service("gmail").unwrap().binary, "aivyx-gmail");
         assert_eq!(find_service("  Drive ").unwrap().key, "drive");
-        assert_eq!(
-            find_service("CALENDAR").unwrap().display,
-            "Google Calendar"
-        );
+        assert_eq!(find_service("CALENDAR").unwrap().display, "Google Calendar");
         assert!(find_service("notion").is_none()); // deferred
         assert!(find_service("nope").is_none());
         // Every service has a distinct loopback port.
-        let mut ports: Vec<u16> =
-            SERVICES.iter().map(|s| s.redirect_port).collect();
+        let mut ports: Vec<u16> = SERVICES.iter().map(|s| s.redirect_port).collect();
         ports.sort();
         ports.dedup();
         assert_eq!(ports.len(), SERVICES.len());
@@ -603,10 +573,7 @@ mod tests {
             svc.token_path(home),
             Path::new("/home/op/.aivyx/tool-processes/gmail/tokens.json")
         );
-        assert_eq!(
-            svc.redirect_uri(),
-            "http://127.0.0.1:8765/callback"
-        );
+        assert_eq!(svc.redirect_uri(), "http://127.0.0.1:8765/callback");
     }
 
     #[test]
@@ -632,8 +599,7 @@ mod tests {
 
     #[test]
     fn list_services_shows_status() {
-        let tmp = std::env::temp_dir()
-            .join(format!("aivyx-list-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("aivyx-list-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         // Mark gmail connected.
         let g = find_service("gmail").unwrap();
@@ -654,8 +620,7 @@ mod tests {
         let input = b"\nthe-client-id\nthe-secret\n".to_vec();
         let mut reader = std::io::Cursor::new(input);
         let mut writer: Vec<u8> = Vec::new();
-        let (id, secret) =
-            collect_credentials(&mut reader, &mut writer, svc).unwrap();
+        let (id, secret) = collect_credentials(&mut reader, &mut writer, svc).unwrap();
         assert_eq!(id, "the-client-id");
         assert_eq!(secret, "the-secret");
         let shown = String::from_utf8_lossy(&writer);
@@ -668,25 +633,20 @@ mod tests {
 
     #[test]
     fn resolve_binary_prefers_exe_sibling() {
-        let tmp = std::env::temp_dir()
-            .join(format!("aivyx-bin-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("aivyx-bin-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let svc = find_service("drive").unwrap();
         // A sibling of the exe dir resolves first (deterministic —
         // independent of whatever is on PATH).
         let sibling = tmp.join("aivyx-drive");
         std::fs::write(&sibling, "#!/bin/sh\n").unwrap();
-        assert_eq!(
-            resolve_service_binary(svc, Some(&tmp)),
-            Some(sibling)
-        );
+        assert_eq!(resolve_service_binary(svc, Some(&tmp)), Some(sibling));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn append_tool_process_adds_when_absent_and_detects_present() {
-        let mut doc: toml_edit::DocumentMut =
-            "[agent]\nprovider = \"ollama\"\n".parse().unwrap();
+        let mut doc: toml_edit::DocumentMut = "[agent]\nprovider = \"ollama\"\n".parse().unwrap();
         assert!(!tool_process_present(&doc, "gmail"));
         append_tool_process(&mut doc, "gmail", "/opt/bin/aivyx-gmail");
         assert!(tool_process_present(&doc, "gmail"));
@@ -705,20 +665,18 @@ mod tests {
     #[test]
     fn service_for_command_matches_by_binary_basename() {
         assert_eq!(
-            service_for_command("/opt/aivyx/bin/aivyx-gmail").unwrap().key,
+            service_for_command("/opt/aivyx/bin/aivyx-gmail")
+                .unwrap()
+                .key,
             "gmail"
         );
-        assert_eq!(
-            service_for_command("aivyx-drive").unwrap().key,
-            "drive"
-        );
+        assert_eq!(service_for_command("aivyx-drive").unwrap().key, "drive");
         assert!(service_for_command("/usr/bin/some-other-tool").is_none());
     }
 
     #[test]
     fn unauthenticated_hint_only_when_configured_but_no_tokens() {
-        let tmp = std::env::temp_dir()
-            .join(format!("aivyx-hint-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("aivyx-hint-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let cmd = "/opt/bin/aivyx-gmail";
         // No tokens.json → hint names the fix.
@@ -736,13 +694,11 @@ mod tests {
 
     #[test]
     fn write_then_connected_check_round_trips() {
-        let tmp = std::env::temp_dir()
-            .join(format!("aivyx-connect-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("aivyx-connect-{}", uuid::Uuid::new_v4()));
         let svc = find_service("calendar").unwrap();
         // Not connected before, and no config yet.
         assert!(!svc.is_connected(&tmp));
-        let path =
-            write_oauth_config(svc, &tmp, "the-id", "the-secret").unwrap();
+        let path = write_oauth_config(svc, &tmp, "the-id", "the-secret").unwrap();
         assert!(path.exists());
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("client_id = \"the-id\""));

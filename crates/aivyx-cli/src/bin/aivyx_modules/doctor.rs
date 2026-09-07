@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions, MemoryProfile, ProviderKind};
 use aivyx_llm::ollama::{
-    OllamaConfig, OllamaOptions, OllamaProvider, AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL,
+    AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL, OllamaConfig, OllamaOptions, OllamaProvider,
     RECOMMENDED_LOCAL_MODEL,
 };
 use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolDescriptor};
@@ -125,7 +125,10 @@ fn check_gatehouse(cfg: &AivyxConfig) {
         GatehouseStatus::TokenSet { off_host } => {
             let host_note = off_host.map_or(String::new(), |h| format!(" (bound off-host at {h})"));
             pass(&format!("auth token set{host_note}"));
-            println!("     token: {}", cfg.web_ui_auth_token.as_deref().unwrap_or(""));
+            println!(
+                "     token: {}",
+                cfg.web_ui_auth_token.as_deref().unwrap_or("")
+            );
         }
         GatehouseStatus::NoTokenOffHost { host } => {
             println!(
@@ -174,7 +177,9 @@ async fn check_ollama(cfg: &AivyxConfig) -> bool {
     pass("Ollama is running");
 
     // 2. The configured model is pulled.
-    let models = crate::init::list_ollama_models(&base_url).await.unwrap_or_default();
+    let models = crate::init::list_ollama_models(&base_url)
+        .await
+        .unwrap_or_default();
     if !models.iter().any(|m| m == &model) {
         fail(
             &format!("model `{model}` is not downloaded"),
@@ -212,7 +217,10 @@ async fn check_ollama(cfg: &AivyxConfig) -> bool {
             false
         }
         Err(e) => {
-            fail(&format!("test generation failed: {e}"), "Check that Ollama is healthy and the model loads.");
+            fail(
+                &format!("test generation failed: {e}"),
+                "Check that Ollama is healthy and the model loads.",
+            );
             false
         }
     }
@@ -236,9 +244,7 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
         description: "A tool you do not need to call for this.".to_string(),
         input_schema: serde_json::json!({ "type": "object", "properties": {} }),
     }];
-    let messages = vec![LlmMessage::user_text(
-        "Reply with exactly the word: OK",
-    )];
+    let messages = vec![LlmMessage::user_text("Reply with exactly the word: OK")];
     let request = LlmRequest {
         model,
         system: Some("You are a helpful assistant."),
@@ -246,8 +252,8 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
         tools: &tools,
         max_tokens: 64,
         temperature: None,
-    id_slot: None,
-    slot_hint: None,
+        id_slot: None,
+        slot_hint: None,
     };
 
     let token = aivyx_core::CancellationToken::new();
@@ -312,9 +318,7 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
             // Chapter Ember — lite is embedding-free BY DESIGN: BM25 lexical +
             // co-occurrence recall over existing memory, zero setup. Report it
             // as active, not "off".
-            pass(
-                "lite recall active (lexical BM25 + co-occurrence, no embeddings)",
-            );
+            pass("lite recall active (lexical BM25 + co-occurrence, no embeddings)");
             println!(
                 "     → add an [embedding] section (a local Ollama running \
                  {model}, or OpenAI) and set `profile = smart` for semantic recall.",
@@ -502,11 +506,18 @@ fn check_team_pack(doc: &toml_edit::DocumentMut, toml_path: &Path) -> bool {
     };
     match aivyx_team::TeamConfig::load(&pack) {
         Ok(team) => {
-            pass(&format!("team pack `{}` loads ({} members)", rel, team.members.len()));
+            pass(&format!(
+                "team pack `{}` loads ({} members)",
+                rel,
+                team.members.len()
+            ));
             true
         }
         Err(e) => {
-            fail(&format!("[team] config_path `{rel}` does not load"), &format!("{e}"));
+            fail(
+                &format!("[team] config_path `{rel}` does not load"),
+                &format!("{e}"),
+            );
             false
         }
     }
@@ -542,7 +553,10 @@ mod tests {
     #[test]
     fn truncate_shortens_long_strings() {
         assert_eq!(truncate("hello", 60), "hello");
-        assert_eq!(truncate(&"x".repeat(100), 10), format!("{}…", "x".repeat(10)));
+        assert_eq!(
+            truncate(&"x".repeat(100), 10),
+            format!("{}…", "x".repeat(10))
+        );
     }
 
     #[test]
@@ -567,7 +581,10 @@ mod tests {
                 off_host: Some(lan)
             }
         );
-        assert_eq!(gatehouse_status(None, None), GatehouseStatus::NoTokenLoopback);
+        assert_eq!(
+            gatehouse_status(None, None),
+            GatehouseStatus::NoTokenLoopback
+        );
         assert_eq!(
             gatehouse_status(None, Some(loopback)),
             GatehouseStatus::NoTokenLoopback
@@ -604,7 +621,10 @@ mod tests {
         let home = std::env::temp_dir().join(format!("doctor-nokitchen-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         assert!(kitchen_config_path(&home).is_none());
-        assert!(check_kitchen(&home).await, "absent vertical must not fail doctor");
+        assert!(
+            check_kitchen(&home).await,
+            "absent vertical must not fail doctor"
+        );
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -614,8 +634,9 @@ mod tests {
         let doc: toml_edit::DocumentMut = "".parse().unwrap();
         assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx.toml")));
         // Set but pointing at a nonexistent file → fail.
-        let doc: toml_edit::DocumentMut =
-            "[team]\nconfig_path = \"no-such-pack.toml\"\n".parse().unwrap();
+        let doc: toml_edit::DocumentMut = "[team]\nconfig_path = \"no-such-pack.toml\"\n"
+            .parse()
+            .unwrap();
         assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx.toml")));
     }
 }

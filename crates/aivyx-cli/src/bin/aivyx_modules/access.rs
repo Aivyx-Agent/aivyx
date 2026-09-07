@@ -10,7 +10,7 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-use aivyx_config::{write_access_section, AccessLevel, AivyxConfig, FieldSource, LoadOptions};
+use aivyx_config::{AccessLevel, AivyxConfig, FieldSource, LoadOptions, write_access_section};
 use toml_edit::DocumentMut;
 
 /// Module-local copy of the default config path (mirrors
@@ -28,18 +28,16 @@ pub fn run_access_show() -> Result<(), String> {
 /// `aivyx access set <level> [--root <dir>] [--yes]` — rewrite the
 /// `[access]` section. `workspace`/`custom` require `--root`; expanded
 /// levels (anything but `sandbox`) require a confirmation unless `--yes`.
-pub fn run_access_set(
-    level: AccessLevel,
-    root: Option<String>,
-    yes: bool,
-) -> Result<(), String> {
+pub fn run_access_set(level: AccessLevel, root: Option<String>, yes: bool) -> Result<(), String> {
     if matches!(level, AccessLevel::Workspace | AccessLevel::Custom) && root.is_none() {
         return Err(format!(
             "access level `{level}` needs a directory — pass `--root <dir>`."
         ));
     }
-    if matches!(level, AccessLevel::Sandbox | AccessLevel::Home | AccessLevel::Full)
-        && root.is_some()
+    if matches!(
+        level,
+        AccessLevel::Sandbox | AccessLevel::Home | AccessLevel::Full
+    ) && root.is_some()
     {
         return Err(format!(
             "access level `{level}` derives its root automatically — `--root` \
@@ -139,7 +137,10 @@ fn confirm(question: &str) -> Result<bool, String> {
         .lock()
         .read_line(&mut line)
         .map_err(|e| format!("failed to read confirmation: {e}"))?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
@@ -207,7 +208,10 @@ mod tests {
         let written = std::fs::read_to_string(&toml).unwrap();
         assert!(written.contains("level = \"home\""), "{written}");
         assert!(written.contains("confirm_destructive = true"), "{written}");
-        assert!(!written.contains("/old"), "stale root must be dropped: {written}");
+        assert!(
+            !written.contains("/old"),
+            "stale root must be dropped: {written}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

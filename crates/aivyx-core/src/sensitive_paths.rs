@@ -77,13 +77,13 @@ const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "redb"];
 /// Directory names a *write* into which plants code that runs later
 /// (auto-start, service units, scheduled jobs, git hooks). Chapter Portcullis.
 const PERSISTENCE_DIR_SEGMENTS: &[&str] = &[
-    "autostart",   // ~/.config/autostart/*.desktop
-    "systemd",     // ~/.config/systemd/user, /etc/systemd
+    "autostart", // ~/.config/autostart/*.desktop
+    "systemd",   // ~/.config/systemd/user, /etc/systemd
     "cron.d",
     "cron.daily",
     "cron.hourly",
     "init.d",
-    "hooks",       // .git/hooks/*
+    "hooks", // .git/hooks/*
     "LaunchAgents",
     "LaunchDaemons",
 ];
@@ -122,13 +122,21 @@ impl SensitivePolicy {
     /// prefixes should already be absolute (the caller canonicalizes/expands
     /// `~` at config load).
     pub fn new(allow: Vec<PathBuf>, extra_deny: Vec<PathBuf>) -> Self {
-        SensitivePolicy { enabled: true, allow, extra_deny }
+        SensitivePolicy {
+            enabled: true,
+            allow,
+            extra_deny,
+        }
     }
 
     /// A disabled guard — every path is allowed. Used when the operator sets
     /// `[access] guard_sensitive_paths = false`, and as the `Default`.
     pub fn disabled() -> Self {
-        SensitivePolicy { enabled: false, allow: Vec::new(), extra_deny: Vec::new() }
+        SensitivePolicy {
+            enabled: false,
+            allow: Vec::new(),
+            extra_deny: Vec::new(),
+        }
     }
 
     /// Classify a **canonical** path for READING. `Some(reason)` ⇒ refuse;
@@ -152,11 +160,7 @@ impl SensitivePolicy {
 
     /// Shared gate: honor `enabled` + the operator allow-list + extra-deny,
     /// then defer to a matcher for the built-in rules.
-    fn gated(
-        &self,
-        canonical: &Path,
-        matcher: impl Fn(&Path) -> Option<String>,
-    ) -> Option<String> {
+    fn gated(&self, canonical: &Path, matcher: impl Fn(&Path) -> Option<String>) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -277,17 +281,20 @@ mod tests {
         // The `.ssh` directory is sensitive wholesale — the agent has no
         // business reading even known_hosts/config/*.pub there by default.
         let g = guard();
-        assert!(g.classify(Path::new("/home/alice/.ssh/id_rsa.pub")).is_some());
-        assert!(g.classify(Path::new("/home/alice/.ssh/known_hosts")).is_some());
+        assert!(
+            g.classify(Path::new("/home/alice/.ssh/id_rsa.pub"))
+                .is_some()
+        );
+        assert!(
+            g.classify(Path::new("/home/alice/.ssh/known_hosts"))
+                .is_some()
+        );
         assert!(g.classify(Path::new("/home/alice/.ssh/config")).is_some());
     }
 
     #[test]
     fn operator_allowlist_overrides_builtins() {
-        let g = SensitivePolicy::new(
-            vec![PathBuf::from("/home/alice/project")],
-            Vec::new(),
-        );
+        let g = SensitivePolicy::new(vec![PathBuf::from("/home/alice/project")], Vec::new());
         // The project's own .env is allowed back in…
         assert!(g.classify(Path::new("/home/alice/project/.env")).is_none());
         // …but a secret outside the allowed prefix is still blocked.
@@ -296,12 +303,15 @@ mod tests {
 
     #[test]
     fn operator_extra_deny_adds_prefixes() {
-        let g = SensitivePolicy::new(
-            Vec::new(),
-            vec![PathBuf::from("/home/alice/secret-vault")],
+        let g = SensitivePolicy::new(Vec::new(), vec![PathBuf::from("/home/alice/secret-vault")]);
+        assert!(
+            g.classify(Path::new("/home/alice/secret-vault/notes.md"))
+                .is_some()
         );
-        assert!(g.classify(Path::new("/home/alice/secret-vault/notes.md")).is_some());
-        assert!(g.classify(Path::new("/home/alice/other/notes.md")).is_none());
+        assert!(
+            g.classify(Path::new("/home/alice/other/notes.md"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -317,13 +327,25 @@ mod tests {
             "/etc/cron.d/job",
             "/home/alice/project/.git/hooks/pre-commit",
         ] {
-            assert!(g.classify_write(Path::new(p)).is_some(), "write should block {p}");
+            assert!(
+                g.classify_write(Path::new(p)).is_some(),
+                "write should block {p}"
+            );
         }
         // Secrets are blocked for writes too (overwrite a credential).
-        assert!(g.classify_write(Path::new("/home/alice/.aws/credentials")).is_some());
+        assert!(
+            g.classify_write(Path::new("/home/alice/.aws/credentials"))
+                .is_some()
+        );
         // Ordinary writes are fine.
-        assert!(g.classify_write(Path::new("/home/alice/project/notes.md")).is_none());
-        assert!(g.classify_write(Path::new("/home/alice/project/src/main.rs")).is_none());
+        assert!(
+            g.classify_write(Path::new("/home/alice/project/notes.md"))
+                .is_none()
+        );
+        assert!(
+            g.classify_write(Path::new("/home/alice/project/src/main.rs"))
+                .is_none()
+        );
         // Persistence names are a WRITE concern only — reads of them are allowed
         // (e.g. the agent inspecting your .bashrc is fine; rewriting it isn't).
         assert!(g.classify(Path::new("/home/alice/.bashrc")).is_none());
@@ -333,8 +355,10 @@ mod tests {
     fn disabled_guard_is_a_noop() {
         let g = SensitivePolicy::disabled();
         assert!(g.classify(Path::new("/home/alice/.ssh/id_rsa")).is_none());
-        assert!(SensitivePolicy::default()
-            .classify(Path::new("/home/alice/.aws/credentials"))
-            .is_none());
+        assert!(
+            SensitivePolicy::default()
+                .classify(Path::new("/home/alice/.aws/credentials"))
+                .is_none()
+        );
     }
 }

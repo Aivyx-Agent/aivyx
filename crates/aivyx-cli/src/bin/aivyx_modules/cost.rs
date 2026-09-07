@@ -205,8 +205,14 @@ mod tests {
         assert!(out.contains("claude-opus-4-8"));
         assert!(out.contains("llama3.1"));
         assert!(out.contains("free"), "local model shows free");
-        assert!(out.contains("untracked"), "unknown model flagged in its row");
-        assert!(out.contains("[pricing]"), "untracked warning points at config");
+        assert!(
+            out.contains("untracked"),
+            "unknown model flagged in its row"
+        );
+        assert!(
+            out.contains("[pricing]"),
+            "untracked warning points at config"
+        );
         // Opus: (1M in + 1M out) + (0.5M in) = $15+$75 + $7.5 = $97.50.
         assert!(out.contains("$97.50"), "opus line priced;\n{out}");
     }

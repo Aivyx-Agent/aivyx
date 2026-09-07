@@ -60,13 +60,11 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use aivyx_capability::Scope;
 
-use crate::{
-    AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification,
-};
+use crate::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
 /// Default cap on the number of bytes read from a single file. Files
 /// larger than this return their first `MAX_READ_BYTES` bytes along
@@ -261,17 +259,14 @@ impl Tool for FsReadTool {
         };
 
         match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
-            Some(abs) => Scope::parse(&format!("fs.read:{}", abs.display()))
-                .unwrap_or_else(read_deny_scope),
+            Some(abs) => {
+                Scope::parse(&format!("fs.read:{}", abs.display())).unwrap_or_else(read_deny_scope)
+            }
             None => read_deny_scope(),
         }
     }
 
-    async fn execute(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Re-parse and re-resolve the input --------------------
         //
         // The loop has already verified the *derived* scope is in the
@@ -284,7 +279,7 @@ impl Tool for FsReadTool {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
                     detail: "input must have a string `path` field".to_string(),
-                })
+                });
             }
         };
 
@@ -439,8 +434,7 @@ impl Tool for FsReadTool {
 /// and distinguishing "which tool tried to escape" is useful grep
 /// context when an LLM is probing.
 fn deny_scope_for(base: &str) -> Scope {
-    Scope::parse(&format!("{base}:/aivyx/__deny__/invalid-input"))
-        .expect("deny scope must parse")
+    Scope::parse(&format!("{base}:/aivyx/__deny__/invalid-input")).expect("deny scope must parse")
 }
 
 fn read_deny_scope() -> Scope {
@@ -477,8 +471,7 @@ fn is_confirmed(input: &Value) -> bool {
     input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
 }
 
-const DESTRUCTIVE_CONFIRM_HINT: &str =
-    "This is an irreversible action and the operator enabled confirm-first \
+const DESTRUCTIVE_CONFIRM_HINT: &str = "This is an irreversible action and the operator enabled confirm-first \
      (`[access] confirm_destructive`). Show the operator exactly what will be \
      affected, get their explicit approval, then re-call with `confirmed: true`.";
 
@@ -679,11 +672,7 @@ impl Tool for FsWriteTool {
         }
     }
 
-    async fn execute(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input fields -------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -691,7 +680,7 @@ impl Tool for FsWriteTool {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
                     detail: "input must have a string `path` field".to_string(),
-                })
+                });
             }
         };
         let content_str = match input.get("content").and_then(|v| v.as_str()) {
@@ -700,7 +689,7 @@ impl Tool for FsWriteTool {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
                     detail: "input must have a string `content` field".to_string(),
-                })
+                });
             }
         };
         let content_bytes = content_str.as_bytes();
@@ -870,9 +859,7 @@ impl Tool for FsWriteTool {
                 if let Err(e) = std::fs::remove_file(&canonical_target) {
                     return ToolOutcome::Failed(AivyxError::Tool {
                         tool: self.id,
-                        detail: format!(
-                            "cannot unlink existing symlink {canonical_target:?}: {e}"
-                        ),
+                        detail: format!("cannot unlink existing symlink {canonical_target:?}: {e}"),
                     });
                 }
             }
@@ -888,10 +875,7 @@ impl Tool for FsWriteTool {
         // same directory — registered tools are shared across turns
         // in `Arc<ToolRegistry>`, so concurrent turns calling
         // `fs.write` on the same file is a real scenario.
-        let tmp_name = format!(
-            ".aivyx-fswrite-{}.tmp",
-            uuid::Uuid::new_v4().simple()
-        );
+        let tmp_name = format!(".aivyx-fswrite-{}.tmp", uuid::Uuid::new_v4().simple());
         let tmp_path = canonical_parent.join(&tmp_name);
 
         // Use OpenOptions with `create_new` so we fail loudly if a
@@ -931,9 +915,7 @@ impl Tool for FsWriteTool {
             let _ = std::fs::remove_file(&tmp_path);
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
-                detail: format!(
-                    "rename {tmp_path:?} → {canonical_target:?} failed: {e}"
-                ),
+                detail: format!("rename {tmp_path:?} → {canonical_target:?} failed: {e}"),
             });
         }
 
@@ -946,9 +928,7 @@ impl Tool for FsWriteTool {
         // Completed (the write did happen) but mark the verification
         // as Unverified so the audit trail shows we couldn't confirm.
         let verified = match std::fs::metadata(&canonical_target) {
-            Ok(md) if md.len() as usize == content_bytes.len() => {
-                Verification::Verified
-            }
+            Ok(md) if md.len() as usize == content_bytes.len() => Verification::Verified,
             _ => Verification::Unverified,
         };
 
@@ -1137,11 +1117,7 @@ impl Tool for FsDeleteTool {
         }
     }
 
-    async fn execute(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input --------------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -1149,7 +1125,7 @@ impl Tool for FsDeleteTool {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
                     detail: "input must have a string `path` field".to_string(),
-                })
+                });
             }
         };
 
@@ -1188,9 +1164,7 @@ impl Tool for FsDeleteTool {
             _ => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: format!(
-                        "path {lexical_abs:?} has no parent directory"
-                    ),
+                    detail: format!("path {lexical_abs:?} has no parent directory"),
                 });
             }
         };
@@ -1219,9 +1193,7 @@ impl Tool for FsDeleteTool {
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: format!(
-                        "cannot canonicalize parent {lexical_parent:?}: {e}"
-                    ),
+                    detail: format!("cannot canonicalize parent {lexical_parent:?}: {e}"),
                 });
             }
         };
@@ -1464,11 +1436,7 @@ impl Tool for FsMetadataTool {
         }
     }
 
-    async fn execute(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input --------------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -1476,7 +1444,7 @@ impl Tool for FsMetadataTool {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
                     detail: "input must have a string `path` field".to_string(),
-                })
+                });
             }
         };
 
@@ -1566,8 +1534,7 @@ impl Tool for FsMetadataTool {
             match std::fs::read_dir(&canonical) {
                 Ok(rd) => {
                     for entry in rd.flatten() {
-                        let name =
-                            entry.file_name().to_string_lossy().into_owned();
+                        let name = entry.file_name().to_string_lossy().into_owned();
                         let kind = match entry.file_type() {
                             Ok(ft) if ft.is_dir() => "directory",
                             Ok(ft) if ft.is_file() => "file",
@@ -1580,9 +1547,7 @@ impl Tool for FsMetadataTool {
                 Err(e) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
                         tool: self.id,
-                        detail: format!(
-                            "cannot read directory {canonical:?}: {e}"
-                        ),
+                        detail: format!("cannot read directory {canonical:?}: {e}"),
                     });
                 }
             }
@@ -1637,8 +1602,8 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
-    use aivyx_capability::{CapabilitySet, TrustTier};
     use crate::MessageOrigin;
+    use aivyx_capability::{CapabilitySet, TrustTier};
 
     /// RAII temp directory — creates `$TMPDIR/aivyx-fs-test-<uuid>/root`
     /// on construction, removes the whole tree on drop. Rolled here to
@@ -1653,11 +1618,9 @@ mod tests {
             let tmp = std::env::var("TMPDIR")
                 .or_else(|_| std::env::var("TEMP"))
                 .unwrap_or_else(|_| "/tmp".to_string());
-            let parent = PathBuf::from(tmp)
-                .join(format!("aivyx-fs-test-{}", uuid::Uuid::new_v4()));
+            let parent = PathBuf::from(tmp).join(format!("aivyx-fs-test-{}", uuid::Uuid::new_v4()));
             let root = parent.join("root");
-            fs::create_dir_all(&root)
-                .expect("test sandbox root must be creatable");
+            fs::create_dir_all(&root).expect("test sandbox root must be creatable");
             SandboxDir {
                 root,
                 _parent: parent,
@@ -1695,9 +1658,7 @@ mod tests {
     /// cancellation token, so the cheapest fake is a channel and audit
     /// hook that do nothing. Import them from the core test helpers.
     fn run_execute(tool: &dyn Tool, input: Value) -> ToolOutcome {
-        use crate::{
-            AgentId, CancellationToken, NullAuditHook, SessionId, TurnId,
-        };
+        use crate::{AgentId, CancellationToken, NullAuditHook, SessionId, TurnId};
 
         // A minimal `ChannelContext` that ignores every call. This is
         // fine for a unit test that only exercises `execute`'s
@@ -2045,10 +2006,7 @@ mod tests {
         let sandbox = SandboxDir::new();
         sandbox.write_file(".env", b"API_KEY=ok-to-read\n");
         // Allow-list the sandbox root → its .env is readable again.
-        let policy = SensitivePolicy::new(
-            vec![sandbox.root.canonicalize().unwrap()],
-            vec![],
-        );
+        let policy = SensitivePolicy::new(vec![sandbox.root.canonicalize().unwrap()], vec![]);
         let tool = build_guarded_tool(&sandbox, policy);
         assert!(matches!(
             run_execute(&tool, json!({ "path": ".env" })),
@@ -2104,9 +2062,7 @@ mod tests {
                     "expected sandbox-escape failure, got {detail}"
                 );
             }
-            other => panic!(
-                "symlink escape must be refused by the canonical fence, got {other:?}"
-            ),
+            other => panic!("symlink escape must be refused by the canonical fence, got {other:?}"),
         }
     }
 
@@ -2152,10 +2108,16 @@ mod tests {
             .expect("build guarded write tool");
 
         // A persistence write (shell rc) inside the sandbox is refused…
-        match run_execute(&tool, json!({ "path": ".bashrc", "content": "evil() { :; }" })) {
+        match run_execute(
+            &tool,
+            json!({ "path": ".bashrc", "content": "evil() { :; }" }),
+        ) {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
                 assert!(detail.contains("refusing to write"), "{detail}");
-                assert!(detail.contains("persistence") || detail.contains("startup"), "{detail}");
+                assert!(
+                    detail.contains("persistence") || detail.contains("startup"),
+                    "{detail}"
+                );
             }
             other => panic!("expected refusal for .bashrc, got {other:?}"),
         }
@@ -2332,10 +2294,7 @@ mod tests {
         let sandbox = SandboxDir::new();
         let tool = build_write_tool(&sandbox);
 
-        let _ = run_execute(
-            &tool,
-            json!({"path": "clean.txt", "content": "hi"}),
-        );
+        let _ = run_execute(&tool, json!({"path": "clean.txt", "content": "hi"}));
 
         let stray_tmp: Vec<_> = std::fs::read_dir(&sandbox.root)
             .unwrap()
@@ -2371,10 +2330,7 @@ mod tests {
         let tool = build_write_tool(&sandbox);
         // One byte over the cap.
         let big: String = "A".repeat(MAX_WRITE_BYTES + 1);
-        let outcome = run_execute(
-            &tool,
-            json!({"path": "too-big.txt", "content": big}),
-        );
+        let outcome = run_execute(&tool, json!({"path": "too-big.txt", "content": big}));
         match outcome {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
                 assert!(detail.contains("limit"), "detail: {detail}");
@@ -2405,10 +2361,7 @@ mod tests {
         symlink(&outside_file, &link).expect("can create escape symlink");
 
         let tool = build_write_tool(&sandbox);
-        let outcome = run_execute(
-            &tool,
-            json!({"path": "escape", "content": "PWNED"}),
-        );
+        let outcome = run_execute(&tool, json!({"path": "escape", "content": "PWNED"}));
         match outcome {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
                 assert!(
@@ -2443,10 +2396,7 @@ mod tests {
         symlink("target.txt", &link).expect("create link");
 
         let tool = build_write_tool(&sandbox);
-        let outcome = run_execute(
-            &tool,
-            json!({"path": "link.txt", "content": "replacement"}),
-        );
+        let outcome = run_execute(&tool, json!({"path": "link.txt", "content": "replacement"}));
         assert!(matches!(outcome, ToolOutcome::Completed { .. }));
 
         // "link.txt" is now a regular file with new content.
@@ -2675,7 +2625,10 @@ mod tests {
             matches!(outcome, ToolOutcome::Failed(_)),
             "confirm-first must refuse an unconfirmed delete"
         );
-        assert!(sandbox.root.join("doomed.txt").exists(), "file must survive");
+        assert!(
+            sandbox.root.join("doomed.txt").exists(),
+            "file must survive"
+        );
     }
 
     #[test]
@@ -2709,10 +2662,7 @@ mod tests {
             .with_confirm_destructive(true)
             .build()
             .unwrap();
-        let outcome = run_execute(
-            &tool,
-            json!({"path": "notes.txt", "content": "clobbered"}),
-        );
+        let outcome = run_execute(&tool, json!({"path": "notes.txt", "content": "clobbered"}));
         assert!(
             matches!(outcome, ToolOutcome::Failed(_)),
             "overwriting an existing file must gate"
@@ -2732,10 +2682,7 @@ mod tests {
             .with_confirm_destructive(true)
             .build()
             .unwrap();
-        let outcome = run_execute(
-            &tool,
-            json!({"path": "fresh.txt", "content": "hello"}),
-        );
+        let outcome = run_execute(&tool, json!({"path": "fresh.txt", "content": "hello"}));
         assert!(matches!(outcome, ToolOutcome::Completed { .. }));
         assert_eq!(
             fs::read_to_string(sandbox.root.join("fresh.txt")).unwrap(),

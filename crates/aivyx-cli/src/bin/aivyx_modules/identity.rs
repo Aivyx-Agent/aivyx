@@ -21,9 +21,7 @@
 
 use std::path::Path;
 
-use aivyx_channel::daemon_client::{
-    daemon_is_running, export_persona_chain, import_persona_chain,
-};
+use aivyx_channel::daemon_client::{daemon_is_running, export_persona_chain, import_persona_chain};
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::identity_export::{build, parse_and_validate};
 use aivyx_config::{AivyxConfig, LoadOptions};
@@ -101,8 +99,7 @@ pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String>
     // opening an IPC connection.
     let raw = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    let bundle = parse_and_validate(&raw)
-        .map_err(|e| format!("import validation failed: {e}"))?;
+    let bundle = parse_and_validate(&raw).map_err(|e| format!("import validation failed: {e}"))?;
 
     let socket_path = default_socket_path()?;
     if !daemon_is_running(&socket_path).await {
@@ -169,9 +166,8 @@ fn load_profile_for_export() -> Result<aivyx_config::Profile, String> {
         require_slack_tokens: false,
         role_override: None,
     };
-    let config = AivyxConfig::load_from_env_and_toml(&opts).map_err(|e| {
-        format!("failed to load aivyx.toml for identity export: {e}")
-    })?;
+    let config = AivyxConfig::load_from_env_and_toml(&opts)
+        .map_err(|e| format!("failed to load aivyx.toml for identity export: {e}"))?;
     Ok(config.profile)
 }
 
@@ -183,12 +179,8 @@ fn write_export_file(path: &Path, contents: &str) -> Result<(), String> {
 
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "failed to create parent dir {}: {e}",
-                    parent.display(),
-                )
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create parent dir {}: {e}", parent.display(),))?;
         }
     }
 
@@ -261,8 +253,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&export).expect("serialize");
         // Re-parse via the validator — should accept (empty
         // chain, default profile, matching effective).
-        let parsed =
-            aivyx_channel::identity_export::parse_and_validate(&json).expect("parse");
+        let parsed = aivyx_channel::identity_export::parse_and_validate(&json).expect("parse");
         assert_eq!(parsed.persona.deltas.len(), 0);
     }
 }

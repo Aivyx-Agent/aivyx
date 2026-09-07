@@ -28,7 +28,7 @@
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 use aivyx_capability::Scope;
@@ -94,8 +94,7 @@ impl Tool for NetDnsTool {
 
     fn required_scope(&self, input: &Value) -> Scope {
         match validate_host(input) {
-            Some(host) => Scope::parse(&format!("net.dns:{host}"))
-                .unwrap_or_else(deny_scope),
+            Some(host) => Scope::parse(&format!("net.dns:{host}")).unwrap_or_else(deny_scope),
             None => deny_scope(),
         }
     }
@@ -192,9 +191,8 @@ fn validate_host(input: &Value) -> Option<String> {
 }
 
 fn deny_scope() -> Scope {
-    Scope::parse("net.dns:__aivyx_unresolvable__").expect(
-        "net.dns:__aivyx_unresolvable__ must parse — net.dns is in KNOWN_BASES",
-    )
+    Scope::parse("net.dns:__aivyx_unresolvable__")
+        .expect("net.dns:__aivyx_unresolvable__ must parse — net.dns is in KNOWN_BASES")
 }
 
 fn input_schema() -> Value {

@@ -28,7 +28,7 @@ use aivyx_channel::daemon_client::{
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::team_mission::{TeamMissionPhase, TeamMissionRecord};
-use aivyx_team::{parse_plan_spec, StepKind, TeamConfig};
+use aivyx_team::{StepKind, TeamConfig, parse_plan_spec};
 
 use crate::TeamSubcommand;
 
@@ -65,7 +65,9 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
             print!("{}", render_mission_list(&missions));
             Ok(())
         }
-        TeamSubcommand::Status { mission_id: Some(id) } => {
+        TeamSubcommand::Status {
+            mission_id: Some(id),
+        } => {
             let mission = team_mission_status(&socket_path, id.clone())
                 .await
                 .map_err(|e| format!("team status failed: {e}"))?;
@@ -106,12 +108,10 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
             Ok(())
         }
         TeamSubcommand::Resume { mission_id } => {
-            let phase = aivyx_channel::daemon_client::resume_team_mission(
-                &socket_path,
-                mission_id.clone(),
-            )
-            .await
-            .map_err(|e| format!("team resume failed: {e}"))?;
+            let phase =
+                aivyx_channel::daemon_client::resume_team_mission(&socket_path, mission_id.clone())
+                    .await
+                    .map_err(|e| format!("team resume failed: {e}"))?;
             println!("mission {mission_id} resumed (now {phase:?})");
             println!("track it with `aivyx team status {mission_id}`");
             Ok(())
@@ -218,7 +218,10 @@ fn render_mission_list(missions: &[TeamMissionRecord]) -> String {
         // Chapter Mission Control — a paused mission's next move is resume,
         // mirroring the pending-gate hint above.
         if m.phase == TeamMissionPhase::Paused {
-            out.push_str(&format!("      ↳ resume with `aivyx team resume {}`\n", m.id));
+            out.push_str(&format!(
+                "      ↳ resume with `aivyx team resume {}`\n",
+                m.id
+            ));
         }
     }
     out
@@ -364,7 +367,8 @@ mod tests {
     #[test]
     fn rejected_gate_renders_as_rejected() {
         let mut rec = sample(TeamMissionPhase::Rejected, None);
-        rec.outputs.insert("approve".into(), "rejected by operator".into());
+        rec.outputs
+            .insert("approve".into(), "rejected by operator".into());
         let out = render_mission_status(&rec);
         assert!(out.contains("[rejected ] approve"));
         assert!(out.contains("[pending  ] write"), "the dependent never ran");

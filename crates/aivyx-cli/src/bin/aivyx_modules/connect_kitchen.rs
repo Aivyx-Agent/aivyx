@@ -62,10 +62,14 @@ pub fn write_kitchen_config(
     organization_id: &str,
 ) -> Result<PathBuf, String> {
     let dir = process_dir(home);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = config_path(home);
-    std::fs::write(&path, render_kitchen_config_toml(base_url, api_key, organization_id))
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    std::fs::write(
+        &path,
+        render_kitchen_config_toml(base_url, api_key, organization_id),
+    )
+    .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     set_file_0600(&path);
     Ok(path)
 }
@@ -125,9 +129,24 @@ pub async fn run_connect_kitchen(
     )
     .map_err(werr)?;
 
-    let base_url = field("AIVYX_KITCHEN_BASE_URL", "KitchenDB base URL (e.g. https://…/rest/v1): ", reader, writer)?;
-    let api_key = field("AIVYX_KITCHEN_API_KEY", "KitchenDB API key: ", reader, writer)?;
-    let organization_id = field("AIVYX_KITCHEN_ORGANIZATION_ID", "Organization id (tenant): ", reader, writer)?;
+    let base_url = field(
+        "AIVYX_KITCHEN_BASE_URL",
+        "KitchenDB base URL (e.g. https://…/rest/v1): ",
+        reader,
+        writer,
+    )?;
+    let api_key = field(
+        "AIVYX_KITCHEN_API_KEY",
+        "KitchenDB API key: ",
+        reader,
+        writer,
+    )?;
+    let organization_id = field(
+        "AIVYX_KITCHEN_ORGANIZATION_ID",
+        "Organization id (tenant): ",
+        reader,
+        writer,
+    )?;
     if base_url.is_empty() || api_key.is_empty() || organization_id.is_empty() {
         return Err("base_url, api_key, and organization_id are all required".to_string());
     }
@@ -174,12 +193,18 @@ fn wire_aivyx_toml(toml_path: &Path, home: &Path, writer: &mut dyn Write) -> Res
         writeln!(writer, "Planted the BOH pack at {}.", pack_path.display()).map_err(werr)?;
     }
 
-    let body = std::fs::read_to_string(toml_path).map_err(|e| format!("read {}: {e}", toml_path.display()))?;
-    let mut doc: toml_edit::DocumentMut =
-        body.parse().map_err(|e| format!("parse {}: {e}", toml_path.display()))?;
+    let body = std::fs::read_to_string(toml_path)
+        .map_err(|e| format!("read {}: {e}", toml_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = body
+        .parse()
+        .map_err(|e| format!("parse {}: {e}", toml_path.display()))?;
 
     if tool_process_present(&doc, "kitchen") {
-        writeln!(writer, "aivyx.toml already wires the `kitchen` tool process.").map_err(werr)?;
+        writeln!(
+            writer,
+            "aivyx.toml already wires the `kitchen` tool process."
+        )
+        .map_err(werr)?;
     } else {
         append_tool_process(&mut doc, "kitchen", KITCHEN_BINARY);
         writeln!(writer, "Wired [[tool_process]] kitchen → {KITCHEN_BINARY}.").map_err(werr)?;
@@ -243,17 +268,26 @@ mod tests {
     fn team_config_path_set_only_when_absent() {
         let mut doc: toml_edit::DocumentMut = "".parse().unwrap();
         assert!(set_team_config_path_if_absent(&mut doc, "kitchen-boh.toml"));
-        assert_eq!(doc["team"]["config_path"].as_str(), Some("kitchen-boh.toml"));
+        assert_eq!(
+            doc["team"]["config_path"].as_str(),
+            Some("kitchen-boh.toml")
+        );
         // No-clobber: a second call (now present) leaves it.
         assert!(!set_team_config_path_if_absent(&mut doc, "other.toml"));
-        assert_eq!(doc["team"]["config_path"].as_str(), Some("kitchen-boh.toml"));
+        assert_eq!(
+            doc["team"]["config_path"].as_str(),
+            Some("kitchen-boh.toml")
+        );
     }
 
     #[test]
     fn team_config_path_respects_an_existing_value() {
         let mut doc: toml_edit::DocumentMut =
             "[team]\nconfig_path = \"mine.toml\"\n".parse().unwrap();
-        assert!(!set_team_config_path_if_absent(&mut doc, "kitchen-boh.toml"));
+        assert!(!set_team_config_path_if_absent(
+            &mut doc,
+            "kitchen-boh.toml"
+        ));
         assert_eq!(doc["team"]["config_path"].as_str(), Some("mine.toml"));
     }
 }

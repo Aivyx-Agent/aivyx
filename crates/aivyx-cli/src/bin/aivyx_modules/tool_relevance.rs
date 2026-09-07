@@ -15,9 +15,7 @@
 /// Entry point for `aivyx tool-relevance dump [--keyword-key <key>]`.
 /// Talks to the daemon over IPC; renders the returned per-row table
 /// in a stable column layout the operator can scan.
-pub async fn run_tool_relevance_dump(
-    keyword_key_filter: Option<&str>,
-) -> Result<(), String> {
+pub async fn run_tool_relevance_dump(keyword_key_filter: Option<&str>) -> Result<(), String> {
     use aivyx_channel::daemon_client::{daemon_is_running, dump_tool_relevance};
     use aivyx_channel::daemon_ipc::default_socket_path;
 
@@ -46,12 +44,9 @@ pub async fn run_tool_relevance_dump(
 /// operator distinguishes "daemon answered with zero rows" from
 /// "daemon failed" (the daemon-failure path errors before this
 /// function is called).
-pub fn render_dump_table(
-    rows: &[aivyx_channel::daemon_ipc::ToolRelevanceDumpRow],
-) -> String {
+pub fn render_dump_table(rows: &[aivyx_channel::daemon_ipc::ToolRelevanceDumpRow]) -> String {
     if rows.is_empty() {
-        return "(ledger empty — no per-keyword-key outcomes recorded yet)\n"
-            .to_string();
+        return "(ledger empty — no per-keyword-key outcomes recorded yet)\n".to_string();
     }
 
     // Column widths sized to the longest value in each column.

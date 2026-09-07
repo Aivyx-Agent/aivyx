@@ -123,12 +123,7 @@ pub trait TurnPlanner: Send + Sync {
     /// asks for the next step. LLM planners use this to append a
     /// `tool_result` message to their conversation history; other
     /// planners default to ignoring it.
-    async fn observe_tool_outcome(
-        &mut self,
-        _tool_id: ToolId,
-        _outcome: &ToolOutcome,
-    ) {
-    }
+    async fn observe_tool_outcome(&mut self, _tool_id: ToolId, _outcome: &ToolOutcome) {}
 
     /// POLISH_WAVES.md sub-project 4, item E — the rendered tool-result
     /// text this turn's planner has accumulated. The turn loop's own
@@ -354,11 +349,7 @@ mod tool_surface_audit {
                 .expect("sandbox path forms a legal scope qualifier")
         }
 
-        async fn execute(
-            &self,
-            _input: serde_json::Value,
-            _ctx: &ToolContext<'_>,
-        ) -> ToolOutcome {
+        async fn execute(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
             // The task-1 skeleton never actually runs — the audit is
             // structural, not behavioral. Task 2 provides the real impl.
             ToolOutcome::Completed {
@@ -412,17 +403,13 @@ mod tool_surface_audit {
         let drop_me = Arc::new(FsReadSkeleton::new("/sandbox"));
         let keep_id = keep.id();
         let drop_id = drop_me.id();
-        let registry = ToolRegistry::new(vec![
-            keep as Arc<dyn Tool>,
-            drop_me as Arc<dyn Tool>,
-        ]);
+        let registry = ToolRegistry::new(vec![keep as Arc<dyn Tool>, drop_me as Arc<dyn Tool>]);
         assert_eq!(registry.snapshot().len(), 2);
 
         // Swap out `drop_me`, add a fresh tool — atomically.
         let added = Arc::new(FsReadSkeleton::new("/sandbox"));
         let added_id = added.id();
-        let (removed, added_n) =
-            registry.replace_tools(&[drop_id], vec![added as Arc<dyn Tool>]);
+        let (removed, added_n) = registry.replace_tools(&[drop_id], vec![added as Arc<dyn Tool>]);
         assert_eq!((removed, added_n), (1, 1));
 
         // The kept + added tools resolve; the dropped one is gone.
@@ -463,9 +450,10 @@ mod tool_surface_audit {
         // `fs.read:/home/user/aivyx-sandbox/notes/today.md`. This is the
         // scope system's core promise and the reason Phase 4 picked a
         // filesystem tool to stress-test it.
-        let held = CapabilitySet::from_scopes([
-            Scope::parse("fs.read:/home/user/aivyx-sandbox/**").unwrap(),
-        ]);
+        let held =
+            CapabilitySet::from_scopes([
+                Scope::parse("fs.read:/home/user/aivyx-sandbox/**").unwrap()
+            ]);
         let effective = held.intersect(TrustTier::Trusted.default_ceiling());
 
         let tool = FsReadSkeleton::new("/home/user/aivyx-sandbox");
@@ -485,9 +473,10 @@ mod tool_surface_audit {
         // this by canonicalizing an evil input like `"../etc/passwd"`;
         // the skeleton here simulates by passing an absolute path
         // through the template directly.
-        let held = CapabilitySet::from_scopes([
-            Scope::parse("fs.read:/home/user/aivyx-sandbox/**").unwrap(),
-        ]);
+        let held =
+            CapabilitySet::from_scopes([
+                Scope::parse("fs.read:/home/user/aivyx-sandbox/**").unwrap()
+            ]);
         let effective = held.intersect(TrustTier::Trusted.default_ceiling());
 
         let attacker = Scope::parse("fs.read:/etc/passwd").unwrap();

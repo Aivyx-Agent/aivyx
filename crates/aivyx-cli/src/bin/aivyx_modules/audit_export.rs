@@ -181,9 +181,8 @@ pub async fn export_chain(
                     continue;
                 }
             }
-            let line = render_line(entry).map_err(|e| {
-                format!("failed to serialize entry seq={}: {e}", entry.seq)
-            })?;
+            let line = render_line(entry)
+                .map_err(|e| format!("failed to serialize entry seq={}: {e}", entry.seq))?;
             writer
                 .write_all(line.as_bytes())
                 .map_err(|e| format!("write failure on stdout: {e}"))?;
@@ -347,15 +346,13 @@ mod tests {
         // filters like `.event.kind == "MemoryAccess"` must work.
         let mem = signed_entry_with(11, sample_memory_access());
         let line = render_line(&mem).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(line.trim_end_matches('\n')).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim_end_matches('\n')).unwrap();
         assert_eq!(v["event"]["kind"], "MemoryAccess");
         assert_eq!(v["event"]["query_or_key"], "project-vision");
 
         let turn = signed_entry_with(12, sample_turn_started());
         let line = render_line(&turn).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(line.trim_end_matches('\n')).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim_end_matches('\n')).unwrap();
         assert_eq!(v["event"]["kind"], "TurnStarted");
     }
 
@@ -365,8 +362,7 @@ mod tests {
         entry.prev_mac = [0xAB; 32];
         entry.mac = [0xCD; 32];
         let line = render_line(&entry).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(line.trim_end_matches('\n')).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim_end_matches('\n')).unwrap();
         assert_eq!(
             v["prev_mac"],
             "abababababababababababababababababababababababababababababababab"
@@ -386,11 +382,13 @@ mod tests {
         // filters.
         let entry = signed_entry_with(0, sample_turn_started());
         let line = render_line(&entry).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(line.trim_end_matches('\n')).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim_end_matches('\n')).unwrap();
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
         keys.sort();
-        assert_eq!(keys, vec!["appended_at_ms", "event", "mac", "prev_mac", "seq"]);
+        assert_eq!(
+            keys,
+            vec!["appended_at_ms", "event", "mac", "prev_mac", "seq"]
+        );
     }
 
     // -- export_chain pagination logic -----------------------------------
@@ -424,13 +422,11 @@ mod tests {
     fn event_type_label_for_skill_auto_proposal_returns_kind_string() {
         let sap = AuditEvent::SkillAutoProposal {
             session_id: SessionId::new(),
-            outcome:
-                aivyx_audit::SkillAutoProposalOutcomeSummary::HeuristicGated,
+            outcome: aivyx_audit::SkillAutoProposalOutcomeSummary::HeuristicGated,
             confidence_thousandths: None,
             proposed_skill_name: None,
             judge_latency_ms: None,
-            heuristic_signals_matched:
-                aivyx_audit::HeuristicSignalsMatched::default(),
+            heuristic_signals_matched: aivyx_audit::HeuristicSignalsMatched::default(),
             category: None,
             source: None,
         };

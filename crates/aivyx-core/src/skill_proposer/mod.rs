@@ -32,13 +32,12 @@ pub mod profile_proposer;
 pub mod similarity;
 
 pub use heuristic::{
-    FailureHeuristicConfig, FailureKind, HeuristicConfig, MatchMode, TurnSignals,
-    is_candidate, is_failure_candidate,
+    FailureHeuristicConfig, FailureKind, HeuristicConfig, MatchMode, TurnSignals, is_candidate,
+    is_failure_candidate,
 };
 pub use judge::{
-    ExistingPersonaSnapshot, ExistingSkillSnapshot, JudgeError, JudgeRequest,
-    JudgeResponse, ProposalSource, ProposedDraft, SkillDraft, judge,
-    parse_judge_response,
+    ExistingPersonaSnapshot, ExistingSkillSnapshot, JudgeError, JudgeRequest, JudgeResponse,
+    ProposalSource, ProposedDraft, SkillDraft, judge, parse_judge_response,
 };
 pub use profile_proposer::{ProfileField, ProfileFieldHint, RoleDraft};
 pub use similarity::title_similarity;

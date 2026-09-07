@@ -21,9 +21,8 @@ use std::path::{Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions};
 use aivyx_pack::{
-    build_payload, daemon_version_ok, keygen_to_file, load_signing_key,
-    read_bundle, read_manifest, unpack_payload, verify_bundle, PackError,
-    PackManifest, HOST_TARGET,
+    HOST_TARGET, PackError, PackManifest, build_payload, daemon_version_ok, keygen_to_file,
+    load_signing_key, read_bundle, read_manifest, unpack_payload, verify_bundle,
 };
 
 use super::connect::{append_tool_process, find_aivyx_toml, tool_process_present};
@@ -44,23 +43,18 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
             println!("wrote signing key to {keyfile} (keep it secret)");
             println!("verifying key (give to operators):");
             println!("  {pubkey}");
-            println!(
-                "operators trust it via:\n  [pack]\n  trusted_publishers = [\"{pubkey}\"]"
-            );
+            println!("operators trust it via:\n  [pack]\n  trusted_publishers = [\"{pubkey}\"]");
             Ok(())
         }
         PackSubcommand::Build { staging, key, out } => {
-            let signing_key =
-                load_signing_key(Path::new(&key)).map_err(|e| e.to_string())?;
-            let payload =
-                build_payload(Path::new(&staging)).map_err(|e| e.to_string())?;
+            let signing_key = load_signing_key(Path::new(&key)).map_err(|e| e.to_string())?;
+            let payload = build_payload(Path::new(&staging)).map_err(|e| e.to_string())?;
             let manifest = read_manifest(&payload).map_err(|e| e.to_string())?;
             aivyx_pack::write_bundle(&payload, &signing_key, Path::new(&out))
                 .map_err(|e| e.to_string())?;
             println!(
                 "built {out}: pack {} v{} for {} (min daemon {})",
-                manifest.name, manifest.version, manifest.target,
-                manifest.min_daemon_version,
+                manifest.name, manifest.version, manifest.target, manifest.min_daemon_version,
             );
             Ok(())
         }
@@ -68,8 +62,7 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
             file,
             allow_untrusted,
         } => {
-            let bundle =
-                read_bundle(Path::new(&file)).map_err(|e| e.to_string())?;
+            let bundle = read_bundle(Path::new(&file)).map_err(|e| e.to_string())?;
             let trusted = trusted_publishers()?;
             match verify_bundle(&bundle, &trusted) {
                 Ok(_) => println!("signature: VERIFIED (trusted publisher)"),
@@ -79,8 +72,7 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
                 }
                 Err(e) => return Err(e.to_string()),
             }
-            let manifest =
-                read_manifest(&bundle.payload).map_err(|e| e.to_string())?;
+            let manifest = read_manifest(&bundle.payload).map_err(|e| e.to_string())?;
             print!("{}", render_manifest(&manifest));
             Ok(())
         }
@@ -117,9 +109,8 @@ fn install(file: &Path) -> Result<(), String> {
     println!("unpacked to {}", install_dir.display());
 
     // Wire the config the Mise way.
-    let toml_path = find_aivyx_toml(&home).ok_or_else(|| {
-        "no aivyx.toml found (cwd or home) — run `aivyx init` first".to_string()
-    })?;
+    let toml_path = find_aivyx_toml(&home)
+        .ok_or_else(|| "no aivyx.toml found (cwd or home) — run `aivyx init` first".to_string())?;
     let text = std::fs::read_to_string(&toml_path)
         .map_err(|e| format!("read {}: {e}", toml_path.display()))?;
     let mut doc: toml_edit::DocumentMut = text
@@ -155,8 +146,7 @@ fn install(file: &Path) -> Result<(), String> {
                  didn't provide it"
             ));
         }
-        team_set =
-            set_team_config_path_if_absent(&mut doc, &team_path.display().to_string());
+        team_set = set_team_config_path_if_absent(&mut doc, &team_path.display().to_string());
         if !team_set {
             println!(
                 "[team] config_path already set — not clobbering (pack team \
@@ -199,9 +189,8 @@ fn set_last_tool_process_args(doc: &mut toml_edit::DocumentMut, args: &[String])
 
 fn trusted_publishers() -> Result<Vec<String>, String> {
     let home = dirs_home()?;
-    let toml_path = find_aivyx_toml(&home).ok_or_else(|| {
-        "no aivyx.toml found (cwd or home) — run `aivyx init` first".to_string()
-    })?;
+    let toml_path = find_aivyx_toml(&home)
+        .ok_or_else(|| "no aivyx.toml found (cwd or home) — run `aivyx init` first".to_string())?;
     let opts = LoadOptions {
         toml_path: Some(toml_path.clone()),
         require_api_key: false,
@@ -295,10 +284,7 @@ args = ["--flag"]
     fn args_land_on_the_appended_tool_process() {
         let mut doc: toml_edit::DocumentMut = "".parse().unwrap();
         append_tool_process(&mut doc, "kitchen-toolkit", "/x/bin/tk");
-        set_last_tool_process_args(
-            &mut doc,
-            &["--a".to_string(), "--b".to_string()],
-        );
+        set_last_tool_process_args(&mut doc, &["--a".to_string(), "--b".to_string()]);
         let rendered = doc.to_string();
         assert!(rendered.contains("name = \"kitchen-toolkit\""));
         assert!(rendered.contains("args = [\"--a\", \"--b\"]"));

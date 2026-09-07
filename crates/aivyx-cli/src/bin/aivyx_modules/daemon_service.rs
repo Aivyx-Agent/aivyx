@@ -139,7 +139,11 @@ pub fn plan_linux(
         &env_file_path.display().to_string(),
         working_dir,
     );
-    ServicePlan { unit_path, unit_contents, env_file_path }
+    ServicePlan {
+        unit_path,
+        unit_contents,
+        env_file_path,
+    }
 }
 
 /// `aivyx daemon install` — install + (by default) start the daemon as a
@@ -161,9 +165,7 @@ pub fn run_uninstall() -> Result<(), String> {
     match Platform::detect() {
         Platform::Linux => uninstall_linux(),
         Platform::MacOs => uninstall_macos(),
-        Platform::Unsupported => {
-            Err("no service was installed by aivyx on this platform.".into())
-        }
+        Platform::Unsupported => Err("no service was installed by aivyx on this platform.".into()),
     }
 }
 
@@ -171,7 +173,10 @@ pub fn run_uninstall() -> Result<(), String> {
 /// `None` when not installed (or unsupported platform). Used by `aivyx doctor`.
 pub fn installed_unit_path() -> Option<PathBuf> {
     let path = match Platform::detect() {
-        Platform::Linux => user_config_dir().ok()?.join("systemd/user").join(SERVICE_UNIT),
+        Platform::Linux => user_config_dir()
+            .ok()?
+            .join("systemd/user")
+            .join(SERVICE_UNIT),
         Platform::MacOs => macos_plist_path().ok()?,
         Platform::Unsupported => return None,
     };
@@ -243,7 +248,11 @@ fn install_linux(web_ui: bool, start: bool) -> Result<(), String> {
          logs:   journalctl --user -u aivyx-daemon -f{}",
         plan.unit_path.display(),
         plan.env_file_path.display(),
-        if start { "\n  (started; runs across reboots via linger)" } else { "\n  (enabled; start with `systemctl --user start aivyx-daemon`)" },
+        if start {
+            "\n  (started; runs across reboots via linger)"
+        } else {
+            "\n  (enabled; start with `systemctl --user start aivyx-daemon`)"
+        },
     );
     Ok(())
 }
@@ -348,11 +357,13 @@ fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
     let plist_path = macos_plist_path()?;
 
     if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create LaunchAgents dir: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create LaunchAgents dir: {e}"))?;
     }
-    std::fs::write(&plist_path, render_launchd_plist(&bin, web_ui, &working_dir, &passphrase))
-        .map_err(|e| format!("write plist {}: {e}", plist_path.display()))?;
+    std::fs::write(
+        &plist_path,
+        render_launchd_plist(&bin, web_ui, &working_dir, &passphrase),
+    )
+    .map_err(|e| format!("write plist {}: {e}", plist_path.display()))?;
     set_permissions_600(&plist_path)?; // the plist carries the secret → owner-only
 
     if start {
@@ -361,9 +372,15 @@ fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
         let plist = plist_path.display().to_string();
         // bootout first so a re-install replaces a running agent (idempotent);
         // ignore the error when nothing is loaded yet.
-        let _ = run_cmd("launchctl", &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")]);
+        let _ = run_cmd(
+            "launchctl",
+            &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")],
+        );
         run_cmd("launchctl", &["bootstrap", &domain, &plist])?;
-        let _ = run_cmd("launchctl", &["enable", &format!("{domain}/{LAUNCHD_LABEL}")]);
+        let _ = run_cmd(
+            "launchctl",
+            &["enable", &format!("{domain}/{LAUNCHD_LABEL}")],
+        );
     }
 
     eprintln!(
@@ -371,7 +388,11 @@ fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
          plist:  {} (0600 — carries the passphrase)\n  \
          logs:   log show --predicate 'process == \"aivyx\"'{}",
         plist_path.display(),
-        if start { "\n  (started; runs at login)" } else { "\n  (written; load with `launchctl bootstrap gui/$(id -u) <plist>`)" },
+        if start {
+            "\n  (started; runs at login)"
+        } else {
+            "\n  (written; load with `launchctl bootstrap gui/$(id -u) <plist>`)"
+        },
     );
     Ok(())
 }
@@ -379,7 +400,10 @@ fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
 fn uninstall_macos() -> Result<(), String> {
     let plist_path = macos_plist_path()?;
     if let Ok(uid) = current_uid() {
-        let _ = run_cmd("launchctl", &["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")]);
+        let _ = run_cmd(
+            "launchctl",
+            &["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")],
+        );
     }
     let mut removed = false;
     if plist_path.exists() {
@@ -414,10 +438,9 @@ fn resolve_passphrase() -> Result<String, String> {
             return Ok(v);
         }
     }
-    let p = rpassword::prompt_password(
-        "Store passphrase for the unattended service (input hidden): ",
-    )
-    .map_err(|e| format!("failed to read passphrase: {e}"))?;
+    let p =
+        rpassword::prompt_password("Store passphrase for the unattended service (input hidden): ")
+            .map_err(|e| format!("failed to read passphrase: {e}"))?;
     if p.is_empty() {
         return Err("passphrase must not be empty".into());
     }
@@ -478,7 +501,10 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<(), String> {
         return Err(format!(
             "`{program} {}` exited with {}",
             args.join(" "),
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()),
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into()),
         ));
     }
     Ok(())
@@ -493,7 +519,10 @@ mod tests {
         // On the build/CI host (Linux) detection is Linux; the point is it never
         // panics and returns a concrete platform.
         let p = Platform::detect();
-        assert!(matches!(p, Platform::Linux | Platform::MacOs | Platform::Unsupported));
+        assert!(matches!(
+            p,
+            Platform::Linux | Platform::MacOs | Platform::Unsupported
+        ));
     }
 
     #[test]
@@ -532,14 +561,25 @@ mod tests {
 
     #[test]
     fn plan_resolves_unit_and_env_paths_under_config_dir() {
-        let plan = plan_linux(Path::new("/home/u/.config"), "/home/u/.local/bin/aivyx", "/home/u", false);
+        let plan = plan_linux(
+            Path::new("/home/u/.config"),
+            "/home/u/.local/bin/aivyx",
+            "/home/u",
+            false,
+        );
         assert_eq!(
             plan.unit_path,
             PathBuf::from("/home/u/.config/systemd/user/aivyx-daemon.service")
         );
-        assert_eq!(plan.env_file_path, PathBuf::from("/home/u/.config/aivyx/daemon.env"));
+        assert_eq!(
+            plan.env_file_path,
+            PathBuf::from("/home/u/.config/aivyx/daemon.env")
+        );
         // the unit references that exact env-file path
-        assert!(plan.unit_contents.contains("EnvironmentFile=-/home/u/.config/aivyx/daemon.env"));
+        assert!(
+            plan.unit_contents
+                .contains("EnvironmentFile=-/home/u/.config/aivyx/daemon.env")
+        );
     }
 
     #[test]

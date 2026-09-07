@@ -9,19 +9,15 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{daemon_is_running, list_notification_history};
-use aivyx_channel::daemon_ipc::{default_socket_path, NotificationHistoryEntry};
+use aivyx_channel::daemon_ipc::{NotificationHistoryEntry, default_socket_path};
 
 /// Entry point for `aivyx notify history [--target NAME] [--limit N]`.
-pub async fn run_notify_history(
-    target: Option<&str>,
-    limit: u32,
-) -> Result<(), String> {
+pub async fn run_notify_history(target: Option<&str>, limit: u32) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
-    let (entries, total_len) =
-        list_notification_history(&socket_path, 0, limit, target)
-            .await
-            .map_err(|e| format!("failed to list notification history: {e}"))?;
+    let (entries, total_len) = list_notification_history(&socket_path, 0, limit, target)
+        .await
+        .map_err(|e| format!("failed to list notification history: {e}"))?;
     print!("{}", render_history(target, &entries, total_len));
     Ok(())
 }

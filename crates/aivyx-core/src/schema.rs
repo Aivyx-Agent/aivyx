@@ -197,12 +197,16 @@ pub(crate) fn validate_at(
     path: &str,
 ) -> Result<(), ValidationError> {
     // ---- Top-level (or nested) object shape ---------------------
-    let schema_obj = schema.as_object().ok_or_else(|| ValidationError::NotAnObject {
-        found: kind_of(schema).to_string(),
-    })?;
-    let input_obj = input.as_object().ok_or_else(|| ValidationError::NotAnObject {
-        found: kind_of(input).to_string(),
-    })?;
+    let schema_obj = schema
+        .as_object()
+        .ok_or_else(|| ValidationError::NotAnObject {
+            found: kind_of(schema).to_string(),
+        })?;
+    let input_obj = input
+        .as_object()
+        .ok_or_else(|| ValidationError::NotAnObject {
+            found: kind_of(input).to_string(),
+        })?;
 
     // If the schema doesn't declare `type: object` (or declares it
     // differently), fall through as "no object-level constraint" —
@@ -233,9 +237,7 @@ pub(crate) fn validate_at(
     }
 
     // ---- additionalProperties: false ------------------------------
-    let properties = schema_obj
-        .get("properties")
-        .and_then(Value::as_object);
+    let properties = schema_obj.get("properties").and_then(Value::as_object);
     let additional_props_allowed = schema_obj
         .get("additionalProperties")
         .and_then(Value::as_bool)
@@ -273,10 +275,7 @@ pub(crate) fn validate_at(
                             found: kind_of(value),
                         });
                     };
-                    if let Some(allowed) = field_schema_obj
-                        .get("enum")
-                        .and_then(Value::as_array)
-                    {
+                    if let Some(allowed) = field_schema_obj.get("enum").and_then(Value::as_array) {
                         let allowed_strs: Vec<String> = allowed
                             .iter()
                             .filter_map(|v| v.as_str().map(str::to_string))
@@ -302,9 +301,7 @@ pub(crate) fn validate_at(
                             found: kind_of(value),
                         });
                     };
-                    if let Some(min) = field_schema_obj
-                        .get("minimum")
-                        .and_then(Value::as_i64)
+                    if let Some(min) = field_schema_obj.get("minimum").and_then(Value::as_i64)
                         && n < min
                     {
                         return Err(ValidationError::BelowMinimum {
@@ -313,9 +310,7 @@ pub(crate) fn validate_at(
                             found: n,
                         });
                     }
-                    if let Some(max) = field_schema_obj
-                        .get("maximum")
-                        .and_then(Value::as_i64)
+                    if let Some(max) = field_schema_obj.get("maximum").and_then(Value::as_i64)
                         && n > max
                     {
                         return Err(ValidationError::AboveMaximum {
@@ -553,7 +548,11 @@ mod tests {
         let err = validate(&schema, &json!({"limit": "5"})).unwrap_err();
         assert!(matches!(
             err,
-            ValidationError::WrongType { expected: "integer", found: "string", .. }
+            ValidationError::WrongType {
+                expected: "integer",
+                found: "string",
+                ..
+            }
         ));
     }
 
@@ -690,9 +689,7 @@ mod tests {
     fn nested_schema_accepts_flat_required_only_shape() {
         // The nested `args` object is optional — a call with just
         // `cmd` must validate. This is the no-args shell invocation.
-        assert!(
-            validate(&shell_exec_nested_schema(), &json!({"cmd": "ls"})).is_ok()
-        );
+        assert!(validate(&shell_exec_nested_schema(), &json!({"cmd": "ls"})).is_ok());
     }
 
     #[test]

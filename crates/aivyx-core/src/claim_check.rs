@@ -217,7 +217,8 @@ fn identifier_tokens(text: &str) -> Vec<String> {
             // design doc.
             let is_icao_like = len == 4
                 && has_alpha
-                && t.chars().all(|c| !c.is_ascii_alphabetic() || c.is_ascii_uppercase());
+                && t.chars()
+                    .all(|c| !c.is_ascii_alphabetic() || c.is_ascii_uppercase());
             (has_digit && has_alpha) || is_hyphenated || is_icao_like
         })
         .collect()
@@ -267,10 +268,7 @@ mod tests {
         // a verdict — the fold must key on what Candor concluded (with
         // registry-accurate tool names), not re-guess from prose.
         let raw_claim_only = "I researched it and saved that to memory.";
-        let notes = detect_unfulfilled_claims(
-            raw_claim_only,
-            &tools(&["web.search"]),
-        );
+        let notes = detect_unfulfilled_claims(raw_claim_only, &tools(&["web.search"]));
         assert_eq!(notes.len(), 1);
         // Build the annotated message exactly the way the turn loop
         // does ("\n⚠ {note}" appended), so this test tracks the real
@@ -298,10 +296,7 @@ mod tests {
 
     #[test]
     fn no_flag_when_the_claim_is_fulfilled() {
-        let notes = detect_unfulfilled_claims(
-            "Done — saved to memory.",
-            &tools(&["memory.write"]),
-        );
+        let notes = detect_unfulfilled_claims("Done — saved to memory.", &tools(&["memory.write"]));
         assert!(notes.is_empty());
     }
 
@@ -340,10 +335,8 @@ mod tests {
 
     #[test]
     fn multiple_unfulfilled_claims_each_flag() {
-        let notes = detect_unfulfilled_claims(
-            "I saved to memory and scheduled a follow-up.",
-            &tools(&[]),
-        );
+        let notes =
+            detect_unfulfilled_claims("I saved to memory and scheduled a follow-up.", &tools(&[]));
         assert_eq!(notes.len(), 2);
     }
 
@@ -426,7 +419,10 @@ mod tests {
 
     #[test]
     fn identifier_tokens_admits_icao_style_codes() {
-        assert_eq!(identifier_tokens("departing YPJT today"), vec!["YPJT".to_string()]);
+        assert_eq!(
+            identifier_tokens("departing YPJT today"),
+            vec!["YPJT".to_string()]
+        );
     }
 
     #[test]

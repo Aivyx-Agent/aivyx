@@ -32,11 +32,7 @@ const ROLE_TOML_PATH: &str = "aivyx.toml";
 ///    without `--force`).
 /// 7. Record the audit event via daemon IPC.
 /// 8. Surface a "restart the daemon" reminder.
-pub async fn run_role_import(
-    proposal_id: &str,
-    yes: bool,
-    force: bool,
-) -> Result<(), String> {
+pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Result<(), String> {
     use aivyx_channel::daemon_client::{
         daemon_is_running, get_persona_proposal, import_role_draft,
     };
@@ -78,21 +74,17 @@ pub async fn run_role_import(
         }
         eprintln!("[y/N] (re-run with --yes to skip this prompt)");
         let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer).map_err(|e| {
-            format!("failed to read confirmation: {e}")
-        })?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-        {
+        std::io::stdin()
+            .read_line(&mut answer)
+            .map_err(|e| format!("failed to read confirmation: {e}"))?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
             return Err("import cancelled by operator".to_string());
         }
     }
 
-    let applied = crate::toml_edit_apply::apply_role_draft_to_path(
-        Path::new(ROLE_TOML_PATH),
-        &draft,
-        force,
-    )
-    .map_err(|e| format!("failed to import role to {ROLE_TOML_PATH}: {e}"))?;
+    let applied =
+        crate::toml_edit_apply::apply_role_draft_to_path(Path::new(ROLE_TOML_PATH), &draft, force)
+            .map_err(|e| format!("failed to import role to {ROLE_TOML_PATH}: {e}"))?;
 
     // Same posture as profile apply-hint: audit-event record is
     // forensic, not load-bearing. Soft-warn if it fails after the
@@ -164,16 +156,13 @@ fn parse_proposal_as_role_draft(
         .applied_op
         .as_ref()
         .unwrap_or(&proposal.proposed_op);
-    let value = op
-        .get("value")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            format!(
-                "proposal `{}` op shape is unexpected (no AppendList.value); \
+    let value = op.get("value").and_then(|v| v.as_str()).ok_or_else(|| {
+        format!(
+            "proposal `{}` op shape is unexpected (no AppendList.value); \
                  cannot decode RoleDraft payload.",
-                proposal.id
-            )
-        })?;
+            proposal.id
+        )
+    })?;
     let draft: aivyx_core::skill_proposer::RoleDraft =
         serde_json::from_str(value).map_err(|e| {
             format!(
@@ -217,10 +206,7 @@ mod tests {
         }
     }
 
-    fn role_draft_payload(
-        name: &str,
-        parent: Option<&str>,
-    ) -> serde_json::Value {
+    fn role_draft_payload(name: &str, parent: Option<&str>) -> serde_json::Value {
         let inner = serde_json::json!({
             "name": name,
             "parent": parent,
@@ -240,10 +226,7 @@ mod tests {
             "pp-r1",
             "RoleDefinitionSuggestion",
             "Approved",
-            Some(role_draft_payload(
-                "research-deploy",
-                Some("research"),
-            )),
+            Some(role_draft_payload("research-deploy", Some("research"))),
         );
         let draft = parse_proposal_as_role_draft(&proposal).unwrap();
         assert_eq!(draft.name, "research-deploy");
@@ -280,12 +263,7 @@ mod tests {
 
     #[test]
     fn parse_proposal_refuses_pending_status() {
-        let proposal = proposal_fixture(
-            "pp-y",
-            "RoleDefinitionSuggestion",
-            "Pending",
-            None,
-        );
+        let proposal = proposal_fixture("pp-y", "RoleDefinitionSuggestion", "Pending", None);
         let err = parse_proposal_as_role_draft(&proposal).unwrap_err();
         assert!(err.contains("only Approved"));
         assert!(err.contains("aivyx persona proposals approve"));
@@ -305,12 +283,8 @@ mod tests {
 
     #[test]
     fn parse_proposal_falls_back_to_proposed_op_when_applied_op_absent() {
-        let mut proposal = proposal_fixture(
-            "pp-fallback",
-            "RoleDefinitionSuggestion",
-            "Approved",
-            None,
-        );
+        let mut proposal =
+            proposal_fixture("pp-fallback", "RoleDefinitionSuggestion", "Approved", None);
         proposal.proposed_op = role_draft_payload("inline-role", None);
         let draft = parse_proposal_as_role_draft(&proposal).unwrap();
         assert_eq!(draft.name, "inline-role");
@@ -369,8 +343,8 @@ mod tests {
 
         // Step 3 — Task 3 atomic apply (force=false; no conflict
         // since `research-deploy` isn't in the pre-existing toml).
-        let applied = apply_role_draft_to_path(&aivyx_toml, &draft, false)
-            .expect("apply must succeed");
+        let applied =
+            apply_role_draft_to_path(&aivyx_toml, &draft, false).expect("apply must succeed");
         assert_eq!(applied.role_name, "research-deploy");
         assert_eq!(applied.parent.as_deref(), Some("research"));
 
@@ -409,7 +383,7 @@ mod tests {
         // The --force semantics end-to-end: same-name role already
         // present → RoleExists without --force; succeeds with --force
         // and replaces the section.
-        use crate::toml_edit_apply::{apply_role_draft_to_path, TomlApplyError};
+        use crate::toml_edit_apply::{TomlApplyError, apply_role_draft_to_path};
         let dir = e2e_tempdir("force-overwrite");
         let aivyx_toml = dir.join("aivyx.toml");
         std::fs::write(
@@ -428,8 +402,7 @@ mod tests {
         let draft = parse_proposal_as_role_draft(&proposal).unwrap();
 
         // Without --force: refuses.
-        let err = apply_role_draft_to_path(&aivyx_toml, &draft, false)
-            .unwrap_err();
+        let err = apply_role_draft_to_path(&aivyx_toml, &draft, false).unwrap_err();
         assert!(matches!(err, TomlApplyError::RoleExists { .. }));
         // File untouched.
         let mid = std::fs::read_to_string(&aivyx_toml).unwrap();

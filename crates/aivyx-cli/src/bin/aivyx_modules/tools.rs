@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{daemon_is_running, get_tool_stats};
-use aivyx_channel::daemon_ipc::{default_socket_path, ToolStat};
+use aivyx_channel::daemon_ipc::{ToolStat, default_socket_path};
 
 /// `aivyx tools [--window <secs>]`
 pub async fn run_tools(window_secs: Option<u64>) -> Result<(), String> {

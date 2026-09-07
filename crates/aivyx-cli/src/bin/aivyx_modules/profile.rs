@@ -75,15 +75,14 @@ pub fn run_profile_edit() -> Result<(), String> {
 
     // Parse the original document, extract the current [profile]
     // section as a starter chunk for the editor.
-    let current_profile_text = extract_profile_section_for_edit(&original_text)
-        .map_err(|e| {
-            format!(
-                "failed to parse {} as TOML: {e}\n\
+    let current_profile_text = extract_profile_section_for_edit(&original_text).map_err(|e| {
+        format!(
+            "failed to parse {} as TOML: {e}\n\
                  The existing config file is malformed. Fix it manually \
                  before running `aivyx profile edit`.",
-                toml_path.display()
-            )
-        })?;
+            toml_path.display()
+        )
+    })?;
 
     let edited_text = open_in_editor(&current_profile_text)?;
 
@@ -114,10 +113,7 @@ pub fn run_profile_edit() -> Result<(), String> {
 ///    update to `aivyx.toml` atomically via the Task 3 primitive,
 ///    records an `AuditEvent::ProfileHintApplied` event via daemon
 ///    IPC, and surfaces a "restart the daemon" reminder.
-pub async fn run_profile_apply_hint(
-    proposal_id: &str,
-    yes: bool,
-) -> Result<(), String> {
+pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), String> {
     use aivyx_channel::daemon_client::{
         apply_profile_hint, daemon_is_running, get_persona_proposal,
     };
@@ -151,20 +147,17 @@ pub async fn run_profile_apply_hint(
         );
         eprintln!("[y/N] (re-run with --yes to skip this prompt)");
         let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer).map_err(|e| {
-            format!("failed to read confirmation: {e}")
-        })?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-        {
+        std::io::stdin()
+            .read_line(&mut answer)
+            .map_err(|e| format!("failed to read confirmation: {e}"))?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
             return Err("apply cancelled by operator".to_string());
         }
     }
 
-    let applied = crate::toml_edit_apply::apply_profile_hint_to_path(
-        Path::new(PROFILE_TOML_PATH),
-        &hint,
-    )
-    .map_err(|e| format!("failed to apply hint to {PROFILE_TOML_PATH}: {e}"))?;
+    let applied =
+        crate::toml_edit_apply::apply_profile_hint_to_path(Path::new(PROFILE_TOML_PATH), &hint)
+            .map_err(|e| format!("failed to apply hint to {PROFILE_TOML_PATH}: {e}"))?;
 
     // Record the audit event via daemon IPC. If the audit-record
     // step fails AFTER the aivyx.toml mutation landed, surface as
@@ -242,16 +235,13 @@ fn parse_proposal_as_profile_hint(
         .applied_op
         .as_ref()
         .unwrap_or(&proposal.proposed_op);
-    let value = op
-        .get("value")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            format!(
-                "proposal `{}` op shape is unexpected (no AppendList.value); \
+    let value = op.get("value").and_then(|v| v.as_str()).ok_or_else(|| {
+        format!(
+            "proposal `{}` op shape is unexpected (no AppendList.value); \
                  cannot decode ProfileFieldHint payload.",
-                proposal.id
-            )
-        })?;
+            proposal.id
+        )
+    })?;
     let hint: aivyx_core::skill_proposer::ProfileFieldHint =
         serde_json::from_str(value).map_err(|e| {
             format!(
@@ -352,7 +342,10 @@ fn default_profile_template() -> String {
 fn open_in_editor(initial_contents: &str) -> Result<String, String> {
     use std::io::Write;
 
-    let editor = std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "vi".to_string());
+    let editor = std::env::var("EDITOR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "vi".to_string());
 
     // Use a unique-enough filename inside the OS temp dir. We do not
     // depend on the `tempfile` crate to keep the dep count low; a
@@ -415,9 +408,8 @@ fn write_aivyx_toml(path: &Path, contents: &str) -> Result<(), String> {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, perms).map_err(|e| {
-            format!("failed to set permissions on {}: {e}", path.display())
-        })?;
+        std::fs::set_permissions(path, perms)
+            .map_err(|e| format!("failed to set permissions on {}: {e}", path.display()))?;
     }
 
     Ok(())
@@ -465,16 +457,12 @@ fn render_profile_for_show(profile: &Profile) -> String {
     ));
 
     match &profile.operator_profile {
-        Some(s) => out.push_str(&format!(
-            "  operator_profile           = {s:?}\n"
-        )),
+        Some(s) => out.push_str(&format!("  operator_profile           = {s:?}\n")),
         None => out.push_str("  operator_profile           = <unset>\n"),
     }
 
     match &profile.communication_style {
-        Some(s) => out.push_str(&format!(
-            "  communication_style        = {s:?}\n"
-        )),
+        Some(s) => out.push_str(&format!("  communication_style        = {s:?}\n")),
         None => out.push_str("  communication_style        = <unset>\n"),
     }
 
@@ -507,9 +495,7 @@ fn render_profile_for_show(profile: &Profile) -> String {
 
     out.push('\n');
     if profile.is_operator_declared() {
-        out.push_str(
-            "Profile injection: ENABLED — Profile flavors every turn's system prompt.\n",
-        );
+        out.push_str("Profile injection: ENABLED — Profile flavors every turn's system prompt.\n");
     } else {
         out.push_str(
             "Profile injection: DISABLED — no operator content declared; daemon \
@@ -540,9 +526,7 @@ mod tests {
     fn operator_declared_profile() -> Profile {
         Profile {
             assistant_name: Sourced::new("Codex".to_string(), FieldSource::Toml),
-            operator_profile: Some(
-                "Senior Rust engineer focused on systems.".to_string(),
-            ),
+            operator_profile: Some("Senior Rust engineer focused on systems.".to_string()),
             communication_style: Some("terse, conclusion-first".to_string()),
             primary_use_cases: vec![
                 "Rust systems programming".to_string(),
@@ -618,8 +602,7 @@ root = \"/home/op/aivyx-sandbox\"
 
     #[test]
     fn extract_profile_section_returns_existing_profile_table() {
-        let extracted =
-            extract_profile_section_for_edit(ORIGINAL_WITH_PROFILE).expect("parse");
+        let extracted = extract_profile_section_for_edit(ORIGINAL_WITH_PROFILE).expect("parse");
         assert!(extracted.contains("[profile]"));
         assert!(extracted.contains("assistant_name = \"Codex\""));
         assert!(extracted.contains("primary_use_cases = [\"Rust systems programming\"]"));
@@ -631,8 +614,7 @@ root = \"/home/op/aivyx-sandbox\"
 
     #[test]
     fn extract_profile_section_returns_template_when_missing() {
-        let extracted =
-            extract_profile_section_for_edit(ORIGINAL_WITHOUT_PROFILE).expect("parse");
+        let extracted = extract_profile_section_for_edit(ORIGINAL_WITHOUT_PROFILE).expect("parse");
         assert!(extracted.contains("[profile]"));
         // The starter template is fully commented out so a no-op
         // editor save leaves the file with no operator-declared
@@ -647,9 +629,8 @@ root = \"/home/op/aivyx-sandbox\"
 
     #[test]
     fn extract_profile_section_rejects_malformed_toml() {
-        let err =
-            extract_profile_section_for_edit("[profile\nassistant_name = \"oops\"")
-                .expect_err("malformed TOML must error");
+        let err = extract_profile_section_for_edit("[profile\nassistant_name = \"oops\"")
+            .expect_err("malformed TOML must error");
         assert!(!err.is_empty());
     }
 
@@ -662,8 +643,7 @@ operator_profile = \"Senior Rust engineer\"
 behavioral_constraints = [\"never auto-commit\"]
 ";
         let merged =
-            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
-                .expect("merge");
+            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited).expect("merge");
 
         // New profile values appear.
         assert!(merged.contains("assistant_name = \"Mira\""));
@@ -694,8 +674,7 @@ behavioral_constraints = [\"never auto-commit\"]
 assistant_name = \"Newcomer\"
 ";
         let merged =
-            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITHOUT_PROFILE, edited)
-                .expect("merge");
+            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITHOUT_PROFILE, edited).expect("merge");
 
         assert!(merged.contains("[profile]"));
         assert!(merged.contains("assistant_name = \"Newcomer\""));
@@ -711,9 +690,8 @@ assistant_name = \"Newcomer\"
 # operator deleted the [profile] line by mistake
 assistant_name = \"oops\"
 ";
-        let err =
-            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
-                .expect_err("missing [profile] header must error");
+        let err = merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
+            .expect_err("missing [profile] header must error");
         assert!(
             err.contains("missing the `[profile]` header"),
             "error message must explain: {err}"
@@ -723,9 +701,8 @@ assistant_name = \"oops\"
     #[test]
     fn merge_rejects_malformed_edited_toml() {
         let edited = "[profile\nassistant_name = oops";
-        let err =
-            merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
-                .expect_err("malformed edited TOML must error");
+        let err = merge_edited_profile_into_aivyx_toml(ORIGINAL_WITH_PROFILE, edited)
+            .expect_err("malformed edited TOML must error");
         assert!(
             err.contains("not valid TOML"),
             "error message must explain: {err}"
@@ -834,12 +811,7 @@ assistant_name = \"oops\"
     #[test]
     fn parse_proposal_refuses_pending_status() {
         // Operator forgot to approve first.
-        let proposal = proposal_fixture(
-            "pp-y",
-            "ProfileHint",
-            "Pending",
-            None,
-        );
+        let proposal = proposal_fixture("pp-y", "ProfileHint", "Pending", None);
         let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
         assert!(err.contains("only Approved proposals"));
         assert!(err.contains("aivyx persona proposals approve"));
@@ -847,12 +819,7 @@ assistant_name = \"oops\"
 
     #[test]
     fn parse_proposal_refuses_rejected_status() {
-        let proposal = proposal_fixture(
-            "pp-z",
-            "ProfileHint",
-            "Rejected",
-            None,
-        );
+        let proposal = proposal_fixture("pp-z", "ProfileHint", "Rejected", None);
         let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
         assert!(err.contains("only Approved"));
     }
@@ -873,16 +840,8 @@ assistant_name = \"oops\"
     fn parse_proposal_falls_back_to_proposed_op_when_applied_op_absent() {
         // Backward-compat: old chain entries might not have
         // applied_op populated. Falls back to proposed_op.
-        let mut proposal = proposal_fixture(
-            "pp-fallback",
-            "ProfileHint",
-            "Approved",
-            None,
-        );
-        proposal.proposed_op = profile_hint_payload(
-            "AssistantName",
-            "Aivyx",
-        );
+        let mut proposal = proposal_fixture("pp-fallback", "ProfileHint", "Approved", None);
+        proposal.proposed_op = profile_hint_payload("AssistantName", "Aivyx");
         let hint = parse_proposal_as_profile_hint(&proposal).unwrap();
         assert_eq!(
             hint.field,
@@ -966,7 +925,10 @@ assistant_name = \"oops\"
             "expected new style, got: {post}"
         );
         // Old value gone.
-        assert!(!post.contains("\"verbose\""), "old value must be overwritten");
+        assert!(
+            !post.contains("\"verbose\""),
+            "old value must be overwritten"
+        );
         // Other Profile field untouched.
         assert!(post.contains("assistant_name = \"Aivyx\""));
         // Top-level comment retained.

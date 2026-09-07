@@ -53,11 +53,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
-    AivyxError, CapabilitySet, ExecutionConfiner, GitCheckpointer, NoopConfiner, Tool,
-    ToolContext, ToolId, ToolOutcome, Verification, default_confiner,
+    AivyxError, CapabilitySet, ExecutionConfiner, GitCheckpointer, NoopConfiner, Tool, ToolContext,
+    ToolId, ToolOutcome, Verification, default_confiner,
 };
 use aivyx_capability::Scope;
 
@@ -243,8 +243,9 @@ impl Tool for GitStatusTool {
     // declares `git.read:**` or a per-repo grant explicitly.
     fn required_scope(&self, input: &Value) -> Scope {
         match resolve_repo(input, &self.repos) {
-            Some(abs) => Scope::parse(&format!("git.read:{}", abs.display()))
-                .unwrap_or_else(deny_scope),
+            Some(abs) => {
+                Scope::parse(&format!("git.read:{}", abs.display())).unwrap_or_else(deny_scope)
+            }
             None => deny_scope(),
         }
     }
@@ -255,8 +256,7 @@ impl Tool for GitStatusTool {
             None => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "git.status: `repo` field missing or not in allow-set"
-                        .to_string(),
+                    detail: "git.status: `repo` field missing or not in allow-set".to_string(),
                 });
             }
         };
@@ -352,8 +352,9 @@ impl Tool for GitDiffTool {
 
     fn required_scope(&self, input: &Value) -> Scope {
         match resolve_repo(input, &self.repos) {
-            Some(abs) => Scope::parse(&format!("git.read:{}", abs.display()))
-                .unwrap_or_else(deny_scope),
+            Some(abs) => {
+                Scope::parse(&format!("git.read:{}", abs.display())).unwrap_or_else(deny_scope)
+            }
             None => deny_scope(),
         }
     }
@@ -364,13 +365,15 @@ impl Tool for GitDiffTool {
             None => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "git.diff: `repo` field missing or not in allow-set"
-                        .to_string(),
+                    detail: "git.diff: `repo` field missing or not in allow-set".to_string(),
                 });
             }
         };
 
-        let cached = input.get("cached").and_then(|v| v.as_bool()).unwrap_or(false);
+        let cached = input
+            .get("cached")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let path = input.get("path").and_then(|v| v.as_str());
 
         let mut cmd = tokio::process::Command::new("git");
@@ -517,8 +520,7 @@ impl Tool for GitCommitTool {
             None => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "git.commit: `repo` field missing or not in allow-set"
-                        .to_string(),
+                    detail: "git.commit: `repo` field missing or not in allow-set".to_string(),
                 });
             }
         };
@@ -593,7 +595,9 @@ impl Tool for GitCommitTool {
         }
 
         if let Some(checkpointer) = self.checkpointers.get(&repo) {
-            checkpointer.checkpoint("git.commit", ctx.cancellation).await;
+            checkpointer
+                .checkpoint("git.commit", ctx.cancellation)
+                .await;
         }
 
         // Stage: `git -C <repo> add -- <paths...>`.
@@ -628,7 +632,12 @@ impl Tool for GitCommitTool {
         // comes from the repo's own git config (operator-owned), same
         // as a manual commit.
         let mut commit_cmd = tokio::process::Command::new("git");
-        commit_cmd.arg("-C").arg(&repo).arg("commit").arg("-m").arg(message);
+        commit_cmd
+            .arg("-C")
+            .arg(&repo)
+            .arg("commit")
+            .arg("-m")
+            .arg(message);
         let mut commit_cmd = confiner.confine(commit_cmd);
         let commit_out = match commit_cmd.output().await {
             Ok(o) => o,
@@ -650,19 +659,25 @@ impl Tool for GitCommitTool {
                 detail: format!(
                     "git.commit: `git commit` exit code {:?}: {}",
                     commit_out.status.code(),
-                    if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() }
+                    if stderr.trim().is_empty() {
+                        stdout.trim()
+                    } else {
+                        stderr.trim()
+                    }
                 ),
             });
         }
 
         // Resolve the new HEAD so the caller gets the commit hash.
         let mut rev_parse_cmd = tokio::process::Command::new("git");
-        rev_parse_cmd.arg("-C").arg(&repo).arg("rev-parse").arg("HEAD");
+        rev_parse_cmd
+            .arg("-C")
+            .arg(&repo)
+            .arg("rev-parse")
+            .arg("HEAD");
         let mut rev_parse_cmd = confiner.confine(rev_parse_cmd);
         let commit_hash = match rev_parse_cmd.output().await {
-            Ok(o) if o.status.success() => {
-                String::from_utf8_lossy(&o.stdout).trim().to_string()
-            }
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
             // The commit succeeded; failing to read HEAD back is
             // non-fatal — report the commit without the hash rather
             // than a false failure.
@@ -787,7 +802,10 @@ fn resolve_repo(input: &Value, repos: &[PathBuf]) -> Option<PathBuf> {
     let path_str = input.get("repo").and_then(|v| v.as_str())?;
     let input_path = Path::new(path_str);
     let canonical = std::fs::canonicalize(input_path).ok()?;
-    if repos.iter().any(|allowed| allowed.as_path() == canonical.as_path()) {
+    if repos
+        .iter()
+        .any(|allowed| allowed.as_path() == canonical.as_path())
+    {
         Some(canonical)
     } else {
         None
@@ -818,9 +836,8 @@ fn parse_porcelain(stdout: &str) -> Vec<Value> {
 /// agent definitely does not hold so the deny path is
 /// deterministic.
 fn deny_scope() -> Scope {
-    Scope::parse("git.read:/__aivyx_unresolvable__").expect(
-        "git.read:/__aivyx_unresolvable__ must parse — `git.read` is in KNOWN_BASES",
-    )
+    Scope::parse("git.read:/__aivyx_unresolvable__")
+        .expect("git.read:/__aivyx_unresolvable__ must parse — `git.read` is in KNOWN_BASES")
 }
 
 /// `git.write` counterpart to [`deny_scope`] — an unsatisfiable
@@ -828,9 +845,8 @@ fn deny_scope() -> Scope {
 /// the deny is on the write base (no `git.read` grant could satisfy it
 /// either).
 fn write_deny_scope() -> Scope {
-    Scope::parse("git.write:/__aivyx_unresolvable__").expect(
-        "git.write:/__aivyx_unresolvable__ must parse — `git.write` is in KNOWN_BASES",
-    )
+    Scope::parse("git.write:/__aivyx_unresolvable__")
+        .expect("git.write:/__aivyx_unresolvable__ must parse — `git.write` is in KNOWN_BASES")
 }
 
 fn status_input_schema() -> Value {
@@ -960,10 +976,7 @@ mod git_tests {
         }
     }
 
-    fn make_ctx<'a>(
-        channel: &'a NoopChannel,
-        audit: &'a dyn crate::AuditHook,
-    ) -> ToolContext<'a> {
+    fn make_ctx<'a>(channel: &'a NoopChannel, audit: &'a dyn crate::AuditHook) -> ToolContext<'a> {
         ToolContext {
             agent_id: AgentId::new(),
             session_id: channel.session,
@@ -1056,9 +1069,8 @@ mod git_tests {
 
     #[test]
     fn config_build_rejects_nonexistent_path() {
-        let cfg = GitReadToolConfig::new(vec![PathBuf::from(
-            "/definitely-not-a-real-path-aivyx-git",
-        )]);
+        let cfg =
+            GitReadToolConfig::new(vec![PathBuf::from("/definitely-not-a-real-path-aivyx-git")]);
         let err = cfg.build().expect_err("nonexistent path must error");
         assert!(matches!(err, AivyxError::Config(_)));
     }
@@ -1102,18 +1114,29 @@ mod git_tests {
     #[test]
     fn commit_input_schema_requires_repo_message_and_paths() {
         let s = commit_input_schema();
-        let required: Vec<&str> =
-            s["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        let required: Vec<&str> = s["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert!(required.contains(&"repo"));
         assert!(required.contains(&"message"));
         assert!(required.contains(&"paths"));
-        assert!(s["properties"].as_object().unwrap().contains_key("confirmed"));
+        assert!(
+            s["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("confirmed")
+        );
     }
 
     #[test]
     fn write_config_rejects_non_repo_dir() {
         let tmp = std::env::temp_dir();
-        let err = GitWriteToolConfig::new(vec![tmp]).build().expect_err("non-repo must error");
+        let err = GitWriteToolConfig::new(vec![tmp])
+            .build()
+            .expect_err("non-repo must error");
         match err {
             AivyxError::Config(msg) => assert!(msg.contains("not a git repo"), "got: {msg}"),
             other => panic!("expected Config, got {other:?}"),
@@ -1126,7 +1149,9 @@ mod git_tests {
         // never be wired into ConcreteAgent's fs_root-scoped checkpointer hook
         // (agent.rs's dispatch loop fires that hook for any tool where this
         // returns true), since git.commit's target repo is not fs_root.
-        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new()).build().expect("build");
+        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new())
+            .build()
+            .expect("build");
         assert!(!tool.mutates_fs_root());
     }
 
@@ -1185,7 +1210,9 @@ mod git_tests {
     async fn commit_happy_path_stages_and_commits() {
         let Some(repo) = init_temp_repo() else { return };
         std::fs::write(repo.join("hello.txt"), b"hi\n").unwrap();
-        let tool = GitWriteToolConfig::new(vec![repo.clone()]).build().expect("build");
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("build");
         let channel = fresh_channel();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
@@ -1202,15 +1229,25 @@ mod git_tests {
         match outcome {
             ToolOutcome::Completed { output, .. } => {
                 assert_eq!(output["committed"], true);
-                assert!(output["commit"].as_str().unwrap().len() >= 7, "expected a hash");
+                assert!(
+                    output["commit"].as_str().unwrap().len() >= 7,
+                    "expected a hash"
+                );
             }
             other => panic!("expected Completed, got {other:?}"),
         }
         // The working tree should now be clean (the file is committed).
         let st = std::process::Command::new("git")
-            .arg("-C").arg(&repo).arg("status").arg("--porcelain")
-            .output().unwrap();
-        assert!(String::from_utf8_lossy(&st.stdout).trim().is_empty(), "tree not clean");
+            .arg("-C")
+            .arg(&repo)
+            .arg("status")
+            .arg("--porcelain")
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&st.stdout).trim().is_empty(),
+            "tree not clean"
+        );
         std::fs::remove_dir_all(&repo).ok();
     }
 
@@ -1219,7 +1256,9 @@ mod git_tests {
         let Some(repo) = init_temp_repo() else { return };
         // Build with an EMPTY allow-set (well: a different, unrelated
         // repo would also work; empty is simplest and still valid).
-        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new()).build().expect("build");
+        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new())
+            .build()
+            .expect("build");
         // required_scope must deny (sentinel) for a repo not on the list.
         let scope = tool.required_scope(&json!({ "repo": repo.display().to_string() }));
         assert_eq!(format!("{scope:?}"), format!("{:?}", write_deny_scope()));
@@ -1268,7 +1307,10 @@ mod git_tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(ok, ToolOutcome::Completed { .. }), "expected Completed, got {ok:?}");
+        assert!(
+            matches!(ok, ToolOutcome::Completed { .. }),
+            "expected Completed, got {ok:?}"
+        );
         std::fs::remove_dir_all(&repo).ok();
     }
 
@@ -1347,7 +1389,9 @@ mod git_tests {
     #[tokio::test]
     async fn commit_rejects_path_traversal_and_empty_inputs() {
         let Some(repo) = init_temp_repo() else { return };
-        let tool = GitWriteToolConfig::new(vec![repo.clone()]).build().expect("build");
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("build");
         let channel = fresh_channel();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
@@ -1362,7 +1406,10 @@ mod git_tests {
         assert!(ctx_less_outcome_detail(&traversal).contains("must not contain"));
 
         let empty_msg = tool
-            .execute(json!({ "repo": base, "message": "  ", "paths": ["a"] }), &ctx)
+            .execute(
+                json!({ "repo": base, "message": "  ", "paths": ["a"] }),
+                &ctx,
+            )
             .await;
         assert!(ctx_less_outcome_detail(&empty_msg).contains("message"));
 
@@ -1454,7 +1501,9 @@ mod git_tests {
 
     #[tokio::test]
     async fn commit_checkpoints_the_correct_repo_when_multiple_are_configured() {
-        let Some(repo_a) = init_temp_repo() else { return };
+        let Some(repo_a) = init_temp_repo() else {
+            return;
+        };
         let Some(repo_b) = init_temp_repo() else {
             std::fs::remove_dir_all(&repo_a).ok();
             return;
@@ -1499,14 +1548,20 @@ mod git_tests {
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         )
         .await;
-        assert!(!refs_a.trim().is_empty(), "repo A must have a checkpoint ref");
+        assert!(
+            !refs_a.trim().is_empty(),
+            "repo A must have a checkpoint ref"
+        );
 
         let refs_b = aivyx_checkpoint::test_support::git(
             &repo_b,
             &["for-each-ref", "refs/aivyx/checkpoints/"],
         )
         .await;
-        assert!(refs_b.trim().is_empty(), "repo B must NOT have any checkpoint ref");
+        assert!(
+            refs_b.trim().is_empty(),
+            "repo B must NOT have any checkpoint ref"
+        );
 
         std::fs::remove_dir_all(&repo_a).ok();
         std::fs::remove_dir_all(&repo_b).ok();
@@ -1577,7 +1632,9 @@ mod git_tests {
         // Default GitWriteToolConfig (no `.with_checkpointers` call) --
         // the map defaults empty, so this repo has no checkpointer even
         // though it's a real git repo.
-        let tool = GitWriteToolConfig::new(vec![repo.clone()]).build().expect("build");
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("build");
 
         let channel = fresh_channel();
         let audit = NullAuditHook;

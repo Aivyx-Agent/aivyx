@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{author_skill, daemon_is_running};
-use aivyx_channel::daemon_ipc::{default_socket_path, SkillAuthorOp};
+use aivyx_channel::daemon_ipc::{SkillAuthorOp, default_socket_path};
 
 async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
     if daemon_is_running(socket_path).await {
@@ -24,17 +24,18 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
 }
 
 /// `aivyx skills teach <name> <trigger> <procedure>` — add a new skill.
-pub async fn run_skills_teach(
-    name: &str,
-    trigger: &str,
-    procedure: &str,
-) -> Result<(), String> {
+pub async fn run_skills_teach(name: &str, trigger: &str, procedure: &str) -> Result<(), String> {
     if name.is_empty() || trigger.is_empty() || procedure.is_empty() {
-        return Err(
-            "`aivyx skills teach` needs <name> <trigger> <procedure>".into(),
-        );
+        return Err("`aivyx skills teach` needs <name> <trigger> <procedure>".into());
     }
-    send(SkillAuthorOp::Teach, name, Some(trigger), Some(procedure), "taught").await
+    send(
+        SkillAuthorOp::Teach,
+        name,
+        Some(trigger),
+        Some(procedure),
+        "taught",
+    )
+    .await
 }
 
 /// `aivyx skills update <name> [--trigger T] [--procedure P]` — change an
@@ -48,9 +49,7 @@ pub async fn run_skills_update(
         return Err("`aivyx skills update` needs <name>".into());
     }
     if trigger.is_none() && procedure.is_none() {
-        return Err(
-            "`aivyx skills update` needs at least --trigger or --procedure".into(),
-        );
+        return Err("`aivyx skills update` needs at least --trigger or --procedure".into());
     }
     send(SkillAuthorOp::Update, name, trigger, procedure, "updated").await
 }
@@ -74,9 +73,7 @@ async fn send(
     require_daemon_running(&socket_path).await?;
     match author_skill(&socket_path, op, name, trigger, procedure).await {
         Ok(seq) => {
-            eprintln!(
-                "aivyx skills: {verb} {name:?} — appended to the persona chain at seq {seq}"
-            );
+            eprintln!("aivyx skills: {verb} {name:?} — appended to the persona chain at seq {seq}");
             Ok(())
         }
         Err(e) => Err(format!("skills {verb} failed: {e}")),

@@ -9,15 +9,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
 use aivyx_config::AccessLevel;
-use aivyx_llm::ollama::RECOMMENDED_LOCAL_MODEL;
-use aivyx_llm::verify::{verify_provider_credentials, VerifyError, VerifyProvider};
 use aivyx_llm::LlmProvider;
+use aivyx_llm::ollama::RECOMMENDED_LOCAL_MODEL;
+use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
+use aivyx_llm::verify::{VerifyError, VerifyProvider, verify_provider_credentials};
 
-use aivyx_channel::profile_draft::{
-    draft_identity, DraftedProfile, IdentityAnswers,
-};
+use aivyx_channel::profile_draft::{DraftedProfile, IdentityAnswers, draft_identity};
 
 /// Default config file name (matches `aivyx-config` convention).
 const CONFIG_FILE: &str = "aivyx.toml";
@@ -76,7 +74,11 @@ pub(crate) async fn detect_ollama(base_url: &str) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    client.get(base_url).send().await.is_ok_and(|r| r.status().is_success())
+    client
+        .get(base_url)
+        .send()
+        .await
+        .is_ok_and(|r| r.status().is_success())
 }
 
 /// Fetch the list of locally available model names from Ollama's
@@ -261,8 +263,8 @@ async fn decide_embedding(
 /// Extract model names from the Ollama `/api/tags` JSON response.
 /// The expected shape is `{ "models": [{ "name": "...", ... }, ...] }`.
 fn parse_model_names(json_body: &str) -> Result<Vec<String>, String> {
-    let value: serde_json::Value = serde_json::from_str(json_body)
-        .map_err(|e| format!("invalid JSON from /api/tags: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(json_body).map_err(|e| format!("invalid JSON from /api/tags: {e}"))?;
 
     let models = value
         .get("models")
@@ -315,23 +317,22 @@ fn prompt_choice(
     writer: &mut dyn IoWrite,
 ) -> Result<usize, String> {
     for (i, opt) in options.iter().enumerate() {
-        writeln!(writer, "  {}) {opt}", i + 1)
-            .map_err(|e| format!("write error: {e}"))?;
+        writeln!(writer, "  {}) {opt}", i + 1).map_err(|e| format!("write error: {e}"))?;
     }
     loop {
-        let input = prompt_line(
-            &format!("{prompt} [{}]: ", default + 1),
-            reader,
-            writer,
-        )?;
+        let input = prompt_line(&format!("{prompt} [{}]: ", default + 1), reader, writer)?;
         if input.is_empty() {
             return Ok(default);
         }
         match input.parse::<usize>() {
             Ok(n) if n >= 1 && n <= options.len() => return Ok(n - 1),
             _ => {
-                writeln!(writer, "Please enter a number between 1 and {}.", options.len())
-                    .map_err(|e| format!("write error: {e}"))?;
+                writeln!(
+                    writer,
+                    "Please enter a number between 1 and {}.",
+                    options.len()
+                )
+                .map_err(|e| format!("write error: {e}"))?;
             }
         }
     }
@@ -379,11 +380,7 @@ async fn collect_and_verify_cloud(
     let resolved_default = template_model.unwrap_or(default_model);
 
     // Initial collection — same prompt order as pre-Phase-104.
-    let mut model = prompt_line(
-        &format!("Model [{resolved_default}]: "),
-        reader,
-        writer,
-    )?;
+    let mut model = prompt_line(&format!("Model [{resolved_default}]: "), reader, writer)?;
     if model.is_empty() {
         model = resolved_default.into();
     }
@@ -393,14 +390,12 @@ async fn collect_and_verify_cloud(
     }
 
     for attempt in 1..=VERIFY_MAX_ATTEMPTS {
-        writeln!(writer, "Verifying provider…")
-            .map_err(|e| format!("write error: {e}"))?;
+        writeln!(writer, "Verifying provider…").map_err(|e| format!("write error: {e}"))?;
         writer.flush().map_err(|e| format!("flush error: {e}"))?;
 
         match verify_provider_credentials(provider, &key, &model).await {
             Ok(()) => {
-                writeln!(writer, "Verified ok.")
-                    .map_err(|e| format!("write error: {e}"))?;
+                writeln!(writer, "Verified ok.").map_err(|e| format!("write error: {e}"))?;
                 return Ok((model, Some(key)));
             }
             Err(VerifyError::Auth(msg)) => {
@@ -465,11 +460,7 @@ async fn collect_and_verify_cloud(
                 if key.is_empty() {
                     return Err("API key cannot be empty".into());
                 }
-                let m = prompt_line(
-                    &format!("Model [{model}]: "),
-                    reader,
-                    writer,
-                )?;
+                let m = prompt_line(&format!("Model [{model}]: "), reader, writer)?;
                 if !m.is_empty() {
                     model = m;
                 }
@@ -507,8 +498,7 @@ fn prompt_yes_no(
         "y" | "yes" => Ok(true),
         "n" | "no" => Ok(false),
         _ => {
-            writeln!(writer, "Please answer y or n.")
-                .map_err(|e| format!("write error: {e}"))?;
+            writeln!(writer, "Please answer y or n.").map_err(|e| format!("write error: {e}"))?;
             prompt_yes_no(prompt, default, reader, writer)
         }
     }
@@ -601,12 +591,7 @@ pub(crate) fn decide_unconfigured_first_run(
     if !is_tty {
         return Ok(UnconfiguredFirstRunDecision::Fail);
     }
-    let run_now = prompt_yes_no(
-        "Run the setup wizard now?",
-        true,
-        reader,
-        writer,
-    )?;
+    let run_now = prompt_yes_no("Run the setup wizard now?", true, reader, writer)?;
     Ok(if run_now {
         UnconfiguredFirstRunDecision::RunWizardInline
     } else {
@@ -799,16 +784,12 @@ fn render_toml(cfg: &InitConfig) -> String {
     match cfg.provider {
         Provider::Anthropic => {
             if let Some(key) = &cfg.api_key {
-                out.push_str(&format!(
-                    "\n[anthropic]\napi_key = \"{key}\"\n"
-                ));
+                out.push_str(&format!("\n[anthropic]\napi_key = \"{key}\"\n"));
             }
         }
         Provider::OpenAi => {
             if let Some(key) = &cfg.api_key {
-                out.push_str(&format!(
-                    "\n[openai]\napi_key = \"{key}\"\n"
-                ));
+                out.push_str(&format!("\n[openai]\napi_key = \"{key}\"\n"));
             }
         }
         Provider::Ollama => {
@@ -835,10 +816,7 @@ fn render_toml(cfg: &InitConfig) -> String {
         }
     }
     // [storage] section
-    out.push_str(&format!(
-        "\n[storage]\npath = \"{}\"\n",
-        cfg.storage_path,
-    ));
+    out.push_str(&format!("\n[storage]\npath = \"{}\"\n", cfg.storage_path,));
 
     // Chapter Engram — `[embedding]` + `[memory] profile`. Shared with the
     // `--template` path (backlog #3) so both render this identically.
@@ -861,7 +839,10 @@ fn render_toml(cfg: &InitConfig) -> String {
     {
         out.push_str("\n[profile]\n");
         if let Some(name) = &cfg.profile_assistant_name {
-            out.push_str(&format!("assistant_name = \"{}\"\n", escape_toml_string(name)));
+            out.push_str(&format!(
+                "assistant_name = \"{}\"\n",
+                escape_toml_string(name)
+            ));
         }
         if let Some(who) = &cfg.profile_operator_profile {
             out.push_str(&format!(
@@ -1067,7 +1048,12 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
          # --------------------------------------------------------------------------\n",
     );
 
-    let mut emit = |name: &str, cron: &str, prompt: &str, enabled: bool, notify: &str, report_kind: Option<&str>| {
+    let mut emit = |name: &str,
+                    cron: &str,
+                    prompt: &str,
+                    enabled: bool,
+                    notify: &str,
+                    report_kind: Option<&str>| {
         out.push_str(&format!(
             "\n[[schedule]]\n\
              name = \"{}\"\n\
@@ -1091,17 +1077,52 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
         }
     };
 
-    emit("environment-review", "0 0 7 * * *", ROUTINE_ENVIRONMENT_REVIEW, core_enabled, "on_completed_non_empty", None);
-    emit("nightly-reflection", "0 0 2 * * *", ROUTINE_NIGHTLY_REFLECTION, core_enabled, "on_completed_non_empty", None);
-    emit("health-check", "0 0 */6 * * *", ROUTINE_HEALTH_CHECK, core_enabled, "on_failed", None);
+    emit(
+        "environment-review",
+        "0 0 7 * * *",
+        ROUTINE_ENVIRONMENT_REVIEW,
+        core_enabled,
+        "on_completed_non_empty",
+        None,
+    );
+    emit(
+        "nightly-reflection",
+        "0 0 2 * * *",
+        ROUTINE_NIGHTLY_REFLECTION,
+        core_enabled,
+        "on_completed_non_empty",
+        None,
+    );
+    emit(
+        "health-check",
+        "0 0 */6 * * *",
+        ROUTINE_HEALTH_CHECK,
+        core_enabled,
+        "on_failed",
+        None,
+    );
     // Chapter Ledger (#6 fix) — the weekly digest is now a deterministic report
     // built from the memory substrate, not an LLM turn that confabulates.
-    emit("weekly-digest", "0 0 8 * * 1", ROUTINE_WEEKLY_DIGEST, core_enabled, "on_completed_non_empty", Some("digest"));
+    emit(
+        "weekly-digest",
+        "0 0 8 * * 1",
+        ROUTINE_WEEKLY_DIGEST,
+        core_enabled,
+        "on_completed_non_empty",
+        Some("digest"),
+    );
     // Chapter Ledger (#6 grounding-gate) — trend-scan is generative web
     // synthesis, so it can't be made deterministic; instead gate its delivery
     // on `on_completed_grounded` — if the turn made NO tool calls (no real
     // search), its "findings" are fabricated and are never broadcast.
-    emit("trend-scan", "0 30 7 * * *", ROUTINE_TREND_SCAN, trend_enabled, "on_completed_grounded", None);
+    emit(
+        "trend-scan",
+        "0 30 7 * * *",
+        ROUTINE_TREND_SCAN,
+        trend_enabled,
+        "on_completed_grounded",
+        None,
+    );
 
     // 2026-07-04 self-learning dogfood (#2) — a fresh install never got a
     // `[[reflection_schedule]]`, so the whole Phase-70 reflection-pass
@@ -1148,11 +1169,7 @@ struct IdentityFields {
 }
 
 fn opt(s: String) -> Option<String> {
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Split a comma-separated wizard list into trimmed, non-empty items —
@@ -1242,11 +1259,7 @@ async fn run_identity_builder(
                 reader,
                 writer,
             )?,
-            never_do: prompt_line(
-                "Is there anything it should never do?\n> ",
-                reader,
-                writer,
-            )?,
+            never_do: prompt_line("Is there anything it should never do?\n> ", reader, writer)?,
         };
         w(writer, "\nDrafting your assistant's identity…")?;
         match draft_identity(provider.unwrap(), model, &answers).await {
@@ -1279,18 +1292,8 @@ fn review_draft(
     draft: DraftedProfile,
 ) -> Result<IdentityFields, String> {
     Ok(IdentityFields {
-        assistant_name: review_scalar(
-            reader,
-            writer,
-            "Name",
-            draft.assistant_name,
-        )?,
-        operator_profile: review_scalar(
-            reader,
-            writer,
-            "Who you are",
-            draft.operator_profile,
-        )?,
+        assistant_name: review_scalar(reader, writer, "Name", draft.assistant_name)?,
+        operator_profile: review_scalar(reader, writer, "Who you are", draft.operator_profile)?,
         communication_style: review_scalar(
             reader,
             writer,
@@ -1325,8 +1328,7 @@ fn review_scalar(
     drafted: Option<String>,
 ) -> Result<Option<String>, String> {
     let shown = drafted.as_deref().unwrap_or("(none)");
-    let input =
-        prompt_line(&format!("  {label} [{shown}]: "), reader, writer)?;
+    let input = prompt_line(&format!("  {label} [{shown}]: "), reader, writer)?;
     Ok(if input.is_empty() {
         drafted
     } else {
@@ -1386,8 +1388,7 @@ fn manual_identity(
         writer,
     )?);
 
-    let style_default =
-        defaults.communication_style.as_deref().unwrap_or("");
+    let style_default = defaults.communication_style.as_deref().unwrap_or("");
     let communication_style = opt(prompt_line(
         &format!(
             "  How should it talk to you? (e.g. 'warm but concise')\
@@ -1495,10 +1496,7 @@ async fn confirm_identity(
     defaults: &TemplateDefaults,
 ) -> Result<IdentityFields, String> {
     loop {
-        let mut fields = run_identity_builder(
-            reader, writer, provider, model, defaults,
-        )
-        .await?;
+        let mut fields = run_identity_builder(reader, writer, provider, model, defaults).await?;
         loop {
             write!(writer, "{}", render_identity_summary(&fields))
                 .map_err(|e| format!("write error: {e}"))?;
@@ -1516,13 +1514,9 @@ async fn confirm_identity(
             match choice {
                 0 => return Ok(fields),
                 1 => {
-                    writeln!(
-                        writer,
-                        "\nEdit each line (press Enter to keep):"
-                    )
-                    .map_err(|e| format!("write error: {e}"))?;
-                    fields =
-                        review_draft(reader, writer, fields.as_draft())?;
+                    writeln!(writer, "\nEdit each line (press Enter to keep):")
+                        .map_err(|e| format!("write error: {e}"))?;
+                    fields = review_draft(reader, writer, fields.as_draft())?;
                 }
                 // "Start over" → re-run the whole builder.
                 _ => break,
@@ -1640,17 +1634,14 @@ impl TemplateDefaults {
         }
     }
 
-    fn from_template(
-        template: &super::init_templates::Template,
-    ) -> Result<Self, String> {
-        let doc: toml_edit::DocumentMut = template.toml_content.parse().map_err(
-            |e: toml_edit::TomlError| {
-                format!(
-                    "template `{}` is not valid TOML: {e}",
-                    template.name,
-                )
-            },
-        )?;
+    fn from_template(template: &super::init_templates::Template) -> Result<Self, String> {
+        let doc: toml_edit::DocumentMut =
+            template
+                .toml_content
+                .parse()
+                .map_err(|e: toml_edit::TomlError| {
+                    format!("template `{}` is not valid TOML: {e}", template.name,)
+                })?;
 
         let provider = doc
             .get("agent")
@@ -1702,7 +1693,6 @@ impl TemplateDefaults {
             template_name: Some(template.name.clone()),
         })
     }
-
 }
 
 /// Phase 66 — splice the wizard's answers back into the template
@@ -1828,9 +1818,9 @@ fn template_declares_web_search(doc: &toml_edit::DocumentMut) -> bool {
     doc.get("mcp_server")
         .and_then(|item| item.as_array_of_tables())
         .map(|servers| {
-            servers.iter().any(|t| {
-                t.get("name").and_then(|v| v.as_str()) == Some("web-search")
-            })
+            servers
+                .iter()
+                .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("web-search"))
         })
         .unwrap_or(false)
 }
@@ -1956,7 +1946,8 @@ async fn collect_persona_seed(
             )?;
             if !name.is_empty() {
                 let trigger = prompt_line("    When does it apply? (trigger): ", reader, writer)?;
-                let procedure = prompt_line("    What should it do? (procedure): ", reader, writer)?;
+                let procedure =
+                    prompt_line("    What should it do? (procedure): ", reader, writer)?;
                 seed.skills.push(SeedSkillFields {
                     name,
                     trigger,
@@ -1978,25 +1969,34 @@ async fn collect_persona_seed(
 
 /// Print a compact summary of a drafted seed so the operator sees exactly what
 /// they're about to plant before confirming.
-fn render_seed_summary(
-    writer: &mut dyn IoWrite,
-    seed: &PersonaSeedFields,
-) -> Result<(), String> {
+fn render_seed_summary(writer: &mut dyn IoWrite, seed: &PersonaSeedFields) -> Result<(), String> {
     let w = |writer: &mut dyn IoWrite, s: &str| -> Result<(), String> {
         writeln!(writer, "{s}").map_err(|e| format!("write error: {e}"))
     };
     w(writer, "")?;
     if !seed.character_traits.is_empty() {
-        w(writer, &format!("    traits:      {}", seed.character_traits.join(", ")))?;
+        w(
+            writer,
+            &format!("    traits:      {}", seed.character_traits.join(", ")),
+        )?;
     }
     if !seed.communication_adaptations.is_empty() {
-        w(writer, &format!("    voice:       {}", seed.communication_adaptations.join(", ")))?;
+        w(
+            writer,
+            &format!(
+                "    voice:       {}",
+                seed.communication_adaptations.join(", ")
+            ),
+        )?;
     }
     if let Some(ctx) = seed.learned_context.first() {
         w(writer, &format!("    context:     {ctx}"))?;
     }
     if let Some(sk) = seed.skills.first() {
-        w(writer, &format!("    skill:       {} — {}", sk.name, sk.trigger))?;
+        w(
+            writer,
+            &format!("    skill:       {} — {}", sk.name, sk.trigger),
+        )?;
     }
     Ok(())
 }
@@ -2080,8 +2080,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         }
     };
 
-    writeln!(writer, "\nSelect a provider:")
-        .map_err(|e| format!("write error: {e}"))?;
+    writeln!(writer, "\nSelect a provider:").map_err(|e| format!("write error: {e}"))?;
     let choice = prompt_choice(
         "Provider",
         &provider_options,
@@ -2127,8 +2126,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
                     }
                 }
             } else {
-                writeln!(writer, "\nAvailable models:")
-                    .map_err(|e| format!("write error: {e}"))?;
+                writeln!(writer, "\nAvailable models:").map_err(|e| format!("write error: {e}"))?;
                 let opts: Vec<&str> = models.iter().map(|s| s.as_str()).collect();
                 // Default the cursor to the recommended model if it's already
                 // pulled; otherwise the first listed model.
@@ -2201,11 +2199,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let (access_level, fs_root) = match level_idx {
         1 => {
-            let r = prompt_line(
-                "Workspace directory: ",
-                &mut reader,
-                &mut writer,
-            )?;
+            let r = prompt_line("Workspace directory: ", &mut reader, &mut writer)?;
             let r = if r.is_empty() { default_fs } else { r };
             (AccessLevel::Workspace, r)
         }
@@ -2235,7 +2229,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
                 &mut reader,
                 &mut writer,
             )?;
-            (AccessLevel::Sandbox, if r.is_empty() { default_fs } else { r })
+            (
+                AccessLevel::Sandbox,
+                if r.is_empty() { default_fs } else { r },
+            )
         }
     };
     // Expanded levels require an explicit confirmation, then offer the
@@ -2287,12 +2284,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     }
 
     // 5b. Web search — bundled MCP server (Phase 46).
-    let enable_web_search = prompt_yes_no(
-        "Enable web search?",
-        true,
-        &mut reader,
-        &mut writer,
-    )?;
+    let enable_web_search = prompt_yes_no("Enable web search?", true, &mut reader, &mut writer)?;
 
     // 5c. Profile bootstrap (Phase 57, PRODUCT.md P13). Q4(c)
     // resolution at sign-off: three short prompts seeding the
@@ -2304,8 +2296,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // constructed for the optional LLM-assisted draft; `None`
     // falls back to the guided manual prompts (local-first — the
     // builder never requires an LLM).
-    let draft_provider =
-        build_wizard_provider(provider, api_key.as_deref());
+    let draft_provider = build_wizard_provider(provider, api_key.as_deref());
     let identity = confirm_identity(
         &mut reader,
         &mut writer,
@@ -2322,8 +2313,14 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
 
     // Chapter Engram — set up the embedding provider so semantic memory works
     // from first boot (pulls the local embedding model on the Ollama path).
-    let embedding =
-        decide_embedding(provider, api_key.as_deref(), base_url, &mut reader, &mut writer).await?;
+    let embedding = decide_embedding(
+        provider,
+        api_key.as_deref(),
+        base_url,
+        &mut reader,
+        &mut writer,
+    )
+    .await?;
 
     // 6. Render + write.
     let cfg = InitConfig {
@@ -2348,7 +2345,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // answers into the template document so the role declarations,
     // MCP servers, commented sections, and structure all survive.
     // Otherwise use the existing minimal `render_toml` synthesis.
-    let mut toml = match (template_defaults.template_doc, &template_defaults.template_name) {
+    let mut toml = match (
+        template_defaults.template_doc,
+        &template_defaults.template_name,
+    ) {
         (Some(doc), Some(name)) => render_with_template(&cfg, name, doc),
         _ => render_toml(&cfg),
     };
@@ -2463,15 +2463,12 @@ mod tests {
             &self,
             _request: aivyx_llm::LlmRequest<'_>,
             _cancel: &aivyx_core::CancellationToken,
-        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError>
-        {
+        ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
             match &self.reply {
                 Some(text) => Ok(Box::new(FakeDraftStream {
                     text: Some(text.clone()),
                 })),
-                None => Err(aivyx_llm::LlmError::Config(
-                    "offline".into(),
-                )),
+                None => Err(aivyx_llm::LlmError::Config("offline".into())),
             }
         }
     }
@@ -2482,16 +2479,10 @@ mod tests {
     impl aivyx_llm::LlmStream for FakeDraftStream {
         async fn next_event(
             &mut self,
-        ) -> Result<
-            Option<aivyx_llm::LlmStreamEvent>,
-            aivyx_llm::LlmError,
-        > {
+        ) -> Result<Option<aivyx_llm::LlmStreamEvent>, aivyx_llm::LlmError> {
             Ok(None)
         }
-        async fn finish(
-            self: Box<Self>,
-        ) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError>
-        {
+        async fn finish(self: Box<Self>) -> Result<aivyx_llm::LlmStepEnd, aivyx_llm::LlmError> {
             Ok(aivyx_llm::LlmStepEnd::FinalMessage {
                 text: self.text.unwrap_or_default(),
                 usage: aivyx_llm::LlmUsage::default(),
@@ -2531,10 +2522,7 @@ mod tests {
             Some("warm but concise")
         );
         assert_eq!(fields.primary_use_cases, vec!["coding", "review"]);
-        assert_eq!(
-            fields.behavioral_preferences,
-            vec!["write tests first"]
-        );
+        assert_eq!(fields.behavioral_preferences, vec!["write tests first"]);
         assert_eq!(
             fields.behavioral_constraints,
             vec!["never force push", "never commit secrets"]
@@ -2542,8 +2530,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identity_builder_draft_path_drafts_then_keeps_on_review()
-    {
+    async fn identity_builder_draft_path_drafts_then_keeps_on_review() {
         let draft = "ASSISTANT_NAME: Sage\n\
             OPERATOR_PROFILE: a founder\n\
             COMMUNICATION_STYLE: warm\n\
@@ -2553,9 +2540,7 @@ mod tests {
         let provider = fake_provider(Some(draft));
         // offer=yes (Enter), 4 conversation answers, 6 review
         // lines (all Enter → keep the drafted value).
-        let input =
-            b"\na calm partner\nconfidant\nwarm\nnothing\n\n\n\n\n\n\n"
-                .to_vec();
+        let input = b"\na calm partner\nconfidant\nwarm\nnothing\n\n\n\n\n\n\n".to_vec();
         let mut reader = std::io::Cursor::new(input);
         let mut writer: Vec<u8> = Vec::new();
         let fields = run_identity_builder(
@@ -2643,8 +2628,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fields.assistant_name.as_deref(), Some("Sage"));
-        assert!(String::from_utf8_lossy(&writer)
-            .contains("Meet your assistant"));
+        assert!(String::from_utf8_lossy(&writer).contains("Meet your assistant"));
     }
 
     #[tokio::test]
@@ -2655,7 +2639,7 @@ mod tests {
             2\n\
             Mira\n\n\n\n\n\n\
             1\n"
-            .to_vec();
+        .to_vec();
         let mut reader = std::io::Cursor::new(input);
         let mut writer: Vec<u8> = Vec::new();
         let fields = confirm_identity(
@@ -2684,20 +2668,15 @@ mod tests {
         };
         // Keep name (Enter), replace operator_profile, keep style,
         // replace use-cases, keep prefs (Enter), keep constraints.
-        let input =
-            b"\na founder\n\nplanning, email\n\n\n".to_vec();
+        let input = b"\na founder\n\nplanning, email\n\n\n".to_vec();
         let mut reader = std::io::Cursor::new(input);
         let mut writer: Vec<u8> = Vec::new();
-        let fields =
-            review_draft(&mut reader, &mut writer, draft).unwrap();
+        let fields = review_draft(&mut reader, &mut writer, draft).unwrap();
         assert_eq!(fields.assistant_name.as_deref(), Some("Sage"));
         assert_eq!(fields.operator_profile.as_deref(), Some("a founder"));
         assert_eq!(fields.communication_style.as_deref(), Some("warm"));
         assert_eq!(fields.primary_use_cases, vec!["planning", "email"]);
-        assert_eq!(
-            fields.behavioral_constraints,
-            vec!["never force push"]
-        );
+        assert_eq!(fields.behavioral_constraints, vec!["never force push"]);
     }
 
     #[test]
@@ -2710,11 +2689,10 @@ mod tests {
             ]
         }"#;
         let names = parse_model_names(json).unwrap();
-        assert_eq!(names, vec![
-            "codellama:7b",
-            "llama3.2:latest",
-            "mistral:latest",
-        ]);
+        assert_eq!(
+            names,
+            vec!["codellama:7b", "llama3.2:latest", "mistral:latest",]
+        );
     }
 
     #[test]
@@ -2759,7 +2737,9 @@ mod tests {
         // First prompt ("Seed a starting personality now?") → default No.
         let mut input = Cursor::new(b"\n" as &[u8]);
         let mut output = Vec::new();
-        let seed = collect_persona_seed(&mut input, &mut output, None, "m").await.unwrap();
+        let seed = collect_persona_seed(&mut input, &mut output, None, "m")
+            .await
+            .unwrap();
         assert!(!seed.has_content());
     }
 
@@ -2770,7 +2750,9 @@ mod tests {
         let script = "y\npragmatic, precise\noperator builds Aivyx\ny\nrust-review\nwhen reviewing Rust\ncheck unwraps\n";
         let mut input = Cursor::new(script.as_bytes());
         let mut output = Vec::new();
-        let seed = collect_persona_seed(&mut input, &mut output, None, "m").await.unwrap();
+        let seed = collect_persona_seed(&mut input, &mut output, None, "m")
+            .await
+            .unwrap();
         assert_eq!(seed.character_traits, vec!["pragmatic", "precise"]);
         assert_eq!(seed.learned_context, vec!["operator builds Aivyx"]);
         assert_eq!(seed.skills.len(), 1);
@@ -2785,7 +2767,9 @@ mod tests {
         // y → seed, but every field left blank, and decline the skill.
         let mut input = Cursor::new(b"y\n\n\nn\n" as &[u8]);
         let mut output = Vec::new();
-        let seed = collect_persona_seed(&mut input, &mut output, None, "m").await.unwrap();
+        let seed = collect_persona_seed(&mut input, &mut output, None, "m")
+            .await
+            .unwrap();
         // No content → no genesis milestone → no [persona_seed] section emitted.
         assert!(!seed.has_content());
     }
@@ -2908,8 +2892,7 @@ mod tests {
     fn decide_service_install_skips_the_offer_when_already_installed() {
         let mut input = Cursor::new(b"" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_service_install(true, Some(true), &mut input, &mut output).unwrap();
+        let decision = decide_service_install(true, Some(true), &mut input, &mut output).unwrap();
         assert!(matches!(
             decision,
             ServiceInstallDecision::AlreadyInstalled { active: Some(true) }
@@ -2922,8 +2905,7 @@ mod tests {
     fn decide_service_install_declined_falls_back() {
         let mut input = Cursor::new(b"n\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
         assert!(matches!(decision, ServiceInstallDecision::Declined));
     }
 
@@ -2931,8 +2913,7 @@ mod tests {
     fn decide_service_install_yes_then_no_web_ui() {
         let mut input = Cursor::new(b"y\nn\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
         assert!(matches!(
             decision,
             ServiceInstallDecision::Install { web_ui: false }
@@ -2943,8 +2924,7 @@ mod tests {
     fn decide_service_install_yes_then_yes_web_ui() {
         let mut input = Cursor::new(b"y\ny\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
         assert!(matches!(
             decision,
             ServiceInstallDecision::Install { web_ui: true }
@@ -2958,8 +2938,7 @@ mod tests {
         // which defaults false.
         let mut input = Cursor::new(b"\n\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_service_install(false, None, &mut input, &mut output).unwrap();
+        let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
         assert!(matches!(
             decision,
             ServiceInstallDecision::Install { web_ui: false }
@@ -2971,8 +2950,7 @@ mod tests {
         let mut input = Cursor::new(b"n\n" as &[u8]);
         let mut output = Vec::new();
         let proceed =
-            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output)
-                .unwrap();
+            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output).unwrap();
         assert!(!proceed);
         let written = String::from_utf8_lossy(&output);
         assert!(
@@ -2986,8 +2964,7 @@ mod tests {
         let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
         let proceed =
-            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output)
-                .unwrap();
+            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output).unwrap();
         assert!(proceed);
     }
 
@@ -2996,17 +2973,18 @@ mod tests {
         let mut input = Cursor::new(b"\n" as &[u8]);
         let mut output = Vec::new();
         let proceed =
-            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output)
-                .unwrap();
-        assert!(!proceed, "default must be No — continuing is the riskier choice");
+            decide_storage_collision("/tmp/fake-store.redb", &mut input, &mut output).unwrap();
+        assert!(
+            !proceed,
+            "default must be No — continuing is the riskier choice"
+        );
     }
 
     #[test]
     fn decide_unconfigured_first_run_fails_immediately_when_not_a_tty() {
         let mut input = Cursor::new(b"" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_unconfigured_first_run(false, &mut input, &mut output).unwrap();
+        let decision = decide_unconfigured_first_run(false, &mut input, &mut output).unwrap();
         assert!(matches!(decision, UnconfiguredFirstRunDecision::Fail));
         // No prompt was printed -- nothing was asked when there's no
         // one to ask.
@@ -3017,8 +2995,7 @@ mod tests {
     fn decide_unconfigured_first_run_yes_runs_the_wizard() {
         let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
+        let decision = decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
         assert!(matches!(
             decision,
             UnconfiguredFirstRunDecision::RunWizardInline
@@ -3029,8 +3006,7 @@ mod tests {
     fn decide_unconfigured_first_run_no_fails() {
         let mut input = Cursor::new(b"n\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
+        let decision = decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
         assert!(matches!(decision, UnconfiguredFirstRunDecision::Fail));
     }
 
@@ -3038,8 +3014,7 @@ mod tests {
     fn decide_unconfigured_first_run_defaults_to_yes_on_bare_enter() {
         let mut input = Cursor::new(b"\n" as &[u8]);
         let mut output = Vec::new();
-        let decision =
-            decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
+        let decision = decide_unconfigured_first_run(true, &mut input, &mut output).unwrap();
         assert!(matches!(
             decision,
             UnconfiguredFirstRunDecision::RunWizardInline
@@ -3197,9 +3172,15 @@ mod tests {
         assert!(toml.contains("[embedding]"), "{toml}");
         assert!(toml.contains("model = \"nomic-embed-text\""), "{toml}");
         assert!(toml.contains("dimensions = 768"), "{toml}");
-        assert!(toml.contains("base_url = \"http://localhost:11434\""), "{toml}");
+        assert!(
+            toml.contains("base_url = \"http://localhost:11434\""),
+            "{toml}"
+        );
         // Local needs no key.
-        assert!(!toml.contains("api_key"), "local embedding renders no key: {toml}");
+        assert!(
+            !toml.contains("api_key"),
+            "local embedding renders no key: {toml}"
+        );
         assert!(toml.contains("[memory]"), "{toml}");
         assert!(toml.contains("profile = \"smart\""), "{toml}");
     }
@@ -3223,7 +3204,10 @@ mod tests {
         });
         let toml = render_toml(&cfg);
         assert!(toml.contains("[embedding]"), "{toml}");
-        assert!(toml.contains("model = \"text-embedding-3-small\""), "{toml}");
+        assert!(
+            toml.contains("model = \"text-embedding-3-small\""),
+            "{toml}"
+        );
         assert!(toml.contains("dimensions = 1536"), "{toml}");
         assert!(toml.contains("api_key = \"sk-embed\""), "{toml}");
         assert!(toml.contains("profile = \"smart\""), "{toml}");
@@ -3266,15 +3250,16 @@ mod tests {
             api_key: None,
         });
         let toml = render_toml(&cfg);
-        let loaded = aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
-            toml_path: Some(write_temp_toml(&toml, "engram-rt")),
-            require_api_key: false,
-            require_telegram_token: false,
-            require_discord_token: false,
-            require_slack_tokens: false,
-            role_override: None,
-        })
-        .expect("generated toml loads");
+        let loaded =
+            aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
+                toml_path: Some(write_temp_toml(&toml, "engram-rt")),
+                require_api_key: false,
+                require_telegram_token: false,
+                require_discord_token: false,
+                require_slack_tokens: false,
+                role_override: None,
+            })
+            .expect("generated toml loads");
         assert_eq!(loaded.memory_profile, aivyx_config::MemoryProfile::Smart);
         let emb = loaded.embedding.expect("[embedding] parsed");
         assert_eq!(emb.model, "nomic-embed-text");
@@ -3323,7 +3308,9 @@ mod tests {
                 .iter()
                 .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
                 .unwrap_or_else(|| panic!("schedule {name} present"));
-            t.get("enabled").and_then(|v| v.as_bool()).expect("enabled bool")
+            t.get("enabled")
+                .and_then(|v| v.as_bool())
+                .expect("enabled bool")
         };
         let count = |toml: &str| -> usize {
             let doc: DocumentMut = toml.parse().unwrap();
@@ -3331,8 +3318,7 @@ mod tests {
         };
 
         // Ollama + web search: all five written; core + trend-scan enabled.
-        let cfg =
-            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
         let toml = render_default_schedules(&cfg);
         assert_eq!(count(&toml), 5);
         assert!(enabled_of(&toml, "environment-review"));
@@ -3340,21 +3326,16 @@ mod tests {
         assert!(enabled_of(&toml, "trend-scan"));
 
         // Ollama, no web search: core enabled, opt-in trend-scan disabled.
-        let cfg =
-            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", false);
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", false);
         let toml = render_default_schedules(&cfg);
         assert!(enabled_of(&toml, "environment-review"));
-        assert!(!enabled_of(&toml, "trend-scan"), "trend-scan needs web search");
+        assert!(
+            !enabled_of(&toml, "trend-scan"),
+            "trend-scan needs web search"
+        );
 
         // Cloud: all five written, every one disabled (discoverable, cost-aware).
-        let cfg = init_config_no_profile(
-            Provider::Anthropic,
-            "claude",
-            Some("k"),
-            "s",
-            "/r",
-            true,
-        );
+        let cfg = init_config_no_profile(Provider::Anthropic, "claude", Some("k"), "s", "/r", true);
         let toml = render_default_schedules(&cfg);
         assert_eq!(count(&toml), 5);
         for name in [
@@ -3364,7 +3345,10 @@ mod tests {
             "weekly-digest",
             "trend-scan",
         ] {
-            assert!(!enabled_of(&toml, name), "cloud routine {name} must be disabled");
+            assert!(
+                !enabled_of(&toml, name),
+                "cloud routine {name} must be disabled"
+            );
         }
     }
 
@@ -3374,8 +3358,7 @@ mod tests {
     #[test]
     fn default_reflection_schedule_is_planted() {
         use toml_edit::DocumentMut;
-        let cfg =
-            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
         let toml = render_default_schedules(&cfg);
         let doc: DocumentMut = toml.parse().unwrap();
         let rs = doc["reflection_schedule"].as_array_of_tables().unwrap();
@@ -3390,19 +3373,16 @@ mod tests {
         );
 
         // Cloud: written but disabled (cost-aware), same as the routines.
-        let cfg = init_config_no_profile(
-            Provider::Anthropic,
-            "claude",
-            Some("k"),
-            "s",
-            "/r",
-            true,
-        );
+        let cfg = init_config_no_profile(Provider::Anthropic, "claude", Some("k"), "s", "/r", true);
         let toml = render_default_schedules(&cfg);
         let doc: DocumentMut = toml.parse().unwrap();
         let rs = doc["reflection_schedule"].as_array_of_tables().unwrap();
         assert_eq!(
-            rs.iter().next().unwrap().get("enabled").and_then(|v| v.as_bool()),
+            rs.iter()
+                .next()
+                .unwrap()
+                .get("enabled")
+                .and_then(|v| v.as_bool()),
             Some(false),
             "cloud reflection must be written disabled"
         );
@@ -3419,19 +3399,37 @@ mod tests {
         // weekly-digest: read-first + never-invent + say-nothing-when-empty.
         let d = ROUTINE_WEEKLY_DIGEST.to_lowercase();
         assert!(d.contains("first read"), "digest must read before writing");
-        assert!(d.contains("journal") && d.contains("memor"), "digest must ground in memory + journal");
+        assert!(
+            d.contains("journal") && d.contains("memor"),
+            "digest must ground in memory + journal"
+        );
         assert!(d.contains("never invent"), "digest must forbid invention");
-        assert!(d.contains("nothing notable to report yet"), "digest must have an explicit empty-case");
+        assert!(
+            d.contains("nothing notable to report yet"),
+            "digest must have an explicit empty-case"
+        );
 
         // trend-scan: must actually search; never fabricate findings/sources.
         let t = ROUTINE_TREND_SCAN.to_lowercase();
-        assert!(t.contains("must actually search the web"), "trend-scan must force a real search");
-        assert!(t.contains("never fabricate"), "trend-scan must forbid fabricated findings");
+        assert!(
+            t.contains("must actually search the web"),
+            "trend-scan must force a real search"
+        );
+        assert!(
+            t.contains("never fabricate"),
+            "trend-scan must forbid fabricated findings"
+        );
 
         // nightly-reflection: grounded too (read-first + don't invent).
         let r = ROUTINE_NIGHTLY_REFLECTION.to_lowercase();
-        assert!(r.contains("first read"), "reflection must read before reflecting");
-        assert!(r.contains("never invent"), "reflection must forbid invention");
+        assert!(
+            r.contains("first read"),
+            "reflection must read before reflecting"
+        );
+        assert!(
+            r.contains("never invent"),
+            "reflection must forbid invention"
+        );
     }
 
     /// Chapter Ledger (#6 fix) — the weekly-digest routine is rendered as a
@@ -3441,8 +3439,7 @@ mod tests {
     #[test]
     fn weekly_digest_is_a_deterministic_report() {
         use toml_edit::DocumentMut;
-        let cfg =
-            init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
         let toml = render_default_schedules(&cfg);
         let doc: DocumentMut = toml.parse().unwrap();
         let scheds = doc["schedule"].as_array_of_tables().unwrap();
@@ -3507,9 +3504,18 @@ mod tests {
         };
         let toml = render_toml(&cfg);
         assert!(toml.contains("[persona_seed]"), "{toml}");
-        assert!(toml.contains("communication_adaptations = [\"leads with code\"]"), "{toml}");
-        assert!(toml.contains("character_traits = [\"pragmatic\", \"precise\"]"), "{toml}");
-        assert!(toml.contains("learned_context = [\"operator builds Aivyx\"]"), "{toml}");
+        assert!(
+            toml.contains("communication_adaptations = [\"leads with code\"]"),
+            "{toml}"
+        );
+        assert!(
+            toml.contains("character_traits = [\"pragmatic\", \"precise\"]"),
+            "{toml}"
+        );
+        assert!(
+            toml.contains("learned_context = [\"operator builds Aivyx\"]"),
+            "{toml}"
+        );
         assert!(toml.contains("[[persona_seed.skill]]"), "{toml}");
         assert!(toml.contains("name = \"rust-review\""), "{toml}");
 
@@ -3621,7 +3627,8 @@ mod tests {
         // Chapter P — a pull against an unreachable Ollama returns a clear
         // Err (surfaced by the wizard / `doctor`), not a panic or a hang.
         let mut writer: Vec<u8> = Vec::new();
-        let res = pull_ollama_model("http://127.0.0.1:1", RECOMMENDED_LOCAL_MODEL, &mut writer).await;
+        let res =
+            pull_ollama_model("http://127.0.0.1:1", RECOMMENDED_LOCAL_MODEL, &mut writer).await;
         assert!(res.is_err(), "unreachable base_url must error");
     }
 
@@ -3697,7 +3704,10 @@ mod tests {
         assert!(toml.contains("level = \"workspace\""));
         assert!(toml.contains("root = \"/home/user/project\""));
         assert!(toml.contains("confirm_destructive = true"));
-        assert!(!toml.contains("[fs]"), "workspace carries its root via [access]");
+        assert!(
+            !toml.contains("[fs]"),
+            "workspace carries its root via [access]"
+        );
     }
 
     // -- Phase 46: web search in init ------------------------------------
@@ -3760,17 +3770,13 @@ mod tests {
     fn render_toml_emits_all_six_profile_fields() {
         let cfg = InitConfig {
             profile_assistant_name: Some("Mira".into()),
-            profile_operator_profile: Some(
-                "a senior Rust engineer who values directness".into(),
-            ),
+            profile_operator_profile: Some("a senior Rust engineer who values directness".into()),
             profile_communication_style: Some("warm but concise".into()),
             profile_primary_use_cases: vec![
                 "systems programming".into(),
                 "personal-finance analysis".into(),
             ],
-            profile_behavioral_preferences: vec![
-                "prefer integration tests over mocks".into(),
-            ],
+            profile_behavioral_preferences: vec!["prefer integration tests over mocks".into()],
             profile_behavioral_constraints: vec![
                 "never autonomously commit code".into(),
                 "always confirm destructive shell commands".into(),
@@ -3787,34 +3793,27 @@ mod tests {
         let toml = render_toml(&cfg);
         // All six fields present.
         assert!(toml.contains("assistant_name = \"Mira\""));
-        assert!(toml.contains(
-            "operator_profile = \"a senior Rust engineer who values directness\""
-        ));
+        assert!(
+            toml.contains("operator_profile = \"a senior Rust engineer who values directness\"")
+        );
         assert!(toml.contains("communication_style = \"warm but concise\""));
         assert!(toml.contains(
             "primary_use_cases = [\"systems programming\", \
              \"personal-finance analysis\"]"
         ));
-        assert!(toml.contains(
-            "behavioral_preferences = [\"prefer integration tests over mocks\"]"
-        ));
+        assert!(
+            toml.contains("behavioral_preferences = [\"prefer integration tests over mocks\"]")
+        );
         assert!(toml.contains(
             "behavioral_constraints = [\"never autonomously commit code\", \
              \"always confirm destructive shell commands\"]"
         ));
         // Round-trips as valid TOML — all six survive a parse.
-        let parsed: toml_edit::DocumentMut =
-            toml.parse().expect("valid TOML");
+        let parsed: toml_edit::DocumentMut = toml.parse().expect("valid TOML");
         let p = &parsed["profile"];
         assert_eq!(p["assistant_name"].as_str(), Some("Mira"));
-        assert_eq!(
-            p["primary_use_cases"].as_array().unwrap().len(),
-            2
-        );
-        assert_eq!(
-            p["behavioral_constraints"].as_array().unwrap().len(),
-            2
-        );
+        assert_eq!(p["primary_use_cases"].as_array().unwrap().len(), 2);
+        assert_eq!(p["behavioral_constraints"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -3847,11 +3846,10 @@ mod tests {
             ".",
             false,
         );
-        let doc: toml_edit::DocumentMut =
-            "[agent]\nprovider = \"ollama\"\nmodel = \"x\"\n\
+        let doc: toml_edit::DocumentMut = "[agent]\nprovider = \"ollama\"\nmodel = \"x\"\n\
              [fs]\nroot = \".\"\n[storage]\npath = \"s.redb\"\n"
-                .parse()
-                .unwrap();
+            .parse()
+            .unwrap();
         let out = render_with_template(&cfg, "coder", doc);
         assert!(out.contains("[sandbox]"));
         assert!(out.contains("default_backend = \"auto\""));
@@ -3934,7 +3932,10 @@ mod tests {
         assert_eq!(out.matches("[memory]").count(), 1);
         assert_eq!(out.matches("[persona_seed]").count(), 1);
         assert_eq!(out.matches("name = \"web-search\"").count(), 1);
-        assert!(out.contains("model = \"custom-embed\""), "template embed kept");
+        assert!(
+            out.contains("model = \"custom-embed\""),
+            "template embed kept"
+        );
         assert!(out.contains("profile = \"lite\""), "template profile kept");
         out.parse::<toml_edit::DocumentMut>()
             .expect("template output is valid TOML");
@@ -3944,14 +3945,7 @@ mod tests {
     fn template_path_skips_engram_when_no_embedding_resolved() {
         // No embedding provider resolved → no [embedding]/[memory] (matches
         // render_toml: the profile would be inert anyway).
-        let cfg = init_config_no_profile(
-            Provider::Ollama,
-            "qwen3:8b",
-            None,
-            "s.redb",
-            ".",
-            false,
-        );
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s.redb", ".", false);
         let out = render_with_template(&cfg, "coder", minimal_template_doc());
         assert!(!out.contains("[embedding]"));
         assert!(!out.contains("[persona_seed]"));
@@ -4010,9 +4004,7 @@ mod tests {
         // generated TOML still parses cleanly.
         let cfg = InitConfig {
             profile_assistant_name: Some("Quote\"y".into()),
-            profile_communication_style: Some(
-                "with \"emphasis\" sometimes".into(),
-            ),
+            profile_communication_style: Some("with \"emphasis\" sometimes".into()),
             profile_primary_use_cases: vec!["Path C:\\\\Users\\code".into()],
             ..init_config_no_profile(
                 Provider::Ollama,

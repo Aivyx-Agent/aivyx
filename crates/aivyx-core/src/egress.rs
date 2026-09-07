@@ -46,22 +46,33 @@ pub struct EgressPolicy {
 impl Default for EgressPolicy {
     /// The default posture: SSRF guard on, no host restriction.
     fn default() -> Self {
-        EgressPolicy { block_private: true, allow_hosts: Vec::new() }
+        EgressPolicy {
+            block_private: true,
+            allow_hosts: Vec::new(),
+        }
     }
 }
 
 impl EgressPolicy {
     pub fn new(block_private: bool, allow_hosts: Vec<String>) -> Self {
         // Normalize allow-list to lowercase for case-insensitive host match.
-        let allow_hosts =
-            allow_hosts.into_iter().map(|h| h.trim().to_ascii_lowercase()).collect();
-        EgressPolicy { block_private, allow_hosts }
+        let allow_hosts = allow_hosts
+            .into_iter()
+            .map(|h| h.trim().to_ascii_lowercase())
+            .collect();
+        EgressPolicy {
+            block_private,
+            allow_hosts,
+        }
     }
 
     /// A fully-permissive policy (SSRF guard off, no allow-list) — the escape
     /// hatch when the operator sets `allow_private_egress` and no host list.
     pub fn permissive() -> Self {
-        EgressPolicy { block_private: false, allow_hosts: Vec::new() }
+        EgressPolicy {
+            block_private: false,
+            allow_hosts: Vec::new(),
+        }
     }
 
     /// Classify a URL. `Some(reason)` ⇒ the request must be refused. Pure.
@@ -106,9 +117,9 @@ impl EgressPolicy {
     /// (`api.github.com` is allowed by `github.com`, but `evilgithub.com`
     /// is not).
     fn host_allowed(&self, host_l: &str) -> bool {
-        self.allow_hosts.iter().any(|a| {
-            host_l == a || host_l.ends_with(&format!(".{a}"))
-        })
+        self.allow_hosts
+            .iter()
+            .any(|a| host_l == a || host_l.ends_with(&format!(".{a}")))
     }
 }
 
@@ -151,10 +162,7 @@ pub(crate) fn filter_public_addrs(
 pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -264,9 +272,18 @@ mod tests {
 
     #[test]
     fn host_extraction_handles_userinfo_ports_ipv6() {
-        assert_eq!(host_of("https://user:pw@example.com:443/p").as_deref(), Some("example.com"));
-        assert_eq!(host_of("http://[2606:2800:220:1::]:80/").as_deref(), Some("2606:2800:220:1::"));
-        assert_eq!(host_of("https://example.com").as_deref(), Some("example.com"));
+        assert_eq!(
+            host_of("https://user:pw@example.com:443/p").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            host_of("http://[2606:2800:220:1::]:80/").as_deref(),
+            Some("2606:2800:220:1::")
+        );
+        assert_eq!(
+            host_of("https://example.com").as_deref(),
+            Some("example.com")
+        );
         assert_eq!(host_of("not a url"), None);
     }
 }

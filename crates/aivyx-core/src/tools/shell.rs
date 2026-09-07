@@ -91,7 +91,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 use aivyx_capability::Scope;
@@ -251,7 +251,11 @@ fn sensitive_command_hit(
 ) -> Option<(String, String)> {
     let home = std::env::var("HOME").ok();
     for raw in cmd.split(|c: char| {
-        c.is_whitespace() || matches!(c, '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '"' | '\'' | '=')
+        c.is_whitespace()
+            || matches!(
+                c,
+                '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '"' | '\'' | '='
+            )
     }) {
         if raw.is_empty() {
             continue;
@@ -314,8 +318,7 @@ fn lexical_resolve(cwd_root: &Path, input_cwd: &Path) -> Option<PathBuf> {
 /// `required_scope` when the input is malformed or escapes the
 /// sandbox lexically. Same shape as `tools::fs`'s deny helper.
 fn deny_scope() -> Scope {
-    Scope::parse("shell.exec:cwd:/aivyx/__deny__/invalid-input")
-        .expect("deny scope must parse")
+    Scope::parse("shell.exec:cwd:/aivyx/__deny__/invalid-input").expect("deny scope must parse")
 }
 
 /// Build the advertised nested input schema for `shell.exec`. The
@@ -327,9 +330,7 @@ fn deny_scope() -> Scope {
 /// well-behaved Unix commands (locale, terminal, path lookup).
 /// All other env vars from the daemon process are stripped via
 /// `env_clear()`. Phase 42.
-const SAFE_ENV_DEFAULTS: &[&str] = &[
-    "PATH", "HOME", "USER", "LANG", "TERM",
-];
+const SAFE_ENV_DEFAULTS: &[&str] = &["PATH", "HOME", "USER", "LANG", "TERM"];
 
 fn shell_exec_input_schema_value() -> Value {
     json!({
@@ -406,7 +407,10 @@ fn input_timeout_ms(input: &Value) -> u64 {
 /// are silently skipped — the schema enforces string values, so
 /// non-string values only appear if the caller bypasses validation.
 fn input_env(input: &Value) -> Vec<(String, String)> {
-    let Some(env_obj) = input.get("args").and_then(|a| a.get("env")).and_then(Value::as_object)
+    let Some(env_obj) = input
+        .get("args")
+        .and_then(|a| a.get("env"))
+        .and_then(Value::as_object)
     else {
         return Vec::new();
     };
@@ -475,8 +479,7 @@ impl Tool for ShellExecTool {
             _ => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "input must have a non-empty string `cmd` field"
-                        .to_string(),
+                    detail: "input must have a non-empty string `cmd` field".to_string(),
                 });
             }
         };
@@ -605,69 +608,71 @@ impl Tool for ShellExecTool {
         // signal the entire process group.
         let child_pid = child.id();
 
-        let output = match tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            child.wait_with_output(),
-        )
-        .await
-        {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!("wait failed: {e}"),
-                });
-            }
-            Err(_elapsed) => {
-                // Phase 42 — graceful process-group shutdown:
-                // 1. SIGTERM the entire process group (child +
-                //    grandchildren). This lets processes flush
-                //    buffers and clean up temp files.
-                // 2. Wait 2 seconds for graceful exit.
-                // 3. SIGKILL the process group if still alive.
-                //
-                // The child's PID equals its PGID because we
-                // called process_group(0). child_pid is None
-                // only if the child exited before we read it,
-                // which would be surprising here (we just timed
-                // out waiting for it), but we handle it.
-                if let Some(pid) = child_pid {
-                    let pgid = pid as i32;
-                    // SIGTERM the process group.
-                    // Safety: killpg is a standard POSIX call.
-                    // pgid is always positive (u32 -> i32 of a
-                    // real PID). A stale pgid (process already
-                    // exited) returns ESRCH, which we ignore.
-                    unsafe { libc::killpg(pgid, libc::SIGTERM); }
-
-                    // Give the group 2 seconds to exit gracefully,
-                    // then SIGKILL. We spawn a brief background
-                    // reaper — the timeout future already dropped
-                    // the child handle, so we can't await it here.
-                    // Instead we wait synchronously (non-blocking
-                    // for already-exited processes) via killpg
-                    // after a sleep.
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                        // If the group is still alive, force-kill.
-                        unsafe { libc::killpg(pgid, libc::SIGKILL); }
+        let output =
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
+                .await
+            {
+                Ok(Ok(out)) => out,
+                Ok(Err(e)) => {
+                    return ToolOutcome::Failed(AivyxError::Tool {
+                        tool: self.id,
+                        detail: format!("wait failed: {e}"),
                     });
                 }
+                Err(_elapsed) => {
+                    // Phase 42 — graceful process-group shutdown:
+                    // 1. SIGTERM the entire process group (child +
+                    //    grandchildren). This lets processes flush
+                    //    buffers and clean up temp files.
+                    // 2. Wait 2 seconds for graceful exit.
+                    // 3. SIGKILL the process group if still alive.
+                    //
+                    // The child's PID equals its PGID because we
+                    // called process_group(0). child_pid is None
+                    // only if the child exited before we read it,
+                    // which would be surprising here (we just timed
+                    // out waiting for it), but we handle it.
+                    if let Some(pid) = child_pid {
+                        let pgid = pid as i32;
+                        // SIGTERM the process group.
+                        // Safety: killpg is a standard POSIX call.
+                        // pgid is always positive (u32 -> i32 of a
+                        // real PID). A stale pgid (process already
+                        // exited) returns ESRCH, which we ignore.
+                        unsafe {
+                            libc::killpg(pgid, libc::SIGTERM);
+                        }
 
-                return ToolOutcome::Completed {
-                    output: json!({
-                        "cmd": cmd,
-                        "cwd": canonical_cwd.display().to_string(),
-                        "stdout": "",
-                        "stderr": "",
-                        "exit_code": -1_i64,
-                        "timed_out": true,
-                        "timeout_ms": timeout_ms,
-                    }),
-                    verified: Verification::NotApplicable,
-                };
-            }
-        };
+                        // Give the group 2 seconds to exit gracefully,
+                        // then SIGKILL. We spawn a brief background
+                        // reaper — the timeout future already dropped
+                        // the child handle, so we can't await it here.
+                        // Instead we wait synchronously (non-blocking
+                        // for already-exited processes) via killpg
+                        // after a sleep.
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            // If the group is still alive, force-kill.
+                            unsafe {
+                                libc::killpg(pgid, libc::SIGKILL);
+                            }
+                        });
+                    }
+
+                    return ToolOutcome::Completed {
+                        output: json!({
+                            "cmd": cmd,
+                            "cwd": canonical_cwd.display().to_string(),
+                            "stdout": "",
+                            "stderr": "",
+                            "exit_code": -1_i64,
+                            "timed_out": true,
+                            "timeout_ms": timeout_ms,
+                        }),
+                        verified: Verification::NotApplicable,
+                    };
+                }
+            };
 
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -716,8 +721,7 @@ mod tests {
             let tmp = std::env::var("TMPDIR")
                 .or_else(|_| std::env::var("TEMP"))
                 .unwrap_or_else(|_| "/tmp".to_string());
-            let dir = PathBuf::from(tmp)
-                .join(format!("aivyx-shell-test-{}", uuid::Uuid::new_v4()));
+            let dir = PathBuf::from(tmp).join(format!("aivyx-shell-test-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
             // canonicalize so the tool's constructor doesn't
             // emit a surprising symlink-resolved root that then
@@ -778,10 +782,7 @@ mod tests {
         }
     }
 
-    fn make_ctx<'a>(
-        channel: &'a NoopChannel,
-        audit: &'a dyn crate::AuditHook,
-    ) -> ToolContext<'a> {
+    fn make_ctx<'a>(channel: &'a NoopChannel, audit: &'a dyn crate::AuditHook) -> ToolContext<'a> {
         ToolContext {
             agent_id: AgentId::new(),
             session_id: channel.session,
@@ -826,10 +827,7 @@ mod tests {
             "cmd": "ls",
             "args": { "cwd": sub.display().to_string() }
         }));
-        assert_eq!(
-            scope.qualifier().unwrap(),
-            format!("cwd:{}", sub.display())
-        );
+        assert_eq!(scope.qualifier().unwrap(), format!("cwd:{}", sub.display()));
     }
 
     #[test]
@@ -917,9 +915,7 @@ mod tests {
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
 
-        let out = tool
-            .execute(json!({"cmd": "printf hello"}), &ctx)
-            .await;
+        let out = tool.execute(json!({"cmd": "printf hello"}), &ctx).await;
 
         match out {
             ToolOutcome::Completed { output, verified } => {
@@ -943,9 +939,7 @@ mod tests {
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
 
-        let out = tool
-            .execute(json!({"cmd": "sh -c 'exit 7'"}), &ctx)
-            .await;
+        let out = tool.execute(json!({"cmd": "sh -c 'exit 7'"}), &ctx).await;
 
         match out {
             ToolOutcome::Completed { output, .. } => {
@@ -1074,10 +1068,7 @@ mod tests {
         // The command: (1) fork a background grandchild that writes
         // its PID to a file then sleeps, (2) parent sleeps too.
         // Both will be killed by the process-group signal on timeout.
-        let cmd = format!(
-            "( echo $$ > {} ; sleep 30 ) & sleep 30",
-            pid_file.display()
-        );
+        let cmd = format!("( echo $$ > {} ; sleep 30 ) & sleep 30", pid_file.display());
 
         let out = tool
             .execute(
@@ -1207,12 +1198,7 @@ mod tests {
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
 
-        let out = tool
-            .execute(
-                json!({"cmd": "printenv PATH"}),
-                &ctx,
-            )
-            .await;
+        let out = tool.execute(json!({"cmd": "printenv PATH"}), &ctx).await;
 
         match out {
             ToolOutcome::Completed { output, .. } => {
@@ -1351,7 +1337,10 @@ mod tests {
 
         let outcome = tool.execute(input, &ctx).await;
 
-        assert!(!target.exists(), "write outside cwd_root must be denied by Landlock");
+        assert!(
+            !target.exists(),
+            "write outside cwd_root must be denied by Landlock"
+        );
         // The shell command itself still "completes" (sh runs, the redirect
         // just fails inside it) -- the ToolOutcome variant is still worth
         // pinning so this test doesn't pass vacuously if the whole call
@@ -1389,10 +1378,7 @@ mod tests {
         assert_eq!(args_schema["type"], "object");
         assert_eq!(args_schema["additionalProperties"], false);
         assert_eq!(args_schema["properties"]["cwd"]["type"], "string");
-        assert_eq!(
-            args_schema["properties"]["timeout_ms"]["type"],
-            "integer"
-        );
+        assert_eq!(args_schema["properties"]["timeout_ms"]["type"], "integer");
         // Phase 42 — env field is an object with string values.
         assert_eq!(args_schema["properties"]["env"]["type"], "object");
         assert_eq!(

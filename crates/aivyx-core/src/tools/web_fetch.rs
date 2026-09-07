@@ -79,14 +79,12 @@ use async_trait::async_trait;
 use base64::Engine;
 use dom_smoothie::Readability;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use aivyx_capability::{CapabilitySet, Scope};
 
 use crate::egress::EgressPolicy;
-use crate::{
-    AivyxError, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, Verification,
-};
+use crate::{AivyxError, StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
 /// Chapter Rampart — refuse a URL the egress policy blocks (SSRF /
 /// private-network guard + opt-in host allow-list). Shared by all three
@@ -137,8 +135,7 @@ fn build_redirect_free_client(
     // the addresses the resolver returns), closing the gap the host-literal
     // check can't.
     if block_private {
-        builder = builder
-            .dns_resolver(std::sync::Arc::new(PrivateFilterResolver));
+        builder = builder.dns_resolver(std::sync::Arc::new(PrivateFilterResolver));
     }
     builder
         .build()
@@ -232,7 +229,6 @@ impl WebFetchToolConfig {
     }
 }
 
-
 /// Maximum number of redirect hops before the loop gives up.
 const MAX_REDIRECT_HOPS: usize = 10;
 
@@ -277,10 +273,7 @@ impl WebFetchTool {
 
     /// Chapter Rampart — install the egress policy (SSRF guard + host
     /// allow-list). Called once at startup; unset ⇒ permissive.
-    pub fn set_egress_policy(
-        &self,
-        policy: Arc<EgressPolicy>,
-    ) -> Result<(), Arc<EgressPolicy>> {
+    pub fn set_egress_policy(&self, policy: Arc<EgressPolicy>) -> Result<(), Arc<EgressPolicy>> {
         self.egress.set(policy)
     }
 
@@ -289,10 +282,7 @@ impl WebFetchTool {
     /// `assemble_role_envelope` completes. Takes `&self` because
     /// the tool is already inside an `Arc` at the call site.
     /// Returns `Err(caps)` if capabilities were already set.
-    pub fn set_effective_capabilities(
-        &self,
-        caps: CapabilitySet,
-    ) -> Result<(), CapabilitySet> {
+    pub fn set_effective_capabilities(&self, caps: CapabilitySet) -> Result<(), CapabilitySet> {
         self.effective_caps.set(caps)
     }
 }
@@ -360,10 +350,7 @@ fn input_timeout_ms(input: &Value) -> u64 {
 /// `Location` header. Returns `None` if the header is missing,
 /// unparseable, or uses a non-HTTP scheme. Resolves relative
 /// `Location` values against `base_url`.
-fn extract_redirect_location(
-    response: &reqwest::Response,
-    base_url: &str,
-) -> Option<String> {
+fn extract_redirect_location(response: &reqwest::Response, base_url: &str) -> Option<String> {
     let location = response
         .headers()
         .get(reqwest::header::LOCATION)?
@@ -569,8 +556,7 @@ impl Tool for WebFetchTool {
             _ => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "input must have a non-empty string `url` field"
-                        .to_string(),
+                    detail: "input must have a non-empty string `url` field".to_string(),
                 });
             }
         };
@@ -636,12 +622,9 @@ impl Tool for WebFetchTool {
 
                 // Re-derive scope from redirect URL and check
                 // against effective capabilities.
-                if let Err(outcome) = check_redirect_scope(
-                    self.id,
-                    &location,
-                    "net.fetch",
-                    &self.effective_caps,
-                ) {
+                if let Err(outcome) =
+                    check_redirect_scope(self.id, &location, "net.fetch", &self.effective_caps)
+                {
                     return outcome;
                 }
 
@@ -661,18 +644,11 @@ impl Tool for WebFetchTool {
             .map(String::from);
 
         // ---- Stream body through StreamEvent::ToolOutput ----------
-        let (body, body_encoding) = match collect_body(
-            response,
-            self.id,
-            "web.fetch",
-            &final_url,
-            ctx,
-        )
-        .await
-        {
-            Ok(pair) => pair,
-            Err(outcome) => return outcome,
-        };
+        let (body, body_encoding) =
+            match collect_body(response, self.id, "web.fetch", &final_url, ctx).await {
+                Ok(pair) => pair,
+                Err(outcome) => return outcome,
+            };
 
         ToolOutcome::Completed {
             output: json!({
@@ -769,10 +745,7 @@ impl std::fmt::Debug for WebExtractTool {
 
 impl WebExtractTool {
     /// Chapter Rampart — install the egress policy (unset ⇒ permissive).
-    pub fn set_egress_policy(
-        &self,
-        policy: Arc<EgressPolicy>,
-    ) -> Result<(), Arc<EgressPolicy>> {
+    pub fn set_egress_policy(&self, policy: Arc<EgressPolicy>) -> Result<(), Arc<EgressPolicy>> {
         self.egress.set(policy)
     }
 
@@ -784,7 +757,9 @@ impl WebExtractTool {
     ) -> Result<(String, Option<String>, String), String> {
         let mut read = Readability::new(html, Some(url), None)
             .map_err(|e| format!("readability init failed: {e}"))?;
-        let article = read.parse().map_err(|e| format!("extraction failed: {e}"))?;
+        let article = read
+            .parse()
+            .map_err(|e| format!("extraction failed: {e}"))?;
         let text = article.text_content.trim().to_string();
         if text.is_empty() {
             return Err("no readable content found (not an article?)".to_string());
@@ -960,22 +935,15 @@ impl WebPostToolConfig {
     }
 }
 
-
 impl WebPostTool {
     /// Chapter Rampart — install the egress policy (unset ⇒ permissive).
-    pub fn set_egress_policy(
-        &self,
-        policy: Arc<EgressPolicy>,
-    ) -> Result<(), Arc<EgressPolicy>> {
+    pub fn set_egress_policy(&self, policy: Arc<EgressPolicy>) -> Result<(), Arc<EgressPolicy>> {
         self.egress.set(policy)
     }
 
     /// Install the effective capability set for per-hop redirect
     /// scope checks. Same pattern as `WebFetchTool`.
-    pub fn set_effective_capabilities(
-        &self,
-        caps: CapabilitySet,
-    ) -> Result<(), CapabilitySet> {
+    pub fn set_effective_capabilities(&self, caps: CapabilitySet) -> Result<(), CapabilitySet> {
         self.effective_caps.set(caps)
     }
 }
@@ -1115,8 +1083,7 @@ impl Tool for WebPostTool {
             _ => {
                 return ToolOutcome::Failed(AivyxError::Tool {
                     tool: self.id,
-                    detail: "input must have a non-empty string `url` field"
-                        .to_string(),
+                    detail: "input must have a non-empty string `url` field".to_string(),
                 });
             }
         };
@@ -1232,12 +1199,9 @@ impl Tool for WebPostTool {
                 None => break, // No valid Location — return 3xx as-is
             };
 
-            if let Err(outcome) = check_redirect_scope(
-                self.id,
-                &location,
-                "net.post",
-                &self.effective_caps,
-            ) {
+            if let Err(outcome) =
+                check_redirect_scope(self.id, &location, "net.post", &self.effective_caps)
+            {
                 return outcome;
             }
 
@@ -1260,7 +1224,10 @@ impl Tool for WebPostTool {
                 Err(e) => {
                     return ToolOutcome::Failed(AivyxError::Tool {
                         tool: self.id,
-                        detail: format!("GET {current_url} (redirect hop) failed: {}", describe_send_error(&e)),
+                        detail: format!(
+                            "GET {current_url} (redirect hop) failed: {}",
+                            describe_send_error(&e)
+                        ),
                     });
                 }
             };
@@ -1275,18 +1242,11 @@ impl Tool for WebPostTool {
             .map(String::from);
 
         // ---- Collect response body ----------------------------------------
-        let (body, body_encoding) = match collect_body(
-            response,
-            self.id,
-            "web.post",
-            &final_url,
-            ctx,
-        )
-        .await
-        {
-            Ok(pair) => pair,
-            Err(outcome) => return outcome,
-        };
+        let (body, body_encoding) =
+            match collect_body(response, self.id, "web.post", &final_url, ctx).await {
+                Ok(pair) => pair,
+                Err(outcome) => return outcome,
+            };
 
         ToolOutcome::Completed {
             output: json!({
@@ -1329,7 +1289,10 @@ mod web_extract_tests {
         let (title, _byline, text) =
             WebExtractTool::extract_html(ARTICLE, "https://example.com/post").expect("extract");
         assert!(title.contains("Headline"), "title: {title:?}");
-        assert!(text.contains("first substantial paragraph"), "text: {text:?}");
+        assert!(
+            text.contains("first substantial paragraph"),
+            "text: {text:?}"
+        );
         assert!(text.contains("second paragraph"), "text: {text:?}");
         // Navigation/footer chrome should be dropped by the readability pass.
         assert!(!text.contains("Home About Contact"), "nav leaked: {text:?}");
@@ -1337,7 +1300,9 @@ mod web_extract_tests {
 
     #[test]
     fn extract_errors_on_empty_or_contentless_html() {
-        assert!(WebExtractTool::extract_html("<html><body></body></html>", "https://x.test").is_err());
+        assert!(
+            WebExtractTool::extract_html("<html><body></body></html>", "https://x.test").is_err()
+        );
     }
 
     #[test]
@@ -1353,10 +1318,19 @@ mod web_extract_tests {
         // so compare against the sentinel, not the base.
         let tool = WebExtractToolConfig::new().build().expect("build");
         let deny = format!("{:?}", deny_scope());
-        assert_eq!(format!("{:?}", tool.required_scope(&json!({"url": "ftp://x"}))), deny);
+        assert_eq!(
+            format!("{:?}", tool.required_scope(&json!({"url": "ftp://x"}))),
+            deny
+        );
         assert_eq!(format!("{:?}", tool.required_scope(&json!({}))), deny);
         // sanity: a real https URL is NOT the deny sentinel
-        assert_ne!(format!("{:?}", tool.required_scope(&json!({"url": "https://ok.test/a"}))), deny);
+        assert_ne!(
+            format!(
+                "{:?}",
+                tool.required_scope(&json!({"url": "https://ok.test/a"}))
+            ),
+            deny
+        );
     }
 }
 
@@ -1405,19 +1379,13 @@ mod tests {
         fn session_id(&self) -> SessionId {
             self.session
         }
-        async fn stream_event(
-            &self,
-            event: StreamEvent<'_>,
-        ) -> Result<(), ChannelError> {
+        async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
             if let StreamEvent::ToolOutput { chunk, .. } = event {
                 self.chunks.lock().unwrap().push(chunk.to_string());
             }
             Ok(())
         }
-        async fn finalize(
-            &self,
-            _outcome: &TurnOutcome,
-        ) -> Result<(), ChannelError> {
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
             Ok(())
         }
         fn cancellation_token(&self) -> CancellationToken {
@@ -1451,8 +1419,7 @@ mod tests {
     #[test]
     fn required_scope_uses_full_url_as_net_fetch_qualifier() {
         let tool = build_tool();
-        let scope =
-            tool.required_scope(&json!({"url": "https://httpbin.org/get"}));
+        let scope = tool.required_scope(&json!({"url": "https://httpbin.org/get"}));
         assert_eq!(scope.base(), "net.fetch");
         assert_eq!(scope.qualifier(), Some("https://httpbin.org/get"));
     }
@@ -1485,8 +1452,7 @@ mod tests {
     #[test]
     fn required_scope_for_ftp_scheme_is_deny_scope() {
         let tool = build_tool();
-        let scope =
-            tool.required_scope(&json!({"url": "ftp://example.com/file"}));
+        let scope = tool.required_scope(&json!({"url": "ftp://example.com/file"}));
         assert!(scope.qualifier().unwrap().contains("__deny__"));
     }
 
@@ -1502,10 +1468,12 @@ mod tests {
         let needed = tool.required_scope(&json!({
             "url": "https://httpbin.org/get"
         }));
-        let held = CapabilitySet::from_scopes([
-            Scope::parse("net.fetch:https://httpbin.org/").unwrap(),
-        ]);
-        assert!(held.grants(&needed), "origin held must grant subpath needed");
+        let held =
+            CapabilitySet::from_scopes([Scope::parse("net.fetch:https://httpbin.org/").unwrap()]);
+        assert!(
+            held.grants(&needed),
+            "origin held must grant subpath needed"
+        );
     }
 
     #[test]
@@ -1514,9 +1482,8 @@ mod tests {
         let needed = tool.required_scope(&json!({
             "url": "https://other.example.com/path"
         }));
-        let held = CapabilitySet::from_scopes([
-            Scope::parse("net.fetch:https://httpbin.org/").unwrap(),
-        ]);
+        let held =
+            CapabilitySet::from_scopes([Scope::parse("net.fetch:https://httpbin.org/").unwrap()]);
         assert!(
             !held.grants(&needed),
             "held httpbin.org must not grant other.example.com"
@@ -1534,9 +1501,8 @@ mod tests {
         let needed = tool.required_scope(&json!({
             "url": "https://example.com.evil.com/login"
         }));
-        let held = CapabilitySet::from_scopes([
-            Scope::parse("net.fetch:https://example.com/").unwrap(),
-        ]);
+        let held =
+            CapabilitySet::from_scopes([Scope::parse("net.fetch:https://example.com/").unwrap()]);
         assert!(
             !held.grants(&needed),
             "held example.com MUST NOT grant hostile-suffix example.com.evil.com"
@@ -1553,10 +1519,7 @@ mod tests {
         assert_eq!(schema["required"], json!(["url"]));
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["properties"]["url"]["type"], "string");
-        assert_eq!(
-            schema["properties"]["timeout_ms"]["type"],
-            "integer"
-        );
+        assert_eq!(schema["properties"]["timeout_ms"]["type"], "integer");
     }
 
     // ---- Execution: error paths without network --------------------
@@ -1568,9 +1531,7 @@ mod tests {
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
 
-        let out = tool
-            .execute(json!({"url": "not-a-url"}), &ctx)
-            .await;
+        let out = tool.execute(json!({"url": "not-a-url"}), &ctx).await;
 
         match out {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
@@ -1588,9 +1549,7 @@ mod tests {
         // The guard short-circuits before any network call, so this needs no
         // server. Covers the cloud-metadata + localhost SSRF cases.
         let tool = build_tool();
-        let _ = tool.set_egress_policy(std::sync::Arc::new(
-            crate::egress::EgressPolicy::default(),
-        ));
+        let _ = tool.set_egress_policy(std::sync::Arc::new(crate::egress::EgressPolicy::default()));
         let channel = CapturingChannel::new();
         let audit = NullAuditHook;
         for url in [
@@ -1634,9 +1593,7 @@ mod tests {
         headers: &'static str,
         body: &'static [u8],
     ) -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}");
 
@@ -1671,12 +1628,7 @@ mod tests {
     #[tokio::test]
     async fn execute_utf8_body_returns_utf8_encoding() {
         let body = b"Hello, world!";
-        let url = mock_server(
-            "200 OK",
-            "Content-Type: text/plain\r\n",
-            body,
-        )
-        .await;
+        let url = mock_server("200 OK", "Content-Type: text/plain\r\n", body).await;
 
         let tool = build_tool();
         let channel = CapturingChannel::new();
@@ -1701,12 +1653,7 @@ mod tests {
     async fn execute_binary_body_returns_base64_encoding() {
         // Invalid UTF-8 bytes
         let body: &[u8] = &[0xFF, 0xFE, 0x00, 0x01, 0x89, 0x50, 0x4E, 0x47];
-        let url = mock_server(
-            "200 OK",
-            "Content-Type: application/octet-stream\r\n",
-            body,
-        )
-        .await;
+        let url = mock_server("200 OK", "Content-Type: application/octet-stream\r\n", body).await;
 
         let tool = build_tool();
         let channel = CapturingChannel::new();
@@ -1773,9 +1720,7 @@ mod tests {
     /// Starts a mock HTTP server that echoes request method, headers,
     /// and body back as a JSON response.
     async fn echo_server() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}");
 
@@ -1841,10 +1786,7 @@ mod tests {
             "url": "https://api.example.com/data"
         }));
         assert_eq!(scope.base(), "net.post");
-        assert_eq!(
-            scope.qualifier(),
-            Some("https://api.example.com/data")
-        );
+        assert_eq!(scope.qualifier(), Some("https://api.example.com/data"));
     }
 
     #[test]
@@ -1880,16 +1822,12 @@ mod tests {
                 assert_eq!(output["status"], 200);
                 assert_eq!(output["method"], "POST");
                 // The echo server returns the request body
-                let echo_body: Value = serde_json::from_str(
-                    output["body"].as_str().unwrap(),
-                )
-                .unwrap();
+                let echo_body: Value =
+                    serde_json::from_str(output["body"].as_str().unwrap()).unwrap();
                 assert_eq!(echo_body["echo_method"], "POST");
                 // Verify the JSON body was sent
-                let sent: Value = serde_json::from_str(
-                    echo_body["echo_body"].as_str().unwrap(),
-                )
-                .unwrap();
+                let sent: Value =
+                    serde_json::from_str(echo_body["echo_body"].as_str().unwrap()).unwrap();
                 assert_eq!(sent["key"], "value");
             }
             other => panic!("expected Completed, got {other:?}"),
@@ -1918,10 +1856,8 @@ mod tests {
         match out {
             ToolOutcome::Completed { output, .. } => {
                 assert_eq!(output["method"], "PUT");
-                let echo_body: Value = serde_json::from_str(
-                    output["body"].as_str().unwrap(),
-                )
-                .unwrap();
+                let echo_body: Value =
+                    serde_json::from_str(output["body"].as_str().unwrap()).unwrap();
                 assert_eq!(echo_body["echo_method"], "PUT");
             }
             other => panic!("expected Completed, got {other:?}"),
@@ -1993,10 +1929,7 @@ mod tests {
 
         match out {
             ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
-                assert!(
-                    detail.contains("url"),
-                    "expected url error: {detail}"
-                );
+                assert!(detail.contains("url"), "expected url error: {detail}");
             }
             other => panic!("expected Failed, got {other:?}"),
         }
@@ -2008,13 +1941,8 @@ mod tests {
     /// then serves a 200 OK with the given body at the redirect target.
     /// The redirect is triggered by any path ending in `/redirect`;
     /// all other paths return the final body.
-    async fn redirect_server(
-        status_code: u16,
-        final_body: &'static str,
-    ) -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+    async fn redirect_server(status_code: u16, final_body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}");
 
@@ -2032,10 +1960,7 @@ mod tests {
                     let request = String::from_utf8_lossy(&buf[..n]);
 
                     // Parse path from first line
-                    let path = request
-                        .split_whitespace()
-                        .nth(1)
-                        .unwrap_or("/");
+                    let path = request.split_whitespace().nth(1).unwrap_or("/");
 
                     let response = if path.ends_with("/redirect") {
                         format!(
@@ -2066,9 +1991,7 @@ mod tests {
 
     /// Mock server that always redirects (for testing the hop cap).
     async fn infinite_redirect_server() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}");
 
@@ -2101,9 +2024,7 @@ mod tests {
 
     fn build_tool_with_caps(scopes: &[&str]) -> WebFetchTool {
         let tool = build_tool();
-        let caps = CapabilitySet::from_scopes(
-            scopes.iter().map(|s| Scope::parse(s).unwrap()),
-        );
+        let caps = CapabilitySet::from_scopes(scopes.iter().map(|s| Scope::parse(s).unwrap()));
         tool.set_effective_capabilities(caps).unwrap();
         tool
     }
@@ -2111,9 +2032,7 @@ mod tests {
     #[tokio::test]
     async fn redirect_301_followed_within_scope() {
         let url = redirect_server(301, "arrived").await;
-        let tool = build_tool_with_caps(&[
-            &format!("net.fetch:{url}/"),
-        ]);
+        let tool = build_tool_with_caps(&[&format!("net.fetch:{url}/")]);
         let channel = CapturingChannel::new();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
@@ -2144,9 +2063,7 @@ mod tests {
     #[tokio::test]
     async fn redirect_302_followed_within_scope() {
         let url = redirect_server(302, "found-it").await;
-        let tool = build_tool_with_caps(&[
-            &format!("net.fetch:{url}/"),
-        ]);
+        let tool = build_tool_with_caps(&[&format!("net.fetch:{url}/")]);
         let channel = CapturingChannel::new();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
@@ -2164,9 +2081,7 @@ mod tests {
         match out {
             ToolOutcome::Completed { output, .. } => {
                 assert_eq!(output["status"], 200);
-                assert!(
-                    output["body"].as_str().unwrap().contains("found-it"),
-                );
+                assert!(output["body"].as_str().unwrap().contains("found-it"),);
             }
             other => panic!("expected Completed, got {other:?}"),
         }
@@ -2176,9 +2091,7 @@ mod tests {
     async fn redirect_to_out_of_scope_url_denied() {
         let url = redirect_server(301, "secret").await;
         // Grant scope only for the initial URL's path, not for /final
-        let tool = build_tool_with_caps(&[
-            "net.fetch:http://other-host.invalid/",
-        ]);
+        let tool = build_tool_with_caps(&["net.fetch:http://other-host.invalid/"]);
         let channel = CapturingChannel::new();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
@@ -2196,10 +2109,7 @@ mod tests {
         match out {
             ToolOutcome::Completed { output, .. } => {
                 assert!(
-                    output["error"]
-                        .as_str()
-                        .unwrap()
-                        .contains("denied"),
+                    output["error"].as_str().unwrap().contains("denied"),
                     "redirect to out-of-scope URL should be denied: {output}"
                 );
             }
@@ -2210,9 +2120,7 @@ mod tests {
     #[tokio::test]
     async fn redirect_chain_capped_at_max_hops() {
         let url = infinite_redirect_server().await;
-        let tool = build_tool_with_caps(&[
-            &format!("net.fetch:{url}/"),
-        ]);
+        let tool = build_tool_with_caps(&[&format!("net.fetch:{url}/")]);
         let channel = CapturingChannel::new();
         let audit = NullAuditHook;
         let ctx = make_ctx(&channel, &audit);
@@ -2230,10 +2138,7 @@ mod tests {
         match out {
             ToolOutcome::Completed { output, .. } => {
                 assert!(
-                    output["error"]
-                        .as_str()
-                        .unwrap()
-                        .contains("exceeded"),
+                    output["error"].as_str().unwrap().contains("exceeded"),
                     "should hit hop cap: {output}"
                 );
             }

@@ -8,31 +8,23 @@
 
 use std::path::Path;
 
-use aivyx_channel::daemon_client::{
-    daemon_is_running, get_learning_insights,
-};
-use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::cooccurrence_ledger::CooccurrencePatterns;
 use aivyx_channel::correction_consolidation::CorrectionConsolidationStat;
 use aivyx_channel::correction_ledger::AccumulatedCorrections;
-use aivyx_channel::memory_recall::RecallClusterStat;
+use aivyx_channel::daemon_client::{daemon_is_running, get_learning_insights};
+use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::helpfulness_ledger::AccumulatedHelpfulness;
-use aivyx_channel::persona_context::PersonaSelectionStat;
+use aivyx_channel::memory_recall::RecallClusterStat;
 use aivyx_channel::persona_consolidation::PersonaConsolidationStat;
+use aivyx_channel::persona_context::PersonaSelectionStat;
 use aivyx_channel::persona_lifecycle::PersonaLifecycleStat;
 use aivyx_channel::proactive_detect::ProactiveStat;
-use aivyx_channel::recall_judgment::{
-    RecallJudgment, RecallJudgmentStat,
-};
-use aivyx_channel::recall_insights::{
-    LearningDigest, ProposalProvenance,
-};
+use aivyx_channel::recall_insights::{LearningDigest, ProposalProvenance};
+use aivyx_channel::recall_judgment::{RecallJudgment, RecallJudgmentStat};
 use aivyx_channel::reflection_scheduler::RecentReflectionStat;
 
 /// `aivyx learning [--window <secs>]`
-pub async fn run_learning(
-    window_secs: Option<u64>,
-) -> Result<(), String> {
+pub async fn run_learning(window_secs: Option<u64>) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
     let (
@@ -52,9 +44,7 @@ pub async fn run_learning(
         cadence,
     ) = get_learning_insights(&socket_path, window_secs)
         .await
-        .map_err(|e| {
-            format!("failed to fetch learning insights: {e}")
-        })?;
+        .map_err(|e| format!("failed to fetch learning insights: {e}"))?;
     print!(
         "{}",
         render_insights(
@@ -77,9 +67,7 @@ pub async fn run_learning(
     Ok(())
 }
 
-async fn require_daemon_running(
-    socket_path: &Path,
-) -> Result<(), String> {
+async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
     if daemon_is_running(socket_path).await {
         return Ok(());
     }
@@ -121,9 +109,7 @@ fn render_insights(
     cadence: &[(String, RecentReflectionStat)],
     accumulated_corrections: Option<&AccumulatedCorrections>,
     correction_consolidation: Option<&CorrectionConsolidationStat>,
-    correction_judgment: Option<
-        &aivyx_channel::correction_judgment::CorrectionJudgmentStat,
-    >,
+    correction_judgment: Option<&aivyx_channel::correction_judgment::CorrectionJudgmentStat>,
 ) -> String {
     let mut out = String::new();
     let days = d.window_secs / 86_400;
@@ -185,9 +171,7 @@ fn render_insights(
                 ));
             }
         }
-        None => out.push_str(
-            "  proactive: not engaged (off, or no cycle yet)\n",
-        ),
+        None => out.push_str("  proactive: not engaged (off, or no cycle yet)\n"),
     }
     match persona_lifecycle {
         Some(p) => {
@@ -236,14 +220,9 @@ fn render_insights(
     out.push_str("\nLeast helpful topics:\n");
     out.push_str(&fmt_topics(&d.top_unhelpful));
 
-    out.push_str(
-        "\nAccumulated helpfulness (all-time, decayed):\n",
-    );
+    out.push_str("\nAccumulated helpfulness (all-time, decayed):\n");
     match accumulated {
-        Some(a)
-            if !a.top_helpful.is_empty()
-                || !a.top_unhelpful.is_empty() =>
-        {
+        Some(a) if !a.top_helpful.is_empty() || !a.top_unhelpful.is_empty() => {
             for t in &a.top_helpful {
                 out.push_str(&format!(
                     "  {:+.1}  {}  ({} sample{})\n",
@@ -266,9 +245,7 @@ fn render_insights(
         _ => out.push_str("  (none yet)\n"),
     }
 
-    out.push_str(
-        "\nTopics that consistently help together:\n",
-    );
+    out.push_str("\nTopics that consistently help together:\n");
     match cooccurrence {
         Some(c) if !c.top_pairs.is_empty() => {
             for p in &c.top_pairs {
@@ -285,32 +262,19 @@ fn render_insights(
         _ => out.push_str("  (none yet)\n"),
     }
 
-    out.push_str(
-        "\nCluster co-recall (last turn, opt-in):\n",
-    );
+    out.push_str("\nCluster co-recall (last turn, opt-in):\n");
     match cluster_recall {
         Some(c) if c.injected > 0 => {
-            out.push_str(&format!(
-                "  {} affined sibling(s) injected\n",
-                c.injected,
-            ));
+            out.push_str(&format!("  {} affined sibling(s) injected\n", c.injected,));
             for (driver, sib) in &c.pairs {
-                out.push_str(&format!(
-                    "    {driver} → {sib}\n"
-                ));
+                out.push_str(&format!("    {driver} → {sib}\n"));
             }
         }
-        Some(_) => out.push_str(
-            "  engaged, 0 injected last turn\n",
-        ),
-        None => out.push_str(
-            "  not engaged (off, or no turn yet)\n",
-        ),
+        Some(_) => out.push_str("  engaged, 0 injected last turn\n"),
+        None => out.push_str("  not engaged (off, or no turn yet)\n"),
     }
 
-    out.push_str(
-        "\nPattern-driven Persona proposals (last cycle, opt-in):\n",
-    );
+    out.push_str("\nPattern-driven Persona proposals (last cycle, opt-in):\n");
     match persona_consolidation {
         Some(c) if c.filed > 0 => {
             // Phase 92 — surface the supersession count
@@ -321,10 +285,7 @@ fn render_insights(
             } else {
                 String::new()
             };
-            out.push_str(&format!(
-                "  {} filed last cycle{supersede_note}\n",
-                c.filed,
-            ));
+            out.push_str(&format!("  {} filed last cycle{supersede_note}\n", c.filed,));
             for (a, b) in &c.pairs {
                 out.push_str(&format!("    {a} + {b}\n"));
             }
@@ -333,12 +294,8 @@ fn render_insights(
             "  engaged, 0 filed last cycle \
              (LLM unavailable)\n",
         ),
-        Some(_) => out.push_str(
-            "  engaged, 0 filed last cycle\n",
-        ),
-        None => out.push_str(
-            "  not engaged (off, or no cycle yet)\n",
-        ),
+        Some(_) => out.push_str("  engaged, 0 filed last cycle\n"),
+        None => out.push_str("  not engaged (off, or no cycle yet)\n"),
     }
 
     // Phase 172 — the durable correction view (topics the
@@ -360,34 +317,23 @@ fn render_insights(
         _ => out.push_str("  (none yet)\n"),
     }
 
-    out.push_str(
-        "\nCorrection-driven Persona proposals (last cycle, opt-in):\n",
-    );
+    out.push_str("\nCorrection-driven Persona proposals (last cycle, opt-in):\n");
     match correction_consolidation {
         Some(c) if c.filed > 0 => {
-            out.push_str(&format!(
-                "  {} filed last cycle\n",
-                c.filed,
-            ));
+            out.push_str(&format!("  {} filed last cycle\n", c.filed,));
             for topic in &c.topics {
                 out.push_str(&format!("    {topic}\n"));
             }
         }
-        Some(c) if c.llm_unavailable => out.push_str(
-            "  engaged, 0 filed last cycle (LLM unavailable)\n",
-        ),
-        Some(_) => {
-            out.push_str("  engaged, 0 filed last cycle\n")
+        Some(c) if c.llm_unavailable => {
+            out.push_str("  engaged, 0 filed last cycle (LLM unavailable)\n")
         }
-        None => out.push_str(
-            "  not engaged (off, or no cycle yet)\n",
-        ),
+        Some(_) => out.push_str("  engaged, 0 filed last cycle\n"),
+        None => out.push_str("  not engaged (off, or no cycle yet)\n"),
     }
 
     // Phase 178 — LLM-judged correction classification.
-    out.push_str(
-        "\nLLM-judged corrections (last cycle, opt-in):\n",
-    );
+    out.push_str("\nLLM-judged corrections (last cycle, opt-in):\n");
     match correction_judgment {
         Some(c) if c.judged > 0 || c.structural_fallback > 0 => {
             out.push_str(&format!(
@@ -405,24 +351,16 @@ fn render_insights(
                 },
             ));
         }
-        _ => out.push_str(
-            "  not engaged (off, or no corrections this cycle)\n",
-        ),
+        _ => out.push_str("  not engaged (off, or no corrections this cycle)\n"),
     }
 
-    out.push_str(
-        "\nLLM-judged recall usefulness (last cycle, opt-in):\n",
-    );
+    out.push_str("\nLLM-judged recall usefulness (last cycle, opt-in):\n");
     match recall_judgment {
         Some(j) if j.judged > 0 => {
             out.push_str(&format!(
                 "  {} judged last cycle (used={}, \
                  irrelevant={}, hurt={}, skipped={})\n",
-                j.judged,
-                j.used,
-                j.irrelevant,
-                j.hurt,
-                j.skipped,
+                j.judged, j.used, j.irrelevant, j.hurt, j.skipped,
             ));
             for (topic, judgment) in &j.pairs {
                 let label = match judgment {
@@ -430,9 +368,7 @@ fn render_insights(
                     RecallJudgment::Irrelevant => "irrelevant",
                     RecallJudgment::Hurt => "hurt",
                 };
-                out.push_str(&format!(
-                    "    {topic} → {label}\n",
-                ));
+                out.push_str(&format!("    {topic} → {label}\n",));
             }
         }
         Some(j) if j.llm_unavailable => out.push_str(
@@ -443,15 +379,11 @@ fn render_insights(
             "  engaged, 0 judged last cycle ({} skipped)\n",
             j.skipped,
         )),
-        None => out.push_str(
-            "  not engaged (off, or no cycle yet)\n",
-        ),
+        None => out.push_str("  not engaged (off, or no cycle yet)\n"),
     }
 
     if proposals.is_empty() {
-        out.push_str(
-            "\nNo recall-driven Persona proposals in this window.\n",
-        );
+        out.push_str("\nNo recall-driven Persona proposals in this window.\n");
         return out;
     }
     out.push_str("\nProposal provenance:\n");
@@ -469,8 +401,7 @@ fn render_insights(
                 Some(_) => "hurt",
                 None => "no-signal",
             };
-            let outcome =
-                c.outcome_kind.as_deref().unwrap_or("unmatched");
+            let outcome = c.outcome_kind.as_deref().unwrap_or("unmatched");
             out.push_str(&format!(
                 "    - t={} {outcome} ({sig}) seqs={:?}\n",
                 c.ts_secs, c.seqs,
@@ -501,15 +432,28 @@ mod tests {
 
     #[test]
     fn render_digest_counts_and_topics() {
-        let out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
+        let out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
         assert!(out.contains("last 2d — 2 days"));
         assert!(out.contains("10 total, 7 scored"));
         assert!(out.contains("3 promoted, 2 left to age out"));
         assert!(out.contains("+5  project/x"));
         assert!(out.contains("-2  scratch"));
-        assert!(out.contains(
-            "No recall-driven Persona proposals in this window."
-        ));
+        assert!(out.contains("No recall-driven Persona proposals in this window."));
     }
 
     /// Phase 93 — the judgment-signal banner renders only
@@ -521,8 +465,20 @@ mod tests {
         let mut d = digest();
         // Default (None) — banner absent.
         let out_none = render_insights(
-            &d, &[], None, None, None, None, None, None, None, None, &[],
-            None, None, None,
+            &d,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
         );
         assert!(!out_none.contains("signal source"));
         // Explicit-off (Some(false)) — banner still absent
@@ -530,19 +486,43 @@ mod tests {
         // augment in effect).
         d.judgment_signal = Some(false);
         let out_off = render_insights(
-            &d, &[], None, None, None, None, None, None, None, None, &[],
-            None, None, None,
+            &d,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
         );
         assert!(!out_off.contains("signal source"));
         // Augment on — the banner fires.
         d.judgment_signal = Some(true);
         let out_on = render_insights(
-            &d, &[], None, None, None, None, None, None, None, None, &[],
-            None, None, None,
+            &d,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
         );
-        assert!(out_on.contains(
-            "signal source: judgment-driven (Phase 93 — augmenting structural)"
-        ));
+        assert!(
+            out_on.contains("signal source: judgment-driven (Phase 93 — augmenting structural)")
+        );
     }
 
     #[test]
@@ -568,10 +548,23 @@ mod tests {
                 },
             ],
         }];
-        let out = render_insights(&digest(), &prov, None, None, None, None, None, None, None, None, &[], None, None, None);
-        assert!(out.contains(
-            "recall-fb:project/x [pending] topic 'project/x' net +5"
-        ));
+        let out = render_insights(
+            &digest(),
+            &prov,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
+        assert!(out.contains("recall-fb:project/x [pending] topic 'project/x' net +5"));
         assert!(out.contains("reason: net +5"));
         assert!(out.contains("completed (helped) seqs=[9]"));
         assert!(out.contains("failed (hurt) seqs=[3]"));
@@ -590,7 +583,22 @@ mod tests {
             proposals_in_window: 0,
             judgment_signal: None,
         };
-        let out = render_insights(&d, &[], None, None, None, None, None, None, None, None, &[], None, None, None);
+        let out = render_insights(
+            &d,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
         assert!(out.contains("last 3600s"));
         assert!(out.contains("0 total, 0 scored"));
         assert!(out.contains("Most helpful topics:\n  (none)"));
@@ -611,12 +619,22 @@ mod tests {
             llm_unavailable: false,
         };
         let out = render_insights(
-            &digest(), &[], None, None, None, None, None, None, None, None,
-            &[], None, None, Some(&stat),
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            Some(&stat),
         );
-        assert!(out.contains(
-            "5 judged (rework 3, praise 1, unrelated 1), 2 structural"
-        ));
+        assert!(out.contains("5 judged (rework 3, praise 1, unrelated 1), 2 structural"));
     }
 
     /// Phase 172 — the most-reworked-topics view + the
@@ -625,20 +643,28 @@ mod tests {
     #[test]
     fn render_corrections_some_and_none() {
         use aivyx_channel::correction_consolidation::CorrectionConsolidationStat;
-        use aivyx_channel::correction_ledger::{
-            AccumulatedCorrections, TopicCorrections,
-        };
+        use aivyx_channel::correction_ledger::{AccumulatedCorrections, TopicCorrections};
 
         // None → "(none yet)" + "not engaged".
         let none_out = render_insights(
-            &digest(), &[], None, None, None, None, None, None, None, None,
-            &[], None, None, None,
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
         );
         assert!(none_out.contains("Most-reworked topics (accumulated):"));
         assert!(none_out.contains("(none yet)"));
-        assert!(none_out.contains(
-            "Correction-driven Persona proposals (last cycle, opt-in):"
-        ));
+        assert!(none_out.contains("Correction-driven Persona proposals (last cycle, opt-in):"));
 
         // Some → decayed count + topic + samples, and a filed
         // proposal line.
@@ -656,8 +682,20 @@ mod tests {
             topics: vec!["auth".into()],
         };
         let some_out = render_insights(
-            &digest(), &[], None, None, None, None, None, None, None, None,
-            &[], Some(&acc), Some(&stat), None,
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            Some(&acc),
+            Some(&stat),
+            None,
         );
         assert!(some_out.contains("4.0  auth (3 windows)"));
         assert!(some_out.contains("1 filed last cycle"));
@@ -667,7 +705,22 @@ mod tests {
     #[test]
     fn render_persona_selection_some_and_none() {
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
+        let none_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
         assert!(none_out.contains("adaptive Persona: not engaged"));
 
         // Some → selected/total.
@@ -676,21 +729,46 @@ mod tests {
             selected: 6,
             total: 20,
         };
-        let some_out =
-            render_insights(&digest(), &[], Some(&stat), None, None, None, None, None, None, None, &[], None, None, None);
-        assert!(some_out.contains(
-            "adaptive Persona: 6/20 facets injected last turn"
-        ));
+        let some_out = render_insights(
+            &digest(),
+            &[],
+            Some(&stat),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
+        assert!(some_out.contains("adaptive Persona: 6/20 facets injected last turn"));
     }
 
     #[test]
     fn render_proactive_some_and_none() {
-        use aivyx_channel::proactive_detect::{
-            ProactiveKind, ProactiveStat, ProactiveSurfaced,
-        };
+        use aivyx_channel::proactive_detect::{ProactiveKind, ProactiveStat, ProactiveSurfaced};
 
         // None → "not engaged" line.
-        let none_out = render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
+        let none_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
         assert!(none_out.contains("proactive: not engaged"));
 
         // Some → count line + per-item lines.
@@ -704,29 +782,50 @@ mod tests {
             deduped: 2,
             capped: 1,
         };
-        let some_out =
-            render_insights(&digest(), &[], None, Some(&stat), None, None, None, None, None, None, &[], None, None, None);
-        assert!(some_out.contains(
-            "proactive: 1 surfaced last cycle (2 deduped, 1 capped)"
-        ));
-        assert!(some_out.contains(
-            "DueReminder 'reminders' — 1 item due"
-        ));
+        let some_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            Some(&stat),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
+        assert!(some_out.contains("proactive: 1 surfaced last cycle (2 deduped, 1 capped)"));
+        assert!(some_out.contains("DueReminder 'reminders' — 1 item due"));
     }
 
     #[test]
     fn render_persona_lifecycle_some_and_none() {
         use aivyx_channel::persona_lifecycle::{
-            PersonaLifecycleProposed, PersonaLifecycleStat,
-            SoftCategory,
+            PersonaLifecycleProposed, PersonaLifecycleStat, SoftCategory,
         };
 
         // None → "not engaged" line.
-        let none_out =
-            render_insights(&digest(), &[], None, None, None, None, None, None, None, None, &[], None, None, None);
-        assert!(
-            none_out.contains("persona lifecycle: not engaged")
+        let none_out = render_insights(
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
         );
+        assert!(none_out.contains("persona lifecycle: not engaged"));
 
         // Some → count line + per-proposal lines.
         let stat = PersonaLifecycleStat {
@@ -767,9 +866,7 @@ mod tests {
 
     #[test]
     fn render_accumulated_helpfulness_some_and_none() {
-        use aivyx_channel::helpfulness_ledger::{
-            AccumulatedHelpfulness, TopicScore,
-        };
+        use aivyx_channel::helpfulness_ledger::{AccumulatedHelpfulness, TopicScore};
 
         // None → header + "(none yet)".
         let none_out = render_insights(
@@ -788,9 +885,7 @@ mod tests {
             None,
             None,
         );
-        assert!(none_out.contains(
-            "Accumulated helpfulness (all-time, decayed):"
-        ));
+        assert!(none_out.contains("Accumulated helpfulness (all-time, decayed):"));
         assert!(none_out.contains("(none yet)"));
 
         // Some → signed score + topic + sample count.
@@ -823,16 +918,12 @@ mod tests {
             None,
         );
         assert!(some_out.contains("+4.5  rust  (2 samples)"));
-        assert!(
-            some_out.contains("-3.0  scratch  (1 sample)")
-        );
+        assert!(some_out.contains("-3.0  scratch  (1 sample)"));
     }
 
     #[test]
     fn render_cooccurrence_some_and_none() {
-        use aivyx_channel::cooccurrence_ledger::{
-            CooccurrencePatterns, PairScore,
-        };
+        use aivyx_channel::cooccurrence_ledger::{CooccurrencePatterns, PairScore};
 
         // None → header + "(none yet)".
         let none_out = render_insights(
@@ -851,9 +942,7 @@ mod tests {
             None,
             None,
         );
-        assert!(none_out.contains(
-            "Topics that consistently help together:"
-        ));
+        assert!(none_out.contains("Topics that consistently help together:"));
 
         // Some → signed score + "a + b" + sample count.
         let cooc = CooccurrencePatterns {
@@ -880,9 +969,7 @@ mod tests {
             None,
             None,
         );
-        assert!(some_out.contains(
-            "+8.0  deploy + rollback  (5 samples)"
-        ));
+        assert!(some_out.contains("+8.0  deploy + rollback  (5 samples)"));
     }
 
     /// Phase 95 — the reflection-cadence block renders one
@@ -893,7 +980,16 @@ mod tests {
     fn render_reflection_cadence_block() {
         // Empty → no cadence section.
         let out_empty = render_insights(
-            &digest(), &[], None, None, None, None, None, None, None, None,
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             &[],
             None,
             None,
@@ -904,10 +1000,22 @@ mod tests {
         // All-zero schedule → also omitted.
         let zero = vec![(
             "nightly".to_string(),
-            RecentReflectionStat { fired: 0, skipped: 0 },
+            RecentReflectionStat {
+                fired: 0,
+                skipped: 0,
+            },
         )];
         let out_zero = render_insights(
-            &digest(), &[], None, None, None, None, None, None, None, None,
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             &zero,
             None,
             None,
@@ -920,15 +1028,30 @@ mod tests {
         let mixed = vec![
             (
                 "nightly".to_string(),
-                RecentReflectionStat { fired: 7, skipped: 2 },
+                RecentReflectionStat {
+                    fired: 7,
+                    skipped: 2,
+                },
             ),
             (
                 "hourly".to_string(),
-                RecentReflectionStat { fired: 0, skipped: 0 },
+                RecentReflectionStat {
+                    fired: 0,
+                    skipped: 0,
+                },
             ),
         ];
         let out_mixed = render_insights(
-            &digest(), &[], None, None, None, None, None, None, None, None,
+            &digest(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             &mixed,
             None,
             None,
@@ -963,21 +1086,14 @@ mod tests {
             None,
             None,
         );
-        assert!(none_out.contains(
-            "Cluster co-recall (last turn, opt-in):"
-        ));
-        assert!(none_out.contains(
-            "not engaged (off, or no turn yet)"
-        ));
+        assert!(none_out.contains("Cluster co-recall (last turn, opt-in):"));
+        assert!(none_out.contains("not engaged (off, or no turn yet)"));
 
         // Some with injections → count + driver→sibling pairs.
         let cr = RecallClusterStat {
             ts_secs: 1_715_005_000,
             injected: 1,
-            pairs: vec![(
-                "deploy".into(),
-                "rollback".into(),
-            )],
+            pairs: vec![("deploy".into(), "rollback".into())],
         };
         let some_out = render_insights(
             &digest(),
@@ -995,12 +1111,8 @@ mod tests {
             None,
             None,
         );
-        assert!(some_out.contains(
-            "1 affined sibling(s) injected"
-        ));
-        assert!(
-            some_out.contains("deploy → rollback")
-        );
+        assert!(some_out.contains("1 affined sibling(s) injected"));
+        assert!(some_out.contains("deploy → rollback"));
 
         // Some but zero injected → "engaged, 0 injected".
         let cr0 = RecallClusterStat {
@@ -1024,8 +1136,6 @@ mod tests {
             None,
             None,
         );
-        assert!(
-            z.contains("engaged, 0 injected last turn")
-        );
+        assert!(z.contains("engaged, 0 injected last turn"));
     }
 }

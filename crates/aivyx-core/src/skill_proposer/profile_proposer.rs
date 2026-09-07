@@ -261,10 +261,7 @@ mod tests {
                                      ready, summarize the diff \
                                      and surface for approval."
                 .to_string(),
-            tool_allowlist_additions: vec![
-                "git.commit".to_string(),
-                "shell.deploy".to_string(),
-            ],
+            tool_allowlist_additions: vec!["git.commit".to_string(), "shell.deploy".to_string()],
             rationale: "Operator's 'research then deploy' \
                         pattern hit the existing research \
                         role's tool wall five times this week."

@@ -20,11 +20,11 @@ use aivyx_channel::daemon_client::{
     get_soul_conflicts, list_persona_deltas, list_persona_proposals, resolve_persona_proposal,
     resolve_soul_conflict, revert_persona_delta,
 };
-use aivyx_channel::soul_contradiction::SoulConflict;
 use aivyx_channel::daemon_ipc::{
-    default_socket_path, EffectivePersonaSummary, PersonaDeltaSummary,
-    PersonaProposalResolution, PersonaProposalSummary,
+    EffectivePersonaSummary, PersonaDeltaSummary, PersonaProposalResolution,
+    PersonaProposalSummary, default_socket_path,
 };
+use aivyx_channel::soul_contradiction::SoulConflict;
 
 /// Entry point for `aivyx persona show`. Fetches the daemon's current
 /// effective Persona via the `GetEffectivePersona` IPC query, then
@@ -162,10 +162,9 @@ pub async fn run_persona_resolve(id: &str, remove_side: char) -> Result<(), Stri
     let conflicts = get_soul_conflicts(&socket_path)
         .await
         .map_err(|e| format!("failed to detect persona conflicts: {e}"))?;
-    let conflict = conflicts
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| format!("no current conflict with id `{id}` (re-run `aivyx persona conflicts`)"))?;
+    let conflict = conflicts.iter().find(|c| c.id == id).ok_or_else(|| {
+        format!("no current conflict with id `{id}` (re-run `aivyx persona conflicts`)")
+    })?;
     let facet = match remove_side {
         'a' | 'A' => &conflict.a,
         'b' | 'B' => &conflict.b,
@@ -216,11 +215,24 @@ fn render_soul_conflicts(conflicts: &[SoulConflict]) -> String {
         return out;
     }
     for c in conflicts {
-        let tag = if c.cross_layer { " (drifts from your Profile)" } else { "" };
+        let tag = if c.cross_layer {
+            " (drifts from your Profile)"
+        } else {
+            ""
+        };
         out.push_str(&format!("⚠ [{}]{}  —  {}\n", c.id, tag, c.reason.trim()));
         out.push_str(&format!("  [a] {} | {}\n", c.a.category, c.a.value.trim()));
-        let b_note = if c.b.is_profile_constraint() { "  (immutable)" } else { "" };
-        out.push_str(&format!("  [b] {} | {}{}\n", c.b.category, c.b.value.trim(), b_note));
+        let b_note = if c.b.is_profile_constraint() {
+            "  (immutable)"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "  [b] {} | {}{}\n",
+            c.b.category,
+            c.b.value.trim(),
+            b_note
+        ));
         out.push_str(&format!(
             "  resolve: aivyx persona resolve {0} --remove <a|b>   |   \
              keep both: aivyx persona dismiss {0}\n\n",
@@ -241,7 +253,10 @@ mod accord_tests {
         assert!(render_soul_conflicts(&[]).contains("No Soul contradictions"));
         let c = SoulConflict {
             id: "abc123".into(),
-            a: SoulFacet { category: "character_traits".into(), value: "concise".into() },
+            a: SoulFacet {
+                category: "character_traits".into(),
+                value: "concise".into(),
+            },
             b: SoulFacet {
                 category: SoulFacet::PROFILE_CONSTRAINT.into(),
                 value: "never flatter me".into(),
@@ -351,14 +366,10 @@ fn render_delta_list(deltas: &[PersonaDeltaSummary]) -> String {
 pub async fn run_persona_proposals_list(status: &str) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
-    let (proposals, total_len) =
-        list_persona_proposals(&socket_path, status, 200)
-            .await
-            .map_err(|e| format!("failed to list persona proposals: {e}"))?;
-    print!(
-        "{}",
-        render_proposal_list(status, &proposals, total_len)
-    );
+    let (proposals, total_len) = list_persona_proposals(&socket_path, status, 200)
+        .await
+        .map_err(|e| format!("failed to list persona proposals: {e}"))?;
+    print!("{}", render_proposal_list(status, &proposals, total_len));
     Ok(())
 }
 
@@ -381,9 +392,7 @@ pub async fn run_persona_proposals_show(proposal_id: &str) -> Result<(), String>
 /// Entry point for `aivyx persona proposals approve <id>`. CLI v1
 /// applies the agent's proposed op verbatim; operators who want
 /// to edit the op before approving use the Web UI Proposals pane.
-pub async fn run_persona_proposals_approve(
-    proposal_id: &str,
-) -> Result<(), String> {
+pub async fn run_persona_proposals_approve(proposal_id: &str) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
     let success = resolve_persona_proposal(
@@ -420,9 +429,7 @@ pub async fn run_persona_proposals_reject(
     )
     .await
     .map_err(|e| format!("reject failed: {e}"))?;
-    eprintln!(
-        "aivyx persona proposals reject: ok — proposal `{proposal_id}` rejected"
-    );
+    eprintln!("aivyx persona proposals reject: ok — proposal `{proposal_id}` rejected");
     Ok(())
 }
 
@@ -443,9 +450,7 @@ fn render_proposal_list(
     total_len: u64,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "Persona proposals (status filter: {status})\n",
-    ));
+    out.push_str(&format!("Persona proposals (status filter: {status})\n",));
     out.push_str("==========================================\n\n");
     if proposals.is_empty() {
         out.push_str(&format!(
@@ -453,28 +458,18 @@ fn render_proposal_list(
         ));
         return out;
     }
-    for rendering in
-        aivyx_channel::proposal_grouping::group_supersession_pairs(proposals)
-    {
+    for rendering in aivyx_channel::proposal_grouping::group_supersession_pairs(proposals) {
         match rendering {
             aivyx_channel::proposal_grouping::ProposalRendering::Linked {
                 remove_side,
                 append_side,
             } => {
                 out.push_str(&render_one_proposal_row(remove_side));
-                out.push_str(&format!(
-                    "  └─ superseded by: {}\n",
-                    append_side.id,
-                ));
+                out.push_str(&format!("  └─ superseded by: {}\n", append_side.id,));
                 out.push_str(&render_one_proposal_row(append_side));
-                out.push_str(&format!(
-                    "  └─ supersedes: {}\n",
-                    remove_side.id,
-                ));
+                out.push_str(&format!("  └─ supersedes: {}\n", remove_side.id,));
             }
-            aivyx_channel::proposal_grouping::ProposalRendering::Unlinked(
-                p,
-            ) => {
+            aivyx_channel::proposal_grouping::ProposalRendering::Unlinked(p) => {
                 out.push_str(&render_one_proposal_row(p));
             }
         }
@@ -494,8 +489,7 @@ fn render_proposal_list(
 /// paths emit byte-identical row content; only the
 /// surrounding `└─` indicator differs.
 fn render_one_proposal_row(p: &PersonaProposalSummary) -> String {
-    let op_str =
-        serde_json::to_string(&p.proposed_op).unwrap_or_else(|_| "{}".into());
+    let op_str = serde_json::to_string(&p.proposed_op).unwrap_or_else(|_| "{}".into());
     format!(
         "[{status}] {id}  category={category}  proposed_at={ts}ms\n  op = {op}\n",
         status = p.status,
@@ -513,16 +507,12 @@ fn render_proposal_detail(p: &PersonaProposalSummary) -> String {
     out.push_str("=========================\n");
     out.push_str(&format!("  status      = {}\n", p.status));
     out.push_str(&format!("  category    = {}\n", p.category));
-    out.push_str(&format!(
-        "  proposed_at = {}ms\n",
-        p.proposed_at_unix_ms,
-    ));
+    out.push_str(&format!("  proposed_at = {}ms\n", p.proposed_at_unix_ms,));
     out.push_str(&format!(
         "  source ses  = {}\n",
         p.source_reflection_session_id,
     ));
-    let op_str = serde_json::to_string_pretty(&p.proposed_op)
-        .unwrap_or_else(|_| "{}".into());
+    let op_str = serde_json::to_string_pretty(&p.proposed_op).unwrap_or_else(|_| "{}".into());
     out.push_str(&format!(
         "\n  proposed op:\n{}\n",
         indent_block(&op_str, "    "),
@@ -540,8 +530,7 @@ fn render_proposal_detail(p: &PersonaProposalSummary) -> String {
         out.push_str(&format!("\n  agent reason: {reason}\n"));
     }
     if let Some(applied_op) = &p.applied_op {
-        let applied_str = serde_json::to_string_pretty(applied_op)
-            .unwrap_or_else(|_| "{}".into());
+        let applied_str = serde_json::to_string_pretty(applied_op).unwrap_or_else(|_| "{}".into());
         if applied_str != op_str {
             out.push_str(&format!(
                 "\n  applied op (operator-edited):\n{}\n",
@@ -581,10 +570,7 @@ fn indent_block(s: &str, indent: &str) -> String {
 /// op shape isn't `AppendList`, or when the inner blob
 /// doesn't parse — the proposed_op JSON dump above still
 /// shows the raw form so nothing is hidden.
-fn render_phase_118_payload(
-    category: &str,
-    proposed_op: &serde_json::Value,
-) -> Option<String> {
+fn render_phase_118_payload(category: &str, proposed_op: &serde_json::Value) -> Option<String> {
     // Op must be an `AppendList { value: <json-string> }`.
     let kind = proposed_op.get("kind")?.as_str()?;
     if kind != "AppendList" {
@@ -610,12 +596,8 @@ fn render_profile_hint_payload(blob: &str) -> Option<String> {
     for line in rationale.lines() {
         out.push_str(&format!("      {line}\n"));
     }
-    out.push_str(
-        "\n  To apply: edit aivyx.toml [profile] and update the\n",
-    );
-    out.push_str(
-        "  field above. Phase 118 does NOT auto-mutate aivyx.toml.\n",
-    );
+    out.push_str("\n  To apply: edit aivyx.toml [profile] and update the\n");
+    out.push_str("  field above. Phase 118 does NOT auto-mutate aivyx.toml.\n");
     Some(out)
 }
 
@@ -623,8 +605,7 @@ fn render_role_draft_payload(blob: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(blob).ok()?;
     let name = parsed.get("name")?.as_str()?;
     let parent = parsed.get("parent").and_then(|v| v.as_str());
-    let system_prompt_addendum =
-        parsed.get("system_prompt_addendum")?.as_str()?;
+    let system_prompt_addendum = parsed.get("system_prompt_addendum")?.as_str()?;
     let tool_allowlist_additions: Vec<String> = parsed
         .get("tool_allowlist_additions")
         .and_then(|v| v.as_array())
@@ -661,15 +642,9 @@ fn render_role_draft_payload(blob: &str) -> Option<String> {
     for line in rationale.lines() {
         out.push_str(&format!("      {line}\n"));
     }
-    out.push_str(
-        "\n  To apply: edit aivyx.toml and add a [roles.<name>]\n",
-    );
-    out.push_str(
-        "  section using the addendum + tool_allowlist above\n",
-    );
-    out.push_str(
-        "  on top of any inherited parent role. Phase 118 does NOT\n",
-    );
+    out.push_str("\n  To apply: edit aivyx.toml and add a [roles.<name>]\n");
+    out.push_str("  section using the addendum + tool_allowlist above\n");
+    out.push_str("  on top of any inherited parent role. Phase 118 does NOT\n");
     out.push_str("  auto-mutate aivyx.toml.\n");
     Some(out)
 }
@@ -768,9 +743,7 @@ mod tests {
     fn proposals_list_empty_renders_filter_aware_message() {
         let out = render_proposal_list("pending", &[], 0);
         assert!(out.contains("status filter: pending"));
-        assert!(
-            out.contains("No proposals matching status filter `pending`")
-        );
+        assert!(out.contains("No proposals matching status filter `pending`"));
     }
 
     #[test]
@@ -806,9 +779,7 @@ mod tests {
             applied_seq: None,
             rejected_reason: None,
             resolved_at_unix_ms: None,
-            supersedes_proposal_id: Some(
-                "consolidate-pair:auth+sessions".into(),
-            ),
+            supersedes_proposal_id: Some("consolidate-pair:auth+sessions".into()),
         };
         let append_side = PersonaProposalSummary {
             id: "consolidate-pair:auth+sessions".into(),
@@ -825,29 +796,15 @@ mod tests {
             applied_seq: None,
             rejected_reason: None,
             resolved_at_unix_ms: None,
-            supersedes_proposal_id: Some(
-                "supersede-remove:consolidate-pair:auth+jwt".into(),
-            ),
+            supersedes_proposal_id: Some("supersede-remove:consolidate-pair:auth+jwt".into()),
         };
         // Input order: AppendList first; grouping helper
         // should still emit RemoveList side first.
-        let out = render_proposal_list(
-            "pending",
-            &[append_side, remove_side],
-            2,
-        );
-        assert!(out.contains(
-            "[Pending] supersede-remove:consolidate-pair:auth+jwt"
-        ));
-        assert!(out.contains(
-            "└─ superseded by: consolidate-pair:auth+sessions"
-        ));
-        assert!(out.contains(
-            "[Pending] consolidate-pair:auth+sessions"
-        ));
-        assert!(out.contains(
-            "└─ supersedes: supersede-remove:consolidate-pair:auth+jwt"
-        ));
+        let out = render_proposal_list("pending", &[append_side, remove_side], 2);
+        assert!(out.contains("[Pending] supersede-remove:consolidate-pair:auth+jwt"));
+        assert!(out.contains("└─ superseded by: consolidate-pair:auth+sessions"));
+        assert!(out.contains("[Pending] consolidate-pair:auth+sessions"));
+        assert!(out.contains("└─ supersedes: supersede-remove:consolidate-pair:auth+jwt"));
         // The RemoveList row appears before the AppendList row.
         let remove_pos = out
             .find("supersede-remove:consolidate-pair:auth+jwt")
@@ -884,14 +841,10 @@ mod tests {
             applied_seq: None,
             rejected_reason: None,
             resolved_at_unix_ms: None,
-            supersedes_proposal_id: Some(
-                "supersede-remove:consolidate-pair:deploy+ship".into(),
-            ),
+            supersedes_proposal_id: Some("supersede-remove:consolidate-pair:deploy+ship".into()),
         };
         let out = render_proposal_list("pending", &[orphan], 1);
-        assert!(out.contains(
-            "[Pending] consolidate-pair:deploy+rollback"
-        ));
+        assert!(out.contains("[Pending] consolidate-pair:deploy+rollback"));
         // Orphan: no link indicator since the partner is
         // absent.
         assert!(
@@ -910,9 +863,7 @@ mod tests {
     /// appears on unlinked rows.
     #[test]
     fn proposals_list_unlinked_row_unchanged() {
-        let out = render_proposal_list(
-            "pending", &[pending_fixture()], 1,
-        );
+        let out = render_proposal_list("pending", &[pending_fixture()], 1);
         assert!(!out.contains("└─"));
     }
 
@@ -1056,9 +1007,7 @@ mod phase_113_filter_tests {
                 "kind": "AppendList",
                 "value": payload.to_string(),
             }),
-            proposed_reason: Some(
-                "Phase 118 — observed recurring style preference".into(),
-            ),
+            proposed_reason: Some("Phase 118 — observed recurring style preference".into()),
             applied_op: None,
             applied_seq: None,
             rejected_reason: None,
@@ -1085,9 +1034,7 @@ mod phase_113_filter_tests {
                 "kind": "AppendList",
                 "value": payload.to_string(),
             }),
-            proposed_reason: Some(
-                "Phase 118 — recurring shape past existing role envelope".into(),
-            ),
+            proposed_reason: Some("Phase 118 — recurring shape past existing role envelope".into()),
             applied_op: None,
             applied_seq: None,
             rejected_reason: None,
