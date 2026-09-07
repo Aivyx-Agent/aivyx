@@ -279,6 +279,7 @@ impl WikiSynthesizer {
             max_tokens: self.config.max_tokens,
             temperature: Some(0.2),
         id_slot: None,
+        slot_hint: None,
         };
         let token = CancellationToken::new();
         let mut stream = self.provider.chat_stream(request, &token).await.ok()?;

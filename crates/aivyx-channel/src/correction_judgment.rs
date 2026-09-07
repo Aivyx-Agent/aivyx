@@ -171,6 +171,7 @@ impl CorrectionJudge for LlmCorrectionJudge {
             max_tokens: JUDGE_MAX_TOKENS,
             temperature: Some(0.0),
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream =

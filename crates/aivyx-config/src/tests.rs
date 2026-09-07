@@ -3743,6 +3743,154 @@ fn mistralrs_display_canonical_form() {
 }
 
 // ------------------------------------------------------------------
+// Task 6 — ProviderKind::Broker regression tests
+// ------------------------------------------------------------------
+
+#[test]
+fn broker_provider_from_env() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "broker");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Broker);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn broker_provider_serde_aliases_parse() {
+    for alias in ["broker", "aivyx-broker", "aivyx_broker"] {
+        let env = EnvScope::new();
+        let tmp = TempDir::new(&format!("broker-toml-{alias}"));
+        let toml_path = tmp.path().join("aivyx.toml");
+        std::fs::write(
+            &toml_path,
+            format!(
+                r#"
+[agent]
+provider = "{alias}"
+model = "qwen3-32b"
+"#
+            ),
+        )
+        .unwrap();
+        let opts = LoadOptions {
+            toml_path: Some(toml_path),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        };
+        let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+        assert_eq!(
+            cfg.provider.value,
+            ProviderKind::Broker,
+            "alias {alias:?} must deserialize to Broker",
+        );
+        drop(env);
+    }
+}
+
+#[test]
+fn broker_validate_does_not_require_api_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "broker");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts)
+        .expect("broker must not require an API key even with require_api_key=true");
+    drop(env);
+}
+
+#[test]
+fn broker_base_url_defaults_to_none() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PROVIDER", "broker");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(
+        cfg.broker_base_url, None,
+        "absent [broker] section must leave broker_base_url None -- the binary's \
+         dispatch arm falls back to aivyx-broker's own http://127.0.0.1:8899 default"
+    );
+    drop(env);
+}
+
+#[test]
+fn broker_base_url_round_trips_from_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("broker-base-url");
+    let toml_path = tmp.path().join("aivyx.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "broker"
+model = "qwen3-32b"
+
+[broker]
+base_url = "http://127.0.0.1:9999"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(
+        cfg.broker_base_url.as_deref(),
+        Some("http://127.0.0.1:9999"),
+    );
+    drop(env);
+}
+
+#[test]
+fn provider_kind_broker_is_openai_compatible_and_not_in_process() {
+    // Task 6 — unlike MistralRs, Broker speaks the identical
+    // OpenAI-compatible wire protocol as LlamaCpp (plus one additive
+    // optional field) and is not an in-process provider.
+    assert!(ProviderKind::Broker.is_openai_compatible());
+    assert!(!ProviderKind::Broker.is_in_process());
+}
+
+#[test]
+fn broker_default_context_window_matches_other_local_providers() {
+    assert_eq!(ProviderKind::Broker.default_context_window(), 8_000);
+}
+
+#[test]
+fn broker_display_canonical_form() {
+    assert_eq!(ProviderKind::Broker.to_string(), "broker");
+}
+
+// ------------------------------------------------------------------
 // [daemon] web_ui / web_ui_port — Phase 39
 // ------------------------------------------------------------------
 

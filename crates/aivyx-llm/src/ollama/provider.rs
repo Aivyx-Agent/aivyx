@@ -787,6 +787,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         }
     }
 
@@ -955,6 +956,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let messages = body["messages"].as_array().unwrap();
@@ -1016,6 +1018,7 @@ mod tests {
             max_tokens: 1024,
             temperature: Some(0.7),
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let opts = body["options"].as_object().unwrap();
@@ -1036,6 +1039,7 @@ mod tests {
             max_tokens: 1024,
             temperature: Some(0.2),
             id_slot: None,
+            slot_hint: None,
         };
         let options = OllamaOptions {
             num_ctx: Some(8192),
@@ -1059,6 +1063,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let err =
             build_request_body(&req, &OllamaOptions::default(), false, None).unwrap_err();
@@ -1215,6 +1220,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1292,6 +1298,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         // Would be Err without the retry; the second attempt succeeds.
@@ -1395,6 +1402,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1436,6 +1444,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1464,6 +1473,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1494,6 +1504,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1539,6 +1550,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1586,6 +1598,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1627,6 +1640,7 @@ mod tests {
             max_tokens: 1024,
             temperature: Some(0.7),
             id_slot: None,
+            slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1705,6 +1719,7 @@ mod tests {
             max_tokens: 1024,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();

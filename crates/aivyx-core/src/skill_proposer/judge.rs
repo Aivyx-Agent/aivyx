@@ -829,6 +829,7 @@ pub async fn judge(
         max_tokens: request.max_tokens,
         temperature: Some(0.2), // low temp for stable judgment
     id_slot: None,
+    slot_hint: None,
     };
 
     let mut stream = provider.chat_stream(llm_request, cancellation).await?;

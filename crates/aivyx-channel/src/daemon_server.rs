@@ -6787,6 +6787,7 @@ fn provider_label(p: aivyx_config::ProviderKind) -> &'static str {
         LlamaCpp => "llamacpp",
         Jan => "jan",
         MistralRs => "mistralrs",
+        Broker => "broker",
     }
 }
 
@@ -9473,6 +9474,7 @@ system_prompt = "You are a custom role."
         assert_eq!(provider_label(ProviderKind::Anthropic), "anthropic");
         assert_eq!(provider_label(ProviderKind::Ollama), "ollama");
         assert_eq!(provider_label(ProviderKind::MistralRs), "mistralrs");
+        assert_eq!(provider_label(ProviderKind::Broker), "broker");
         assert_eq!(budget_action_label(aivyx_cost::BudgetAction::Deny), "deny");
         assert_eq!(
             budget_action_label(aivyx_cost::BudgetAction::Alert),

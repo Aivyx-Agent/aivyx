@@ -301,6 +301,13 @@ fn build_request_body(
         body["id_slot"] = json!(slot_id);
     }
 
+    if let Some(hint) = &request.slot_hint {
+        body["aivyx_slot_hint"] = json!({
+            "prefix_hash": hint.prefix_hash,
+            "preferred_slot": hint.preferred_slot,
+        });
+    }
+
     Ok(body)
 }
 
@@ -756,6 +763,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -798,6 +806,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -850,6 +859,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         }
     }
 
@@ -979,6 +989,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         let messages = body["messages"].as_array().unwrap();
@@ -1003,6 +1014,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
@@ -1036,6 +1048,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&req, false, true).unwrap();
 
@@ -1091,6 +1104,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1136,6 +1150,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1218,6 +1233,7 @@ data: [DONE]\n\n";
             max_tokens: 2048,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&req, false, false).unwrap();
         assert!(
@@ -1237,6 +1253,7 @@ data: [DONE]\n\n";
             max_tokens: 1000,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         assert!(
@@ -1362,6 +1379,7 @@ data: [DONE]\n\n";
             max_tokens: 2048,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1394,6 +1412,7 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
             id_slot: None,
+            slot_hint: None,
         };
         let body = build_request_body(&request, true, false).unwrap();
         assert!(body.get("id_slot").is_none(), "id_slot must be omitted entirely when None");
@@ -1411,8 +1430,62 @@ data: [DONE]\n\n";
             max_tokens: 100,
             temperature: None,
             id_slot: Some(2),
+            slot_hint: None,
         };
         let body = build_request_body(&request, true, false).unwrap();
         assert_eq!(body["id_slot"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn build_request_body_omits_aivyx_slot_hint_when_none() {
+        let messages: Vec<LlmMessage> = vec![];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let request = LlmRequest {
+            model: "test-model",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 100,
+            temperature: None,
+            id_slot: None,
+            slot_hint: None,
+        };
+        let body = build_request_body(&request, true, false).unwrap();
+        assert!(
+            body.get("aivyx_slot_hint").is_none(),
+            "aivyx_slot_hint must be omitted entirely when None -- a request without it \
+             must behave exactly like a plain OpenAI-compatible call"
+        );
+    }
+
+    #[test]
+    fn build_request_body_includes_aivyx_slot_hint_when_set() {
+        let messages: Vec<LlmMessage> = vec![];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let request = LlmRequest {
+            model: "test-model",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 100,
+            temperature: None,
+            // Broker mode never sets `id_slot` directly (no local
+            // `KvSlotPool` checkout) -- `slot_hint` carries the
+            // equivalent information instead.
+            id_slot: None,
+            slot_hint: Some(crate::SlotHint {
+                prefix_hash: "abc123".to_string(),
+                preferred_slot: Some(2),
+            }),
+        };
+        let body = build_request_body(&request, true, false).unwrap();
+        assert_eq!(
+            body["aivyx_slot_hint"],
+            serde_json::json!({"prefix_hash": "abc123", "preferred_slot": 2}),
+        );
+        assert!(
+            body.get("id_slot").is_none(),
+            "id_slot must stay absent when only slot_hint is set"
+        );
     }
 }

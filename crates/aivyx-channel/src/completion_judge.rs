@@ -168,6 +168,7 @@ impl CompletionJudge {
             max_tokens: JUDGE_MAX_TOKENS,
             temperature: Some(0.0),
         id_slot: None,
+        slot_hint: None,
         };
         let cancel = CancellationToken::new();
         let text = match self.provider.chat_stream(request, &cancel).await {

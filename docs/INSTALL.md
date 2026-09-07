@@ -1617,6 +1617,44 @@ model    = "qwen2.5-7b-instruct"
 base_url = "http://localhost:1337/v1"  # override if you changed Jan's port
 ```
 
+### Coordinating GPU-slot access across multiple processes (`aivyx-broker`, Task 6)
+
+If more than one local process shares a single `llama-server` — e.g. `aivyx`'s
+own daemon and a delegated
+[`aivyx-coder`](https://github.com/Aivyx-Agent/aivyx-coder) subprocess pointed
+at the same GPU — each picks a physical KV-cache slot independently, with zero
+awareness of the other. `llama-server` itself defers rather than corrupts state
+on a same-slot collision, but the result is silent head-of-line blocking and
+cache-locality thrash.
+
+[`aivyx-broker`](https://github.com/Aivyx-Agent/aivyx-broker) is a standalone
+local daemon that sits between every client and the real `llama-server`: it
+owns live slot admission and the KV-cache restore/warm/save lifecycle, then
+forwards the completion through untouched. Point `aivyx` at the broker
+instead of `llama-server` directly and it stops doing its own local
+slot-picking and kvcache restore/save — the broker now owns that (see
+`aivyx-broker`'s own `README.md` for how to build, run, and configure it,
+including its `--kvcache-store-path` flag, which should point at the same
+directory this repo's own `[kvcache] store_path` / `AIVYX_KVCACHE_STORE_PATH`
+would otherwise use, so every client shares one on-disk cache).
+
+```toml
+[agent]
+provider = "broker"
+model    = "qwen3-32b"  # arbitrary string; forwarded to the real llama-server
+
+[broker]
+base_url = "http://127.0.0.1:8899"  # aivyx-broker's own default bind; override if you changed --port
+```
+
+`aivyx-broker` must already be running (started the same way you'd start
+`llama-server` itself — there is no auto-spawn); if it isn't, `aivyx` sees a
+connection-refused error against `[broker] base_url`, the same shape as
+`llama-server` being down. Only worth adopting once more than one local
+process actually shares the same `llama-server` — a single-process setup gets
+no benefit from it and should stay on `provider = "llamacpp"`'s own
+[KV-cache persistence](#kv-cache-persistence-llama-server-only) instead.
+
 ### Tradeoffs the matrix doesn't capture
 
 - **Model-family metadata.** Aivyx's textual tool-call

@@ -1093,6 +1093,7 @@ mod tests {
             max_tokens: 256,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
 
         let token = CancellationToken::new();
@@ -1128,6 +1129,7 @@ mod tests {
             max_tokens: 256,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
 
         let token = CancellationToken::new();
@@ -1168,6 +1170,7 @@ mod tests {
             max_tokens: 256,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let token = CancellationToken::new();
         let err = match provider.chat_stream(req, &token).await {
@@ -1200,6 +1203,7 @@ mod tests {
             max_tokens: 256,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let token = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &token).await.unwrap();
@@ -1238,6 +1242,7 @@ mod tests {
             // a sum of powers of two (e.g. 0.3) would fail this assertion.
             temperature: Some(0.5),
             id_slot: None,
+            slot_hint: None,
         };
         let token = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &token).await.unwrap();
@@ -1272,6 +1277,7 @@ mod tests {
             max_tokens: 16,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let token = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &token).await.unwrap();
@@ -1408,6 +1414,7 @@ mod tests {
             max_tokens: 256,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let token = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &token).await.unwrap();
@@ -1528,6 +1535,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let err = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).unwrap_err();
         match err {
@@ -1557,6 +1565,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let body = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).expect("ok");
         assert_eq!(body["model"], "claude-haiku-4-5-20251001");
@@ -1583,6 +1592,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_ok());
     }
@@ -1837,6 +1847,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let err = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).unwrap_err();
         match err {
@@ -1879,6 +1890,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_ok());
     }
@@ -1901,6 +1913,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         let err = build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).unwrap_err();
         assert!(matches!(err, LlmError::Parse(_)));
@@ -1995,6 +2008,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         // Default cap → rejected.
         assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_err());
@@ -2029,6 +2043,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         // Cap of 50 → over by 10.
         let err = build_request_body(&req, 50).unwrap_err();
@@ -2067,6 +2082,7 @@ mod tests {
             max_tokens: 100,
             temperature: None,
         id_slot: None,
+        slot_hint: None,
         };
         assert!(build_request_body(&req, ANTHROPIC_PDF_PAGE_CAP).is_ok());
     }

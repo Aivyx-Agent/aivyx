@@ -389,6 +389,12 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx";
 /// - `Jan` (Phase 133) — `base_url = http://localhost:1337/v1`;
 ///   model management via Jan's desktop GUI. No
 ///   `ollama.list/show/pull` tools registered.
+/// - `Broker` (Task 6) — `base_url = http://127.0.0.1:8899`
+///   (`aivyx-broker`'s own documented default bind); speaks the
+///   identical OpenAI-compat wire protocol as `LlamaCpp`, plus one
+///   additive `aivyx_slot_hint` field. This run never builds a local
+///   `KvSlotPool` / kvcache store -- the broker owns that lifecycle
+///   itself. No `ollama.list/show/pull` tools registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -410,6 +416,20 @@ pub enum ProviderKind {
     /// and tuning parameters.
     #[serde(alias = "mistralrs", alias = "mistral-rs", alias = "mistral_rs")]
     MistralRs,
+    /// Task 6 — `aivyx-broker`, a standalone local daemon that
+    /// coordinates GPU-slot access across multiple local processes
+    /// sharing one `llama-server` (e.g. `aivyx`'s own daemon and a
+    /// delegated `aivyx-coder` subprocess). Speaks the identical
+    /// OpenAI-compatible wire protocol as [`ProviderKind::LlamaCpp`] --
+    /// same request/response shape -- plus one additive optional JSON
+    /// field (`aivyx_slot_hint`) the broker uses to make its own
+    /// cache-locality-aware slot admission decision. Unlike `LlamaCpp`,
+    /// a client in this mode never picks or persists a KV-cache slot
+    /// itself: the broker owns the full checkout/restore/warm/save
+    /// lifecycle server-side. See `[broker] base_url` /
+    /// `broker_base_url`.
+    #[serde(alias = "broker", alias = "aivyx-broker", alias = "aivyx_broker")]
+    Broker,
 }
 
 impl ProviderKind {
@@ -426,12 +446,17 @@ impl ProviderKind {
                 | ProviderKind::Ollama
                 | ProviderKind::LlamaCpp
                 | ProviderKind::Jan
+                | ProviderKind::Broker
         )
         // Phase 134 — MistralRs is intentionally NOT in this set.
         // It has no HTTP wire protocol; the model runs in-process.
         // Callers branching on this method (banner display, api-key
         // requirement) treat MistralRs as a distinct "in-process"
         // category.
+        //
+        // Task 6 — Broker IS in this set: it speaks the identical
+        // OpenAI-compatible wire protocol as LlamaCpp (same request/
+        // response shape, plus one additive optional field).
     }
 
     /// Phase 134 — `true` if this provider runs the model in
@@ -459,6 +484,10 @@ impl ProviderKind {
             // the loaded GGUF's metadata; mistralrs honors the
             // model's declared max_seq_len at load time.
             ProviderKind::MistralRs => 8_000,
+            // Task 6 — same conservative posture; the broker proxies
+            // to a real `llama-server`, whose actual context depends
+            // on the loaded model, same as the direct LlamaCpp path.
+            ProviderKind::Broker => 8_000,
         }
     }
 }
@@ -472,6 +501,7 @@ impl std::fmt::Display for ProviderKind {
             ProviderKind::LlamaCpp => f.write_str("llamacpp"),
             ProviderKind::Jan => f.write_str("jan"),
             ProviderKind::MistralRs => f.write_str("mistralrs"),
+            ProviderKind::Broker => f.write_str("broker"),
         }
     }
 }
@@ -1121,6 +1151,14 @@ pub struct AivyxConfig {
     /// session-construction time. Empty when the operator
     /// uses a different provider.
     pub mistralrs_options: MistralRsOptions,
+    /// Task 6 — `[broker] base_url` operator override for
+    /// `aivyx-broker`'s address. `None` uses the built-in
+    /// `http://127.0.0.1:8899` default (aivyx-broker's own default
+    /// bind, matching the `LlamaCpp`/`Jan` "sensible localhost
+    /// default, TOML overrides it" pattern) at provider-construction
+    /// time. Only consulted when `provider = "broker"`; empty when
+    /// the operator uses a different provider.
+    pub broker_base_url: Option<String>,
     /// Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override for
     /// the per-turn wall-clock deadline. `None` → the built-in 120s
     /// default. Raised for slow local backends; the binary passes it to
@@ -3909,6 +3947,9 @@ struct RawToml {
     /// embedded Rust-native provider.
     #[serde(default)]
     mistralrs: MistralRsOptions,
+    /// Task 6 — `[broker]` config section for `aivyx-broker`.
+    #[serde(default)]
+    broker: RawBroker,
     /// Phase 135 — `[voice]` config section for the
     /// voice channel adapter.
     #[serde(default)]
@@ -5496,6 +5537,16 @@ pub struct MistralRsOptions {
     pub constrain_tool_calls: bool,
 }
 
+/// Task 6 — `[broker]` section for `aivyx-broker`. Currently just the
+/// base URL; `aivyx-broker` itself has no other client-configurable
+/// per-request knobs (queue timeout, kvcache budget, etc. are the
+/// broker's own startup flags, not something a client sets per-request).
+#[derive(Debug, Default, Deserialize)]
+struct RawBroker {
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
 /// `OllamaOptions`.
 #[derive(Debug, Default, Deserialize)]
 struct RawOllama {
@@ -5713,12 +5764,15 @@ impl AivyxConfig {
                     // Phase 134 — same alias set as the serde
                     // attribute on the enum.
                     "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
+                    // Task 6 — same alias set as the serde attribute
+                    // on the enum.
+                    "broker" | "aivyx-broker" | "aivyx_broker" => ProviderKind::Broker,
                     other => {
                         return Err(ConfigError::Invalid {
                             field: "provider",
                             reason: format!(
                                 "{ENV_PROVIDER}={other:?} is not valid. \
-                                 Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs"
+                                 Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker"
                             ),
                         });
                     }
@@ -6363,6 +6417,11 @@ impl AivyxConfig {
         // embedded provider. Validation (model_path required when
         // provider = mistralrs) happens in `validate()` below.
         let mistralrs_options = toml.mistralrs.clone();
+        // Task 6 — [broker] base_url pass-through. `None` when unset;
+        // the binary's `ProviderKind::Broker` dispatch arm falls back
+        // to `aivyx-broker`'s own documented default
+        // (`http://127.0.0.1:8899`).
+        let broker_base_url = toml.broker.base_url.clone();
         // Phase 135 — [voice] options pass through to the voice
         // channel adapter. No validation here; the binary's
         // ChannelKind::Voice dispatch arm validates required
@@ -7613,6 +7672,7 @@ impl AivyxConfig {
             tool_relevance,
             ollama_options,
             mistralrs_options,
+            broker_base_url,
             turn_timeout_secs: toml.agent.turn_timeout_secs,
             cycle_detection: toml.agent.cycle_detection,
             injection_scan_enabled,
@@ -7901,13 +7961,16 @@ impl AivyxConfig {
                 ProviderKind::Ollama
                 | ProviderKind::LlamaCpp
                 | ProviderKind::Jan
-                | ProviderKind::MistralRs => {
+                | ProviderKind::MistralRs
+                | ProviderKind::Broker => {
                     // Local-LLM providers do not require an API key —
                     // they run locally and ignore the Authorization
                     // header. Phase 133 added LlamaCpp + Jan; Phase
                     // 134 adds MistralRs (in-process, no wire
                     // protocol at all, so the question doesn't
-                    // arise).
+                    // arise). Task 6 adds Broker -- `aivyx-broker` is
+                    // loopback-only with no auth, same trust model as
+                    // `llama-server` itself.
                 }
             }
         }

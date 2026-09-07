@@ -247,6 +247,7 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
         max_tokens: 64,
         temperature: None,
     id_slot: None,
+    slot_hint: None,
     };
 
     let token = aivyx_core::CancellationToken::new();

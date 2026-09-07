@@ -195,6 +195,7 @@ impl RecallJudge for LlmRecallJudge {
             max_tokens: JUDGE_MAX_TOKENS,
             temperature: Some(0.0),
         id_slot: None,
+        slot_hint: None,
         };
         // Non-cancellable token: the consolidation pass is on
         // a reflection cron, not an interactive turn (Phase 87

@@ -5946,6 +5946,10 @@ async fn run_async(
         // referenced when `provider = "mistralrs"`; for any other
         // provider the field is bound and ignored.
         mistralrs_options: config_mistralrs_options,
+        // Task 6 — [broker] base_url override for `aivyx-broker`. Only
+        // referenced when `provider = "broker"`; for any other provider
+        // the field is bound and ignored.
+        broker_base_url: config_broker_base_url,
         // Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override,
         // passed to the SessionConfig below (slow local backends).
         turn_timeout_secs,
@@ -6220,6 +6224,15 @@ async fn run_async(
     // Track the Ollama base URL for tool registration (Phase 36).
     let mut ollama_base_url_for_tools: Option<String> = None;
     let mut llamacpp_base_url_for_kvcache: Option<String> = None;
+    // Task 6 — deliberately NOT set for `ProviderKind::Broker`. Unlike
+    // LlamaCpp, broker mode never builds a local `KvSlotPool` /
+    // `LlamaServerSlotStore` at all -- `aivyx-broker` owns the full
+    // checkout/restore/warm/save lifecycle server-side, so this run's
+    // planner(s) must never do their own local slot-picking. See
+    // `broker_slot_hint_mode` below, which instead arms
+    // `LlmPlanner::with_broker_slot_hint` on the daemon's own planner
+    // factory.
+    let mut broker_slot_hint_mode = false;
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::Anthropic => {
             let api_key = anthropic_api_key
@@ -6387,6 +6400,45 @@ async fn run_async(
                         .to_string(),
                 );
             }
+        }
+        ProviderKind::Broker => {
+            // Task 6 — route through the OpenAI-compat provider against
+            // `aivyx-broker` instead of `llama-server` directly. The
+            // broker speaks the identical OpenAI-compatible wire
+            // protocol as the `LlamaCpp` arm above -- same
+            // `OpenAiProvider`/`OpenAiConfig` construction, just a
+            // different `base_url`. Defaults to
+            // `http://127.0.0.1:8899` (aivyx-broker's own documented
+            // default bind); operator overrides via `[broker] base_url`
+            // in aivyx.toml.
+            //
+            // Deliberately does NOT set `llamacpp_base_url_for_kvcache`
+            // -- this run must never build a local `KvSlotPool` /
+            // `LlamaServerSlotStore` (see that variable's own doc
+            // comment above). Sets `broker_slot_hint_mode` instead, so
+            // the daemon's planner factory below arms
+            // `LlmPlanner::with_broker_slot_hint` in its place.
+            //
+            // The API key is accepted if present but never required
+            // (aivyx-broker is loopback-only with no auth, same trust
+            // model as llama-server itself).
+            const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
+            let base_url = config_broker_base_url
+                .clone()
+                .unwrap_or_else(|| DEFAULT_BROKER_BASE_URL.to_string());
+            broker_slot_hint_mode = true;
+            let cfg = match openai_api_key {
+                Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
+                None => OpenAiConfig::without_api_key().with_base_url(base_url),
+            }
+            // Chapter Emboss (EB.2) — same grammar-constrained
+            // tool-calling knob as the direct llama-server path (the
+            // broker forwards the request to a real llama-server
+            // untouched).
+            .with_constrain_tool_calls(openai_constrain_tool_calls);
+            let p = OpenAiProvider::new(cfg)
+                .map_err(|e| format!("failed to build aivyx-broker provider: {e}"))?;
+            Arc::new(p)
         }
     };
 
@@ -9064,6 +9116,7 @@ async fn run_async(
         let planner_provider = Arc::clone(&provider);
         let planner_tools = Arc::clone(&tools);
         let planner_kv_cache_handles = kv_cache_handles.clone();
+        let planner_broker_slot_hint_mode = broker_slot_hint_mode;
         let daemon_overrides = shared_role_overrides.clone();
         // Phase 60 Task 3 — per-turn Persona refresh, same shape
         // as the local-CLI session config above.
@@ -9120,6 +9173,15 @@ async fn run_async(
                     build_hash.clone(),
                 ),
                 None => planner,
+            };
+            // Task 6 — mutually exclusive with the `with_kv_cache` call
+            // above: `planner_kv_cache_handles` is never `Some` when
+            // `provider = "broker"` (see `broker_slot_hint_mode`'s own
+            // doc comment above), so at most one of the two ever fires.
+            let planner = if planner_broker_slot_hint_mode {
+                planner.with_broker_slot_hint()
+            } else {
+                planner
             };
             Box::new(planner) as Box<dyn aivyx_core::TurnPlanner>
         };

@@ -54,6 +54,7 @@ pub async fn decompose_goal(
         max_tokens: PLANNER_MAX_TOKENS,
         temperature: Some(0.2),
     id_slot: None,
+    slot_hint: None,
     };
 
     let mut stream = provider

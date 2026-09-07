@@ -380,6 +380,41 @@ pub struct LlmRequest<'a> {
     /// (see `LlmPlanner`'s kvcache fields); `None` for every other
     /// provider and every llama-server request before checkout.
     pub id_slot: Option<u32>,
+
+    /// `aivyx-broker`-only: an additive `aivyx_slot_hint` JSON field
+    /// (`{"prefix_hash": ..., "preferred_slot": ...}`) the broker uses to
+    /// make its own cache-locality-aware slot admission decision. Only
+    /// ever set when `[agent] provider = "broker"` (see
+    /// `LlmPlanner::with_broker_slot_hint`); `None` for every other
+    /// provider. Mutually exclusive with `id_slot` in practice -- broker
+    /// mode never checks out a local `KvSlotPool` slot (the broker owns
+    /// that lifecycle itself), so `id_slot` stays `None` whenever this is
+    /// `Some`, and vice versa. A backend that doesn't recognize the
+    /// `aivyx_slot_hint` field (real OpenAI, Anthropic, Ollama, a bare
+    /// llama-server) is unaffected: only the OpenAI-compat provider's
+    /// request-body builder serializes it, and only when `Some`.
+    pub slot_hint: Option<SlotHint>,
+}
+
+/// `aivyx-broker` slot hint carried on [`LlmRequest::slot_hint`].
+/// Serialized as the `aivyx_slot_hint` JSON key by the OpenAI-compat
+/// provider (`openai::provider::build_request_body`) — an additive field
+/// on top of the plain OpenAI-compatible wire shape; a request without it
+/// behaves exactly like a normal OpenAI-compatible call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlotHint {
+    /// Stable hash of (system prompt + tool definitions) — the same
+    /// computation `aivyx-core`'s `compute_prefix_hash` uses for its own
+    /// local `CacheKey`. The broker uses this to prefer routing requests
+    /// that share a prefix onto the same physical `llama-server` slot.
+    pub prefix_hash: String,
+    /// Optional slot the caller would prefer, if it has one in mind.
+    /// `None` lets the broker pick freely. `aivyx`'s own broker-mode
+    /// planner never has a preference (it never checks out a local
+    /// slot), so this is always `None` from that call site today —
+    /// typed as `Option` because the broker's own wire contract accepts
+    /// one, not because `aivyx` currently sends one.
+    pub preferred_slot: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +769,7 @@ mod tests {
             max_tokens: 256,
             temperature: Some(0.2),
             id_slot: None,
+            slot_hint: None,
         }
     }
 

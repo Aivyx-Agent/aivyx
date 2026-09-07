@@ -44,7 +44,8 @@ use serde_json::json;
 use aivyx_kvcache::{CacheKey, CacheMeta, LlamaServerSlotStore};
 use aivyx_llm::{
     ContentBlock, KvSlotPool, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd,
-    LlmStream, LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, ToolCallEnd,
+    LlmStream, LlmStreamEvent, LlmToolCallRecord, LlmToolDescriptor, LlmUsage, SlotHint,
+    ToolCallEnd,
 };
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
@@ -509,6 +510,15 @@ pub struct LlmPlanner {
     /// always release it even if the rest of `begin_turn`'s async work
     /// never completes (e.g. the turn future is dropped mid-warm-up).
     kv_slot_id: Option<u32>,
+    /// `true` only when `with_broker_slot_hint` was called (only ever
+    /// true when `[agent] provider = "broker"`). When set, every
+    /// outgoing `LlmRequest` carries `slot_hint: Some(SlotHint { .. })`
+    /// instead of a raw `id_slot` pin -- `aivyx-broker` owns the full
+    /// checkout/restore/warm/save lifecycle server-side in this mode, so
+    /// this planner never calls `with_kv_cache` alongside it, and
+    /// `ensure_kv_slot_checked_out` (gated on `kv_cache.is_some()`)
+    /// stays a complete no-op the whole turn.
+    broker_slot_hint: bool,
 }
 
 struct KvCacheConfig {
@@ -678,6 +688,7 @@ impl LlmPlanner {
             task_message_index: None,
             kv_cache: None,
             kv_slot_id: None,
+            broker_slot_hint: false,
         }
     }
 
@@ -695,6 +706,21 @@ impl LlmPlanner {
         build_hash: String,
     ) -> Self {
         self.kv_cache = Some(KvCacheConfig { pool, store, backend_id, model_id, build_hash });
+        self
+    }
+
+    /// Opts this `LlmPlanner` into `aivyx-broker` slot-hint mode. Only
+    /// ever called by whoever builds this planner's factory closure when
+    /// `[agent] provider = "broker"` -- mutually exclusive with
+    /// `with_kv_cache` in practice (the two are never called on the same
+    /// planner: the broker owns slot admission and the restore/warm/save
+    /// lifecycle itself, so this planner must never also run its own
+    /// local `KvSlotPool` checkout for the same turn). Every outgoing
+    /// `LlmRequest` this planner builds after this call carries
+    /// `slot_hint: Some(SlotHint { prefix_hash, preferred_slot })`
+    /// instead of a raw `id_slot` pin.
+    pub fn with_broker_slot_hint(mut self) -> Self {
+        self.broker_slot_hint = true;
         self
     }
 
@@ -818,6 +844,11 @@ impl LlmPlanner {
                 max_tokens: 1,
                 temperature: None,
                 id_slot: Some(slot_id),
+                // This warm-up path only ever runs when `kv_cache` is
+                // configured, which is never true alongside
+                // `broker_slot_hint` (see that field's doc comment) --
+                // always `None` here.
+                slot_hint: None,
             };
             let cancellation = crate::CancellationToken::new();
             let provider = self.provider.clone();
@@ -936,6 +967,17 @@ impl LlmPlanner {
         &self,
         channel: &dyn ChannelContext,
     ) -> Result<LlmStepEnd, LlmError> {
+        // Broker mode (`broker_slot_hint`) attaches `slot_hint` instead
+        // of pinning `id_slot` directly -- `aivyx-broker` picks the
+        // physical slot itself, server-side, using this as a
+        // cache-locality hint. `self.kv_slot_id` stays `None` the whole
+        // turn in broker mode (this planner never calls `with_kv_cache`
+        // alongside `with_broker_slot_hint`, so `ensure_kv_slot_checked_out`
+        // never runs), so `id_slot` below is always `None` here too.
+        let slot_hint = self.broker_slot_hint.then(|| SlotHint {
+            prefix_hash: compute_prefix_hash(self.config.system_prompt.as_deref(), &self.tools),
+            preferred_slot: self.kv_slot_id,
+        });
         let request = LlmRequest {
             model: self.config.model.as_str(),
             system: self.config.system_prompt.as_deref(),
@@ -944,6 +986,7 @@ impl LlmPlanner {
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             id_slot: self.kv_slot_id,
+            slot_hint,
         };
 
         let cancellation = channel.cancellation_token();
@@ -2018,6 +2061,10 @@ mod tests {
 
     struct FakeLlmProvider {
         script: Mutex<std::collections::VecDeque<FakeStep>>,
+        // Task 6 — records `(id_slot, slot_hint)` off the most recent
+        // `chat_stream` call, so tests can assert on what the planner
+        // actually sent without a real HTTP layer to inspect.
+        last_request: Mutex<Option<(Option<u32>, Option<SlotHint>)>>,
     }
 
     struct FakeStep {
@@ -2029,6 +2076,7 @@ mod tests {
         fn new(steps: Vec<FakeStep>) -> Arc<Self> {
             Arc::new(FakeLlmProvider {
                 script: Mutex::new(steps.into()),
+                last_request: Mutex::new(None),
             })
         }
     }
@@ -2037,9 +2085,10 @@ mod tests {
     impl LlmProvider for FakeLlmProvider {
         async fn chat_stream(
             &self,
-            _request: LlmRequest<'_>,
+            request: LlmRequest<'_>,
             _cancellation: &crate::CancellationToken,
         ) -> Result<Box<dyn LlmStream>, LlmError> {
+            *self.last_request.lock().unwrap() = Some((request.id_slot, request.slot_hint.clone()));
             let step = self
                 .script
                 .lock()
@@ -5217,6 +5266,117 @@ mod tests {
             "chat_stream (the warm-up call) must be invoked when the pool's recorded prefix \
              for this slot does not match this planner's own prefix -- if this stayed at 1, \
              the skip check would be firing unconditionally instead of comparing prefixes"
+        );
+    }
+
+    // ---- Task 6 — ProviderKind::Broker slot-hint mode -------------
+
+    #[tokio::test]
+    async fn broker_slot_hint_mode_skips_local_checkout_and_attaches_slot_hint() {
+        // Task 6 regression test: a broker-mode planner
+        // (`with_broker_slot_hint`, no `with_kv_cache`) must never touch a
+        // local `KvSlotPool` -- `aivyx-broker` owns admission and the
+        // restore/warm/save lifecycle itself -- and every outgoing
+        // request must carry `slot_hint` instead of a raw `id_slot` pin.
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "ok".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let mut planner = LlmPlanner::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        )
+        .with_broker_slot_hint();
+
+        // A pool that exists but is deliberately never wired into this
+        // planner (no `with_kv_cache` call) -- proof the broker-mode
+        // planner has no way to touch it at all, not merely that it
+        // chooses not to.
+        let unused_pool = Arc::new(KvSlotPool::new(1));
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        assert!(
+            planner.kv_cache.is_none(),
+            "broker mode must never configure a local kvcache pool"
+        );
+        assert_eq!(
+            planner.kv_slot_id, None,
+            "broker mode must never check out a local slot id"
+        );
+        assert_eq!(
+            unused_pool.checkout(),
+            Some(0),
+            "the unrelated pool must be completely untouched by a broker-mode turn"
+        );
+
+        let (id_slot, slot_hint) = provider
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("chat_stream must have been called");
+        assert_eq!(
+            id_slot, None,
+            "broker mode must send id_slot: None, not a raw local pin"
+        );
+        let hint = slot_hint.expect("broker mode must attach a slot_hint");
+        assert_eq!(
+            hint.prefix_hash,
+            compute_prefix_hash(None, &[]),
+            "prefix_hash must match this planner's own config (no system prompt, no tools)"
+        );
+        assert_eq!(
+            hint.preferred_slot, None,
+            "no local slot was ever checked out, so preferred_slot must be None"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_broker_planner_never_attaches_a_slot_hint() {
+        // Inverse of the test above: an ordinary planner (no
+        // `with_broker_slot_hint` call -- every existing provider's
+        // shape today) must never send `slot_hint`, byte-identical to
+        // pre-Task-6 behavior.
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "ok".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let mut planner = LlmPlanner::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        let (id_slot, slot_hint) = provider
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("chat_stream must have been called");
+        assert_eq!(id_slot, None);
+        assert_eq!(
+            slot_hint, None,
+            "a planner that never opted into broker mode must never attach a slot_hint"
         );
     }
 }
