@@ -705,6 +705,15 @@ impl LlmPlanner {
         model_id: String,
         build_hash: String,
     ) -> Self {
+        // `with_kv_cache` and `with_broker_slot_hint` are mutually
+        // exclusive by construction (llama-server-local-kvcache mode and
+        // aivyx-broker mode never coexist for the same planner) -- this
+        // is a cheap invariant check, not a behavior change, to catch a
+        // future caller that ever combines the two.
+        debug_assert!(
+            !self.broker_slot_hint,
+            "with_kv_cache called on a planner already in broker_slot_hint mode"
+        );
         self.kv_cache = Some(KvCacheConfig { pool, store, backend_id, model_id, build_hash });
         self
     }
@@ -720,6 +729,11 @@ impl LlmPlanner {
     /// `slot_hint: Some(SlotHint { prefix_hash, preferred_slot })`
     /// instead of a raw `id_slot` pin.
     pub fn with_broker_slot_hint(mut self) -> Self {
+        // Symmetric invariant check to the one in `with_kv_cache` above.
+        debug_assert!(
+            self.kv_cache.is_none(),
+            "with_broker_slot_hint called on a planner that already has kv_cache set"
+        );
         self.broker_slot_hint = true;
         self
     }
@@ -2061,7 +2075,7 @@ mod tests {
 
     struct FakeLlmProvider {
         script: Mutex<std::collections::VecDeque<FakeStep>>,
-        // Task 6 — records `(id_slot, slot_hint)` off the most recent
+        // GPU-slot broker coordination — records `(id_slot, slot_hint)` off the most recent
         // `chat_stream` call, so tests can assert on what the planner
         // actually sent without a real HTTP layer to inspect.
         last_request: Mutex<Option<(Option<u32>, Option<SlotHint>)>>,
@@ -5269,11 +5283,11 @@ mod tests {
         );
     }
 
-    // ---- Task 6 — ProviderKind::Broker slot-hint mode -------------
+    // ---- GPU-slot broker coordination — ProviderKind::Broker slot-hint mode ----
 
     #[tokio::test]
     async fn broker_slot_hint_mode_skips_local_checkout_and_attaches_slot_hint() {
-        // Task 6 regression test: a broker-mode planner
+        // Regression test: a broker-mode planner
         // (`with_broker_slot_hint`, no `with_kv_cache`) must never touch a
         // local `KvSlotPool` -- `aivyx-broker` owns admission and the
         // restore/warm/save lifecycle itself -- and every outgoing

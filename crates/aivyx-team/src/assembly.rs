@@ -75,6 +75,7 @@ impl TeamAssembly {
             Arc<aivyx_kvcache::LlamaServerSlotStore>,
             String,
         )>,
+        broker_slot_hint_mode: bool,
         message_origin: aivyx_core::MessageOrigin,
         injection_scan_enabled: bool,
         injection_scan_exempt: std::collections::BTreeSet<String>,
@@ -88,6 +89,7 @@ impl TeamAssembly {
             .with_member_backends(member_backends)
             .with_checkpointer(checkpointer)
             .with_kv_cache(kv_cache_handles)
+            .with_broker_slot_hint_mode(broker_slot_hint_mode)
             .with_injection_scan_enabled(injection_scan_enabled)
             .with_injection_scan_exempt(injection_scan_exempt);
         let pool = Arc::new(SpecialistPool::new(
@@ -212,6 +214,7 @@ mod tests {
             std::collections::HashMap::new(),
             None,
             None,
+            false,
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),
@@ -234,6 +237,7 @@ mod tests {
             std::collections::HashMap::new(),
             None,
             None,
+            false,
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),
@@ -302,6 +306,7 @@ mod tests {
             std::collections::HashMap::new(),
             None,
             None,
+            false,
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),

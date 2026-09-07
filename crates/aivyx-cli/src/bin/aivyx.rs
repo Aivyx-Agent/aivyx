@@ -1462,7 +1462,25 @@ fn print_config_banner(config: &AivyxConfig) {
             None => "<unset>".to_string(),
         }
     );
-    if config.provider.value.is_openai_compatible() {
+    if config.provider.value == aivyx_config::ProviderKind::Broker {
+        // GPU-slot broker coordination — Broker is openai-compatible
+        // (`is_openai_compatible()` returns true for it, same as
+        // LlamaCpp/Jan) but does NOT use `[openai] base_url` — it has its
+        // own `[broker] base_url` field, resolved the same way the real
+        // provider-construction arm resolves it (see `ProviderKind::Broker`
+        // in `run_async`'s provider-selection match). Handled as its own
+        // top-level branch, ahead of the generic `is_openai_compatible()`
+        // branch below, so it never falls into printing `config.openai_base_url`
+        // (wrong field; broker mode doesn't read it) or nothing at all.
+        eprintln!(
+            "  base_url          = {:?} ({})",
+            config
+                .broker_base_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:8899"),
+            if config.broker_base_url.is_some() { "configured" } else { "default" },
+        );
+    } else if config.provider.value.is_openai_compatible() {
         if config.provider.value == aivyx_config::ProviderKind::OpenAi {
             eprintln!(
                 "  openai_api_key    = {}",
@@ -4929,10 +4947,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     "jan" => ProviderKind::Jan,
                     // Phase 134 — embedded mistralrs.
                     "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
+                    // GPU-slot broker coordination — accept the same
+                    // alias as the serde alias attribute on the enum.
+                    "broker" => ProviderKind::Broker,
                     other => {
                         return Err(format!(
                             "unrecognized provider `{other}`. \
-                             Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs"
+                             Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker"
                         ));
                     }
                 });
@@ -5946,9 +5967,9 @@ async fn run_async(
         // referenced when `provider = "mistralrs"`; for any other
         // provider the field is bound and ignored.
         mistralrs_options: config_mistralrs_options,
-        // Task 6 — [broker] base_url override for `aivyx-broker`. Only
-        // referenced when `provider = "broker"`; for any other provider
-        // the field is bound and ignored.
+        // GPU-slot broker coordination — [broker] base_url override for
+        // `aivyx-broker`. Only referenced when `provider = "broker"`;
+        // for any other provider the field is bound and ignored.
         broker_base_url: config_broker_base_url,
         // Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override,
         // passed to the SessionConfig below (slow local backends).
@@ -6224,12 +6245,12 @@ async fn run_async(
     // Track the Ollama base URL for tool registration (Phase 36).
     let mut ollama_base_url_for_tools: Option<String> = None;
     let mut llamacpp_base_url_for_kvcache: Option<String> = None;
-    // Task 6 — deliberately NOT set for `ProviderKind::Broker`. Unlike
-    // LlamaCpp, broker mode never builds a local `KvSlotPool` /
-    // `LlamaServerSlotStore` at all -- `aivyx-broker` owns the full
-    // checkout/restore/warm/save lifecycle server-side, so this run's
-    // planner(s) must never do their own local slot-picking. See
-    // `broker_slot_hint_mode` below, which instead arms
+    // GPU-slot broker coordination — deliberately NOT set for
+    // `ProviderKind::Broker`. Unlike LlamaCpp, broker mode never builds a
+    // local `KvSlotPool` / `LlamaServerSlotStore` at all -- `aivyx-broker`
+    // owns the full checkout/restore/warm/save lifecycle server-side, so
+    // this run's planner(s) must never do their own local slot-picking.
+    // See `broker_slot_hint_mode` below, which instead arms
     // `LlmPlanner::with_broker_slot_hint` on the daemon's own planner
     // factory.
     let mut broker_slot_hint_mode = false;
@@ -6402,8 +6423,9 @@ async fn run_async(
             }
         }
         ProviderKind::Broker => {
-            // Task 6 — route through the OpenAI-compat provider against
-            // `aivyx-broker` instead of `llama-server` directly. The
+            // GPU-slot broker coordination — route through the
+            // OpenAI-compat provider against `aivyx-broker` instead of
+            // `llama-server` directly. The
             // broker speaks the identical OpenAI-compatible wire
             // protocol as the `LlamaCpp` arm above -- same
             // `OpenAiProvider`/`OpenAiConfig` construction, just a
@@ -8404,6 +8426,9 @@ async fn run_async(
             // built `kv_cache_handles` (the same one the daemon path below
             // reuses) — no second `/props` probe needed here.
             kv_cache_handles.clone(),
+            // GPU-slot broker coordination — same flag the daemon path's
+            // own `TeamRunDeps.broker_slot_hint_mode` reuses below.
+            broker_slot_hint_mode,
             tool_list,
             mission,
             config.as_deref(),
@@ -9174,10 +9199,11 @@ async fn run_async(
                 ),
                 None => planner,
             };
-            // Task 6 — mutually exclusive with the `with_kv_cache` call
-            // above: `planner_kv_cache_handles` is never `Some` when
-            // `provider = "broker"` (see `broker_slot_hint_mode`'s own
-            // doc comment above), so at most one of the two ever fires.
+            // GPU-slot broker coordination — mutually exclusive with the
+            // `with_kv_cache` call above: `planner_kv_cache_handles` is
+            // never `Some` when `provider = "broker"` (see
+            // `broker_slot_hint_mode`'s own doc comment above), so at
+            // most one of the two ever fires.
             let planner = if planner_broker_slot_hint_mode {
                 planner.with_broker_slot_hint()
             } else {
@@ -9299,6 +9325,11 @@ async fn run_async(
                 // team mission runs shares the exact same `KvSlotPool` the
                 // daemon's main agent uses.
                 kv_cache_handles: kv_cache_handles.clone(),
+                // GPU-slot broker coordination — reuse the same flag the
+                // daemon's own main-agent planner wiring above uses, so
+                // every specialist sub-turn a team mission runs also gets
+                // `with_broker_slot_hint()` called on its own planner.
+                broker_slot_hint_mode,
                 injection_scan_enabled,
                 injection_scan_exempt: injection_scan_exempt.clone(),
             };
@@ -12713,6 +12744,13 @@ mod tests {
         let parsed = parse_cli_args_from(&argv(&["--provider", "ollama"]))
             .expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Ollama));
+    }
+
+    #[test]
+    fn provider_flag_broker() {
+        let parsed = parse_cli_args_from(&argv(&["--provider", "broker"]))
+            .expect("must parse");
+        assert_eq!(parsed.provider, Some(ProviderKind::Broker));
     }
 
     // -----------------------------------------------------------------

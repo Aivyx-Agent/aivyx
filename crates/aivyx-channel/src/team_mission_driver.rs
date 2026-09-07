@@ -184,6 +184,13 @@ pub struct TeamRunDeps {
         std::sync::Arc<aivyx_kvcache::LlamaServerSlotStore>,
         String,
     )>,
+    /// GPU-slot broker coordination — `true` when `[agent] provider =
+    /// "broker"`. Passed through to every specialist's `SpecialistFactory`
+    /// so a team mission's specialist turns get `with_broker_slot_hint()`
+    /// too, not just the daemon's own main agent. Mutually exclusive with
+    /// `kv_cache_handles` in practice (see that field's own doc comment).
+    /// `false` (the default) preserves pre-broker behavior.
+    pub broker_slot_hint_mode: bool,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -1646,6 +1653,7 @@ fn assemble_runtime(
         member_backends,
         deps.checkpointer.clone(),
         deps.kv_cache_handles.clone(),
+        deps.broker_slot_hint_mode,
         message_origin,
         deps.injection_scan_enabled,
         deps.injection_scan_exempt.clone(),
@@ -2341,6 +2349,7 @@ pub(crate) mod tests {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             kv_cache_handles: None,
+            broker_slot_hint_mode: false,
         }
     }
 
@@ -2380,6 +2389,7 @@ pub(crate) mod tests {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             kv_cache_handles: None,
+            broker_slot_hint_mode: false,
         }
     }
 

@@ -213,6 +213,7 @@ pub async fn run_mission(
         Arc<aivyx_kvcache::LlamaServerSlotStore>,
         String,
     )>,
+    broker_slot_hint_mode: bool,
     base_tools: Vec<Arc<dyn Tool>>,
     mission: &str,
     config: Option<&str>,
@@ -262,6 +263,7 @@ pub async fn run_mission(
         std::collections::HashMap::new(),
         checkpointer.clone(),
         kv_cache_handles.clone(),
+        broker_slot_hint_mode,
         // Interactively started via the CLI -- a real operator, not an
         // unattended trigger, so the recursive-scheduling guard doesn't
         // apply here.
@@ -277,6 +279,7 @@ pub async fn run_mission(
     let model_owned = model.to_string();
     let soul = lead.soul.clone();
     let planner_kv_cache_handles = kv_cache_handles.clone();
+    let planner_broker_slot_hint_mode = broker_slot_hint_mode;
     let agent = ConcreteAgent::new(
         AgentId::new(),
         lead_caps,
@@ -300,6 +303,15 @@ pub async fn run_mission(
                     build_hash.clone(),
                 ),
                 None => planner,
+            };
+            // GPU-slot broker coordination — mutually exclusive with the
+            // `with_kv_cache` call above (see `SpecialistFactory`'s own
+            // `broker_slot_hint_mode` doc comment): at most one of the two
+            // ever fires.
+            let planner = if planner_broker_slot_hint_mode {
+                planner.with_broker_slot_hint()
+            } else {
+                planner
             };
             Box::new(planner)
         },

@@ -3743,7 +3743,7 @@ fn mistralrs_display_canonical_form() {
 }
 
 // ------------------------------------------------------------------
-// Task 6 — ProviderKind::Broker regression tests
+// GPU-slot broker coordination — ProviderKind::Broker regression tests
 // ------------------------------------------------------------------
 
 #[test]
@@ -3873,7 +3873,7 @@ base_url = "http://127.0.0.1:9999"
 
 #[test]
 fn provider_kind_broker_is_openai_compatible_and_not_in_process() {
-    // Task 6 — unlike MistralRs, Broker speaks the identical
+    // GPU-slot broker coordination — unlike MistralRs, Broker speaks the identical
     // OpenAI-compatible wire protocol as LlamaCpp (plus one additive
     // optional field) and is not an in-process provider.
     assert!(ProviderKind::Broker.is_openai_compatible());

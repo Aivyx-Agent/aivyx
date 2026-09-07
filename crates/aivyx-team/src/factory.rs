@@ -83,6 +83,16 @@ pub struct SpecialistFactory {
         Arc<aivyx_kvcache::LlamaServerSlotStore>,
         String,
     )>,
+    /// GPU-slot broker coordination — `true` when `[agent] provider =
+    /// "broker"`, mirroring `kv_cache_handles` above but for
+    /// `aivyx-broker` mode: attached to every built specialist so its own
+    /// per-turn `LlmPlanner` calls `with_broker_slot_hint()` too, not just
+    /// the hosting process's main/lead agent. Mutually exclusive with
+    /// `kv_cache_handles` in practice (broker mode and llama-server-local
+    /// kvcache mode never coexist for the same run — see
+    /// `LlmPlanner::with_broker_slot_hint`'s own doc comment). `false`
+    /// (the default) preserves pre-broker behavior.
+    broker_slot_hint_mode: bool,
 }
 
 impl SpecialistFactory {
@@ -103,6 +113,7 @@ impl SpecialistFactory {
             member_backends: std::collections::HashMap::new(),
             checkpointer: None,
             kv_cache_handles: None,
+            broker_slot_hint_mode: false,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
         }
@@ -174,6 +185,15 @@ impl SpecialistFactory {
         self
     }
 
+    /// GPU-slot broker coordination — attach broker slot-hint mode to
+    /// every specialist this factory builds. `false` means "no broker
+    /// slot hint" (provider isn't `broker`), preserving pre-broker
+    /// behavior — same shape as `with_kv_cache`.
+    pub fn with_broker_slot_hint_mode(mut self, broker_slot_hint_mode: bool) -> Self {
+        self.broker_slot_hint_mode = broker_slot_hint_mode;
+        self
+    }
+
     /// Build an attenuated specialist agent from `member`, with its
     /// capabilities capped at `ceiling` (NT-02) — the operator's real,
     /// un-narrowed authority, not any particular member's own declared
@@ -209,6 +229,7 @@ impl SpecialistFactory {
         // `LlamaCpp`); revisit if a per-role llama-server override is ever
         // added.
         let kv_cache_handles = self.kv_cache_handles.clone();
+        let broker_slot_hint_mode = self.broker_slot_hint_mode;
 
         let agent = ConcreteAgent::new(
             AgentId::new(),
@@ -233,6 +254,16 @@ impl SpecialistFactory {
                         build_hash.clone(),
                     ),
                     None => planner,
+                };
+                // GPU-slot broker coordination — same shape as the
+                // `kv_cache_handles` match above: `broker_slot_hint_mode`
+                // and `kv_cache_handles` are never both set for the same
+                // factory (see this field's own doc comment), so at most
+                // one of the two ever fires.
+                let planner = if broker_slot_hint_mode {
+                    planner.with_broker_slot_hint()
+                } else {
+                    planner
                 };
                 Box::new(planner)
             },
@@ -929,6 +960,120 @@ mod tests {
             "once the shared pool's only slot is released, specialist A — built \
              from the same factory — must be able to check it out; \
              got {captured_after_release:?}"
+        );
+    }
+
+    // --- broker slot-hint wiring (GPU-slot broker coordination) ------------
+    //
+    // Mirrors the kvcache wiring tests immediately above: without
+    // `with_broker_slot_hint_mode`/the `broker_slot_hint_mode` flag in
+    // `build`'s closure, every other test in this file stays green, since
+    // `LlmPlanner::new` already defaults `broker_slot_hint` to `false`.
+
+    /// Wraps `testutil::FakeProvider`, recording the `slot_hint` field of
+    /// every `LlmRequest` it receives before delegating. `slot_hint` is
+    /// `Some(_)` only when the request came from an `LlmPlanner` that had
+    /// `with_broker_slot_hint` called on it — so capturing it is a direct,
+    /// discriminating probe of the wiring under test.
+    struct SlotHintCapturingProvider {
+        inner: Arc<crate::testutil::FakeProvider>,
+        captured_slot_hints: std::sync::Mutex<Vec<Option<aivyx_llm::SlotHint>>>,
+    }
+
+    impl SlotHintCapturingProvider {
+        fn wrapping(inner: Arc<crate::testutil::FakeProvider>) -> Arc<Self> {
+            Arc::new(SlotHintCapturingProvider {
+                inner,
+                captured_slot_hints: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn captured(&self) -> Vec<Option<aivyx_llm::SlotHint>> {
+            self.captured_slot_hints.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for SlotHintCapturingProvider {
+        async fn chat_stream(
+            &self,
+            request: LlmRequest<'_>,
+            cancel: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            self.captured_slot_hints.lock().unwrap().push(request.slot_hint.clone());
+            self.inner.chat_stream(request, cancel).await
+        }
+    }
+
+    /// Proves `SpecialistFactory::with_broker_slot_hint_mode` actually
+    /// reaches the specialist's own `LlmPlanner` — not just that `build()`
+    /// still returns `Ok` when it's configured (which would pass
+    /// identically whether the wiring exists or not). Direct analogue of
+    /// `build_wires_kv_cache_into_the_specialists_own_llm_planner` above.
+    #[tokio::test]
+    async fn build_wires_broker_slot_hint_into_the_specialists_own_llm_planner() {
+        use crate::testutil::{FakeLeadChannel, FakeProvider};
+        use aivyx_core::{ChannelContext, Message};
+
+        let provider = SlotHintCapturingProvider::wrapping(FakeProvider::always("ok"));
+        let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let f = SpecialistFactory::new(
+            Arc::clone(&provider) as Arc<dyn LlmProvider>,
+            "test-model",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![],
+        )
+        .with_broker_slot_hint_mode(true);
+
+        let specialist = f.build(&member("spec", &["fs.read"], &[]), &lead, None).expect("build");
+
+        let channel = FakeLeadChannel::at(TrustTier::Trusted);
+        let _ = specialist
+            .turn(Message::text(channel.session_id(), "go"), &channel)
+            .await;
+
+        let captured = provider.captured();
+        assert!(
+            captured.iter().any(|hint| hint.is_some()),
+            "with_broker_slot_hint_mode on the factory must reach the \
+             specialist's own LlmPlanner — expected at least one LlmRequest \
+             with slot_hint = Some(_), got {captured:?}"
+        );
+    }
+
+    /// Control for the test above: a factory that never called
+    /// `with_broker_slot_hint_mode` (the default, `false`) must never
+    /// attach a `slot_hint` — ruling out "every request always carries a
+    /// slot_hint regardless of wiring" as an alternate explanation for a
+    /// green result above.
+    #[tokio::test]
+    async fn build_omits_broker_slot_hint_when_not_configured() {
+        use crate::testutil::{FakeLeadChannel, FakeProvider};
+        use aivyx_core::{ChannelContext, Message};
+
+        let provider = SlotHintCapturingProvider::wrapping(FakeProvider::always("ok"));
+        let lead = CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()]);
+        let f = SpecialistFactory::new(
+            Arc::clone(&provider) as Arc<dyn LlmProvider>,
+            "test-model",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![],
+        );
+
+        let specialist = f.build(&member("spec", &["fs.read"], &[]), &lead, None).expect("build");
+
+        let channel = FakeLeadChannel::at(TrustTier::Trusted);
+        let _ = specialist
+            .turn(Message::text(channel.session_id(), "go"), &channel)
+            .await;
+
+        let captured = provider.captured();
+        assert!(
+            captured.iter().all(|hint| hint.is_none()),
+            "a factory with broker_slot_hint_mode left at its default \
+             (false) must never attach a slot_hint; got {captured:?}"
         );
     }
 

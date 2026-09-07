@@ -389,7 +389,7 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx";
 /// - `Jan` (Phase 133) — `base_url = http://localhost:1337/v1`;
 ///   model management via Jan's desktop GUI. No
 ///   `ollama.list/show/pull` tools registered.
-/// - `Broker` (Task 6) — `base_url = http://127.0.0.1:8899`
+/// - `Broker` (GPU-slot broker coordination) — `base_url = http://127.0.0.1:8899`
 ///   (`aivyx-broker`'s own documented default bind); speaks the
 ///   identical OpenAI-compat wire protocol as `LlamaCpp`, plus one
 ///   additive `aivyx_slot_hint` field. This run never builds a local
@@ -416,7 +416,7 @@ pub enum ProviderKind {
     /// and tuning parameters.
     #[serde(alias = "mistralrs", alias = "mistral-rs", alias = "mistral_rs")]
     MistralRs,
-    /// Task 6 — `aivyx-broker`, a standalone local daemon that
+    /// GPU-slot broker coordination — `aivyx-broker`, a standalone local daemon that
     /// coordinates GPU-slot access across multiple local processes
     /// sharing one `llama-server` (e.g. `aivyx`'s own daemon and a
     /// delegated `aivyx-coder` subprocess). Speaks the identical
@@ -454,7 +454,7 @@ impl ProviderKind {
         // requirement) treat MistralRs as a distinct "in-process"
         // category.
         //
-        // Task 6 — Broker IS in this set: it speaks the identical
+        // GPU-slot broker coordination — Broker IS in this set: it speaks the identical
         // OpenAI-compatible wire protocol as LlamaCpp (same request/
         // response shape, plus one additive optional field).
     }
@@ -484,7 +484,7 @@ impl ProviderKind {
             // the loaded GGUF's metadata; mistralrs honors the
             // model's declared max_seq_len at load time.
             ProviderKind::MistralRs => 8_000,
-            // Task 6 — same conservative posture; the broker proxies
+            // GPU-slot broker coordination — same conservative posture; the broker proxies
             // to a real `llama-server`, whose actual context depends
             // on the loaded model, same as the direct LlamaCpp path.
             ProviderKind::Broker => 8_000,
@@ -1151,7 +1151,7 @@ pub struct AivyxConfig {
     /// session-construction time. Empty when the operator
     /// uses a different provider.
     pub mistralrs_options: MistralRsOptions,
-    /// Task 6 — `[broker] base_url` operator override for
+    /// GPU-slot broker coordination — `[broker] base_url` operator override for
     /// `aivyx-broker`'s address. `None` uses the built-in
     /// `http://127.0.0.1:8899` default (aivyx-broker's own default
     /// bind, matching the `LlamaCpp`/`Jan` "sensible localhost
@@ -3947,7 +3947,7 @@ struct RawToml {
     /// embedded Rust-native provider.
     #[serde(default)]
     mistralrs: MistralRsOptions,
-    /// Task 6 — `[broker]` config section for `aivyx-broker`.
+    /// GPU-slot broker coordination — `[broker]` config section for `aivyx-broker`.
     #[serde(default)]
     broker: RawBroker,
     /// Phase 135 — `[voice]` config section for the
@@ -5537,7 +5537,7 @@ pub struct MistralRsOptions {
     pub constrain_tool_calls: bool,
 }
 
-/// Task 6 — `[broker]` section for `aivyx-broker`. Currently just the
+/// GPU-slot broker coordination — `[broker]` section for `aivyx-broker`. Currently just the
 /// base URL; `aivyx-broker` itself has no other client-configurable
 /// per-request knobs (queue timeout, kvcache budget, etc. are the
 /// broker's own startup flags, not something a client sets per-request).
@@ -5764,8 +5764,8 @@ impl AivyxConfig {
                     // Phase 134 — same alias set as the serde
                     // attribute on the enum.
                     "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
-                    // Task 6 — same alias set as the serde attribute
-                    // on the enum.
+                    // GPU-slot broker coordination — same alias set as
+                    // the serde attribute on the enum.
                     "broker" | "aivyx-broker" | "aivyx_broker" => ProviderKind::Broker,
                     other => {
                         return Err(ConfigError::Invalid {
@@ -6417,7 +6417,7 @@ impl AivyxConfig {
         // embedded provider. Validation (model_path required when
         // provider = mistralrs) happens in `validate()` below.
         let mistralrs_options = toml.mistralrs.clone();
-        // Task 6 — [broker] base_url pass-through. `None` when unset;
+        // GPU-slot broker coordination — [broker] base_url pass-through. `None` when unset;
         // the binary's `ProviderKind::Broker` dispatch arm falls back
         // to `aivyx-broker`'s own documented default
         // (`http://127.0.0.1:8899`).
@@ -7968,9 +7968,9 @@ impl AivyxConfig {
                     // header. Phase 133 added LlamaCpp + Jan; Phase
                     // 134 adds MistralRs (in-process, no wire
                     // protocol at all, so the question doesn't
-                    // arise). Task 6 adds Broker -- `aivyx-broker` is
-                    // loopback-only with no auth, same trust model as
-                    // `llama-server` itself.
+                    // arise). GPU-slot broker coordination adds Broker
+                    // -- `aivyx-broker` is loopback-only with no auth,
+                    // same trust model as `llama-server` itself.
                 }
             }
         }

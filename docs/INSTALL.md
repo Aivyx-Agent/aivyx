@@ -1617,7 +1617,7 @@ model    = "qwen2.5-7b-instruct"
 base_url = "http://localhost:1337/v1"  # override if you changed Jan's port
 ```
 
-### Coordinating GPU-slot access across multiple processes (`aivyx-broker`, Task 6)
+### Coordinating GPU-slot access across multiple processes (`aivyx-broker`)
 
 If more than one local process shares a single `llama-server` — e.g. `aivyx`'s
 own daemon and a delegated
