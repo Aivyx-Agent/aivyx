@@ -2,7 +2,7 @@
 //! `budget.*` tools.
 //!
 //! Phase 143. JSON file at
-//! `~/.aivyx/tool-processes/toolkit/budget.json`
+//! `~/.aivyx-pa/tool-processes/toolkit/budget.json`
 //! (0600 perms, atomic write-then-rename — same
 //! pattern as Phase 125's task_store).
 //!

@@ -786,7 +786,7 @@ pub async fn run_graph_sweep_loop(
                 let r = extractor.sweep(now, max_topics).await;
                 if r.triples > 0 {
                     eprintln!(
-                        "aivyx graph-sweep: {} triple(s) from {} topic(s) ({} scanned)",
+                        "aivyx-pa graph-sweep: {} triple(s) from {} topic(s) ({} scanned)",
                         r.triples, r.extracted, r.scanned
                     );
                 }

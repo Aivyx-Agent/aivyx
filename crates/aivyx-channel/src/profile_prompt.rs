@@ -36,10 +36,10 @@
 //!    than a string-rewrite.
 //!
 //! **Non-invasive on legacy configs.** When [`Profile::is_operator_declared`]
-//! returns `false` — i.e. no `[profile]` section in `aivyx.toml`,
-//! only the synthesized default with `assistant_name = "Aivyx"` —
+//! returns `false` — i.e. no `[profile]` section in `aivyx-pa.toml`,
+//! only the synthesized default with `assistant_name = "Aivyx PA"` —
 //! the helper returns the role's `system_prompt` unchanged. No
-//! "Your name is Aivyx" noise prepended to every default config.
+//! "Your name is Aivyx PA" noise prepended to every default config.
 
 use aivyx_config::{OllamaFamilyStrategy, Profile};
 use aivyx_llm::LlmToolDescriptor;

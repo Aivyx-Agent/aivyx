@@ -1,4 +1,4 @@
-//! `aivyx workspace` — operator-facing visibility into the agent's personal
+//! `aivyx-pa workspace` — operator-facing visibility into the agent's personal
 //! workspace (Chapter O). The workspace is the agent's own space, but it is a
 //! real directory the operator can always inspect: `ls` lists it, `cat` prints
 //! a file, `path` prints where it is. Read-only — no daemon, no passphrase.
@@ -7,16 +7,16 @@ use std::path::{Component, Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions};
 
-const WORKSPACE_TOML_PATH: &str = "aivyx.toml";
+const WORKSPACE_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// `aivyx workspace path` — print the resolved workspace directory.
+/// `aivyx-pa workspace path` — print the resolved workspace directory.
 pub fn run_workspace_path() -> Result<(), String> {
     let root = workspace_root()?;
     println!("{}", root.display());
     Ok(())
 }
 
-/// `aivyx workspace ls [path]` — list the workspace, or a sub-path within it.
+/// `aivyx-pa workspace ls [path]` — list the workspace, or a sub-path within it.
 pub fn run_workspace_ls(rel: Option<&str>) -> Result<(), String> {
     let root = workspace_root()?;
     let target = resolve_within(&root, rel.unwrap_or("."))?;
@@ -38,7 +38,7 @@ pub fn run_workspace_ls(rel: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx workspace cat <path>` — print a file from the workspace.
+/// `aivyx-pa workspace cat <path>` — print a file from the workspace.
 pub fn run_workspace_cat(rel: &str) -> Result<(), String> {
     let root = workspace_root()?;
     let target = resolve_within(&root, rel)?;
@@ -49,7 +49,7 @@ pub fn run_workspace_cat(rel: &str) -> Result<(), String> {
 }
 
 /// Resolve the workspace root from config (honours `[workspace] path` /
-/// `AIVYX_WORKSPACE`). Errors if the workspace is disabled or absent.
+/// `AIVYX_PA_WORKSPACE`). Errors if the workspace is disabled or absent.
 fn workspace_root() -> Result<PathBuf, String> {
     let cfg = load_config_for_inspection()?;
     if !cfg.workspace_enabled.value {

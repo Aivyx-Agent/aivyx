@@ -100,7 +100,7 @@ fn parse_plan(input: &Value) -> Result<MissionPlan, String> {
 /// Parse the lead's friendly `{ goal, steps: [{ id, specialist|reviewer, … }] }`
 /// spec into a (still-unvalidated) [`MissionPlan`] — the same shape the
 /// `decompose_task` tool accepts. Chapter L (L.5) exposes it so the daemon-run
-/// `aivyx team start --plan <file.json>` path can author a plan by hand without
+/// `aivyx-pa team start --plan <file.json>` path can author a plan by hand without
 /// the verbose serde-tagged `StepKind` wire form.
 pub fn parse_plan_spec(input: &Value) -> Result<MissionPlan, String> {
     parse_plan(input)

@@ -315,7 +315,7 @@ mod tests {
             "exported_at": "2026-05-13T00:00:00Z",
             "source_host": null,
             "profile": {
-                "assistant_name": "Aivyx",
+                "assistant_name": "Aivyx PA",
                 "operator_profile": null,
                 "communication_style": null,
                 "primary_use_cases": [],

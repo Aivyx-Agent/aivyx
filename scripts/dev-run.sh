@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# aivyx local dev launcher — Phase 99 Task 1.
+# aivyx-pa local dev launcher — Phase 99 Task 1.
 #
 # Phase 99 keeps all builds local while repo infrastructure is still
 # being decided (no CI, no remote runners). This script is the
-# local-testing entry point: it builds the `aivyx` binary and
+# local-testing entry point: it builds the `aivyx-pa` binary and
 # launches it against a **fully local Ollama backend** with a
 # disposable, gitignored state directory — so a `run Aivyx locally`
 # loop is one command and leaves no footprint outside `.dev-run/`.
@@ -13,7 +13,7 @@
 #   1. Preflights the Ollama server (reachable + requested model
 #      pulled) so a misconfigured backend fails fast with an
 #      actionable message instead of mid-session.
-#   2. Builds `aivyx` locally (`cargo build --bin aivyx`).
+#   2. Builds `aivyx-pa` locally (`cargo build --bin aivyx-pa`).
 #   3. Execs the binary with the Ollama provider selected and every
 #      path pinned under `.dev-run/` — sandbox FS root, encrypted
 #      store, and a throwaway dev passphrase.
@@ -29,7 +29,7 @@
 # this pattern for a real install.
 #
 # Usage:
-#   ./scripts/dev-run.sh [options] [-- <args passed to aivyx>]
+#   ./scripts/dev-run.sh [options] [-- <args passed to aivyx-pa>]
 #
 # Options:
 #   --model <name>      Ollama model to use      (default: llama3.1)
@@ -56,10 +56,10 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 DEV_DIR="$REPO_ROOT/.dev-run"
 
 # --- defaults (each overridable via the matching flag) ---------------
-MODEL="${AIVYX_MODEL:-llama3.1}"
-OLLAMA_URL="${AIVYX_OLLAMA_URL:-http://localhost:11434}"
+MODEL="${AIVYX_PA_MODEL:-llama3.1}"
+OLLAMA_URL="${AIVYX_PA_OLLAMA_URL:-http://localhost:11434}"
 # Dev-only throwaway. See header — never a real secret.
-PASSPHRASE="${AIVYX_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
+PASSPHRASE="${AIVYX_PA_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
 BUILD_PROFILE="debug"
 DO_RESET=0
 DO_VERIFY=0
@@ -117,13 +117,13 @@ fi
 mkdir -p "$DEV_DIR/sandbox"
 
 # --- build (local only — Phase 99) ----------------------------------
-echo "dev-run: building aivyx ($BUILD_PROFILE)"
+echo "dev-run: building aivyx-pa ($BUILD_PROFILE)"
 if [[ "$BUILD_PROFILE" == "release" ]]; then
-    cargo build --bin aivyx --release
+    cargo build --bin aivyx-pa --release
 else
-    cargo build --bin aivyx
+    cargo build --bin aivyx-pa
 fi
-BIN="$REPO_ROOT/target/$BUILD_PROFILE/aivyx"
+BIN="$REPO_ROOT/target/$BUILD_PROFILE/aivyx-pa"
 
 # --- launch ----------------------------------------------------------
 echo "dev-run: launching"
@@ -134,16 +134,16 @@ echo "dev-run:   store    = $DEV_DIR/store.redb"
 echo "dev-run:   args     = ${PASSTHROUGH[*]:-(none)}"
 echo
 
-# CWD is .dev-run/ so the binary's default ./aivyx.toml lookup is
-# isolated from the repo root — drop a .dev-run/aivyx.toml later if a
+# CWD is .dev-run/ so the binary's default ./aivyx-pa.toml lookup is
+# isolated from the repo root — drop a .dev-run/aivyx-pa.toml later if a
 # dev role config is wanted; nothing in the repo gets picked up by
 # accident.
 cd "$DEV_DIR"
 exec env \
-    AIVYX_PROVIDER=ollama \
-    AIVYX_MODEL="$MODEL" \
-    AIVYX_OPENAI_BASE_URL="$OLLAMA_URL" \
-    AIVYX_FS_ROOT="$DEV_DIR/sandbox" \
-    AIVYX_STORAGE_PATH="$DEV_DIR/store.redb" \
-    AIVYX_PASSPHRASE="$PASSPHRASE" \
+    AIVYX_PA_PROVIDER=ollama \
+    AIVYX_PA_MODEL="$MODEL" \
+    AIVYX_PA_OPENAI_BASE_URL="$OLLAMA_URL" \
+    AIVYX_PA_FS_ROOT="$DEV_DIR/sandbox" \
+    AIVYX_PA_STORAGE_PATH="$DEV_DIR/store.redb" \
+    AIVYX_PA_PASSPHRASE="$PASSPHRASE" \
     "$BIN" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}

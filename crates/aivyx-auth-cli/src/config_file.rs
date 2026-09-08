@@ -55,7 +55,7 @@ pub fn default_config_path(service_subdir: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join(service_subdir)
             .join("config.toml"),
@@ -170,11 +170,11 @@ max_retries = 5"#,
         if std::env::var_os("HOME").is_some() {
             let p = default_config_path("notion").expect("HOME set");
             let s = p.to_string_lossy();
-            assert!(s.ends_with("/.aivyx/tool-processes/notion/config.toml"), "{s}");
+            assert!(s.ends_with("/.aivyx-pa/tool-processes/notion/config.toml"), "{s}");
 
             let p = default_config_path("n8n").unwrap();
             let s = p.to_string_lossy();
-            assert!(s.ends_with("/.aivyx/tool-processes/n8n/config.toml"), "{s}");
+            assert!(s.ends_with("/.aivyx-pa/tool-processes/n8n/config.toml"), "{s}");
         }
     }
 

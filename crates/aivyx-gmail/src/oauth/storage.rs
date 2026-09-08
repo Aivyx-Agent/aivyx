@@ -4,7 +4,7 @@
 //! `save_tokens` / `load_tokens` now lives in
 //! [`aivyx_google_oauth::storage`]. The service-specific
 //! token-file path resolution
-//! (`~/.aivyx/tool-processes/gmail/tokens.json`) stays
+//! (`~/.aivyx-pa/tool-processes/gmail/tokens.json`) stays
 //! here because each Google integration has its own
 //! service-name segment.
 
@@ -13,14 +13,14 @@ use std::path::PathBuf;
 pub use aivyx_google_oauth::storage::{load_tokens, save_tokens, StorageError};
 
 /// Resolves the default token storage path for the Gmail
-/// tool process: `$HOME/.aivyx/tool-processes/gmail/tokens.json`.
+/// tool process: `$HOME/.aivyx-pa/tool-processes/gmail/tokens.json`.
 /// Returns `None` when `$HOME` is unset (CI or other non-
 /// interactive contexts).
 pub fn default_token_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("gmail")
             .join("tokens.json"),

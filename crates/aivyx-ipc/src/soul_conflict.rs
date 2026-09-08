@@ -10,7 +10,7 @@
 //! result of a detection pass over the Soul (and, cross-layer, against the
 //! operator's declared Profile constraints).
 //!
-//! Detection is best-effort and on-demand (the operator runs `aivyx persona
+//! Detection is best-effort and on-demand (the operator runs `aivyx-pa persona
 //! conflicts` / the Studio asks) — zero background cost, no new config. It only
 //! *finds*; resolution removes the losing facet via a normal `RemoveList`
 //! persona delta on the signed chain (operator-authored, revertible).

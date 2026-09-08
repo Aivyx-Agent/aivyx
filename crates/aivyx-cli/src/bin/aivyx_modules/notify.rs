@@ -1,4 +1,4 @@
-//! `aivyx notify history` CLI — Phase 73.
+//! `aivyx-pa notify history` CLI — Phase 73.
 //!
 //! Terminal parity with the Web UI Notifications pane.
 //! IPC-backed (the audit chain lives in encrypted storage; the
@@ -11,7 +11,7 @@ use std::path::Path;
 use aivyx_channel::daemon_client::{daemon_is_running, list_notification_history};
 use aivyx_channel::daemon_ipc::{NotificationHistoryEntry, default_socket_path};
 
-/// Entry point for `aivyx notify history [--target NAME] [--limit N]`.
+/// Entry point for `aivyx-pa notify history [--target NAME] [--limit N]`.
 pub async fn run_notify_history(target: Option<&str>, limit: u32) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -27,8 +27,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx notify: no daemon running on socket {} — \
-         start the daemon first with `aivyx daemon run`",
+        "aivyx-pa notify: no daemon running on socket {} — \
+         start the daemon first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }

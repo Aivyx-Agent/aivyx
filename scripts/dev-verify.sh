@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# aivyx local verification pass — Phase 99 Task 3.
+# aivyx-pa local verification pass — Phase 99 Task 3.
 #
 # `dev-run.sh` proves an interactive chat session works. This script
 # is its non-interactive sibling: a scripted battery that drives the
-# real `aivyx` binary against a real local Ollama backend and checks
+# real `aivyx-pa` binary against a real local Ollama backend and checks
 # the subsystems a human cannot reliably smoke-test by hand — the
 # audit chain, the encrypted store, the memory/fs tool paths, and
 # daemon mode.
@@ -39,9 +39,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 DEV_DIR="$REPO_ROOT/.dev-run"
 RUN_DIR="$DEV_DIR/run"
 
-MODEL="${AIVYX_MODEL:-llama3.1}"
-OLLAMA_URL="${AIVYX_OLLAMA_URL:-http://localhost:11434}"
-PASSPHRASE="${AIVYX_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
+MODEL="${AIVYX_PA_MODEL:-llama3.1}"
+OLLAMA_URL="${AIVYX_PA_OLLAMA_URL:-http://localhost:11434}"
+PASSPHRASE="${AIVYX_PA_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
 KEEP=0
 # Generous — a cold local model can take a while on the first turn.
 TURN_TIMEOUT=180
@@ -80,22 +80,22 @@ if [[ $KEEP -eq 0 ]]; then
 fi
 mkdir -p "$DEV_DIR/sandbox" "$RUN_DIR"
 
-echo "dev-verify: building aivyx (debug)"
-if ! cargo build --bin aivyx; then
+echo "dev-verify: building aivyx-pa (debug)"
+if ! cargo build --bin aivyx-pa; then
     echo "dev-verify: ERROR — build failed" >&2
     exit 1
 fi
-BIN="$REPO_ROOT/target/debug/aivyx"
+BIN="$REPO_ROOT/target/debug/aivyx-pa"
 echo "dev-verify: model=$MODEL  ollama=$OLLAMA_URL"
 
 # The whole dev environment, exported once so every invocation below
 # inherits it. CWD is pinned to .dev-run/ inside the helpers.
-export AIVYX_PROVIDER=ollama
-export AIVYX_MODEL="$MODEL"
-export AIVYX_OPENAI_BASE_URL="$OLLAMA_URL"
-export AIVYX_FS_ROOT="$DEV_DIR/sandbox"
-export AIVYX_STORAGE_PATH="$DEV_DIR/store.redb"
-export AIVYX_PASSPHRASE="$PASSPHRASE"
+export AIVYX_PA_PROVIDER=ollama
+export AIVYX_PA_MODEL="$MODEL"
+export AIVYX_PA_OPENAI_BASE_URL="$OLLAMA_URL"
+export AIVYX_PA_FS_ROOT="$DEV_DIR/sandbox"
+export AIVYX_PA_STORAGE_PATH="$DEV_DIR/store.redb"
+export AIVYX_PA_PASSPHRASE="$PASSPHRASE"
 export XDG_RUNTIME_DIR="$RUN_DIR"
 
 # Fast, non-LLM invocations — flags and subcommands. stdin is the
@@ -116,7 +116,7 @@ audit_count() {
 section "introspection (no session)"
 
 out="$(aivyx_run --version </dev/null 2>&1)"
-if [[ $? -eq 0 && "$out" == aivyx\ * ]]; then
+if [[ $? -eq 0 && "$out" == aivyx-pa\ * ]]; then
     pass "--version → $out"
 else
     fail "--version unexpected: $out"
@@ -218,7 +218,7 @@ section "daemon lifecycle + memory query"
 DAEMON_LOG="$RUN_DIR/daemon.log"
 aivyx_run daemon run >"$DAEMON_LOG" 2>&1 </dev/null &
 dpid=$!
-SOCK="$RUN_DIR/aivyx/daemon.sock"
+SOCK="$RUN_DIR/aivyx-pa/daemon.sock"
 for _ in $(seq 1 40); do
     [[ -S "$SOCK" ]] && break
     kill -0 "$dpid" 2>/dev/null || break
@@ -234,9 +234,9 @@ if [[ -S "$SOCK" ]]; then
     fi
 
     if out="$(aivyx_run memory list </dev/null 2>&1)"; then
-        pass "aivyx memory list ran against the daemon (rc=0)"
+        pass "aivyx-pa memory list ran against the daemon (rc=0)"
     else
-        fail "aivyx memory list failed: $out"
+        fail "aivyx-pa memory list failed: $out"
     fi
 
     search="$(aivyx_run memory search VERIFY-BANANA-7723 </dev/null 2>&1)"

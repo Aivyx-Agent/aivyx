@@ -14,7 +14,7 @@
 //! ## Why the move
 //!
 //! The functional assertions don't depend on anything the
-//! binary owns — they load `examples/aivyx.toml`, call
+//! binary owns — they load `examples/aivyx-pa.toml`, call
 //! `render_role_envelope`, and assert on substrings of the
 //! returned string. That is exactly the shape Rust integration
 //! tests are best at: compiling against the public surface of
@@ -53,11 +53,11 @@ use std::path::PathBuf;
 use aivyx_channel::{render_role_envelope, ChannelKind};
 use aivyx_config::{AivyxConfig, LoadOptions};
 
-/// Load `examples/aivyx.toml` via `aivyx_config::LoadOptions`.
+/// Load `examples/aivyx-pa.toml` via `aivyx_config::LoadOptions`.
 /// Mirrors the binary-internal `load_example_config` helper but
 /// runs from an integration-test crate's context — the
 /// `CARGO_MANIFEST_DIR` anchor is still `crates/aivyx-channel/`,
-/// so the relative `../../examples/aivyx.toml` walk is
+/// so the relative `../../examples/aivyx-pa.toml` walk is
 /// identical.
 fn load_example_config() -> AivyxConfig {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -65,10 +65,10 @@ fn load_example_config() -> AivyxConfig {
         .join("..")
         .join("..")
         .join("examples")
-        .join("aivyx.toml");
+        .join("aivyx-pa.toml");
     assert!(
         example_path.exists(),
-        "examples/aivyx.toml must exist at {example_path:?}"
+        "examples/aivyx-pa.toml must exist at {example_path:?}"
     );
     let opts = LoadOptions {
         toml_path: Some(example_path),
@@ -79,14 +79,14 @@ fn load_example_config() -> AivyxConfig {
         role_override: Some("default".to_string()),
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .expect("examples/aivyx.toml must load cleanly via aivyx-config")
+        .expect("examples/aivyx-pa.toml must load cleanly via aivyx-config")
 }
 
 // --------------------------------------------------------------
 // Rendered-envelope-per-role tests
 // --------------------------------------------------------------
 
-/// Render `coder` against `examples/aivyx.toml`. Verifies the
+/// Render `coder` against `examples/aivyx-pa.toml`. Verifies the
 /// structural elements (header, parent chain, level breakdown,
 /// effective envelope) and pins that the documented seven
 /// scopes each appear in the rendered output. Coder has no
@@ -177,7 +177,7 @@ fn print_role_renders_junior_researcher_with_visible_drops() {
         "empty-capability-scopes line for junior level: {rendered}"
     );
     // The dropped block must mention at least one of the
-    // surprises documented in `examples/aivyx.toml`. We assert
+    // surprises documented in `examples/aivyx-pa.toml`. We assert
     // the strongest signal: shell.exec from the floor gets
     // dropped (researcher does not declare it), with a reason
     // line that names the floor.
@@ -237,7 +237,7 @@ fn print_role_renders_researcher_with_no_drops() {
 
 /// Case 3 (single qualified target) + structural impossibility.
 ///
-/// `coder` in `examples/aivyx.toml` declares
+/// `coder` in `examples/aivyx-pa.toml` declares
 /// `role.switch:researcher` and inherits unqualified
 /// `role.switch` from `default`. Intersection picks the
 /// narrower form, so `coder`'s effective envelope holds
@@ -287,7 +287,7 @@ fn print_role_lists_role_switch_targets_for_coder() {
 
 /// Case 2 (unqualified `role.switch` → any role).
 ///
-/// `default` in `examples/aivyx.toml` declares unqualified
+/// `default` in `examples/aivyx-pa.toml` declares unqualified
 /// `role.switch`. Under D4 Rule 2 the bare base grants any
 /// qualifier, so the enumerator should emit the
 /// "(any role - unqualified role.switch held)" line and list

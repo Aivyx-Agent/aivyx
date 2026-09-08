@@ -11,7 +11,7 @@
 //!   scope set.
 //! - [`storage::default_token_path`] — calendar-specific
 //!   token file location resolution
-//!   (`~/.aivyx/tool-processes/calendar/tokens.json`).
+//!   (`~/.aivyx-pa/tool-processes/calendar/tokens.json`).
 //!
 //! See Phase 128 mod.rs preamble for the original inline-copy
 //! tracking; that posture's N=3 trigger fired at Phase 129

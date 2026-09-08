@@ -3,7 +3,7 @@
 //! wiring needs at startup to size the `KvSlotPool` and detect a server
 //! upgrade (via `build_info`, folded into `CacheKey.build_hash`).
 //!
-//! `aivyx` has no other `/props`-consuming code today (unlike
+//! `aivyx-pa` has no other `/props`-consuming code today (unlike
 //! `aivyx-coder`, which already probes `/props` for context-window
 //! detection) -- this is a standalone fetch, not an extension of an
 //! existing one.

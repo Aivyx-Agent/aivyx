@@ -204,7 +204,7 @@ where
     let input_device = channel.config().input_device.clone();
 
     eprintln!();
-    eprintln!("aivyx voice — push-to-talk REPL");
+    eprintln!("aivyx-pa voice — push-to-talk REPL");
     eprintln!("  Enter        : start recording (then Enter again to stop)");
     eprintln!("  quit + Enter : exit");
     eprintln!();
@@ -564,7 +564,7 @@ where
     let poll_interval = std::time::Duration::from_millis(vad_cfg.poll_interval_ms);
 
     eprintln!();
-    eprintln!("aivyx voice — push-to-talk REPL (streaming TTS + auto-stop)");
+    eprintln!("aivyx-pa voice — push-to-talk REPL (streaming TTS + auto-stop)");
     eprintln!("  Enter             : start recording (then pause to dispatch)");
     eprintln!("  Enter mid-record  : abort the current capture");
     eprintln!("  Enter mid-reply   : abort the agent + playback");

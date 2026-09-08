@@ -1,4 +1,4 @@
-//! Operator-facing `aivyx persona` CLI surface — Phase 60.
+//! Operator-facing `aivyx-pa persona` CLI surface — Phase 60.
 //!
 //! Phase 59 shipped the Persona substrate (storage + chain + propose +
 //! apply + assembly). This module ships the operator-facing inspection
@@ -26,9 +26,9 @@ use aivyx_channel::daemon_ipc::{
 };
 use aivyx_channel::soul_contradiction::SoulConflict;
 
-/// Entry point for `aivyx persona show`. Fetches the daemon's current
+/// Entry point for `aivyx-pa persona show`. Fetches the daemon's current
 /// effective Persona via the `GetEffectivePersona` IPC query, then
-/// renders it in a labeled banner-style format mirroring `aivyx
+/// renders it in a labeled banner-style format mirroring `aivyx-pa
 /// profile show`.
 pub async fn run_persona_show() -> Result<(), String> {
     let socket_path = default_socket_path()?;
@@ -40,10 +40,10 @@ pub async fn run_persona_show() -> Result<(), String> {
     Ok(())
 }
 
-/// Entry point for `aivyx persona list`. Fetches every approved
+/// Entry point for `aivyx-pa persona list`. Fetches every approved
 /// delta via paginated `ListPersonaDeltas` queries, then renders
 /// them in chain order with ids, timestamps, categories, and ops.
-/// Phase 113 — `aivyx persona list [--auto-only |
+/// Phase 113 — `aivyx-pa persona list [--auto-only |
 /// --manual-only]` filter discriminator. Mirrors
 /// `PersonaListFilter` in the binary; defined here in the
 /// module so [`run_persona_list`]'s signature stays in this
@@ -107,21 +107,21 @@ pub fn filter_delta_list(
     }
 }
 
-/// Entry point for `aivyx persona revert <delta_id>`. Sends a
+/// Entry point for `aivyx-pa persona revert <delta_id>`. Sends a
 /// `RevertPersonaDelta` IPC message to the daemon, which appends a
 /// `Revert` op delta to the chain and recomputes the shared runtime
 /// state. Per Q5(a) at Phase 60 sign-off, no operator approval gate
 /// — the operator is the proposer.
 pub async fn run_persona_revert(target_delta_id: &str) -> Result<(), String> {
     if target_delta_id.is_empty() {
-        return Err("`aivyx persona revert` requires a delta id".into());
+        return Err("`aivyx-pa persona revert` requires a delta id".into());
     }
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
     match revert_persona_delta(&socket_path, target_delta_id).await {
         Ok(seq) => {
             eprintln!(
-                "aivyx persona revert: ok — appended revert delta at chain seq {seq} \
+                "aivyx-pa persona revert: ok — appended revert delta at chain seq {seq} \
                  (target: {target_delta_id})"
             );
             Ok(())
@@ -135,13 +135,13 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx persona: no daemon running on socket {} — \
-         start the daemon first with `aivyx daemon run` (or just `aivyx`)",
+        "aivyx-pa persona: no daemon running on socket {} — \
+         start the daemon first with `aivyx-pa daemon run` (or just `aivyx-pa`)",
         socket_path.display(),
     ))
 }
 
-/// `aivyx persona conflicts` — Chapter Accord on-demand contradiction pass over
+/// `aivyx-pa persona conflicts` — Chapter Accord on-demand contradiction pass over
 /// the Soul (and against operator Profile constraints).
 pub async fn run_persona_conflicts() -> Result<(), String> {
     let socket_path = default_socket_path()?;
@@ -153,7 +153,7 @@ pub async fn run_persona_conflicts() -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx persona resolve <id> --remove <a|b>` — remove the chosen facet of a
+/// `aivyx-pa persona resolve <id> --remove <a|b>` — remove the chosen facet of a
 /// detected contradiction. Re-runs detection to map the stable id + side to the
 /// concrete `(category, value)`, then appends a `RemoveList` persona delta.
 pub async fn run_persona_resolve(id: &str, remove_side: char) -> Result<(), String> {
@@ -163,7 +163,7 @@ pub async fn run_persona_resolve(id: &str, remove_side: char) -> Result<(), Stri
         .await
         .map_err(|e| format!("failed to detect persona conflicts: {e}"))?;
     let conflict = conflicts.iter().find(|c| c.id == id).ok_or_else(|| {
-        format!("no current conflict with id `{id}` (re-run `aivyx persona conflicts`)")
+        format!("no current conflict with id `{id}` (re-run `aivyx-pa persona conflicts`)")
     })?;
     let facet = match remove_side {
         'a' | 'A' => &conflict.a,
@@ -182,17 +182,17 @@ pub async fn run_persona_resolve(id: &str, remove_side: char) -> Result<(), Stri
         .map_err(|e| format!("failed to resolve conflict: {e}"))?;
     println!(
         "Resolved: removed {} facet {:?} (persona chain seq {seq}). Reversible via \
-         `aivyx persona revert`.",
+         `aivyx-pa persona revert`.",
         facet.category, facet.value,
     );
     Ok(())
 }
 
-/// `aivyx persona dismiss <id>` — Chapter Accord "keep both": mark a detected
+/// `aivyx-pa persona dismiss <id>` — Chapter Accord "keep both": mark a detected
 /// contradiction a false positive so it isn't re-flagged (nothing is removed).
 pub async fn run_persona_dismiss(id: &str) -> Result<(), String> {
     if id.is_empty() {
-        return Err("`aivyx persona dismiss` requires a conflict id".into());
+        return Err("`aivyx-pa persona dismiss` requires a conflict id".into());
     }
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -234,8 +234,8 @@ fn render_soul_conflicts(conflicts: &[SoulConflict]) -> String {
             b_note
         ));
         out.push_str(&format!(
-            "  resolve: aivyx persona resolve {0} --remove <a|b>   |   \
-             keep both: aivyx persona dismiss {0}\n\n",
+            "  resolve: aivyx-pa persona resolve {0} --remove <a|b>   |   \
+             keep both: aivyx-pa persona dismiss {0}\n\n",
             c.id
         ));
     }
@@ -359,10 +359,10 @@ fn render_delta_list(deltas: &[PersonaDeltaSummary]) -> String {
 }
 
 // ---------------------------------------------------------------
-// Phase 70 — `aivyx persona proposals` subcommand handlers.
+// Phase 70 — `aivyx-pa persona proposals` subcommand handlers.
 // ---------------------------------------------------------------
 
-/// Entry point for `aivyx persona proposals list [--status ...]`.
+/// Entry point for `aivyx-pa persona proposals list [--status ...]`.
 pub async fn run_persona_proposals_list(status: &str) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -373,7 +373,7 @@ pub async fn run_persona_proposals_list(status: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Entry point for `aivyx persona proposals show <id>`.
+/// Entry point for `aivyx-pa persona proposals show <id>`.
 pub async fn run_persona_proposals_show(proposal_id: &str) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -389,7 +389,7 @@ pub async fn run_persona_proposals_show(proposal_id: &str) -> Result<(), String>
     }
 }
 
-/// Entry point for `aivyx persona proposals approve <id>`. CLI v1
+/// Entry point for `aivyx-pa persona proposals approve <id>`. CLI v1
 /// applies the agent's proposed op verbatim; operators who want
 /// to edit the op before approving use the Web UI Proposals pane.
 pub async fn run_persona_proposals_approve(proposal_id: &str) -> Result<(), String> {
@@ -403,7 +403,7 @@ pub async fn run_persona_proposals_approve(proposal_id: &str) -> Result<(), Stri
     .await
     .map_err(|e| format!("approve failed: {e}"))?;
     eprintln!(
-        "aivyx persona proposals approve: ok — proposal `{proposal_id}` \
+        "aivyx-pa persona proposals approve: ok — proposal `{proposal_id}` \
          applied as persona delta at chain seq {seq}",
         seq = success
             .applied_seq
@@ -413,7 +413,7 @@ pub async fn run_persona_proposals_approve(proposal_id: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Entry point for `aivyx persona proposals reject <id> [--reason ...]`.
+/// Entry point for `aivyx-pa persona proposals reject <id> [--reason ...]`.
 pub async fn run_persona_proposals_reject(
     proposal_id: &str,
     reason: Option<&str>,
@@ -429,7 +429,7 @@ pub async fn run_persona_proposals_reject(
     )
     .await
     .map_err(|e| format!("reject failed: {e}"))?;
-    eprintln!("aivyx persona proposals reject: ok — proposal `{proposal_id}` rejected");
+    eprintln!("aivyx-pa persona proposals reject: ok — proposal `{proposal_id}` rejected");
     Ok(())
 }
 
@@ -563,7 +563,7 @@ fn indent_block(s: &str, indent: &str) -> String {
 /// [`aivyx_core::skill_proposer::ProfileFieldHint`] or
 /// [`aivyx_core::skill_proposer::RoleDraft`] payload. This
 /// renders the payload in operator-readable form so
-/// `aivyx persona proposals show <id>` doesn't make the
+/// `aivyx-pa persona proposals show <id>` doesn't make the
 /// operator parse JSON-in-JSON.
 ///
 /// Returns `None` when the category isn't Phase 118, when the
@@ -596,8 +596,8 @@ fn render_profile_hint_payload(blob: &str) -> Option<String> {
     for line in rationale.lines() {
         out.push_str(&format!("      {line}\n"));
     }
-    out.push_str("\n  To apply: edit aivyx.toml [profile] and update the\n");
-    out.push_str("  field above. Phase 118 does NOT auto-mutate aivyx.toml.\n");
+    out.push_str("\n  To apply: edit aivyx-pa.toml [profile] and update the\n");
+    out.push_str("  field above. Phase 118 does NOT auto-mutate aivyx-pa.toml.\n");
     Some(out)
 }
 
@@ -642,10 +642,10 @@ fn render_role_draft_payload(blob: &str) -> Option<String> {
     for line in rationale.lines() {
         out.push_str(&format!("      {line}\n"));
     }
-    out.push_str("\n  To apply: edit aivyx.toml and add a [roles.<name>]\n");
+    out.push_str("\n  To apply: edit aivyx-pa.toml and add a [roles.<name>]\n");
     out.push_str("  section using the addendum + tool_allowlist above\n");
     out.push_str("  on top of any inherited parent role. Phase 118 does NOT\n");
-    out.push_str("  auto-mutate aivyx.toml.\n");
+    out.push_str("  auto-mutate aivyx-pa.toml.\n");
     Some(out)
 }
 
@@ -1056,9 +1056,9 @@ mod phase_113_filter_tests {
         assert!(out.contains("rationale"));
         assert!(out.contains("uses bullets"));
         // Operator action instruction explains the workflow
-        // (Phase 118 does NOT auto-mutate aivyx.toml).
+        // (Phase 118 does NOT auto-mutate aivyx-pa.toml).
         assert!(out.contains("To apply"));
-        assert!(out.contains("aivyx.toml"));
+        assert!(out.contains("aivyx-pa.toml"));
         assert!(out.contains("does NOT auto-mutate"));
     }
 

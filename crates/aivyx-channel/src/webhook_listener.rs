@@ -42,7 +42,7 @@ pub async fn run_webhook_listener(
         .await
         .map_err(|e| format!("webhook listener: failed to bind {addr}: {e}"))?;
 
-    eprintln!("aivyx webhook: listening on http://{addr}");
+    eprintln!("aivyx-pa webhook: listening on http://{addr}");
 
     let store = Arc::new(store);
 
@@ -52,7 +52,7 @@ pub async fn run_webhook_listener(
                 match result {
                     Ok(conn) => conn,
                     Err(e) => {
-                        eprintln!("aivyx webhook: accept error: {e}");
+                        eprintln!("aivyx-pa webhook: accept error: {e}");
                         continue;
                     }
                 }
@@ -76,7 +76,7 @@ pub async fn run_webhook_listener(
             tokio::select! {
                 result = conn => {
                     if let Err(e) = result {
-                        eprintln!("aivyx webhook: connection error: {e}");
+                        eprintln!("aivyx-pa webhook: connection error: {e}");
                     }
                 }
                 _ = conn_shutdown.cancelled() => {}
@@ -139,7 +139,7 @@ async fn fire_webhook(
             );
         }
         Err(e) => {
-            eprintln!("aivyx webhook: storage error looking up {webhook_id:?}: {e}");
+            eprintln!("aivyx-pa webhook: storage error looking up {webhook_id:?}: {e}");
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 r#"{"error":"internal error"}"#,
@@ -182,7 +182,7 @@ async fn fire_webhook(
         let mut updated = record;
         updated.last_fired_at = Some(now_ms);
         if let Err(e) = webhook::update_webhook(&store_clone, &updated).await {
-            eprintln!("aivyx webhook: failed to update last_fired_at for {}: {e}", updated.webhook_id);
+            eprintln!("aivyx-pa webhook: failed to update last_fired_at for {}: {e}", updated.webhook_id);
         }
     });
 

@@ -1,9 +1,9 @@
-//! `aivyx access` — the operator-facing access-level Settings command
+//! `aivyx-pa access` — the operator-facing access-level Settings command
 //! (Chapter N). `show` prints the resolved access level, the fs-root reach
 //! it derives, and the confirm-first posture; `set <level>` rewrites the
-//! `[access]` section of `aivyx.toml` (re-confirming the expanded levels).
+//! `[access]` section of `aivyx-pa.toml` (re-confirming the expanded levels).
 //!
-//! Like `aivyx profile`, these are synchronous file operations — no daemon,
+//! Like `aivyx-pa profile`, these are synchronous file operations — no daemon,
 //! no passphrase, no API key. The change takes effect on the next daemon
 //! start (access level is load-time, same as roles).
 
@@ -16,16 +16,16 @@ use toml_edit::DocumentMut;
 /// Module-local copy of the default config path (mirrors
 /// [`crate::DEFAULT_TOML_PATH`] without coupling to it, same as the other
 /// subcommand modules).
-const ACCESS_TOML_PATH: &str = "aivyx.toml";
+const ACCESS_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// `aivyx access show` — print the current access level + resolved reach.
+/// `aivyx-pa access show` — print the current access level + resolved reach.
 pub fn run_access_show() -> Result<(), String> {
     let cfg = load_config_for_inspection()?;
     print!("{}", render_access_for_show(&cfg));
     Ok(())
 }
 
-/// `aivyx access set <level> [--root <dir>] [--yes]` — rewrite the
+/// `aivyx-pa access set <level> [--root <dir>] [--yes]` — rewrite the
 /// `[access]` section. `workspace`/`custom` require `--root`; expanded
 /// levels (anything but `sandbox`) require a confirmation unless `--yes`.
 pub fn run_access_set(level: AccessLevel, root: Option<String>, yes: bool) -> Result<(), String> {
@@ -80,12 +80,12 @@ pub fn run_access_set(level: AccessLevel, root: Option<String>, yes: bool) -> Re
     eprintln!("Access level set to `{level}` in {}.", path.display());
     eprintln!(
         "Restart the daemon for the change to take effect: \
-         `aivyx daemon stop && aivyx daemon run`."
+         `aivyx-pa daemon stop && aivyx-pa daemon run`."
     );
     Ok(())
 }
 
-/// Parse the `<level>` token of `aivyx access set`.
+/// Parse the `<level>` token of `aivyx-pa access set`.
 pub fn parse_level(s: &str) -> Result<AccessLevel, String> {
     // The string⇄level mapping lives once in `aivyx_config::AccessLevel`; this
     // wraps it with the CLI's operator-facing error text.
@@ -100,12 +100,12 @@ pub fn parse_level(s: &str) -> Result<AccessLevel, String> {
 fn render_access_for_show(cfg: &AivyxConfig) -> String {
     let src = |s: FieldSource| match s {
         FieldSource::Default => "default",
-        FieldSource::Toml => "aivyx.toml",
+        FieldSource::Toml => "aivyx-pa.toml",
         FieldSource::Env => "env",
         FieldSource::EncryptedStore => "encrypted-store",
     };
     let mut out = String::new();
-    out.push_str("aivyx access:\n");
+    out.push_str("aivyx-pa access:\n");
     out.push_str(&format!(
         "  level              = {} ({})\n",
         cfg.access_level.value,
@@ -198,7 +198,7 @@ mod tests {
         // removes a stale [access] root, in an isolated temp cwd.
         let dir = std::env::temp_dir().join(format!("aivyx-access-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let toml = dir.join("aivyx.toml");
+        let toml = dir.join("aivyx-pa.toml");
         std::fs::write(&toml, "[access]\nlevel = \"workspace\"\nroot = \"/old\"\n").unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();

@@ -93,14 +93,14 @@ pub async fn fire_due(
         for t in &targets {
             if let Err(e) = notifier.notify(t, &r.message).await {
                 eprintln!(
-                    "aivyx reminder: deliver to {t:?} failed: {e}"
+                    "aivyx-pa reminder: deliver to {t:?} failed: {e}"
                 );
             }
         }
         // Clear the fired reminder (best-effort; a failed cancel
         // means it re-fires next tick — at-least-once, never lost).
         if let Err(e) = store.cancel(&r.id).await {
-            eprintln!("aivyx reminder: clear {:?} failed: {e}", r.id);
+            eprintln!("aivyx-pa reminder: clear {:?} failed: {e}", r.id);
         }
     }
     due.len()
@@ -117,7 +117,7 @@ pub async fn run_reminder_driver(
         tokio::time::sleep(interval).await;
         let fired = fire_due(&store, notifier.as_ref(), now_unix()).await;
         if fired > 0 {
-            eprintln!("aivyx reminder: fired {fired} reminder(s)");
+            eprintln!("aivyx-pa reminder: fired {fired} reminder(s)");
         }
     }
 }

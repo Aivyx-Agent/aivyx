@@ -560,7 +560,7 @@ impl Tool for ShellExecTool {
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
         // Phase 42 — clear inherited environment so the child
-        // cannot read ANTHROPIC_API_KEY, AIVYX_PASSPHRASE, or
+        // cannot read ANTHROPIC_API_KEY, AIVYX_PA_PASSPHRASE, or
         // any other secret from the daemon's process env. Then
         // inject only safe defaults (PATH, HOME, USER, LANG,
         // TERM) from the current env, plus any vars the caller

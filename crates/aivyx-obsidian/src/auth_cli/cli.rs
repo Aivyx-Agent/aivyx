@@ -33,10 +33,10 @@ SUBCOMMANDS:
 
 When run with no arguments, the binary enters IPC-loop mode
 (spawned by the Aivyx daemon via [[tool_process]] in
-aivyx.toml).
+aivyx-pa.toml).
 
 CONFIG FILE
-    Expected at ~/.aivyx/tool-processes/obsidian/config.toml
+    Expected at ~/.aivyx-pa/tool-processes/obsidian/config.toml
     with:
 
         vault_path = \"/absolute/path/to/MyVault\"

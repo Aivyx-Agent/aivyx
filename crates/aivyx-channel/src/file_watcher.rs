@@ -101,7 +101,7 @@ pub async fn run_file_watcher(
                 reconcile_watches(&mut watcher, &mut active_watches, &enabled, &tx);
             }
             Err(e) => {
-                eprintln!("aivyx file-watcher: failed to load watches: {e}");
+                eprintln!("aivyx-pa file-watcher: failed to load watches: {e}");
             }
         }
 
@@ -245,7 +245,7 @@ fn reconcile_watches(
                 }
             }
             Err(e) => {
-                eprintln!("aivyx file-watcher: notify error: {e}");
+                eprintln!("aivyx-pa file-watcher: notify error: {e}");
             }
         }
     });
@@ -275,7 +275,7 @@ fn reconcile_watches(
                     }
                     Err(e) => {
                         eprintln!(
-                            "aivyx file-watcher: failed to watch {:?} for {:?}: {e}",
+                            "aivyx-pa file-watcher: failed to watch {:?} for {:?}: {e}",
                             r.path, r.watch_id,
                         );
                     }
@@ -283,14 +283,14 @@ fn reconcile_watches(
             }
 
             if let Err(e) = w.configure(Config::default()) {
-                eprintln!("aivyx file-watcher: configure error: {e}");
+                eprintln!("aivyx-pa file-watcher: configure error: {e}");
             }
 
             *active = new_active;
             *watcher = Some(w);
         }
         Err(e) => {
-            eprintln!("aivyx file-watcher: failed to create watcher: {e}");
+            eprintln!("aivyx-pa file-watcher: failed to create watcher: {e}");
         }
     }
 }
@@ -301,13 +301,13 @@ async fn update_last_fired(store: &DomainHandle, watch_id: &str) {
             record.last_fired_at = Some(now_millis());
             if let Err(e) = file_watch::update_file_watch(store, &record).await {
                 eprintln!(
-                    "aivyx file-watcher: failed to update last_fired_at for {watch_id}: {e}"
+                    "aivyx-pa file-watcher: failed to update last_fired_at for {watch_id}: {e}"
                 );
             }
         }
         Ok(None) => {} // Watch was deleted between fire and update.
         Err(e) => {
-            eprintln!("aivyx file-watcher: storage read error for {watch_id}: {e}");
+            eprintln!("aivyx-pa file-watcher: storage read error for {watch_id}: {e}");
         }
     }
 }

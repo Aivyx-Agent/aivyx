@@ -16,7 +16,7 @@
 //!   under-counting.
 //!
 //! Shipped default rates are **approximate published USD/Mtok as of early
-//! 2026** and are a convenience only — `[pricing.<model>]` in `aivyx.toml`
+//! 2026** and are a convenience only — `[pricing.<model>]` in `aivyx-pa.toml`
 //! (wired in K.5) is authoritative.
 
 use std::collections::HashMap;

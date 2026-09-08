@@ -8,7 +8,7 @@
 //! `budget.write` for `budget.record`.
 //!
 //! Data lives at
-//! `~/.aivyx/tool-processes/toolkit/budget.json`
+//! `~/.aivyx-pa/tool-processes/toolkit/budget.json`
 //! (0600 perms, atomic write — see
 //! [`crate::budget_store`] for the storage
 //! substrate).

@@ -7,8 +7,8 @@
 //!    `examples/templates/*.toml`. They're embedded into the
 //!    binary at compile time via `include_str!`. Every fresh
 //!    install ships with the bundled set; no filesystem setup
-//!    needed for `aivyx init --template <name>` to work.
-//! 2. **User override** at `~/.local/share/aivyx/templates/`.
+//!    needed for `aivyx-pa init --template <name>` to work.
+//! 2. **User override** at `~/.local/share/aivyx-pa/templates/`.
 //!    If a `<name>.toml` exists there it shadows the bundled
 //!    template of the same name. Operators can author their
 //!    own templates without rebuilding the binary.
@@ -49,7 +49,7 @@ pub enum TemplateSource {
     /// Embedded at compile time via `include_str!`.
     Bundled,
     /// Read from the user-dir override at
-    /// `~/.local/share/aivyx/templates/<name>.toml`.
+    /// `~/.local/share/aivyx-pa/templates/<name>.toml`.
     User,
 }
 
@@ -111,13 +111,13 @@ pub fn bundled_templates() -> Vec<Template> {
 // ---------------------------------------------------------------------------
 
 /// Resolve the user template directory. Per XDG conventions:
-/// `$XDG_DATA_HOME/aivyx/templates/` if set, otherwise
-/// `~/.local/share/aivyx/templates/`. Returns `None` if neither
+/// `$XDG_DATA_HOME/aivyx-pa/templates/` if set, otherwise
+/// `~/.local/share/aivyx-pa/templates/`. Returns `None` if neither
 /// `XDG_DATA_HOME` nor `HOME` is in the environment.
 pub fn user_template_dir() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         if !xdg.is_empty() {
-            return Some(PathBuf::from(xdg).join("aivyx").join("templates"));
+            return Some(PathBuf::from(xdg).join("aivyx-pa").join("templates"));
         }
     }
     let home = std::env::var("HOME").ok()?;
@@ -128,7 +128,7 @@ pub fn user_template_dir() -> Option<PathBuf> {
         PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("aivyx")
+            .join("aivyx-pa")
             .join("templates"),
     )
 }
@@ -216,7 +216,7 @@ pub fn load_template(name: &str) -> Result<Template, String> {
         }
     }
     Err(format!(
-        "unknown template `{name}` — run `aivyx init --list-templates` \
+        "unknown template `{name}` — run `aivyx-pa init --list-templates` \
          to see what's available"
     ))
 }
@@ -267,7 +267,7 @@ pub fn render_template_list(templates: &[Template]) -> String {
         ));
     }
     out.push_str(
-        "\nUse `aivyx init --template <name>` to start the wizard \
+        "\nUse `aivyx-pa init --template <name>` to start the wizard \
          pre-filled from a template.\n",
     );
     out
@@ -409,7 +409,7 @@ mod tests {
             std::env::set_var("XDG_DATA_HOME", "/custom/xdg");
         }
         let dir = user_template_dir().expect("dir must be Some");
-        assert_eq!(dir, PathBuf::from("/custom/xdg/aivyx/templates"));
+        assert_eq!(dir, PathBuf::from("/custom/xdg/aivyx-pa/templates"));
         // Restore.
         unsafe {
             match prior {

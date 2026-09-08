@@ -1,7 +1,7 @@
 //! Operator-supplied KitchenDB connection config.
 //!
 //! Chapter Brigade (BG.1). Loaded once at tool-process startup from
-//! `~/.aivyx/tool-processes/kitchen/config.toml`. The kitchen toolkit talks to
+//! `~/.aivyx-pa/tool-processes/kitchen/config.toml`. The kitchen toolkit talks to
 //! the operator's **KitchenDB** (Postgres + PostgREST) — the system of record —
 //! so it needs the PostgREST base URL, an API key, and the multi-tenant
 //! `organization_id` every KitchenDB RPC takes (`p_organization_id`).
@@ -9,7 +9,7 @@
 //! ## File format
 //!
 //! ```toml
-//! # ~/.aivyx/tool-processes/kitchen/config.toml
+//! # ~/.aivyx-pa/tool-processes/kitchen/config.toml
 //!
 //! [kitchen_db]
 //! # The PostgREST base URL (Supabase: https://<ref>.supabase.co/rest/v1).
@@ -63,11 +63,11 @@ pub struct KitchenDbConfig {
     pub organization_id: String,
 }
 
-/// Default config path: `$HOME/.aivyx/tool-processes/kitchen/config.toml`.
+/// Default config path: `$HOME/.aivyx-pa/tool-processes/kitchen/config.toml`.
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
     let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
     Ok(PathBuf::from(home)
-        .join(".aivyx")
+        .join(".aivyx-pa")
         .join("tool-processes")
         .join("kitchen")
         .join("config.toml"))

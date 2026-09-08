@@ -34,7 +34,7 @@ pub struct SandboxConfig {
 /// Chapter Conduit (CD.3) — the last N stderr lines kept per stdio
 /// server, so a misconfigured server's own diagnostic survives instead
 /// of going to `/dev/null`. Caller-owned (the daemon holds a clone) so
-/// the tail can be read for the failure log and `aivyx mcp status`
+/// the tail can be read for the failure log and `aivyx-pa mcp status`
 /// without putting it on the [`McpTransport`] trait.
 const MAX_STDERR_LINES: usize = 50;
 

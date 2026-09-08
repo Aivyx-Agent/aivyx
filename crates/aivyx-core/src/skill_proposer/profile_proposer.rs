@@ -5,14 +5,14 @@
 //! shapes:
 //!
 //! - [`ProfileFieldHint`] — a noted suggestion that the
-//!   operator-declared `[profile]` block in `aivyx.toml`
+//!   operator-declared `[profile]` block in `aivyx-pa.toml`
 //!   could be refined for one of the six declared Profile-
 //!   config fields. Operator-staged regardless of confidence;
-//!   does NOT auto-mutate `aivyx.toml`.
+//!   does NOT auto-mutate `aivyx-pa.toml`.
 //! - [`RoleDraft`] — a noted draft for an entirely new Role
 //!   definition the agent observes would fit the operator's
 //!   recurring task shapes. Operator-staged regardless of
-//!   confidence; does NOT auto-mutate `aivyx.toml`.
+//!   confidence; does NOT auto-mutate `aivyx-pa.toml`.
 //!
 //! Both payloads ride inside the existing Phase 110 list-
 //! category substrate as JSON-serialized strings on
@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 // Profile field naming
 // ---------------------------------------------------------------------------
 
-/// The six declared `[profile]` fields in `aivyx.toml`. Mirrors
+/// The six declared `[profile]` fields in `aivyx-pa.toml`. Mirrors
 /// the field names operators see and edit directly in the TOML
 /// config, NOT the [`PersonaDeltaCategory`] enum
 /// (`aivyx-channel::persona`) that names the Persona-chain
@@ -61,23 +61,23 @@ use serde::{Deserialize, Serialize};
 /// [`PersonaDeltaCategory`]: aivyx-channel::persona::PersonaDeltaCategory
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ProfileField {
-    /// Scalar — `profile.assistant_name` in `aivyx.toml`.
+    /// Scalar — `profile.assistant_name` in `aivyx-pa.toml`.
     AssistantName,
-    /// Scalar — `profile.operator_profile` in `aivyx.toml`.
+    /// Scalar — `profile.operator_profile` in `aivyx-pa.toml`.
     OperatorProfile,
-    /// Scalar — `profile.communication_style` in `aivyx.toml`.
+    /// Scalar — `profile.communication_style` in `aivyx-pa.toml`.
     CommunicationStyle,
-    /// List — `profile.primary_use_cases` in `aivyx.toml`.
+    /// List — `profile.primary_use_cases` in `aivyx-pa.toml`.
     PrimaryUseCases,
-    /// List — `profile.behavioral_preferences` in `aivyx.toml`.
+    /// List — `profile.behavioral_preferences` in `aivyx-pa.toml`.
     BehavioralPreferences,
-    /// List — `profile.behavioral_constraints` in `aivyx.toml`.
+    /// List — `profile.behavioral_constraints` in `aivyx-pa.toml`.
     BehavioralConstraints,
 }
 
 impl ProfileField {
     /// Stable string label — matches the field name as it
-    /// appears in `aivyx.toml`. Used in operator-facing
+    /// appears in `aivyx-pa.toml`. Used in operator-facing
     /// messages and in the audit-event `category` field
     /// (Phase 114 wire-compat: stays a string in
     /// `SkillAutoProposal.category`).
@@ -111,7 +111,7 @@ impl ProfileField {
 // ---------------------------------------------------------------------------
 
 /// A noted suggestion that the operator-declared `[profile]`
-/// block in `aivyx.toml` could be refined.
+/// block in `aivyx-pa.toml` could be refined.
 ///
 /// The auto-proposer LLM judge drafts one of these when it
 /// observes recurring task shapes that suggest the declared
@@ -119,7 +119,7 @@ impl ProfileField {
 /// staged in the Persona chain for operator review; on
 /// approval, it lands in [`EffectivePersona::profile_hints`]
 /// as a record-of-suggestion. The operator decides whether
-/// to act on the hint by editing `aivyx.toml`.
+/// to act on the hint by editing `aivyx-pa.toml`.
 ///
 /// For scalar fields (`is_scalar` true on the field), the
 /// `suggested_value` is the proposed new value. For list
@@ -155,7 +155,7 @@ pub struct ProfileFieldHint {
 ///
 /// Phase 118 ships ONLY the proposer + chain entry — the
 /// approved draft sits in the Persona chain for operator
-/// review and optional copy into `[roles.*]` in `aivyx.toml`.
+/// review and optional copy into `[roles.*]` in `aivyx-pa.toml`.
 /// No auto-mutation of the role config; the P9 Role-config
 /// operator-curated boundary stays intact.
 ///
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn profile_field_labels_match_aivyx_toml_field_names() {
         // The labels are the operator-visible field names in
-        // `aivyx.toml`. Drift would break the operator's
+        // `aivyx-pa.toml`. Drift would break the operator's
         // ability to map a hint to the field they need to edit.
         assert_eq!(ProfileField::AssistantName.label(), "assistant_name");
         assert_eq!(ProfileField::OperatorProfile.label(), "operator_profile");

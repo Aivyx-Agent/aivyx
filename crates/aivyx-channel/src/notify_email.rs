@@ -238,13 +238,13 @@ impl NotifyEmailBackend {
 
     /// Compose the subject line for a notification. Public for
     /// testing. When `subject` is present, that's the subject
-    /// verbatim; when absent, "Aivyx notification" is the
+    /// verbatim; when absent, "Aivyx PA notification" is the
     /// default so the email doesn't ship with an empty Subject:
     /// header (which some servers downgrade).
     pub fn compose_subject(subject: Option<&str>) -> String {
         match subject {
             Some(s) if !s.is_empty() => s.to_string(),
-            _ => "Aivyx notification".to_string(),
+            _ => "Aivyx PA notification".to_string(),
         }
     }
 }
@@ -331,7 +331,7 @@ mod tests {
     fn compose_subject_default_when_none() {
         assert_eq!(
             NotifyEmailBackend::compose_subject(None),
-            "Aivyx notification",
+            "Aivyx PA notification",
         );
     }
 
@@ -339,7 +339,7 @@ mod tests {
     fn compose_subject_default_when_empty() {
         assert_eq!(
             NotifyEmailBackend::compose_subject(Some("")),
-            "Aivyx notification",
+            "Aivyx PA notification",
         );
     }
 
@@ -373,7 +373,7 @@ mod tests {
         backend.send("body", None).await.expect("send ok");
 
         let calls = sender.calls.lock().unwrap();
-        assert_eq!(calls[0].2, "Aivyx notification");
+        assert_eq!(calls[0].2, "Aivyx PA notification");
     }
 
     #[tokio::test]

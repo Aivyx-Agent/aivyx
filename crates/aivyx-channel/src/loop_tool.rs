@@ -312,7 +312,7 @@ impl Tool for LoopCompleteTool {
             // rejection only goes back to the agent). Log every verdict so a
             // watcher sees *why* a completion was accepted or held.
             eprintln!(
-                "aivyx loop: completion verdict for '{}' — {}: {}",
+                "aivyx-pa loop: completion verdict for '{}' — {}: {}",
                 story.title,
                 if verdict.passed { "ACCEPTED" } else { "REJECTED" },
                 verdict.reason,

@@ -1,8 +1,8 @@
 //! Phase 104 — provider credential verification.
 //!
-//! Used by `aivyx init` to confirm the operator-supplied
+//! Used by `aivyx-pa init` to confirm the operator-supplied
 //! `(provider, api_key, model)` triple is valid before writing
-//! `aivyx.toml` to disk. Catches typo'd keys and non-existent
+//! `aivyx-pa.toml` to disk. Catches typo'd keys and non-existent
 //! model names at config-write time rather than first-turn time
 //! (after the operator has already committed to a passphrase).
 //!

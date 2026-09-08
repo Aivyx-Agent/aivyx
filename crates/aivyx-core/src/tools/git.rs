@@ -735,12 +735,12 @@ fn should_warn_once(repo: &Path) -> bool {
 fn confiner_for(repo: &Path, require_enforcement: bool) -> Arc<dyn ExecutionConfiner> {
     if repo.join(".git").is_file() {
         if should_warn_once(repo) {
-            // No `tracing` dependency in this crate (the rest of `aivyx`
+            // No `tracing` dependency in this crate (the rest of `aivyx-pa`
             // logs operator-facing warnings via `eprintln!`, e.g.
             // `aivyx-cli/src/bin/aivyx.rs`) — match that convention rather
             // than pulling in a new logging dependency for one line.
             eprintln!(
-                "aivyx: skipping Landlock confinement for {}: its .git is a file, \
+                "aivyx-pa: skipping Landlock confinement for {}: its .git is a file, \
                  not a directory, so this repo is a git worktree or submodule \
                  whose real gitdir lives outside the repo root — confining to the \
                  repo root would break git entirely here",

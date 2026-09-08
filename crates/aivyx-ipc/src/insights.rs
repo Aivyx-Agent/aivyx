@@ -379,7 +379,7 @@ pub struct LearningDigest {
     /// distinguishes "knob explicitly off" from "section
     /// absent" on the surface. `#[serde(default,
     /// skip_serializing_if = "Option::is_none")]` keeps the
-    /// IPC wire-compat — older `aivyx learning` clients
+    /// IPC wire-compat — older `aivyx-pa learning` clients
     /// decode the digest unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgment_signal: Option<bool>,

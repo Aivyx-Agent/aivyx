@@ -118,7 +118,7 @@ pub struct ReflectionProposeTool {
     /// `Pending` row. The mission/gate flow stays in place for
     /// memory writes (which still flow through reflection.apply);
     /// persona deltas land in both surfaces so the operator can
-    /// review them via the new Web UI Proposals pane / `aivyx
+    /// review them via the new Web UI Proposals pane / `aivyx-pa
     /// persona proposals` CLI rather than waiting on a mission
     /// gate.
     persona_proposal_log:
@@ -507,7 +507,7 @@ impl Tool for ReflectionProposeTool {
         // Phase 70 — also write each persona delta to the
         // persistent proposal chain as a `Pending` row so the
         // operator can review via the Web UI Proposals pane /
-        // `aivyx persona proposals` CLI without waiting on the
+        // `aivyx-pa persona proposals` CLI without waiting on the
         // mission gate. Best-effort: failures emit a tracing
         // diagnostic but don't fail the whole tool call, since
         // the mission/gate path still provides the legacy

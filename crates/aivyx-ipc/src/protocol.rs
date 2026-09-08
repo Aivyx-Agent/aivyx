@@ -27,19 +27,19 @@ pub const FRAME_HEADER_LEN: usize = 4;
 
 /// Resolve the daemon socket path per `docs/DAEMON_IPC.md`:
 ///
-/// 1. `$XDG_RUNTIME_DIR/aivyx/daemon.sock` (preferred)
-/// 2. `$HOME/.local/share/aivyx/daemon.sock` (fallback)
+/// 1. `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock` (preferred)
+/// 2. `$HOME/.local/share/aivyx-pa/daemon.sock` (fallback)
 ///
 /// Returns `Err` only if neither `XDG_RUNTIME_DIR` nor `HOME` is set.
 pub fn default_socket_path() -> Result<PathBuf, String> {
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-        return Ok(PathBuf::from(xdg).join("aivyx").join("daemon.sock"));
+        return Ok(PathBuf::from(xdg).join("aivyx-pa").join("daemon.sock"));
     }
     if let Ok(home) = std::env::var("HOME") {
         return Ok(PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("aivyx")
+            .join("aivyx-pa")
             .join("daemon.sock"));
     }
     Err("neither XDG_RUNTIME_DIR nor HOME is set; cannot determine daemon socket path".into())
@@ -47,8 +47,8 @@ pub fn default_socket_path() -> Result<PathBuf, String> {
 
 /// Resolve the daemon PID file path — sibling of the socket file.
 ///
-/// `$XDG_RUNTIME_DIR/aivyx/daemon.pid` (preferred) or
-/// `$HOME/.local/share/aivyx/daemon.pid` (fallback).
+/// `$XDG_RUNTIME_DIR/aivyx-pa/daemon.pid` (preferred) or
+/// `$HOME/.local/share/aivyx-pa/daemon.pid` (fallback).
 pub fn default_pid_path() -> Result<PathBuf, String> {
     default_socket_path().map(|p| p.with_extension("pid"))
 }
@@ -136,13 +136,13 @@ pub enum QueryPayload {
     /// - `false` (default) — the **running** snapshot the daemon is
     ///   actually using for system-prompt assembly (the boot-time
     ///   `Arc<Profile>`). This is the Command-Center / status meaning.
-    /// - `true` — re-read the **on-disk** `[profile]` from `aivyx.toml`
+    /// - `true` — re-read the **on-disk** `[profile]` from `aivyx-pa.toml`
     ///   (the same source the Agents editor *writes*, and what the next
     ///   restart will load). The two diverge after a `SetProfile` write
     ///   that hasn't been applied by a restart yet; the editor seeds from
     ///   `from_disk = true` so what you load equals what you edit.
     ///   Falls back to the running snapshot when the daemon was launched
-    ///   without an `aivyx.toml`.
+    ///   without an `aivyx-pa.toml`.
     ///
     /// `#[serde(default)]` keeps the field absent on the wire for
     /// pre-Chapter-V clients (`{"kind":"GetProfile"}` decodes to
@@ -168,7 +168,7 @@ pub enum QueryPayload {
     /// for export. Unlike `ListPersonaDeltas` (paginated summaries
     /// for the Web UI), this returns full-fidelity `DeltaExport`
     /// values that preserve every PersonaDelta field. Operator-
-    /// driven; intended to feed `aivyx identity export <path>`.
+    /// driven; intended to feed `aivyx-pa identity export <path>`.
     /// The daemon returns up to `MAX_EXPORT_CHAIN_ENTRIES` entries
     /// in one shot (current cap: 100,000 — enough for years of
     /// reflection-approved deltas at realistic rates).
@@ -201,7 +201,7 @@ pub enum QueryPayload {
     /// (name/kind/default), for the Studio Notifications screen.
     /// Targets remain TOML-managed; this is a view, not a CRUD
     /// surface — creating/editing a target still means editing
-    /// `aivyx.toml`.
+    /// `aivyx-pa.toml`.
     GetNotifyTargets,
     /// POLISH_WAVES.md sub-project 7 plan 2 — the editable notify-target
     /// list (distinct from `GetNotifyTargets`'s read-only status view).
@@ -242,7 +242,7 @@ pub enum QueryPayload {
     DeleteNotifyTarget { name: String },
     /// Phase 74 — list every distinct memory topic. Drives the
     /// Web UI Memory pane's left-column topic list + the
-    /// `aivyx memory list` CLI render.
+    /// `aivyx-pa memory list` CLI render.
     ListMemoryTopics,
     /// Phase 74 — fetch up to `limit` entries for a single
     /// memory topic, newest first. Mirrors `Memory::get_recent`'s
@@ -422,7 +422,7 @@ pub enum QueryPayload {
     /// when the daemon has no team service).
     GetTeamRoster,
     /// Chapter Z — list a directory for the Documents browser. `root` is
-    /// `"workspace"` (the agent's `~/.aivyx/workspace`) or `"fs"` (the operator's
+    /// `"workspace"` (the agent's `~/.aivyx-pa/workspace`) or `"fs"` (the operator's
     /// access-scoped `fs_root`); `path` is relative to that root. Read-only;
     /// `..`/symlink escapes are rejected daemon-side. Responds with
     /// [`QueryResponsePayload::ListDir`] (or `QueryError` `bad_root` /
@@ -503,7 +503,7 @@ pub enum QueryPayload {
     /// embedding provider is available. Read-only; none of this was queryable
     /// before. Responds with [`QueryResponsePayload::GetSettings`].
     GetSettings,
-    /// Chapter U — rewrite the `[access]` section of `aivyx.toml`. `level` is
+    /// Chapter U — rewrite the `[access]` section of `aivyx-pa.toml`. `level` is
     /// one of `sandbox | workspace | home | full | custom`; `root` is required
     /// for `workspace`/`custom` and rejected for the auto-derived levels.
     /// `confirm` MUST be `true` for any expanded (non-sandbox) level — the
@@ -519,7 +519,7 @@ pub enum QueryPayload {
         #[serde(default)]
         confirm: bool,
     },
-    /// Chapter U — rewrite the `[budget]` section of `aivyx.toml`. A `None`
+    /// Chapter U — rewrite the `[budget]` section of `aivyx-pa.toml`. A `None`
     /// cap clears that dimension (uncapped). `on_exceeded` is `alert | deny`
     /// (absent ⇒ the `deny` default); `alert_at` is the early-warning fraction
     /// in `[0.0, 1.0]` (absent ⇒ no early-warning tier). Takes effect on the
@@ -551,11 +551,11 @@ pub enum QueryPayload {
         #[serde(default)]
         confirm: bool,
     },
-    /// Chapter V — rewrite the `[profile]` section of `aivyx.toml` (the
+    /// Chapter V — rewrite the `[profile]` section of `aivyx-pa.toml` (the
     /// operator-declared identity layer, PRODUCT.md P13). Every field carries
     /// **clear-on-`None`** semantics matching `aivyx_config::ProfileWrite`: an
     /// absent field removes that key (the loader's default then applies — e.g.
-    /// `assistant_name` falls back to `"Aivyx"`), a present one writes it. An
+    /// `assistant_name` falls back to `"Aivyx PA"`), a present one writes it. An
     /// explicit empty list (`Some([])`) is "declared but empty", distinct from
     /// absent. The Settings screen's confirm-first gate does **not** apply here
     /// — Profile is free-form declaration, not an access-expansion. Takes
@@ -587,10 +587,10 @@ pub enum QueryPayload {
     /// and `voices-*.bin`). Read-only.
     /// Responds with [`QueryResponsePayload::GetVoiceSettings`].
     GetVoiceSettings,
-    /// Chapter Voice — rewrite the `[voice]` section of `aivyx.toml`. All fields
+    /// Chapter Voice — rewrite the `[voice]` section of `aivyx-pa.toml`. All fields
     /// are `#[serde(default)]` with **clear-on-`None`** (matching
     /// `aivyx_config::VoiceWrite`). Load-time — takes effect when the voice
-    /// channel (`aivyx --channel voice`) next starts. Responds with
+    /// channel (`aivyx-pa --channel voice`) next starts. Responds with
     /// [`QueryResponsePayload::VoiceApplied`] (or `QueryError`).
     SetVoice {
         #[serde(default)]
@@ -617,7 +617,7 @@ pub enum QueryPayload {
     /// Chapter Roster — persist the operator-authored team. Writes the whole
     /// `[team]`-rooted config file the daemon loads at startup (Chapter Roster
     /// RO.1: `[team] config_path`, else the conventional `team.toml` beside
-    /// `aivyx.toml`). The daemon **validates** the roster server-side
+    /// `aivyx-pa.toml`). The daemon **validates** the roster server-side
     /// (`TeamConfig::validate` — names, scopes parse to a known base,
     /// lead-is-a-member, ≤9 specialists) **before** it touches disk; an invalid
     /// roster is rejected with `QueryError` `invalid_roster` and nothing is
@@ -1018,7 +1018,7 @@ pub enum QueryResponsePayload {
     },
     /// Response to [`QueryPayload::GetProfile`]. Phase 58 — the
     /// daemon's currently-loaded Profile snapshot. The Web UI
-    /// renders this into the Profile pane mirroring `aivyx profile
+    /// renders this into the Profile pane mirroring `aivyx-pa profile
     /// show`. Always populated — even on a daemon with no `[profile]`
     /// section in TOML, the synthesized default is returned (the
     /// snapshot includes `injection_enabled = false` in that case).
@@ -1034,7 +1034,7 @@ pub enum QueryResponsePayload {
     },
     /// Response to [`QueryPayload::ExportPersonaChain`]. Phase 64.
     /// Full-fidelity chain in a single response for the
-    /// `aivyx identity export` flow. `deltas` is the chain in
+    /// `aivyx-pa identity export` flow. `deltas` is the chain in
     /// order; `effective` is the folded state at export time
     /// (the export bundle embeds this as `effective_at_export`
     /// per Q5(a)).
@@ -1373,7 +1373,7 @@ pub enum QueryResponsePayload {
         max_run_tokens: Option<u64>,
         /// Chapter K (K.4.2) — the per-run dollar cap, if any. The
         /// live spend rides `state.spent_cents`; this carries the cap
-        /// value so `aivyx loop status` can show "spend / cap".
+        /// value so `aivyx-pa loop status` can show "spend / cap".
         /// `#[serde(default)]` so pre-K.4.2 frames decode.
         #[serde(default)]
         max_run_usd: Option<f64>,
@@ -1381,7 +1381,7 @@ pub enum QueryResponsePayload {
         /// threshold (`[loop] max_idle_iterations`; `0` = disabled).
         /// The live consecutive-idle count rides
         /// `state.consecutive_idle`; this carries the configured
-        /// threshold so `aivyx loop status` can show "idle / threshold".
+        /// threshold so `aivyx-pa loop status` can show "idle / threshold".
         /// `#[serde(default)]` so pre-Circuit frames decode.
         #[serde(default)]
         max_idle_iterations: u32,
@@ -1576,9 +1576,9 @@ pub struct VoiceSettingsSnapshot {
 
 /// Chapter U — the daemon's effective config snapshot for the Settings screen.
 /// Wasm-clean plain-field mirror (no `aivyx-config` / `aivyx-cost` dep): the
-/// access half mirrors `aivyx access show`, the budget half mirrors the
+/// access half mirrors `aivyx-pa access show`, the budget half mirrors the
 /// `[budget]` caps, and the provider half is read-only context (changed via
-/// `aivyx init`, not this screen — see `docs/FRONTEND.md` §8).
+/// `aivyx-pa init`, not this screen — see `docs/FRONTEND.md` §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingsSnapshot {
     /// `sandbox | workspace | home | full | custom` (matches `[access] level`).
@@ -1702,7 +1702,7 @@ pub struct ToolRelevanceDumpRow {
 /// [`QueryResponsePayload::ToolStats`]. One row per tool: the
 /// registry-listing fields (`name`, `description`, `scope_base`,
 /// `registered`) joined with the audit-derived call statistics.
-/// The `aivyx tools` CLI renders one table row per `ToolStat`.
+/// The `aivyx-pa tools` CLI renders one table row per `ToolStat`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolStat {
     /// Tool name as the planner advertises it (e.g. `fs.read`).
@@ -1777,7 +1777,7 @@ pub struct ReminderView {
 
 /// Phase 74 — wire-format view of one memory entry. Flat shape
 /// mirroring the Phase 47 audit / Phase 70 proposal summary
-/// patterns; the Web UI Memory pane + `aivyx memory show` CLI
+/// patterns; the Web UI Memory pane + `aivyx-pa memory show` CLI
 /// render against this type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryEntrySummary {
@@ -2305,7 +2305,7 @@ pub enum FrontendMessage {
         seed: PersonaSeedWire,
     },
     /// Chapter Tutor — operator-initiated skill authoring on a **grown** chain.
-    /// The operator (via `aivyx skills teach|update|forget` or the Studio Skills
+    /// The operator (via `aivyx-pa skills teach|update|forget` or the Studio Skills
     /// screen) authors a skill directly; the daemon appends a signed,
     /// operator-authored `LearnedSkill` delta via the same `skill_edit` helpers
     /// the agent tool uses, then recomputes the shared persona (adopted
@@ -2510,7 +2510,7 @@ pub enum FrontendMessage {
     },
     /// Phase 119 — operator's act-on-approval gesture for a
     /// Phase 118 `ProfileHint` proposal. Carries the values
-    /// the CLI already wrote to `aivyx.toml` via the Task 3
+    /// the CLI already wrote to `aivyx-pa.toml` via the Task 3
     /// atomic primitive; the daemon's job is to record the
     /// `AuditEvent::ProfileHintApplied` entry so forensic
     /// walks see the apply alongside the upstream
@@ -2525,7 +2525,7 @@ pub enum FrontendMessage {
         /// The declared Profile-config field the apply
         /// mutated (matches `ProfileField::label()`).
         field: String,
-        /// The value written to aivyx.toml — new scalar for
+        /// The value written to aivyx-pa.toml — new scalar for
         /// scalar fields, appended entry for list fields.
         applied_value: String,
     },
@@ -2797,7 +2797,7 @@ pub enum DaemonMessage {
     /// `ok = true` means the daemon recorded the
     /// `AuditEvent::ProfileHintApplied` entry; `ok = false`
     /// with `error` populated means the audit-log append
-    /// failed (the operator's `aivyx.toml` mutation already
+    /// failed (the operator's `aivyx-pa.toml` mutation already
     /// landed CLI-side before the IPC fired).
     ProfileHintApplyAcked {
         id: String,
@@ -3657,7 +3657,7 @@ mod tests {
                 id: "q-010".into(),
                 payload: QueryResponsePayload::GetProfile {
                     profile: ProfileSummary {
-                        assistant_name: "Aivyx".into(),
+                        assistant_name: "Aivyx PA".into(),
                         assistant_name_source: "default".into(),
                         operator_profile: None,
                         communication_style: None,

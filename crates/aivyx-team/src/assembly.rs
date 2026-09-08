@@ -10,7 +10,7 @@
 //! (`decompose_task` / `synthesize_results` / `verify_output`), delegation
 //! (`delegate_task` / `query_agent`), and the lead's own message tools.
 //!
-//! The CLI (`aivyx team run`) builds a lead `ConcreteAgent` over `lead_tools`
+//! The CLI (`aivyx-pa team run`) builds a lead `ConcreteAgent` over `lead_tools`
 //! and the same `AuditHook`, so every delegation + specialist tool call lands
 //! on the one HMAC chain.
 

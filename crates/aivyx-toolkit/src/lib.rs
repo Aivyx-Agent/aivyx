@@ -10,7 +10,7 @@
 //! ## Layout (Phase 125 Task 2 — this commit)
 //!
 //! - [`config`] — operator-supplied config at
-//!   `~/.aivyx/tool-processes/toolkit/config.toml`. Holds
+//!   `~/.aivyx-pa/tool-processes/toolkit/config.toml`. Holds
 //!   the Brave Search API key + any per-tool tunables.
 //! - [`harness`] — multi-tool IPC dispatcher (same shape as
 //!   `aivyx-gmail`'s harness module; the Phase 123

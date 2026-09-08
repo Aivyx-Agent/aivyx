@@ -1,11 +1,11 @@
 //! `aivyx-toolkit` binary entry point.
 //!
 //! Phase 125 Task 6 — full IPC loop wiring. The daemon spawns
-//! this binary via `[[tool_process]]` in `aivyx.toml`; on
+//! this binary via `[[tool_process]]` in `aivyx-pa.toml`; on
 //! start-up we:
 //!
 //! 1. Load the operator config from
-//!    `~/.aivyx/tool-processes/toolkit/config.toml`.
+//!    `~/.aivyx-pa/tool-processes/toolkit/config.toml`.
 //! 2. Open the task store + health store at the toolkit
 //!    state directory.
 //! 3. Build the shared `reqwest::Client` used by `web.search`

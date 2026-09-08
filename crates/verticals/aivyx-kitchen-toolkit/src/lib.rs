@@ -2,7 +2,7 @@
 //! Brigade).
 //!
 //! A [Chapter F/G](../../../docs/VERTICAL_PACKS.md) substrate-pattern tool
-//! process: the daemon spawns it via `[[tool_process]]` in `aivyx.toml`, and it
+//! process: the daemon spawns it via `[[tool_process]]` in `aivyx-pa.toml`, and it
 //! registers the `kitchen.*` tools through the multi-tool harness
 //! ([`run_multi_tool_subprocess`]). The tools call the operator's **KitchenDB**
 //! (Postgres + PostgREST) — the system of record — via [`KitchenClient`]; the

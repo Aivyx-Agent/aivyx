@@ -6,7 +6,7 @@
 //! could call `TeamMissionService` directly. Re-verified against the real
 //! architecture: every channel adapter's daemon-mode driver
 //! (`telegram_daemon_frontend.rs` and its Discord/Slack siblings) is a
-//! **separate OS process** from `aivyx daemon run`, talking over
+//! **separate OS process** from `aivyx-pa daemon run`, talking over
 //! Unix-socket IPC via `daemon_client`. This module therefore calls the
 //! existing, already-tested one-shot `daemon_client::{team_mission_list,
 //! team_mission_status, resolve_team_gate, abort_team_mission,

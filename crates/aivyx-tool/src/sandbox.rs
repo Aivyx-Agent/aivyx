@@ -9,7 +9,7 @@
 //! security-focused product is secure by default.
 //!
 //! The presets are **isolating but functional**: a tool that
-//! reads its OAuth token from `$HOME/.aivyx/tool-processes/<tool>/`
+//! reads its OAuth token from `$HOME/.aivyx-pa/tool-processes/<tool>/`
 //! and makes network calls must still work. So the preset gives
 //! read-only system directories, a private `/tmp`, no `$HOME`
 //! except a writable bind of the per-tool data dir, and leaves
@@ -273,7 +273,7 @@ mod tests {
     fn bubblewrap_preset_argv_is_isolating_and_functional() {
         let cmd_dir = PathBuf::from("/opt/aivyx/bin");
         let token_dir =
-            PathBuf::from("/home/op/.aivyx/tool-processes/gmail");
+            PathBuf::from("/home/op/.aivyx-pa/tool-processes/gmail");
         let c = bubblewrap_preset(&[cmd_dir], &[token_dir]);
         assert_eq!(c.wrapper, "bwrap");
         let a = c.args.join(" ");
@@ -286,8 +286,8 @@ mod tests {
         assert!(a.contains("--proc /proc"));
         // The per-tool token dir is the ONLY writable $HOME path.
         assert!(a.contains(
-            "--bind /home/op/.aivyx/tool-processes/gmail \
-             /home/op/.aivyx/tool-processes/gmail"
+            "--bind /home/op/.aivyx-pa/tool-processes/gmail \
+             /home/op/.aivyx-pa/tool-processes/gmail"
         ));
         assert!(!a.contains("--bind /home/op "));
         // Process isolation + network on.
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn preset_for_dispatches_by_backend() {
         let ro = [PathBuf::from("/opt/aivyx/bin")];
-        let w = [PathBuf::from("/home/op/.aivyx/tool-processes/notion")];
+        let w = [PathBuf::from("/home/op/.aivyx-pa/tool-processes/notion")];
         assert_eq!(
             preset_for(SandboxBackend::Bubblewrap, &ro, &w).wrapper,
             "bwrap"
@@ -398,7 +398,7 @@ mod tests {
             SandboxChoice::Backend(SandboxBackend::Bubblewrap),
             None, // nothing detected, but forced
             &[PathBuf::from("/opt/bin")],
-            &[PathBuf::from("/home/op/.aivyx/tool-processes/x")],
+            &[PathBuf::from("/home/op/.aivyx-pa/tool-processes/x")],
         )
         .expect("forced");
         assert_eq!(got.wrapper, "bwrap");

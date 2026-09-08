@@ -50,7 +50,7 @@ impl RateGate for ChannelRateGate {
         match self.limiter.check(tool, Instant::now()) {
             RateVerdict::Ok => Ok(()),
             RateVerdict::Alert(reason) => {
-                eprintln!("aivyx rate-limit: {reason} (alert — proceeding)");
+                eprintln!("aivyx-pa rate-limit: {reason} (alert — proceeding)");
                 Ok(())
             }
             RateVerdict::Deny(reason) => Err(reason),

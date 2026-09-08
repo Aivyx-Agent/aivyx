@@ -9,7 +9,7 @@
 //!
 //! **Lifecycle (unchanged):** loaded once at tool-process
 //! startup from
-//! `~/.aivyx/tool-processes/{service}/config.toml`;
+//! `~/.aivyx-pa/tool-processes/{service}/config.toml`;
 //! passed by-value to [`crate::exchange::exchange_code`] +
 //! [`crate::exchange::refresh_access_token`] as needed.
 

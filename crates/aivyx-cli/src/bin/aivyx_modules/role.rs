@@ -1,27 +1,27 @@
-//! Operator-facing `aivyx role` CLI surface — Phase 119 Task 5.
+//! Operator-facing `aivyx-pa role` CLI surface — Phase 119 Task 5.
 //!
 //! Today this module ships exactly one subcommand:
 //!
-//! - `aivyx role import <proposal-id> [--yes] [--force]` — applies an
+//! - `aivyx-pa role import <proposal-id> [--yes] [--force]` — applies an
 //!   operator-approved Phase 118 `RoleDefinitionSuggestion` proposal
-//!   to `aivyx.toml`'s `[roles.<name>]` section via the Task 3 atomic
+//!   to `aivyx-pa.toml`'s `[roles.<name>]` section via the Task 3 atomic
 //!   primitive, then records the `AuditEvent::RoleDraftImported`
 //!   audit-event via daemon IPC.
 //!
-//! Future `aivyx role` subcommands (e.g. `list`, `show`, `edit`) land
+//! Future `aivyx-pa role` subcommands (e.g. `list`, `show`, `edit`) land
 //! additively under the same [`RoleSubcommand`] enum without
 //! fragmenting `CliMode`.
 
 use std::path::Path;
 
 /// Default TOML path — mirrors the Phase 58 `profile.rs` constant.
-const ROLE_TOML_PATH: &str = "aivyx.toml";
+const ROLE_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// Entry point for `aivyx role import <proposal-id> [--yes] [--force]`.
+/// Entry point for `aivyx-pa role import <proposal-id> [--yes] [--force]`.
 /// Phase 119 Task 5 — operator's act-on-approval gesture for a Phase
 /// 118 `RoleDefinitionSuggestion` proposal.
 ///
-/// The flow mirrors `aivyx profile apply-hint` (Phase 119 Task 4):
+/// The flow mirrors `aivyx-pa profile apply-hint` (Phase 119 Task 4):
 /// 1. Require daemon running.
 /// 2. Fetch the proposal via daemon IPC.
 /// 3. Validate category + status (Approved only — Q2(a) at Phase 119
@@ -41,8 +41,8 @@ pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Resul
     let socket_path = default_socket_path()?;
     if !daemon_is_running(&socket_path).await {
         return Err(format!(
-            "aivyx role import: daemon must be running (socket {}). \
-             Start it with `aivyx`.",
+            "aivyx-pa role import: daemon must be running (socket {}). \
+             Start it with `aivyx-pa`.",
             socket_path.display(),
         ));
     }
@@ -113,14 +113,14 @@ pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Resul
         Err(e) => {
             eprintln!(
                 "warning: audit-event record failed: {e}\n\
-                 The aivyx.toml mutation is in place; you can re-record \
+                 The aivyx-pa.toml mutation is in place; you can re-record \
                  the audit event by running the command again."
             );
         }
     }
     eprintln!(
         "Restart the daemon for the new role to take effect: \
-         `aivyx daemon stop && aivyx`."
+         `aivyx-pa daemon stop && aivyx-pa`."
     );
     Ok(())
 }
@@ -128,8 +128,8 @@ pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Resul
 /// Pure validator: parse the proposal's wire shape into a
 /// [`RoleDraft`]. Fails closed on every distinct error mode so the
 /// CLI surface gives the operator an actionable hint:
-/// - Wrong category → cross-reference `aivyx profile apply-hint`.
-/// - Wrong status → cross-reference `aivyx persona proposals approve`.
+/// - Wrong category → cross-reference `aivyx-pa profile apply-hint`.
+/// - Wrong status → cross-reference `aivyx-pa persona proposals approve`.
 /// - Malformed payload → operator-readable parse error.
 ///
 /// Extracted as a pure function so the validation logic is testable
@@ -141,14 +141,14 @@ fn parse_proposal_as_role_draft(
     if proposal.category != "RoleDefinitionSuggestion" {
         return Err(format!(
             "proposal `{}` has category `{}`, not `RoleDefinitionSuggestion`. \
-             Use `aivyx profile apply-hint` for ProfileHint.",
+             Use `aivyx-pa profile apply-hint` for ProfileHint.",
             proposal.id, proposal.category
         ));
     }
     if proposal.status != "Approved" {
         return Err(format!(
             "proposal `{}` has status `{}`; only Approved proposals can be \
-             imported. Run `aivyx persona proposals approve {}` first.",
+             imported. Run `aivyx-pa persona proposals approve {}` first.",
             proposal.id, proposal.status, proposal.id
         ));
     }
@@ -258,7 +258,7 @@ mod tests {
         );
         let err = parse_proposal_as_role_draft(&proposal).unwrap_err();
         assert!(err.contains("not `RoleDefinitionSuggestion`"));
-        assert!(err.contains("aivyx profile apply-hint"));
+        assert!(err.contains("aivyx-pa profile apply-hint"));
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
         let proposal = proposal_fixture("pp-y", "RoleDefinitionSuggestion", "Pending", None);
         let err = parse_proposal_as_role_draft(&proposal).unwrap_err();
         assert!(err.contains("only Approved"));
-        assert!(err.contains("aivyx persona proposals approve"));
+        assert!(err.contains("aivyx-pa persona proposals approve"));
     }
 
     #[test]
@@ -314,13 +314,13 @@ mod tests {
         //      assert chain HMAC verifies.
         use crate::toml_edit_apply::apply_role_draft_to_path;
         let dir = e2e_tempdir("import-pipeline");
-        let aivyx_toml = dir.join("aivyx.toml");
+        let aivyx_toml = dir.join("aivyx-pa.toml");
         // Pre-existing config has a profile + an unrelated role.
         // Import must add the new role WITHOUT touching either.
         std::fs::write(
             &aivyx_toml,
             "[profile]\n\
-             assistant_name = \"Aivyx\"\n\
+             assistant_name = \"Aivyx PA\"\n\
              \n\
              [roles.coder]\n\
              tool_allowlist = [\"fs.read\"]\n",
@@ -357,7 +357,7 @@ mod tests {
         assert!(post.contains("\"git.commit\""));
         // Pre-existing state untouched.
         assert!(post.contains("[profile]"));
-        assert!(post.contains("\"Aivyx\""));
+        assert!(post.contains("\"Aivyx PA\""));
         assert!(post.contains("[roles.coder]"));
         assert!(post.contains("\"fs.read\""));
 
@@ -385,7 +385,7 @@ mod tests {
         // and replaces the section.
         use crate::toml_edit_apply::{TomlApplyError, apply_role_draft_to_path};
         let dir = e2e_tempdir("force-overwrite");
-        let aivyx_toml = dir.join("aivyx.toml");
+        let aivyx_toml = dir.join("aivyx-pa.toml");
         std::fs::write(
             &aivyx_toml,
             "[roles.research-deploy]\n\

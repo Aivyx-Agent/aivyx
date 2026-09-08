@@ -446,7 +446,7 @@ pub trait Memory: Send + Sync {
 
     /// Phase 74 — return every distinct topic name in the
     /// substrate, sorted ascending. Drives the Web UI Memory
-    /// pane's left-column topic list and the `aivyx memory list`
+    /// pane's left-column topic list and the `aivyx-pa memory list`
     /// CLI render.
     async fn list_topics(&self) -> Result<Vec<String>, MemoryError>;
 

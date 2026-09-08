@@ -42,7 +42,7 @@ const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(100);
 
 /// Chapter L.6 — how often the Missions panel polls the daemon's
-/// `TeamMissionList` feed. Poll-based, mirroring `aivyx loop status`; a live
+/// `TeamMissionList` feed. Poll-based, mirroring `aivyx-pa loop status`; a live
 /// mission updates within this window.
 const MISSION_POLL: Duration = Duration::from_millis(1500);
 
@@ -259,7 +259,7 @@ async fn fetch_audit_page(socket_path: &Path, state: &mut AppState, from_seq: u6
 /// snapshot and push it into the Tools view. Called once on switching
 /// into the view, mirroring `fetch_audit_page`'s own "no background
 /// refresh" posture — `window_secs: None` (whole audit chain), matching
-/// the `aivyx tools` CLI's own default. Best-effort: a fetch error
+/// the `aivyx-pa tools` CLI's own default. Best-effort: a fetch error
 /// (e.g. no audit log configured) leaves the panel as-is.
 async fn fetch_tool_stats(socket_path: &Path, state: &mut AppState) {
     if let Ok(tools) = aivyx_channel::daemon_client::get_tool_stats(socket_path, None).await {

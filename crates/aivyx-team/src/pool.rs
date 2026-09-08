@@ -75,11 +75,11 @@ impl ChannelContext for SpecialistChannel {
         // operator-facing Fleet panel (J.7) is still deferred.
         match event {
             StreamEvent::ToolCallStarted { tool_name, .. } => {
-                eprintln!("aivyx team: [{}] → {tool_name}", self.label);
+                eprintln!("aivyx-pa team: [{}] → {tool_name}", self.label);
             }
             StreamEvent::ToolCallFinished { tool_name, outcome_summary, .. } => {
                 let summary: String = outcome_summary.chars().take(120).collect();
-                eprintln!("aivyx team: [{}] ← {tool_name} — {summary}", self.label);
+                eprintln!("aivyx-pa team: [{}] ← {tool_name} — {summary}", self.label);
             }
             _ => {}
         }
@@ -115,7 +115,7 @@ pub struct SpecialistPool {
     /// errors if asked to resolve the lead's own name/role, "is the lead,
     /// not a delegable specialist"), so this field's practical effect
     /// today is scoped to specialist turns. The CLI's own separate
-    /// lead-agent construction path (`aivyx team run`) builds its lead
+    /// lead-agent construction path (`aivyx-pa team run`) builds its lead
     /// with `Operator` origin directly, outside this mechanism entirely.
     message_origin: aivyx_core::MessageOrigin,
 }
@@ -174,7 +174,7 @@ impl SpecialistPool {
             None => match self.fallback_specialist(specialist) {
                 Some(m) => {
                     eprintln!(
-                        "aivyx team: planner named unknown specialist \
+                        "aivyx-pa team: planner named unknown specialist \
                          {specialist:?}; routing to best-fit {:?}",
                         m.name
                     );

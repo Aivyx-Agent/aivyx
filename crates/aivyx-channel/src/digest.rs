@@ -92,7 +92,7 @@ impl WeeklyDigestBuilder {
     pub async fn run(&self, since_secs: u64, now_secs: u64) -> String {
         let text = self.render(since_secs, now_secs).await;
         if let Err(e) = self.memory.put(DIGEST_TOPIC, &text).await {
-            eprintln!("aivyx digest: failed to persist weekly-digest: {e}");
+            eprintln!("aivyx-pa digest: failed to persist weekly-digest: {e}");
         }
         text
     }

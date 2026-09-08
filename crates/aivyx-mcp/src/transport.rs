@@ -166,7 +166,7 @@ impl McpServerBridge {
             protocol_version: "2024-11-05".into(),
             capabilities: ClientCapabilities {},
             client_info: ClientInfo {
-                name: "aivyx".into(),
+                name: "aivyx-pa".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
             },
         };

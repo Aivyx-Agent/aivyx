@@ -286,12 +286,12 @@ impl SemanticMemoryContext {
         let seq = match self.memory.put(EXPLICIT_MEMORY_TOPIC, &fact).await {
             Ok(seq) => seq,
             Err(e) => {
-                eprintln!("aivyx memory: fact-capture write failed: {e}");
+                eprintln!("aivyx-pa memory: fact-capture write failed: {e}");
                 return;
             }
         };
         eprintln!(
-            "aivyx memory: captured fact → {EXPLICIT_MEMORY_TOPIC}: {fact}"
+            "aivyx-pa memory: captured fact → {EXPLICIT_MEMORY_TOPIC}: {fact}"
         );
         if let Ok(mut vecs) = self.provider.embed(std::slice::from_ref(&fact)).await {
             if !vecs.is_empty() {
@@ -1069,13 +1069,13 @@ impl ContextProvider for SemanticMemoryContext {
         // streak that Q1a was chosen to protect, so the marker
         // uses the same operator-visible stderr-breadcrumb
         // convention the memory GC + embedding backfill already
-        // use (`aivyx memory gc: …`, `aivyx memory embed: …`).
+        // use (`aivyx-pa memory gc: …`, `aivyx-pa memory embed: …`).
         // The *content* recalled is independently visible — it
         // is the labeled block injected into the turn.
         eprintln!("{}", recall_marker_line(&final_hits));
         if n_sib > 0 {
             eprintln!(
-                "aivyx recall-cluster: injected {n_sib} affined \
+                "aivyx-pa recall-cluster: injected {n_sib} affined \
                  sibling(s) (sharing rag_top_k)"
             );
         }
@@ -1089,7 +1089,7 @@ impl ContextProvider for SemanticMemoryContext {
                 .count();
             if n_graph > 0 {
                 eprintln!(
-                    "aivyx recall-graph: injected {n_graph} via graph-walk \
+                    "aivyx-pa recall-graph: injected {n_graph} via graph-walk \
                      (≤{}-hop affinity)",
                     self.recall_graph_hops
                 );
@@ -1292,10 +1292,10 @@ impl LiteRecallContext {
         };
         match self.memory.put(EXPLICIT_MEMORY_TOPIC, &fact).await {
             Ok(_) => eprintln!(
-                "aivyx memory: captured explicit request → {EXPLICIT_MEMORY_TOPIC}: {fact}"
+                "aivyx-pa memory: captured explicit request → {EXPLICIT_MEMORY_TOPIC}: {fact}"
             ),
             Err(e) => {
-                eprintln!("aivyx memory: explicit-capture write failed: {e}")
+                eprintln!("aivyx-pa memory: explicit-capture write failed: {e}")
             }
         }
     }
@@ -1480,7 +1480,7 @@ pub(crate) fn recall_marker_line(hits: &[(MemoryEntry, f32)]) -> String {
     }
     let n = hits.len();
     format!(
-        "aivyx recall: injected {n} memor{} [{list}]",
+        "aivyx-pa recall: injected {n} memor{} [{list}]",
         if n == 1 { "y" } else { "ies" }
     )
 }
@@ -1714,13 +1714,13 @@ mod tests {
         let one = [(entry("notes"), 0.9)];
         assert_eq!(
             recall_marker_line(&one),
-            "aivyx recall: injected 1 memory [notes]"
+            "aivyx-pa recall: injected 1 memory [notes]"
         );
         // Duplicate topic collapses; count still reflects hits.
         let two_same = [(entry("notes"), 0.9), (entry("notes"), 0.8)];
         assert_eq!(
             recall_marker_line(&two_same),
-            "aivyx recall: injected 2 memories [notes]"
+            "aivyx-pa recall: injected 2 memories [notes]"
         );
     }
 

@@ -6,7 +6,7 @@
 //! `task.write` for `task.create`, `task.complete`,
 //! `task.delete`.
 //!
-//! Data lives at `~/.aivyx/tool-processes/toolkit/tasks.json`
+//! Data lives at `~/.aivyx-pa/tool-processes/toolkit/tasks.json`
 //! (0600 perms, atomic write — see
 //! [`crate::task_store`] for the storage substrate).
 //!

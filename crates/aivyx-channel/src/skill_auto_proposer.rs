@@ -407,7 +407,7 @@ impl SkillProposerOutcome {
 ///   directly as an approved entry tagged `auto_accepted: true`.
 /// - `Staged`: worth-proposing but below confidence
 ///   threshold → land in the proposal chain as Pending so the
-///   operator can review through `aivyx persona proposals
+///   operator can review through `aivyx-pa persona proposals
 ///   approve` (the same surface manual proposals use).
 /// - `DroppedJudgeDup`: the judge declared this candidate a
 ///   semantic duplicate of an existing skill → nothing
@@ -921,7 +921,7 @@ pub fn spawn_auto_proposer_task(
         // give the operator the full forensic surface.
         match &outcome {
             SkillProposerOutcome::JudgeError(msg) => {
-                eprintln!("aivyx skill-auto-proposer: judge-error ({msg})");
+                eprintln!("aivyx-pa skill-auto-proposer: judge-error ({msg})");
             }
             SkillProposerOutcome::Disabled
             | SkillProposerOutcome::HeuristicGated
@@ -1263,7 +1263,7 @@ pub async fn run_auto_propose_pipeline_with_source(
         use aivyx_audit::AuditWriter as _;
         if let Err(e) = alog.append(event) {
             eprintln!(
-                "aivyx skill-auto-proposer: audit append failed ({e})"
+                "aivyx-pa skill-auto-proposer: audit append failed ({e})"
             );
         }
     }
@@ -1284,7 +1284,7 @@ pub async fn run_auto_propose_pipeline_with_source(
 ///   Some(<plain string>) }`.
 ///
 /// Writes the same three-step sequence as the operator-side
-/// `aivyx persona proposals approve` flow: Pending append →
+/// `aivyx-pa persona proposals approve` flow: Pending append →
 /// PersonaDelta append → Approved transition → shared
 /// persona recompute.
 async fn write_auto_accepted_delta(
@@ -1358,7 +1358,7 @@ async fn write_auto_accepted_delta(
 /// Phase 114 — chain-write helper for the Staged path,
 /// generalized over all PersonaDeltaCategory variants. Writes
 /// a Pending proposal entry only; the operator resolves
-/// through `aivyx persona proposals approve` / `reject`.
+/// through `aivyx-pa persona proposals approve` / `reject`.
 async fn write_staged_delta(
     persona_proposal_log: &Arc<
         crate::persona_proposal::PersistentPersonaProposalLog,
@@ -2253,7 +2253,7 @@ mod tests {
     fn routing_per_category_disabled_drops_to_category_disabled_outcome() {
         // Scalar default: AssistantName disabled.
         let verdict =
-            scalar_set_verdict("AssistantName", 0.999, "Aivyx");
+            scalar_set_verdict("AssistantName", 0.999, "Aivyx PA");
         let config = config_with_per_category_defaults();
         let d = decide_routing(&verdict, &[], &config);
         match &d {
@@ -2564,7 +2564,7 @@ mod tests {
     #[test]
     fn build_proposed_op_dispatches_scalar_set_for_assistant_name() {
         let draft = ProposedDraft::ScalarSet {
-            value: "Aivyx".into(),
+            value: "Aivyx PA".into(),
         };
         let op = build_proposed_op("AssistantName", &draft, "r".into()).unwrap();
         assert_eq!(
@@ -2573,7 +2573,7 @@ mod tests {
         );
         match op.op {
             crate::persona::PersonaDeltaOp::SetScalar { value } => {
-                assert_eq!(value.as_deref(), Some("Aivyx"));
+                assert_eq!(value.as_deref(), Some("Aivyx PA"));
             }
             other => panic!("expected SetScalar, got {other:?}"),
         }

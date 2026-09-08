@@ -362,7 +362,7 @@ pub async fn operator_update_schedule(
 
 /// Delete a schedule. Config-defined routines are refused — the boot
 /// sync would resurrect them, so the honest gesture is disable (or
-/// removing the `[[schedule]]` entry from `aivyx.toml`).
+/// removing the `[[schedule]]` entry from `aivyx-pa.toml`).
 pub async fn operator_delete_schedule(
     handle: &DomainHandle,
     schedule_id: &str,
@@ -374,7 +374,7 @@ pub async fn operator_delete_schedule(
     if record.created_by == ScheduleProvenance::Config {
         return Err(
             "config-defined routines come back at restart — disable it instead, \
-             or remove its [[schedule]] entry from aivyx.toml"
+             or remove its [[schedule]] entry from aivyx-pa.toml"
                 .into(),
         );
     }

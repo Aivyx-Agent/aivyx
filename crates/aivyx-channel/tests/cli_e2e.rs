@@ -1,6 +1,6 @@
 //! Phase 3 task 5 — end-to-end CLI integration test.
 //!
-//! This test drives the same `run_session` function the `aivyx` binary
+//! This test drives the same `run_session` function the `aivyx-pa` binary
 //! calls, but with every non-deterministic seam replaced by a
 //! test-owned fake:
 //!

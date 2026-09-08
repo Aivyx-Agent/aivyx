@@ -65,7 +65,7 @@ impl MissionReport {
 
 /// Observes a mission run as the runtime walks the DAG — the progress feed
 /// Chapter L's daemon needs to surface live mission state (the J.7 TUI panel,
-/// `aivyx team status`). All methods default to no-ops so an observer overrides
+/// `aivyx-pa team status`). All methods default to no-ops so an observer overrides
 /// only the events it cares about; `()` is the null observer used by the plain
 /// [`TeamRuntime::run`] path (no behavior change from the J.4 batch run).
 ///

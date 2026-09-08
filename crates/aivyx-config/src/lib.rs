@@ -7,9 +7,9 @@
 //! with its own parsing helper and error message. The per-variable
 //! helpers worked fine at Phase 3 (when there were two or three), but
 //! by the end of Phase 8 the binary had accreted `ANTHROPIC_API_KEY`,
-//! `AIVYX_MODEL`, `AIVYX_SYSTEM_PROMPT`, `AIVYX_FS_ROOT`,
-//! `AIVYX_STORAGE_PATH`, `AIVYX_MEMORY_MAX_PER_TOPIC`,
-//! `AIVYX_PASSPHRASE`, `AIVYX_TELEGRAM_TOKEN`, `AIVYX_TELEGRAM_CHAT_ID`,
+//! `AIVYX_PA_MODEL`, `AIVYX_PA_SYSTEM_PROMPT`, `AIVYX_PA_FS_ROOT`,
+//! `AIVYX_PA_STORAGE_PATH`, `AIVYX_PA_MEMORY_MAX_PER_TOPIC`,
+//! `AIVYX_PA_PASSPHRASE`, `AIVYX_PA_TELEGRAM_TOKEN`, `AIVYX_PA_TELEGRAM_CHAT_ID`,
 //! and the platform-level `HOME` / `XDG_DATA_HOME`. Every new adapter
 //! added at least one more. The env-var sprawl was a compounding debt:
 //! each tweak touched three places (parser, docs comment, startup
@@ -21,7 +21,7 @@
 //!
 //! 1. **Environment variables** — highest priority, unchanged names
 //!    so existing deployments keep working.
-//! 2. **TOML file** (default path: `./aivyx.toml`) — second priority,
+//! 2. **TOML file** (default path: `./aivyx-pa.toml`) — second priority,
 //!    for operators who want a readable config file.
 //! 3. **Encrypted secrets store** — third priority, read from
 //!    [`aivyx_storage::KeyDomain::Secrets`] after the store opens.
@@ -95,8 +95,8 @@ use serde::{Deserialize, Serialize};
 use aivyx_capability::{Scope, TrustTier};
 use aivyx_storage::{KeyDomain, Storage};
 
-// Chapter U — section-scoped writes back to `aivyx.toml` (the shared
-// `[access]` / `[budget]` rewriter used by both `aivyx access set` and the
+// Chapter U — section-scoped writes back to `aivyx-pa.toml` (the shared
+// `[access]` / `[budget]` rewriter used by both `aivyx-pa access set` and the
 // daemon's Settings IPC handlers).
 pub mod config_write;
 pub use config_write::{
@@ -129,7 +129,7 @@ pub use autonomy::{
 pub enum FieldSource {
     /// Read from a process environment variable.
     Env,
-    /// Read from a TOML file (typically `./aivyx.toml`).
+    /// Read from a TOML file (typically `./aivyx-pa.toml`).
     Toml,
     /// Read from the encrypted `KeyDomain::Secrets` store. Only secret-
     /// bearing fields can come from this source.
@@ -206,15 +206,15 @@ pub const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 /// `docs/SECURITY_POSTURE.md`), and turn discipline.
 ///
 /// It is a compiled-in [`FieldSource::Default`] — never planted into
-/// `aivyx.toml`. Existing installs inherit it live (and pick up future
+/// `aivyx-pa.toml`. Existing installs inherit it live (and pick up future
 /// charter improvements on upgrade), and it only materializes in config if
 /// the operator overrides it via `[agent] system_prompt`, a per-`[[role]]`
-/// `system_prompt`, or `AIVYX_SYSTEM_PROMPT` — in which case source-tracking
+/// `system_prompt`, or `AIVYX_PA_SYSTEM_PROMPT` — in which case source-tracking
 /// reports a source other than `Default`.
 ///
 /// Kept compact (~270 tokens) so it does not starve small local models'
 /// context budgets.
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Aivyx, a capable assistant running locally on the operator's own machine. \
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Aivyx PA, a capable assistant running locally on the operator's own machine. \
 You are terse and thoughtful: answer directly, act when you can, and never narrate work you haven't actually done. \
 Match the operator's brevity — a short question deserves a short answer, not a lecture.
 
@@ -356,16 +356,16 @@ pub const DEFAULT_WORKSPACE_JOURNALING_INTERVAL_SECS: u64 = 21_600;
 /// working with zero edits.
 ///
 /// Also the fall-through default for [`AivyxConfig::active_role`] when
-/// neither [`LoadOptions::role_override`] nor the `AIVYX_ROLE` env var
+/// neither [`LoadOptions::role_override`] nor the `AIVYX_PA_ROLE` env var
 /// supplies a value.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 
 /// Default assistant name used by [`Profile`] when no `[profile]
 /// assistant_name` is declared in TOML. Matches the product name —
-/// operators who don't care about renaming get "Aivyx" by default;
+/// operators who don't care about renaming get "Aivyx PA" by default;
 /// operators who want a named assistant override it explicitly. Q5(b)
 /// resolution at Phase 57 sign-off (PRODUCT.md P13 commit 5).
-pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx";
+pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx PA";
 
 /// Which LLM provider backend to use.
 ///
@@ -418,7 +418,7 @@ pub enum ProviderKind {
     MistralRs,
     /// GPU-slot broker coordination — `aivyx-broker`, a standalone local daemon that
     /// coordinates GPU-slot access across multiple local processes
-    /// sharing one `llama-server` (e.g. `aivyx`'s own daemon and a
+    /// sharing one `llama-server` (e.g. `aivyx-pa`'s own daemon and a
     /// delegated `aivyx-coder` subprocess). Speaks the identical
     /// OpenAI-compatible wire protocol as [`ProviderKind::LlamaCpp`] --
     /// same request/response shape -- plus one additive optional JSON
@@ -518,7 +518,7 @@ impl std::fmt::Display for ProviderKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AccessLevel {
-    /// Today's behavior — `fs_root` defaults to `$HOME/aivyx-sandbox`,
+    /// Today's behavior — `fs_root` defaults to `$HOME/aivyx-pa-sandbox`,
     /// no shell. The safe default for an untrusted/shared agent.
     #[default]
     Sandbox,
@@ -557,7 +557,7 @@ impl AccessLevel {
     /// Parse the lowercase wire/display name back into a level — the inverse
     /// of [`as_str`](Self::as_str). `None` for an unknown token. The single
     /// source of truth for the string⇄level mapping, shared by the CLI's
-    /// `aivyx access set` parser and the daemon's `SetAccessLevel` IPC handler.
+    /// `aivyx-pa access set` parser and the daemon's `SetAccessLevel` IPC handler.
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
             "sandbox" => Some(AccessLevel::Sandbox),
@@ -604,8 +604,8 @@ pub enum ConfigError {
     },
 
     /// A source supplied a value but it failed to parse (e.g. a
-    /// non-integer `AIVYX_MEMORY_MAX_PER_TOPIC` or a non-`i64`
-    /// `AIVYX_TELEGRAM_CHAT_ID`).
+    /// non-integer `AIVYX_PA_MEMORY_MAX_PER_TOPIC` or a non-`i64`
+    /// `AIVYX_PA_TELEGRAM_CHAT_ID`).
     #[error("field `{field}` had invalid value: {reason}")]
     Invalid {
         field: &'static str,
@@ -651,7 +651,7 @@ pub enum ConfigError {
     NonUtf8Secret { field: &'static str },
 
     /// The caller selected an active role (via
-    /// [`LoadOptions::role_override`] or the `AIVYX_ROLE` env var) that
+    /// [`LoadOptions::role_override`] or the `AIVYX_PA_ROLE` env var) that
     /// was not present in the loaded [`AivyxConfig::roles`] map. The
     /// error lists every known role name so the operator can see what
     /// was actually loaded alongside what was requested.
@@ -721,7 +721,7 @@ pub struct LoadOptions {
     /// use this to isolate env-only behavior). `Some(path)` means
     /// "read this file if it exists; its absence is not an error,
     /// but its existence-plus-parse-failure is." The binary defaults
-    /// this to `Some(PathBuf::from("./aivyx.toml"))`.
+    /// this to `Some(PathBuf::from("./aivyx-pa.toml"))`.
     pub toml_path: Option<PathBuf>,
     /// If `true`, [`AivyxConfig::validate`] errors out when
     /// `anthropic_api_key` is still `None`. Set to `false` by
@@ -751,7 +751,7 @@ pub struct LoadOptions {
     ///
     /// 1. `LoadOptions::role_override` (this field) — typically populated
     ///    from a future `--role <name>` CLI flag.
-    /// 2. `AIVYX_ROLE` environment variable.
+    /// 2. `AIVYX_PA_ROLE` environment variable.
     /// 3. [`DEFAULT_ROLE_NAME`] (`"default"`).
     ///
     /// An override that does not match any role loaded from config
@@ -813,7 +813,7 @@ pub struct AivyxConfig {
     pub openai_base_url: Option<Sourced<String>>,
     /// Overrides where the kvcache store directory lives. `None`
     /// (default) preserves the historical per-app `ProjectDirs`-derived
-    /// path (`~/.local/share/aivyx/kvcache`). Set this to the *same*
+    /// path (`~/.local/share/aivyx-pa/kvcache`). Set this to the *same*
     /// directory as `aivyx-coder`'s own `[backend] kvcache_store_path`
     /// when both point at the same `llama-server` — a single server has
     /// exactly one `--slot-save-path`, so both sides must agree on the
@@ -823,7 +823,7 @@ pub struct AivyxConfig {
     /// match each other, so this doesn't mean either reuses the other's
     /// prefill work — see that recipe for what sharing the directory
     /// does and doesn't buy). `[kvcache] store_path` in TOML,
-    /// `AIVYX_KVCACHE_STORE_PATH` env override. Must be an absolute
+    /// `AIVYX_PA_KVCACHE_STORE_PATH` env override. Must be an absolute
     /// path — `~` is not expanded, same convention as `storage_path`
     /// elsewhere in this struct.
     pub kvcache_store_path: Option<Sourced<PathBuf>>,
@@ -847,7 +847,7 @@ pub struct AivyxConfig {
     /// field stays here for three reasons:
     ///
     /// 1. Backwards compatibility — configs that predate Phase 11 and
-    ///    set `[agent] system_prompt = "..."` (or `AIVYX_SYSTEM_PROMPT`)
+    ///    set `[agent] system_prompt = "..."` (or `AIVYX_PA_SYSTEM_PROMPT`)
     ///    continue to work because the loader synthesizes an implicit
     ///    `"default"` role whose `system_prompt` is sourced from this
     ///    field.
@@ -862,8 +862,8 @@ pub struct AivyxConfig {
     ///    synthesized `default` role.
     pub system_prompt: Sourced<String>,
     /// Filesystem sandbox root for `fs.read` / `fs.write` tools.
-    /// Resolution order: `AIVYX_FS_ROOT` → TOML `fs.root` → the
-    /// `[access] level`-derived default → `$HOME/aivyx-sandbox`. Missing
+    /// Resolution order: `AIVYX_PA_FS_ROOT` → TOML `fs.root` → the
+    /// `[access] level`-derived default → `$HOME/aivyx-pa-sandbox`. Missing
     /// HOME with no override is a [`ConfigError::NoHome`].
     pub fs_root: Sourced<PathBuf>,
     /// Chapter N — operator-selected access level. Decides the default
@@ -925,7 +925,7 @@ pub struct AivyxConfig {
     /// `[workspace]` ⇒ enabled. `enabled = false` ⇒ no workspace at all.
     pub workspace_enabled: Sourced<bool>,
     /// Chapter O — the agent's workspace directory. Resolution order:
-    /// `AIVYX_WORKSPACE` → `[workspace] path` → `$HOME/.aivyx/workspace`.
+    /// `AIVYX_PA_WORKSPACE` → `[workspace] path` → `$HOME/.aivyx-pa/workspace`.
     /// Independent of `fs_root` / the access level.
     pub workspace_path: Sourced<PathBuf>,
     /// Chapter O — whether proactive journaling fires on a cadence.
@@ -935,8 +935,8 @@ pub struct AivyxConfig {
     /// [`DEFAULT_WORKSPACE_JOURNALING_INTERVAL_SECS`].
     pub workspace_journaling_interval_secs: Sourced<u64>,
     /// Encrypted-store path (redb file). Resolution order:
-    /// `AIVYX_STORAGE_PATH` → TOML `storage.path` →
-    /// `$XDG_DATA_HOME/aivyx/store.redb` → `$HOME/.local/share/aivyx/store.redb`.
+    /// `AIVYX_PA_STORAGE_PATH` → TOML `storage.path` →
+    /// `$XDG_DATA_HOME/aivyx-pa/store.redb` → `$HOME/.local/share/aivyx-pa/store.redb`.
     pub storage_path: Sourced<PathBuf>,
     /// Per-topic memory-write tripwire. Always populated — default is
     /// [`DEFAULT_MEMORY_MAX_PER_TOPIC`].
@@ -1069,7 +1069,7 @@ pub struct AivyxConfig {
     /// `None` when absent: the autonomous-loop driver is not
     /// spawned (the backlog can still be stocked, but no run can
     /// start). `Some` arms the driver; runs still start only on
-    /// an explicit `aivyx loop start`.
+    /// an explicit `aivyx-pa loop start`.
     pub loop_config: Option<LoopConfig>,
     /// Phase 91 — `[recall_judgment]` section. `None` when
     /// absent: the recall-feedback loop runs unchanged (the
@@ -1241,7 +1241,7 @@ pub struct AivyxConfig {
     /// Resolution priority at load time (highest first):
     /// 1. [`LoadOptions::role_override`] (populated by the future
     ///    `--role <name>` CLI flag landing in Phase 11 Task 4).
-    /// 2. `AIVYX_ROLE` environment variable.
+    /// 2. `AIVYX_PA_ROLE` environment variable.
     /// 3. [`DEFAULT_ROLE_NAME`] (`"default"`).
     ///
     /// The loader validates at load time that `self.roles` contains
@@ -1258,7 +1258,7 @@ pub struct AivyxConfig {
     /// a default carrying `assistant_name = `
     /// [`DEFAULT_ASSISTANT_NAME`] and every other category empty.
     ///
-    /// Q1(a) at Phase 57 sign-off: Profile lives in `aivyx.toml`
+    /// Q1(a) at Phase 57 sign-off: Profile lives in `aivyx-pa.toml`
     /// as a top-level `[profile]` table — single operator-facing
     /// config file, plain-text-inspectable per P13 commit 4.
     pub profile: Profile,
@@ -1355,13 +1355,13 @@ pub struct AivyxConfig {
     /// Chapter Roster — the operator's team-config file. `[team] config_path`
     /// points at a `[team]`-rooted TOML document (the same shape packs like
     /// `kitchen-boh.toml` use, loaded via `aivyx_team::TeamConfig::load`). When
-    /// `None` *and* no conventional `team.toml` sits beside `aivyx.toml`, the
+    /// `None` *and* no conventional `team.toml` sits beside `aivyx-pa.toml`, the
     /// daemon falls back to the built-in `default_nonagon()` — so an operator
     /// who never touches teams sees byte-identical behavior. A relative path is
-    /// resolved against the directory of the loaded `aivyx.toml`.
+    /// resolved against the directory of the loaded `aivyx-pa.toml`.
     pub team_config_path: Option<PathBuf>,
     /// Chapter Freight — `[pack] trusted_publishers`: base64 Ed25519
-    /// verifying keys trusted for `aivyx pack install` (unioned with the
+    /// verifying keys trusted for `aivyx-pa pack install` (unioned with the
     /// compiled-in publisher set at verify time). Validated at load:
     /// every entry must be base64 of exactly 32 bytes.
     pub pack_trusted_publishers: Vec<String>,
@@ -1545,16 +1545,16 @@ pub enum ToolAllowlist {
 
 /// Operator-declared identity layer per **PRODUCT.md P13**. Profile
 /// is loaded once per daemon lifetime from the `[profile]` table in
-/// `aivyx.toml` and injects into every turn's system prompt
+/// `aivyx-pa.toml` and injects into every turn's system prompt
 /// regardless of active role. Profile is the role-orthogonal identity
 /// layer — roles gate *what* the agent may do, Profile flavors *how*
 /// it speaks and judges.
 ///
 /// Phase 57 lands the substrate; Phase 58 lands the operator-facing
-/// inspection surface (`aivyx profile show` / `edit`).
+/// inspection surface (`aivyx-pa profile show` / `edit`).
 ///
 /// Profile carries no secrets per P13 commit 7 — it is plain-text-
-/// inspectable, lives in the operator-facing `aivyx.toml`, and is
+/// inspectable, lives in the operator-facing `aivyx-pa.toml`, and is
 /// never used for API keys, passphrases, or tokens.
 ///
 /// The agent **cannot** write to its own Profile (P13 commit 3).
@@ -1602,7 +1602,7 @@ impl Default for Profile {
     /// Profile with [`DEFAULT_ASSISTANT_NAME`] populated and every
     /// other category empty. Matches the existing precedent
     /// ([`DEFAULT_MODEL`], [`DEFAULT_ROLE_NAME`],
-    /// [`DEFAULT_SYSTEM_PROMPT`]) — every existing `aivyx.toml`
+    /// [`DEFAULT_SYSTEM_PROMPT`]) — every existing `aivyx-pa.toml`
     /// keeps working without a `[profile]` section.
     fn default() -> Self {
         Self {
@@ -1628,7 +1628,7 @@ impl Profile {
     /// system-prompt assembly path skips the Profile section
     /// entirely and emits the role's `system_prompt` unchanged.
     /// This keeps the substrate non-invasive — every pre-Phase-57
-    /// `aivyx.toml` sees zero behavior change unless it actually
+    /// `aivyx-pa.toml` sees zero behavior change unless it actually
     /// declares a `[profile]` section.
     pub fn is_operator_declared(&self) -> bool {
         self.assistant_name.source != FieldSource::Default
@@ -1664,7 +1664,7 @@ pub struct TelegramConfig {
 }
 
 /// Phase 107 — Discord-specific configuration. Loaded from the
-/// `[discord]` TOML section and the `AIVYX_DISCORD_TOKEN` env
+/// `[discord]` TOML section and the `AIVYX_PA_DISCORD_TOKEN` env
 /// var; mirrors `TelegramConfig`'s shape so the binary's
 /// channel-dispatch code reads symmetrically.
 #[derive(Debug, Clone)]
@@ -1764,7 +1764,7 @@ pub enum McpTransportKind {
 }
 
 /// One MCP server to connect to at daemon startup.
-/// Loaded from `[[mcp_server]]` entries in `aivyx.toml`.
+/// Loaded from `[[mcp_server]]` entries in `aivyx-pa.toml`.
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
     pub name: String,
@@ -1776,7 +1776,7 @@ pub struct McpServerConfig {
     /// Chapter Conduit (CD.1) — environment variables passed to a stdio
     /// server's child process (e.g. `GITHUB_PERSONAL_ACCESS_TOKEN`).
     /// `${VAR}` values are resolved from the daemon's own environment at
-    /// load time so secrets stay out of `aivyx.toml`. Sorted by key for
+    /// load time so secrets stay out of `aivyx-pa.toml`. Sorted by key for
     /// deterministic ordering. Empty for remote transports.
     pub env: Vec<(String, String)>,
     /// Chapter Conduit (CD.2) — HTTP headers sent on every request to a
@@ -1800,7 +1800,7 @@ pub struct McpServerConfig {
 
 /// One tool process to spawn at daemon startup. Phase 49 — delivers
 /// PRODUCT.md P12 (Tools as Separate Processes Over Daemon IPC).
-/// Loaded from `[[tool_process]]` entries in `aivyx.toml`.
+/// Loaded from `[[tool_process]]` entries in `aivyx-pa.toml`.
 ///
 /// `scope_overrides` lets the operator narrow (never widen) the scopes
 /// the tool declares at handshake. Keys are tool names within the
@@ -1842,7 +1842,7 @@ pub struct SandboxConfig {
 /// bundled default sandbox applied to a `[[tool_process]]` that
 /// has no explicit `sandbox` block. `None` is the in-code default
 /// (absent section) so existing configs are byte-identical to
-/// Phase 179; the `aivyx init` wizard writes `Auto` so new
+/// Phase 179; the `aivyx-pa init` wizard writes `Auto` so new
 /// launches are secure-by-default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SandboxDefaultBackend {
@@ -2915,7 +2915,7 @@ pub const DEFAULT_PC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
 /// Revert + core-protected flow; opt-in.
 ///
 /// `None` (no section) → the pass never runs; the correction
-/// ledger still accumulates passively (visible in `aivyx
+/// ledger still accumulates passively (visible in `aivyx-pa
 /// learning`) but files nothing. `Some` arms the pass; it still
 /// no-ops unless `enabled = true`.
 #[derive(Debug, Clone, PartialEq)]
@@ -2953,14 +2953,14 @@ pub const DEFAULT_CC_MAX_PROPOSALS_PER_CYCLE: u32 = 3;
 ///
 /// Arms the autonomous-loop driver: when present and `enabled =
 /// true`, the daemon spawns the loop driver background task so
-/// `aivyx loop start` can run the backlog to completion. The
+/// `aivyx-pa loop start` can run the backlog to completion. The
 /// HMAC-chained backlog substrate is always available (the
-/// `aivyx loop add` CLI works regardless); this block only
+/// `aivyx-pa loop add` CLI works regardless); this block only
 /// controls whether *runs* can be driven and with what cap.
 ///
 /// `None` (no section) → the driver is not spawned; the backlog
 /// can still be stocked but no run can start. `Some` arms the
-/// driver; runs still start only on an explicit `aivyx loop
+/// driver; runs still start only on an explicit `aivyx-pa loop
 /// start`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopConfig {
@@ -2970,10 +2970,10 @@ pub struct LoopConfig {
     /// Hard cap on iterations per run — the primary guardrail on
     /// a fully-autonomous, code-committing loop. A run stops once
     /// it reaches this many fresh-context iterations regardless
-    /// of remaining backlog. `aivyx loop start --max-iterations`
+    /// of remaining backlog. `aivyx-pa loop start --max-iterations`
     /// may lower it per run; this is the default + the ceiling.
     pub max_iterations: u32,
-    /// Priority assigned to a story added via `aivyx loop add`
+    /// Priority assigned to a story added via `aivyx-pa loop add`
     /// without an explicit `--priority`. Lower runs first.
     pub default_priority: u32,
     /// Phase 174 — the shell command the driver runs to verify
@@ -3031,7 +3031,7 @@ pub struct LoopConfig {
     /// When `true`, a daemon restart while a run was active (a crash or a
     /// `systemctl restart`) re-starts the run if the backlog still has pending
     /// stories — so a "runs for days" agent under `Restart=on-failure` keeps
-    /// working instead of silently stopping. An **explicit** `aivyx loop stop`
+    /// working instead of silently stopping. An **explicit** `aivyx-pa loop stop`
     /// clears the persisted marker, so a deliberate stop is respected across a
     /// restart. Default `false` (opt-in): auto-resuming a code-committing
     /// autonomous loop on every boot is a deliberate operator choice.
@@ -3064,7 +3064,7 @@ pub const DEFAULT_LOOP_MAX_ITERATIONS: u32 = 25;
 /// stall long before the iteration/token caps. Mirrors Bridle's
 /// repeat-call default of 3.
 pub const DEFAULT_LOOP_MAX_IDLE_ITERATIONS: u32 = 3;
-/// Default story priority for `aivyx loop add` without
+/// Default story priority for `aivyx-pa loop add` without
 /// `--priority`. A mid-range value so operators can insert both
 /// higher- and lower-priority stories around it.
 pub const DEFAULT_LOOP_PRIORITY: u32 = 100;
@@ -3266,7 +3266,7 @@ pub const DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN: u64 = 5000;
 /// Phase 120 — default threshold for the planner's tool-name fuzzy-
 /// match recovery. Matches the Phase 112 fuzzy-match default (0.80)
 /// so the substrate stays uniform; operators can override via
-/// `[providers] tool_name_auto_correct_threshold` in `aivyx.toml`.
+/// `[providers] tool_name_auto_correct_threshold` in `aivyx-pa.toml`.
 pub const DEFAULT_TOOL_NAME_AUTO_CORRECT_THRESHOLD: f32 = 0.80;
 
 /// Phase 114 — `[persona.auto_propose]` runtime config.
@@ -3475,7 +3475,7 @@ pub const DEFAULT_PERSONA_LIST_THRESHOLD: f32 = 0.85;
 /// All fields are `Option`-typed; the binary preserves `None`
 /// values through the conversion so Ollama's per-model defaults
 /// apply. Operators set fields explicitly via `[ollama]` in
-/// `aivyx.toml`.
+/// `aivyx-pa.toml`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OllamaOptions {
     pub num_ctx: Option<u32>,
@@ -3507,7 +3507,7 @@ impl OllamaOptions {
 }
 
 /// Phase 122 Task 2 — per-family prompt-strategy enum.
-/// Operators select strategies in `aivyx.toml` via
+/// Operators select strategies in `aivyx-pa.toml` via
 /// `[ollama.<family>] prompt_strategy = "..."`. Family
 /// detection from the model-name prefix lands in
 /// [`detect_model_family`]; per-family defaults land in
@@ -3577,7 +3577,7 @@ impl OllamaFamilyStrategy {
 
     /// Phase 122 Task 2 — per-family default lookup. Used by
     /// the loader to fill in defaults when an operator's
-    /// `aivyx.toml` doesn't override a specific family.
+    /// `aivyx-pa.toml` doesn't override a specific family.
     /// Defaults upgraded at Phase 124 from StructuredInjection
     /// to FewShotExamples for qwen3 + gemma4.
     ///
@@ -3955,7 +3955,7 @@ struct RawToml {
     #[serde(default)]
     voice: VoiceOptions,
     #[serde(default)]
-    aivyx: RawAivyx,
+    aivyx_pa: RawAivyxPa,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
     /// → `None`, which triggers the implicit-`default`-role synthesis
     /// in the loader. `Some(vec)` (including `Some(vec![])` for a
@@ -4033,7 +4033,7 @@ struct RawTeam {
 }
 
 /// `[pack]` section. Chapter Freight — base64 Ed25519 verifying keys the
-/// operator trusts for `aivyx pack install`, unioned at verify time with
+/// operator trusts for `aivyx-pa pack install`, unioned at verify time with
 /// the compiled-in Aivyx publisher set.
 #[derive(Debug, Default, Deserialize)]
 struct RawPack {
@@ -4134,7 +4134,7 @@ struct RawMcpServer {
     #[serde(default = "default_true")]
     enabled: bool,
     /// When `true`, resolve `command` to the current binary path at runtime.
-    /// Used for bundled MCP servers that ship inside the `aivyx` binary.
+    /// Used for bundled MCP servers that ship inside the `aivyx-pa` binary.
     #[serde(default)]
     bundled: bool,
     /// Phase 55 — optional `[mcp_server.sandbox]` nested block.
@@ -5596,7 +5596,7 @@ struct RawFailureOutcomesConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct RawAivyx {
+struct RawAivyxPa {
     #[serde(default)]
     passphrase: Option<String>,
 }
@@ -5607,7 +5607,7 @@ struct RawAivyx {
 
 /// Canonical byte keys used to look up secrets in
 /// [`KeyDomain::Secrets`]. Defined as module constants so any future
-/// `aivyx secrets set` CLI subcommand writes the exact same keys.
+/// `aivyx-pa secrets set` CLI subcommand writes the exact same keys.
 pub mod secret_keys {
     /// Storage key for the Anthropic API key. Value: UTF-8 string.
     pub const ANTHROPIC_API_KEY: &[u8] = b"anthropic_api_key";
@@ -5633,9 +5633,9 @@ pub mod secret_keys {
     /// Storing the passphrase inside a store that is itself encrypted
     /// by that passphrase is obviously useless, so in practice this
     /// key will never be populated — but we reserve it anyway for
-    /// symmetry and to make the future `aivyx secrets set` surface
+    /// symmetry and to make the future `aivyx-pa secrets set` surface
     /// complete.
-    pub const AIVYX_PASSPHRASE: &[u8] = b"aivyx_passphrase";
+    pub const AIVYX_PA_PASSPHRASE: &[u8] = b"aivyx_passphrase";
 }
 
 // --------------------------------------------------------------------
@@ -5643,43 +5643,43 @@ pub mod secret_keys {
 // --------------------------------------------------------------------
 
 const ENV_ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
-const ENV_MODEL: &str = "AIVYX_MODEL";
-const ENV_SYSTEM_PROMPT: &str = "AIVYX_SYSTEM_PROMPT";
-const ENV_FS_ROOT: &str = "AIVYX_FS_ROOT";
+const ENV_MODEL: &str = "AIVYX_PA_MODEL";
+const ENV_SYSTEM_PROMPT: &str = "AIVYX_PA_SYSTEM_PROMPT";
+const ENV_FS_ROOT: &str = "AIVYX_PA_FS_ROOT";
 /// Chapter O — env override for the agent workspace directory.
-const ENV_WORKSPACE: &str = "AIVYX_WORKSPACE";
-const ENV_STORAGE_PATH: &str = "AIVYX_STORAGE_PATH";
+const ENV_WORKSPACE: &str = "AIVYX_PA_WORKSPACE";
+const ENV_STORAGE_PATH: &str = "AIVYX_PA_STORAGE_PATH";
 const ENV_XDG_DATA_HOME: &str = "XDG_DATA_HOME";
 const ENV_HOME: &str = "HOME";
-const ENV_MEMORY_MAX_PER_TOPIC: &str = "AIVYX_MEMORY_MAX_PER_TOPIC";
-const ENV_MEMORY_TTL_SECS: &str = "AIVYX_MEMORY_TTL_SECS";
-const ENV_PASSPHRASE: &str = "AIVYX_PASSPHRASE";
-const ENV_TELEGRAM_TOKEN: &str = "AIVYX_TELEGRAM_TOKEN";
-const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_TELEGRAM_CHAT_ID";
+const ENV_MEMORY_MAX_PER_TOPIC: &str = "AIVYX_PA_MEMORY_MAX_PER_TOPIC";
+const ENV_MEMORY_TTL_SECS: &str = "AIVYX_PA_MEMORY_TTL_SECS";
+const ENV_PASSPHRASE: &str = "AIVYX_PA_PASSPHRASE";
+const ENV_TELEGRAM_TOKEN: &str = "AIVYX_PA_TELEGRAM_TOKEN";
+const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_PA_TELEGRAM_CHAT_ID";
 
 /// Phase 107 — Discord bot token + optional application id.
-/// Same `AIVYX_*` prefix convention every other secret uses.
-const ENV_DISCORD_TOKEN: &str = "AIVYX_DISCORD_TOKEN";
-const ENV_DISCORD_APPLICATION_ID: &str = "AIVYX_DISCORD_APPLICATION_ID";
+/// Same `AIVYX_PA_*` prefix convention every other secret uses.
+const ENV_DISCORD_TOKEN: &str = "AIVYX_PA_DISCORD_TOKEN";
+const ENV_DISCORD_APPLICATION_ID: &str = "AIVYX_PA_DISCORD_APPLICATION_ID";
 
 /// Phase 108 — Slack tokens. Two distinct tokens because
 /// Socket Mode requires both: bot for REST, app for the
 /// outbound WebSocket. Optional `team_id` constraint.
-const ENV_SLACK_BOT_TOKEN: &str = "AIVYX_SLACK_BOT_TOKEN";
-const ENV_SLACK_APP_TOKEN: &str = "AIVYX_SLACK_APP_TOKEN";
-const ENV_SLACK_TEAM_ID: &str = "AIVYX_SLACK_TEAM_ID";
+const ENV_SLACK_BOT_TOKEN: &str = "AIVYX_PA_SLACK_BOT_TOKEN";
+const ENV_SLACK_APP_TOKEN: &str = "AIVYX_PA_SLACK_APP_TOKEN";
+const ENV_SLACK_TEAM_ID: &str = "AIVYX_PA_SLACK_TEAM_ID";
 /// Env-var override for the active role name, second-priority in the
 /// active-role resolution chain (below [`LoadOptions::role_override`]
 /// and above the [`DEFAULT_ROLE_NAME`] fall-through). Phase 11 Task 1.
-const ENV_ROLE: &str = "AIVYX_ROLE";
-const ENV_OPENAI_API_KEY: &str = "AIVYX_OPENAI_API_KEY";
-const ENV_OPENAI_BASE_URL: &str = "AIVYX_OPENAI_BASE_URL";
-const ENV_KVCACHE_STORE_PATH: &str = "AIVYX_KVCACHE_STORE_PATH";
-const ENV_PROVIDER: &str = "AIVYX_PROVIDER";
+const ENV_ROLE: &str = "AIVYX_PA_ROLE";
+const ENV_OPENAI_API_KEY: &str = "AIVYX_PA_OPENAI_API_KEY";
+const ENV_OPENAI_BASE_URL: &str = "AIVYX_PA_OPENAI_BASE_URL";
+const ENV_KVCACHE_STORE_PATH: &str = "AIVYX_PA_KVCACHE_STORE_PATH";
+const ENV_PROVIDER: &str = "AIVYX_PA_PROVIDER";
 /// Phase 75 — env override for the embedding-backend API key.
 /// Highest priority in the env > TOML > encrypted-store
 /// fall-through, matching the anthropic / openai key pattern.
-const ENV_EMBEDDING_API_KEY: &str = "AIVYX_EMBEDDING_API_KEY";
+const ENV_EMBEDDING_API_KEY: &str = "AIVYX_PA_EMBEDDING_API_KEY";
 
 // --------------------------------------------------------------------
 // Loader
@@ -5814,7 +5814,7 @@ impl AivyxConfig {
         };
 
         // --- fs_root ------------------------------------------------
-        // Phase 8 binary logic: env → default `$HOME/aivyx-sandbox`.
+        // Phase 8 binary logic: env → default `$HOME/aivyx-pa-sandbox`.
         // Phase 9 adds TOML `fs.root` between them. Chapter N inserts the
         // `[access] root` and `[access] level`-derived default below the
         // explicit `[fs] root`. A missing HOME with no explicit override is
@@ -5831,7 +5831,7 @@ impl AivyxConfig {
                             AccessLevel::Sandbox => {
                                 let home = env_path(ENV_HOME)
                                     .ok_or(ConfigError::NoHome { field: "fs_root" })?;
-                                home.join("aivyx-sandbox")
+                                home.join("aivyx-pa-sandbox")
                             }
                             AccessLevel::Home => env_path(ENV_HOME)
                                 .ok_or(ConfigError::NoHome { field: "fs_root" })?,
@@ -5951,8 +5951,8 @@ impl AivyxConfig {
 
         // --- workspace (Chapter O) ----------------------------------
         // The agent's own always-available workspace, independent of
-        // `fs_root`. Path: AIVYX_WORKSPACE → `[workspace] path` →
-        // `$HOME/.aivyx/workspace`. Absent section ⇒ enabled at default.
+        // `fs_root`. Path: AIVYX_PA_WORKSPACE → `[workspace] path` →
+        // `$HOME/.aivyx-pa/workspace`. Absent section ⇒ enabled at default.
         let workspace_enabled = match toml.workspace.enabled {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(true, FieldSource::Default),
@@ -5964,7 +5964,7 @@ impl AivyxConfig {
                 None => {
                     let home = env_path(ENV_HOME)
                         .ok_or(ConfigError::NoHome { field: "workspace_path" })?;
-                    Sourced::new(home.join(".aivyx").join("workspace"), FieldSource::Default)
+                    Sourced::new(home.join(".aivyx-pa").join("workspace"), FieldSource::Default)
                 }
             },
         };
@@ -5982,8 +5982,8 @@ impl AivyxConfig {
             };
 
         // --- storage_path -------------------------------------------
-        // Phase 8 logic: env → $XDG_DATA_HOME/aivyx/store.redb →
-        // $HOME/.local/share/aivyx/store.redb. Phase 9 adds a TOML
+        // Phase 8 logic: env → $XDG_DATA_HOME/aivyx-pa/store.redb →
+        // $HOME/.local/share/aivyx-pa/store.redb. Phase 9 adds a TOML
         // `storage.path` entry with env-beats-toml precedence.
         let storage_path = match env_path(ENV_STORAGE_PATH) {
             Some(p) => Sourced::new(p, FieldSource::Env),
@@ -5991,13 +5991,13 @@ impl AivyxConfig {
                 Some(p) => Sourced::new(p, FieldSource::Toml),
                 None => {
                     let default_path = if let Some(xdg) = env_path(ENV_XDG_DATA_HOME) {
-                        xdg.join("aivyx").join("store.redb")
+                        xdg.join("aivyx-pa").join("store.redb")
                     } else {
                         let home =
                             env_path(ENV_HOME).ok_or(ConfigError::NoHome { field: "storage_path" })?;
                         home.join(".local")
                             .join("share")
-                            .join("aivyx")
+                            .join("aivyx-pa")
                             .join("store.redb")
                     };
                     Sourced::new(default_path, FieldSource::Default)
@@ -6139,11 +6139,11 @@ impl AivyxConfig {
         // --- passphrase --------------------------------------------
         // Secret; "set but empty" is treated as unset at this layer,
         // preserving Phase 7's bailout behavior for `export
-        // AIVYX_PASSPHRASE=` with no value.
+        // AIVYX_PA_PASSPHRASE=` with no value.
         let passphrase = env_secret(ENV_PASSPHRASE)
             .map(|s| SourcedSecret::new(s, FieldSource::Env))
             .or_else(|| {
-                toml.aivyx
+                toml.aivyx_pa
                     .passphrase
                     .as_ref()
                     .filter(|s| !s.is_empty())
@@ -6664,7 +6664,7 @@ impl AivyxConfig {
             ) {
                 warnings.push(
                     "both a legacy `[agent] system_prompt` (or \
-                     AIVYX_SYSTEM_PROMPT env var) and one or more \
+                     AIVYX_PA_SYSTEM_PROMPT env var) and one or more \
                      explicit `[[role]]` entries are present in this \
                      config. The explicit roles win at run time and \
                      the legacy prompt is ignored — move the prompt \
@@ -6718,7 +6718,7 @@ impl AivyxConfig {
         }
 
         // --- active_role -------------------------------------------
-        // Priority: LoadOptions::role_override > AIVYX_ROLE env var >
+        // Priority: LoadOptions::role_override > AIVYX_PA_ROLE env var >
         // DEFAULT_ROLE_NAME. At this point `roles` is non-empty — the
         // explicit branch only lands here on behalf of the loader
         // (even an explicit `role = []` is a user error that surfaces
@@ -7477,7 +7477,7 @@ impl AivyxConfig {
         //
         // Q5(a) at Phase 63 sign-off: validate at config-load time
         // rather than daemon startup. The operator gets the error
-        // at `aivyx daemon run` startup, not at 9am the next
+        // at `aivyx-pa daemon run` startup, not at 9am the next
         // morning when the schedule fires silently. Mirrors the
         // load-time-not-runtime discipline of
         // `validate_role_inheritance` above.
@@ -7529,7 +7529,7 @@ impl AivyxConfig {
         // "smart" memory dark for months). `lite` is embedding-free by
         // design (lexical + co-occurrence over existing data), so it gets
         // no warning. Non-fatal — accumulate it like the other loader
-        // warnings; `aivyx doctor` carries the actionable fix.
+        // warnings; `aivyx-pa doctor` carries the actionable fix.
         if matches!(memory_profile, MemoryProfile::Smart)
             && embedding.is_none()
         {
@@ -7538,7 +7538,7 @@ impl AivyxConfig {
                  provider is configured, so semantic recall is inert. \
                  Add an `[embedding]` section (e.g. a local Ollama with \
                  `nomic-embed-text`), or use `profile = lite` for \
-                 embedding-free recall. Run `aivyx doctor` for details."
+                 embedding-free recall. Run `aivyx-pa doctor` for details."
                     .to_string(),
             );
         }
@@ -7735,7 +7735,7 @@ impl AivyxConfig {
             web_ui_auth_token,
             // Chapter Roster — the operator's team-config file pointer. Stored
             // as-given (relative paths are resolved against the loaded
-            // `aivyx.toml`'s directory at the daemon's team build site).
+            // `aivyx-pa.toml`'s directory at the daemon's team build site).
             team_config_path: toml.team.config_path.map(PathBuf::from),
             pack_trusted_publishers: {
                 let entries = toml.pack.trusted_publishers.unwrap_or_default();
@@ -7750,7 +7750,7 @@ impl AivyxConfig {
                             field: "pack.trusted_publishers",
                             reason: format!(
                                 "{e:?} is not base64 of a 32-byte Ed25519 \
-                                 verifying key (as printed by `aivyx pack \
+                                 verifying key (as printed by `aivyx-pa pack \
                                  keygen`)"
                             ),
                         });
@@ -8038,7 +8038,7 @@ impl AivyxConfig {
 /// Chapter Conduit (CD.1) — interpolate `${VAR}` references in an MCP
 /// `env` value against the daemon's own environment, so an operator
 /// keeps the actual secret in their shell/systemd environment rather
-/// than in `aivyx.toml`. A literal `$$` is an escape for a single `$`
+/// than in `aivyx-pa.toml`. A literal `$$` is an escape for a single `$`
 /// (so a value that genuinely needs `${` writes `$${`). A reference to
 /// an unset host variable is a hard config error (a missing token
 /// should fail loudly at startup, not silently pass an empty string).

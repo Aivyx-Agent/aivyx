@@ -1,16 +1,16 @@
-//! Operator-facing `aivyx profile` CLI surface — Phase 58.
+//! Operator-facing `aivyx-pa profile` CLI surface — Phase 58.
 //!
 //! Phase 57 shipped the Profile substrate (`aivyx-config::Profile`,
 //! `[profile]` TOML table, `assemble_session_prompt`, init wizard,
 //! startup-banner row). This module ships the operator surface that
 //! closes PRODUCT.md P13:
 //!
-//! - `aivyx profile show` — labeled, human-readable inspection.
-//! - `aivyx profile edit` — surgical `[profile]` section edit in
-//!   `$EDITOR`, preserving the rest of `aivyx.toml` via `toml_edit`
+//! - `aivyx-pa profile show` — labeled, human-readable inspection.
+//! - `aivyx-pa profile edit` — surgical `[profile]` section edit in
+//!   `$EDITOR`, preserving the rest of `aivyx-pa.toml` via `toml_edit`
 //!   (Task 3).
 //!
-//! Q3(a) resolution at Phase 58 sign-off: `show` reads `aivyx.toml`
+//! Q3(a) resolution at Phase 58 sign-off: `show` reads `aivyx-pa.toml`
 //! from disk (no daemon dispatch needed). Profile is operator-mutable
 //! only — the agent never writes to it — so disk state and live state
 //! are always equivalent modulo a pending daemon restart.
@@ -28,9 +28,9 @@ use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, Profile};
 /// [`crate::DEFAULT_TOML_PATH`] without depending on it (this module
 /// is included via `#[path = ...]` and re-exporting from the binary
 /// would create a cyclic-looking dependency).
-const PROFILE_TOML_PATH: &str = "aivyx.toml";
+const PROFILE_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// Entry point for `aivyx profile show`. Loads `aivyx.toml` via the
+/// Entry point for `aivyx-pa profile show`. Loads `aivyx-pa.toml` via the
 /// same `aivyx-config` path the daemon uses at startup, then renders
 /// the resolved [`Profile`] to stdout in a labeled format mirroring
 /// the startup banner.
@@ -41,12 +41,12 @@ pub fn run_profile_show() -> Result<(), String> {
     Ok(())
 }
 
-/// Entry point for `aivyx profile edit`. Phase 58 Task 3 — Q2(a)
+/// Entry point for `aivyx-pa profile edit`. Phase 58 Task 3 — Q2(a)
 /// resolution.
 ///
 /// The flow:
 ///
-/// 1. Read `aivyx.toml` (or initialize a synthesized empty document
+/// 1. Read `aivyx-pa.toml` (or initialize a synthesized empty document
 ///    if the file does not exist).
 /// 2. Extract the current `[profile]` section as a standalone TOML
 ///    chunk and write it to a tempfile.
@@ -56,7 +56,7 @@ pub fn run_profile_show() -> Result<(), String> {
 ///    clear message pointing at the tempfile so the operator can
 ///    retry without losing their edits.
 /// 5. Splice the new `[profile]` table back into the original
-///    `aivyx.toml` document via `toml_edit` — preserving every
+///    `aivyx-pa.toml` document via `toml_edit` — preserving every
 ///    other section, every comment, and the original whitespace.
 /// 6. Write the merged document back to disk with `0600` permissions.
 /// 7. Print a restart reminder per Q5(a) — Profile is load-time-only,
@@ -64,8 +64,8 @@ pub fn run_profile_show() -> Result<(), String> {
 pub fn run_profile_edit() -> Result<(), String> {
     let toml_path = Path::new(PROFILE_TOML_PATH);
 
-    // Read the existing aivyx.toml (or start with an empty document
-    // if the operator has not run `aivyx init` yet).
+    // Read the existing aivyx-pa.toml (or start with an empty document
+    // if the operator has not run `aivyx-pa init` yet).
     let original_text = if toml_path.exists() {
         std::fs::read_to_string(toml_path)
             .map_err(|e| format!("failed to read {}: {e}", toml_path.display()))?
@@ -79,7 +79,7 @@ pub fn run_profile_edit() -> Result<(), String> {
         format!(
             "failed to parse {} as TOML: {e}\n\
                  The existing config file is malformed. Fix it manually \
-                 before running `aivyx profile edit`.",
+                 before running `aivyx-pa profile edit`.",
             toml_path.display()
         )
     })?;
@@ -94,23 +94,23 @@ pub fn run_profile_edit() -> Result<(), String> {
     eprintln!("Profile updated in {}.", toml_path.display());
     eprintln!(
         "Restart the daemon for changes to take effect: \
-         `aivyx daemon stop && aivyx`."
+         `aivyx-pa daemon stop && aivyx-pa`."
     );
 
     Ok(())
 }
 
-/// Entry point for `aivyx profile apply-hint <proposal-id> [--yes]`.
+/// Entry point for `aivyx-pa profile apply-hint <proposal-id> [--yes]`.
 /// Phase 119 Task 4.
 ///
 /// Operator workflow:
-/// 1. Operator has already run `aivyx persona proposals approve <id>`
+/// 1. Operator has already run `aivyx-pa persona proposals approve <id>`
 ///    on a `ProfileHint` proposal (Q2(a) at Phase 119 sign-off —
 ///    separate approve and apply gestures).
 /// 2. This command fetches the now-Approved proposal, validates the
 ///    category, parses the inner `ProfileFieldHint` payload,
 ///    confirms with the operator (unless `--yes`), applies the field
-///    update to `aivyx.toml` atomically via the Task 3 primitive,
+///    update to `aivyx-pa.toml` atomically via the Task 3 primitive,
 ///    records an `AuditEvent::ProfileHintApplied` event via daemon
 ///    IPC, and surfaces a "restart the daemon" reminder.
 pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), String> {
@@ -122,8 +122,8 @@ pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), 
     let socket_path = default_socket_path()?;
     if !daemon_is_running(&socket_path).await {
         return Err(format!(
-            "aivyx profile apply-hint: daemon must be running \
-             (socket {}). Start it with `aivyx`.",
+            "aivyx-pa profile apply-hint: daemon must be running \
+             (socket {}). Start it with `aivyx-pa`.",
             socket_path.display(),
         ));
     }
@@ -160,7 +160,7 @@ pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), 
             .map_err(|e| format!("failed to apply hint to {PROFILE_TOML_PATH}: {e}"))?;
 
     // Record the audit event via daemon IPC. If the audit-record
-    // step fails AFTER the aivyx.toml mutation landed, surface as
+    // step fails AFTER the aivyx-pa.toml mutation landed, surface as
     // a soft warning — the file mutation is the load-bearing
     // result; the audit event is forensic.
     let audit_result = apply_profile_hint(
@@ -187,14 +187,14 @@ pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), 
         Err(e) => {
             eprintln!(
                 "warning: audit-event record failed: {e}\n\
-                 The aivyx.toml mutation is in place; you can re-record \
+                 The aivyx-pa.toml mutation is in place; you can re-record \
                  the audit event by running the command again."
             );
         }
     }
     eprintln!(
         "Restart the daemon for the new value to take effect: \
-         `aivyx daemon stop && aivyx`."
+         `aivyx-pa daemon stop && aivyx-pa`."
     );
     Ok(())
 }
@@ -216,14 +216,14 @@ fn parse_proposal_as_profile_hint(
     if proposal.category != "ProfileHint" {
         return Err(format!(
             "proposal `{}` has category `{}`, not `ProfileHint`. \
-             Use `aivyx role import` for RoleDefinitionSuggestion.",
+             Use `aivyx-pa role import` for RoleDefinitionSuggestion.",
             proposal.id, proposal.category
         ));
     }
     if proposal.status != "Approved" {
         return Err(format!(
             "proposal `{}` has status `{}`; only Approved proposals can be \
-             applied. Run `aivyx persona proposals approve {}` first.",
+             applied. Run `aivyx-pa persona proposals approve {}` first.",
             proposal.id, proposal.status, proposal.id
         ));
     }
@@ -252,7 +252,7 @@ fn parse_proposal_as_profile_hint(
     Ok(hint)
 }
 
-/// Parse `original_text` (the existing `aivyx.toml`) and return the
+/// Parse `original_text` (the existing `aivyx-pa.toml`) and return the
 /// `[profile]` section as a standalone TOML document the operator can
 /// edit in a tempfile. If the original document has no `[profile]`
 /// section, returns [`default_profile_template`] so the operator
@@ -294,7 +294,7 @@ fn merge_edited_profile_into_aivyx_toml(
         edited_text.parse().map_err(|e: toml_edit::TomlError| {
             format!(
                 "edited Profile is not valid TOML: {e}\n\
-                 Your edits have not been applied. Re-run `aivyx profile \
+                 Your edits have not been applied. Re-run `aivyx-pa profile \
                  edit` to try again."
             )
         })?;
@@ -304,7 +304,7 @@ fn merge_edited_profile_into_aivyx_toml(
         .get("profile")
         .ok_or_else(|| {
             "edited Profile is missing the `[profile]` header. \
-             Re-run `aivyx profile edit` and keep the header line."
+             Re-run `aivyx-pa profile edit` and keep the header line."
                 .to_string()
         })?
         .clone();
@@ -314,7 +314,7 @@ fn merge_edited_profile_into_aivyx_toml(
 }
 
 /// Synthesize a starter `[profile]` template when the existing
-/// `aivyx.toml` carries no `[profile]` section. Includes one
+/// `aivyx-pa.toml` carries no `[profile]` section. Includes one
 /// commented placeholder per category so the operator sees the
 /// full shape without typing it from scratch.
 fn default_profile_template() -> String {
@@ -323,7 +323,7 @@ fn default_profile_template() -> String {
      # Each field is optional; remove the lines you do not want\n\
      # to declare. Restart the daemon for changes to take effect.\n\
      \n\
-     # assistant_name = \"Aivyx\"\n\
+     # assistant_name = \"Aivyx PA\"\n\
      # operator_profile = \"\"\n\
      # communication_style = \"\"\n\
      # primary_use_cases = []\n\
@@ -398,7 +398,7 @@ fn open_in_editor(initial_contents: &str) -> Result<String, String> {
     Ok(edited)
 }
 
-/// Write the merged TOML back to `aivyx.toml` with `0600` permissions
+/// Write the merged TOML back to `aivyx-pa.toml` with `0600` permissions
 /// on Unix. Mirrors the init wizard's `write_config` pattern.
 fn write_aivyx_toml(path: &Path, contents: &str) -> Result<(), String> {
     std::fs::write(path, contents)
@@ -417,7 +417,7 @@ fn write_aivyx_toml(path: &Path, contents: &str) -> Result<(), String> {
 
 /// Load `AivyxConfig` with relaxed validation. The Profile-inspection
 /// path does not require an API key, a Telegram token, or a
-/// passphrase — it only needs the loader to parse `aivyx.toml` and
+/// passphrase — it only needs the loader to parse `aivyx-pa.toml` and
 /// populate the `profile` field (or synthesize the default).
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
     let opts = LoadOptions {
@@ -541,7 +541,7 @@ mod tests {
     fn show_default_profile_renders_aivyx_default_and_disabled_injection() {
         let out = render_profile_for_show(&default_profile());
         assert!(out.starts_with("Profile\n=======\n"));
-        assert!(out.contains("assistant_name             = \"Aivyx\" (default)"));
+        assert!(out.contains("assistant_name             = \"Aivyx PA\" (default)"));
         assert!(out.contains("operator_profile           = <unset>"));
         assert!(out.contains("communication_style        = <unset>"));
         assert!(out.contains("primary_use_cases          = <unset>"));
@@ -570,11 +570,11 @@ mod tests {
     }
 
     // -------------------------------------------------------------
-    // Task 3 — `aivyx profile edit` merge logic tests.
+    // Task 3 — `aivyx-pa profile edit` merge logic tests.
     // -------------------------------------------------------------
 
     const ORIGINAL_WITH_PROFILE: &str = "\
-# Generated by `aivyx init`
+# Generated by `aivyx-pa init`
 
 [agent]
 provider = \"anthropic\"
@@ -619,7 +619,7 @@ root = \"/home/op/aivyx-sandbox\"
         // The starter template is fully commented out so a no-op
         // editor save leaves the file with no operator-declared
         // content — same effect as not running edit at all.
-        assert!(extracted.contains("# assistant_name = \"Aivyx\""));
+        assert!(extracted.contains("# assistant_name = \"Aivyx PA\""));
         assert!(extracted.contains("# operator_profile = \"\""));
         assert!(extracted.contains("# communication_style = \"\""));
         assert!(extracted.contains("# primary_use_cases = []"));
@@ -664,7 +664,7 @@ behavioral_constraints = [\"never auto-commit\"]
         assert!(merged.contains("root = \"/home/op/aivyx-sandbox\""));
 
         // The leading comment from the original document survives.
-        assert!(merged.contains("# Generated by `aivyx init`"));
+        assert!(merged.contains("# Generated by `aivyx-pa init`"));
     }
 
     #[test]
@@ -805,7 +805,7 @@ assistant_name = \"oops\"
         );
         let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
         assert!(err.contains("not `ProfileHint`"));
-        assert!(err.contains("aivyx role import"));
+        assert!(err.contains("aivyx-pa role import"));
     }
 
     #[test]
@@ -814,7 +814,7 @@ assistant_name = \"oops\"
         let proposal = proposal_fixture("pp-y", "ProfileHint", "Pending", None);
         let err = parse_proposal_as_profile_hint(&proposal).unwrap_err();
         assert!(err.contains("only Approved proposals"));
-        assert!(err.contains("aivyx persona proposals approve"));
+        assert!(err.contains("aivyx-pa persona proposals approve"));
     }
 
     #[test]
@@ -841,13 +841,13 @@ assistant_name = \"oops\"
         // Backward-compat: old chain entries might not have
         // applied_op populated. Falls back to proposed_op.
         let mut proposal = proposal_fixture("pp-fallback", "ProfileHint", "Approved", None);
-        proposal.proposed_op = profile_hint_payload("AssistantName", "Aivyx");
+        proposal.proposed_op = profile_hint_payload("AssistantName", "Aivyx PA");
         let hint = parse_proposal_as_profile_hint(&proposal).unwrap();
         assert_eq!(
             hint.field,
             aivyx_core::skill_proposer::ProfileField::AssistantName
         );
-        assert_eq!(hint.suggested_value, "Aivyx");
+        assert_eq!(hint.suggested_value, "Aivyx PA");
     }
 
     // ----- Phase 119 Task 7 — scripted e2e (profile apply pipeline) -----
@@ -879,14 +879,14 @@ assistant_name = \"oops\"
         // Phase 118 chain shape.
         use crate::toml_edit_apply::apply_profile_hint_to_path;
         let dir = e2e_tempdir("apply-pipeline");
-        let aivyx_toml = dir.join("aivyx.toml");
+        let aivyx_toml = dir.join("aivyx-pa.toml");
         // The operator already has an existing [profile] section
         // with a different communication_style — apply must overwrite.
         std::fs::write(
             &aivyx_toml,
             "# Top-level comment retained across apply.\n\
              [profile]\n\
-             assistant_name = \"Aivyx\"\n\
+             assistant_name = \"Aivyx PA\"\n\
              communication_style = \"verbose\"\n",
         )
         .unwrap();
@@ -930,7 +930,7 @@ assistant_name = \"oops\"
             "old value must be overwritten"
         );
         // Other Profile field untouched.
-        assert!(post.contains("assistant_name = \"Aivyx\""));
+        assert!(post.contains("assistant_name = \"Aivyx PA\""));
         // Top-level comment retained.
         assert!(post.contains("# Top-level comment"));
 

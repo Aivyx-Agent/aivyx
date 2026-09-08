@@ -1,8 +1,8 @@
 //! `settings` — the configuration surface, in the Aivyx palette.
 //!
 //! Aivyx resolves config with a precedence chain — environment ›
-//! `aivyx.toml` › built-in defaults — and can report exactly where
-//! each value came from (the `aivyx config sources` output). This
+//! `aivyx-pa.toml` › built-in defaults — and can report exactly where
+//! each value came from (the `aivyx-pa config sources` output). This
 //! screen leans on that: a categories column on the left, and on the
 //! right the selected category's settings, each annotated with its
 //! **source** `(env)` / `(toml)` / `(default)`. The categories mirror
@@ -84,13 +84,13 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Settings", bold(FG)),
         ])),
         area,
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("~/.aivyx · aivyx.toml ", dim())]).right_aligned()),
+        Paragraph::new(Line::from(vec![Span::styled("~/.aivyx-pa · aivyx-pa.toml ", dim())]).right_aligned()),
         area,
     );
 }
@@ -101,14 +101,14 @@ fn precedence(f: &mut Frame, area: Rect) {
             Span::styled(" resolved ", dim()),
             Span::styled("env", Style::default().fg(LAV)),
             Span::styled(" › ", Style::default().fg(DIMMER)),
-            Span::styled("aivyx.toml", Style::default().fg(LAV)),
+            Span::styled("aivyx-pa.toml", Style::default().fg(LAV)),
             Span::styled(" › ", Style::default().fg(DIMMER)),
             Span::styled("defaults", Style::default().fg(DIM)),
         ])),
         area,
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("[ edit aivyx.toml ] ", bold(AMBER))]).right_aligned()),
+        Paragraph::new(Line::from(vec![Span::styled("[ edit aivyx-pa.toml ] ", bold(AMBER))]).right_aligned()),
         area,
     );
 }

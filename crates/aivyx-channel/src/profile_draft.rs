@@ -4,7 +4,7 @@
 //! builder. Chapter Genesis (GE.1) lifted it out of the
 //! `aivyx-cli` binary into `aivyx-channel` — next to
 //! [`crate::persona_seed_draft`] — so the **same drafter** backs
-//! both the `aivyx init` CLI wizard and the daemon's
+//! both the `aivyx-pa init` CLI wizard and the daemon's
 //! `DraftProfile` IPC (the Studio onboarding flow, GE.2/GE.3).
 //! The two drafters are complementary: this one drafts the
 //! operator-**declared** P13 Profile (six fields); the persona

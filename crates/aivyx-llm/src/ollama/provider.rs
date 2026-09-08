@@ -68,7 +68,7 @@ pub const AUTO_NUM_CTX_CAP: u32 = 16_384;
 /// normal laptop (~5 GB), big enough to drive the agent's tool-calling, and in
 /// the family verified live against the thinking + non-terminal-tool-call
 /// fixes and auto-`num_ctx` (qwen3 at 9B and 27B). The wizard defaults to it
-/// and offers to pull it; `aivyx doctor` checks for a usable model against it.
+/// and offers to pull it; `aivyx-pa doctor` checks for a usable model against it.
 pub const RECOMMENDED_LOCAL_MODEL: &str = "qwen3:8b";
 
 /// #17c — how many times to resample after Ollama rejects the model's
@@ -92,7 +92,7 @@ fn is_ollama_tool_parse_error(message: &str) -> bool {
 
 /// Ollama-specific generation options that ride in the
 /// `options: {...}` block of the `/api/chat` request body.
-/// Operators set these via `[ollama]` in `aivyx.toml` (Phase 121
+/// Operators set these via `[ollama]` in `aivyx-pa.toml` (Phase 121
 /// Task 6); `None` values are omitted from the wire form so
 /// Ollama's own defaults apply.
 ///
@@ -497,7 +497,7 @@ impl crate::LlmProvider for OllamaProvider {
                 {
                     attempt += 1;
                     eprintln!(
-                        "aivyx ollama: model emitted a malformed tool call; \
+                        "aivyx-pa ollama: model emitted a malformed tool call; \
                          resampling (retry {attempt}/{MAX_TOOL_PARSE_RETRIES})"
                     );
                     continue;

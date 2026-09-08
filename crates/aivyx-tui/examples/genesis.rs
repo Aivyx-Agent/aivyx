@@ -4,7 +4,7 @@
 //! guided first launch where the End User shapes *the* assistant: its
 //! identity (Profile, P13), a Persona seed (P14, which then grows from
 //! use), a default role + trust posture, and a provider. It's the
-//! `aivyx init` wizard + the Phase 66 templates + the Phase 181 guided
+//! `aivyx-pa init` wizard + the Phase 66 templates + the Phase 181 guided
 //! identity builder (optionally LLM-assisted — describe it in words and
 //! Aivyx drafts the rest). A stepper on top, the current step's form on
 //! the left, and a live "your assistant" preview on the right.
@@ -77,7 +77,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Genesis", bold(FG)),
             Span::styled("   set up your assistant", dim()),
         ])),

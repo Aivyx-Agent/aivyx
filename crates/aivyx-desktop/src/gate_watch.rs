@@ -26,10 +26,10 @@ use crate::UserEvent;
 
 const WS_URL: &str = "ws://127.0.0.1:7843/ws";
 
-/// The daemon ws endpoint, derived from `AIVYX_STUDIO_URL` when set
+/// The daemon ws endpoint, derived from `AIVYX_PA_STUDIO_URL` when set
 /// (remote appliance) — same override the webview honors in `main.rs`.
 fn ws_url() -> String {
-    match std::env::var("AIVYX_STUDIO_URL") {
+    match std::env::var("AIVYX_PA_STUDIO_URL") {
         Ok(u) => {
             let host = u
                 .trim_start_matches("http://")
@@ -57,13 +57,13 @@ pub async fn run(proxy: EventLoopProxy<UserEvent>) {
         if let Err(e) = watch_once(&proxy).await {
             let msg = e.to_string();
             if msg.contains("401") {
-                if std::env::var("AIVYX_STUDIO_TOKEN").is_ok() {
+                if std::env::var("AIVYX_PA_STUDIO_TOKEN").is_ok() {
                     eprintln!(
-                        "aivyx-desktop: gate watcher: the Studio rejected                          AIVYX_STUDIO_TOKEN (401) — check the token.                          Notifications disabled for this run."
+                        "aivyx-desktop: gate watcher: the Studio rejected                          AIVYX_PA_STUDIO_TOKEN (401) — check the token.                          Notifications disabled for this run."
                     );
                 } else {
                     eprintln!(
-                        "aivyx-desktop: gate watcher: the Studio requires a                          token (401) — set AIVYX_STUDIO_TOKEN to enable gate                          notifications. Disabled for this run."
+                        "aivyx-desktop: gate watcher: the Studio requires a                          token (401) — set AIVYX_PA_STUDIO_TOKEN to enable gate                          notifications. Disabled for this run."
                     );
                 }
                 return;
@@ -77,10 +77,10 @@ pub async fn run(proxy: EventLoopProxy<UserEvent>) {
 /// One connection's lifetime: handshake, then poll missions and notify on each
 /// newly-seen gate until the socket drops.
 async fn watch_once(proxy: &EventLoopProxy<UserEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    // `AIVYX_STUDIO_TOKEN` authenticates against a Gatehouse-protected
+    // `AIVYX_PA_STUDIO_TOKEN` authenticates against a Gatehouse-protected
     // Studio (the daemon accepts `Authorization: Bearer <token>`).
     let mut request = ws_url().into_client_request()?;
-    if let Ok(token) = std::env::var("AIVYX_STUDIO_TOKEN") {
+    if let Ok(token) = std::env::var("AIVYX_PA_STUDIO_TOKEN") {
         request.headers_mut().insert(
             "Authorization",
             format!("Bearer {token}").parse()?,
@@ -146,7 +146,7 @@ fn notify_gate(goal: &str, gate: &str, proxy: EventLoopProxy<UserEvent>) {
     let body = format!("{goal}\n⚑ {gate}");
     std::thread::spawn(move || {
         match notify_rust::Notification::new()
-            .summary("Aivyx — approval needed")
+            .summary("Aivyx PA — approval needed")
             .body(&body)
             .action("open", "Open Studio")
             .show()

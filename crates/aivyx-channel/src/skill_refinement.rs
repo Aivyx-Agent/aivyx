@@ -96,7 +96,7 @@ pub async fn propose_skill_refinements(
     {
         Ok(u) => u,
         Err(e) => {
-            eprintln!("aivyx skill-refinement: underperformers query failed: {e}");
+            eprintln!("aivyx-pa skill-refinement: underperformers query failed: {e}");
             return stat;
         }
     };
@@ -155,7 +155,7 @@ pub async fn propose_skill_refinements(
             .append_pending(append_id.clone(), now_ms, source_label.to_string(), append_op)
             .await
         {
-            eprintln!("aivyx skill-refinement: append (v2) failed for {skill_name}: {e}");
+            eprintln!("aivyx-pa skill-refinement: append (v2) failed for {skill_name}: {e}");
             continue;
         }
 
@@ -175,7 +175,7 @@ pub async fn propose_skill_refinements(
         {
             // The v2 half is already filed (one-way linkage); the operator
             // can still review it. Log and move on.
-            eprintln!("aivyx skill-refinement: retire (v1) failed for {skill_name}: {e}");
+            eprintln!("aivyx-pa skill-refinement: retire (v1) failed for {skill_name}: {e}");
         }
         stat.filed += 1;
     }

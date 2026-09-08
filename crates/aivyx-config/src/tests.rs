@@ -17,8 +17,8 @@
 //!    `source == FieldSource::Toml`.
 //! 3. **Env-over-TOML.** Both sources hold the same field; assert the
 //!    env value wins and `source == FieldSource::Env`.
-//! 4. **Invalid parsing.** Set `AIVYX_MEMORY_MAX_PER_TOPIC=not-a-num`
-//!    and `AIVYX_TELEGRAM_CHAT_ID=oops`; assert typed `Invalid`.
+//! 4. **Invalid parsing.** Set `AIVYX_PA_MEMORY_MAX_PER_TOPIC=not-a-num`
+//!    and `AIVYX_PA_TELEGRAM_CHAT_ID=oops`; assert typed `Invalid`.
 //! 5. **Missing required field.** Ask for `require_api_key = true`
 //!    with no source supplying one; assert `Missing { field:
 //!    "anthropic_api_key" }`.
@@ -55,7 +55,7 @@ fn env_lock() -> MutexGuard<'static, ()> {
 thread_local! {
     /// `true` while an [`EnvScope`] is live on this thread. The loader
     /// helpers assert on it so a test that reads ambient env (HOME,
-    /// `AIVYX_*`) without holding the env-guard fails *deterministically*
+    /// `AIVYX_PA_*`) without holding the env-guard fails *deterministically*
     /// here instead of flaking when it races a parallel env-mutating test.
     static ENV_SCOPE_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -90,24 +90,24 @@ impl EnvScope {
         ENV_SCOPE_ACTIVE.with(|f| f.set(true));
         let vars = [
             "ANTHROPIC_API_KEY",
-            "AIVYX_MODEL",
-            "AIVYX_SYSTEM_PROMPT",
-            "AIVYX_FS_ROOT",
-            "AIVYX_WORKSPACE",
-            "AIVYX_STORAGE_PATH",
+            "AIVYX_PA_MODEL",
+            "AIVYX_PA_SYSTEM_PROMPT",
+            "AIVYX_PA_FS_ROOT",
+            "AIVYX_PA_WORKSPACE",
+            "AIVYX_PA_STORAGE_PATH",
             "XDG_DATA_HOME",
             "HOME",
-            "AIVYX_MEMORY_MAX_PER_TOPIC",
-            "AIVYX_PASSPHRASE",
-            "AIVYX_TELEGRAM_TOKEN",
-            "AIVYX_TELEGRAM_CHAT_ID",
+            "AIVYX_PA_MEMORY_MAX_PER_TOPIC",
+            "AIVYX_PA_PASSPHRASE",
+            "AIVYX_PA_TELEGRAM_TOKEN",
+            "AIVYX_PA_TELEGRAM_CHAT_ID",
             // Phase 11 Task 1: scope the role override env var into
             // the env-guard so role-tests don't leak state across
             // parallel cargo-test runs.
-            "AIVYX_ROLE",
-            "AIVYX_OPENAI_API_KEY",
-            "AIVYX_OPENAI_BASE_URL",
-            "AIVYX_PROVIDER",
+            "AIVYX_PA_ROLE",
+            "AIVYX_PA_OPENAI_API_KEY",
+            "AIVYX_PA_OPENAI_BASE_URL",
+            "AIVYX_PA_PROVIDER",
         ];
         let saved: Vec<_> = vars
             .iter()
@@ -234,14 +234,14 @@ fn uuid_like() -> String {
 fn env_only_populates_every_field_with_env_source() {
     let env = EnvScope::new();
     env.set("ANTHROPIC_API_KEY", "sk-test-env-key");
-    env.set("AIVYX_MODEL", "claude-from-env");
-    env.set("AIVYX_SYSTEM_PROMPT", "env prompt");
-    env.set("AIVYX_FS_ROOT", "/tmp/env-fs-root");
-    env.set("AIVYX_STORAGE_PATH", "/tmp/env-store.redb");
-    env.set("AIVYX_MEMORY_MAX_PER_TOPIC", "1234");
-    env.set("AIVYX_PASSPHRASE", "env-passphrase");
-    env.set("AIVYX_TELEGRAM_TOKEN", "123:env-token");
-    env.set("AIVYX_TELEGRAM_CHAT_ID", "42");
+    env.set("AIVYX_PA_MODEL", "claude-from-env");
+    env.set("AIVYX_PA_SYSTEM_PROMPT", "env prompt");
+    env.set("AIVYX_PA_FS_ROOT", "/tmp/env-fs-root");
+    env.set("AIVYX_PA_STORAGE_PATH", "/tmp/env-store.redb");
+    env.set("AIVYX_PA_MEMORY_MAX_PER_TOPIC", "1234");
+    env.set("AIVYX_PA_PASSPHRASE", "env-passphrase");
+    env.set("AIVYX_PA_TELEGRAM_TOKEN", "123:env-token");
+    env.set("AIVYX_PA_TELEGRAM_CHAT_ID", "42");
 
     let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
         .expect("load should succeed");
@@ -272,10 +272,10 @@ fn env_only_populates_every_field_with_env_source() {
     assert_eq!(chat.source, FieldSource::Env);
     assert_eq!(chat.value, 42);
 
-    // Phase 11 Task 1: with no `[[role]]` entries and no AIVYX_ROLE
+    // Phase 11 Task 1: with no `[[role]]` entries and no AIVYX_PA_ROLE
     // override, the backwards-compat bridge must synthesize an
     // implicit `default` role whose system_prompt mirrors the
-    // legacy env-sourced value. The test does not set AIVYX_ROLE, so
+    // legacy env-sourced value. The test does not set AIVYX_PA_ROLE, so
     // the active role falls through to DEFAULT_ROLE_NAME.
     assert_eq!(cfg.roles.len(), 1, "exactly one synthesized role");
     let default_role = cfg
@@ -299,11 +299,11 @@ fn env_only_populates_every_field_with_env_source() {
 
 #[test]
 fn env_empty_string_is_treated_as_unset() {
-    // Phase 8 behavior preserved: `export AIVYX_PASSPHRASE=` with no
+    // Phase 8 behavior preserved: `export AIVYX_PA_PASSPHRASE=` with no
     // value should not populate the passphrase field. Tests the
     // `env_string` helper's empty-is-unset rule.
     let env = EnvScope::new();
-    env.set("AIVYX_PASSPHRASE", "");
+    env.set("AIVYX_PA_PASSPHRASE", "");
 
     let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
         .expect("load should succeed");
@@ -320,7 +320,7 @@ fn env_empty_string_is_treated_as_unset() {
 fn toml_only_populates_fields_with_toml_source() {
     let env = EnvScope::new();
     let tmp = TempDir::new("toml-only");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -344,7 +344,7 @@ max_per_topic = 777
 token = "toml:123:abc"
 chat_id = 99
 
-[aivyx]
+[aivyx_pa]
 passphrase = "toml-passphrase"
 "#,
     )
@@ -517,7 +517,7 @@ fn discord_and_slack_team_command_allowed_senders_round_trip_from_toml() {
 fn env_beats_toml_when_both_set() {
     let env = EnvScope::new();
     let tmp = TempDir::new("precedence");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -530,9 +530,9 @@ chat_id = 1
     )
     .unwrap();
 
-    env.set("AIVYX_MODEL", "env-wins");
-    env.set("AIVYX_TELEGRAM_TOKEN", "env-token");
-    env.set("AIVYX_TELEGRAM_CHAT_ID", "2");
+    env.set("AIVYX_PA_MODEL", "env-wins");
+    env.set("AIVYX_PA_TELEGRAM_TOKEN", "env-token");
+    env.set("AIVYX_PA_TELEGRAM_CHAT_ID", "2");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -576,14 +576,14 @@ fn defaults_win_when_no_source_supplies_value() {
     assert_eq!(cfg.system_prompt.source, FieldSource::Default);
     assert_eq!(cfg.system_prompt.value, DEFAULT_SYSTEM_PROMPT);
     assert_eq!(cfg.fs_root.source, FieldSource::Default);
-    assert!(cfg.fs_root.value.ends_with("aivyx-sandbox"));
+    assert!(cfg.fs_root.value.ends_with("aivyx-pa-sandbox"));
     assert_eq!(cfg.storage_path.source, FieldSource::Default);
-    // Default path without XDG_DATA_HOME should end in .local/share/aivyx/store.redb
+    // Default path without XDG_DATA_HOME should end in .local/share/aivyx-pa/store.redb
     assert!(cfg
         .storage_path
         .value
         .to_string_lossy()
-        .ends_with(".local/share/aivyx/store.redb"));
+        .ends_with(".local/share/aivyx-pa/store.redb"));
     assert_eq!(
         cfg.memory_max_per_topic.source,
         FieldSource::Default
@@ -700,7 +700,7 @@ fn xdg_data_home_wins_over_home_for_storage_default() {
     let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap();
     assert_eq!(
         cfg.storage_path.value,
-        PathBuf::from("/tmp/xdg/aivyx/store.redb")
+        PathBuf::from("/tmp/xdg/aivyx-pa/store.redb")
     );
     assert_eq!(cfg.storage_path.source, FieldSource::Default);
 
@@ -729,7 +729,7 @@ fn no_home_and_no_fs_root_override_is_typed_error() {
 #[test]
 fn unparseable_memory_cap_is_typed_invalid_error() {
     let env = EnvScope::new();
-    env.set("AIVYX_MEMORY_MAX_PER_TOPIC", "not-a-number");
+    env.set("AIVYX_PA_MEMORY_MAX_PER_TOPIC", "not-a-number");
 
     let err = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
         .expect_err("should fail parsing");
@@ -750,7 +750,7 @@ fn unparseable_memory_cap_is_typed_invalid_error() {
 #[test]
 fn unparseable_telegram_chat_id_is_typed_invalid_error() {
     let env = EnvScope::new();
-    env.set("AIVYX_TELEGRAM_CHAT_ID", "oops");
+    env.set("AIVYX_PA_TELEGRAM_CHAT_ID", "oops");
 
     let err = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
         .expect_err("should fail parsing");
@@ -768,7 +768,7 @@ fn unparseable_telegram_chat_id_is_typed_invalid_error() {
 fn malformed_toml_is_typed_parse_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("malformed");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "this is : not : valid TOML ][").unwrap();
 
     let opts = LoadOptions {
@@ -838,7 +838,7 @@ fn validate_errors_when_required_api_key_missing() {
 fn validate_errors_when_required_telegram_token_missing() {
     let env = EnvScope::new();
     // Set only the chat_id — token missing everywhere.
-    env.set("AIVYX_TELEGRAM_CHAT_ID", "1");
+    env.set("AIVYX_PA_TELEGRAM_CHAT_ID", "1");
     let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap();
     let opts = LoadOptions {
         toml_path: None,
@@ -861,7 +861,7 @@ fn validate_errors_when_required_telegram_token_missing() {
 fn validate_succeeds_when_everything_required_is_set() {
     let env = EnvScope::new();
     env.set("ANTHROPIC_API_KEY", "sk-x");
-    env.set("AIVYX_TELEGRAM_TOKEN", "t-x");
+    env.set("AIVYX_PA_TELEGRAM_TOKEN", "t-x");
     let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap();
     let opts = LoadOptions {
         toml_path: None,
@@ -1026,7 +1026,7 @@ async fn non_utf8_secret_in_store_is_typed_error() {
 //   - Q4 resolution (Option B): a config with both legacy
 //     `system_prompt` *and* explicit `[[role]]` entries loads
 //     successfully with a non-fatal warning on `AivyxConfig::warnings`.
-//   - Active-role priority: `LoadOptions::role_override` > `AIVYX_ROLE`
+//   - Active-role priority: `LoadOptions::role_override` > `AIVYX_PA_ROLE`
 //     env var > `DEFAULT_ROLE_NAME`.
 //   - Backwards compat: zero `[[role]]` entries synthesize an implicit
 //     `default` role that inherits the legacy `system_prompt`'s
@@ -1041,7 +1041,7 @@ async fn non_utf8_secret_in_store_is_typed_error() {
 fn explicit_roles_from_toml_parse_into_role_map() {
     let env = EnvScope::new();
     let tmp = TempDir::new("roles-toml");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1063,7 +1063,7 @@ memory_topic_prefix = "researcher/"
     // Select `coder` explicitly via env var so the load succeeds;
     // neither `coder` nor `researcher` is the default role name so
     // omitting the selector would fail `UnknownRole`.
-    env.set("AIVYX_ROLE", "coder");
+    env.set("AIVYX_PA_ROLE", "coder");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1116,7 +1116,7 @@ memory_topic_prefix = "researcher/"
     let names: Vec<&str> = cfg.roles.keys().map(String::as_str).collect();
     assert_eq!(names, vec!["coder", "researcher"]);
 
-    // Active role reflects the AIVYX_ROLE env var.
+    // Active role reflects the AIVYX_PA_ROLE env var.
     assert_eq!(cfg.active_role.value, "coder");
     assert_eq!(cfg.active_role.source, FieldSource::Env);
 
@@ -1130,7 +1130,7 @@ memory_topic_prefix = "researcher/"
 fn role_without_tool_allowlist_key_is_allow_all() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-allow-all");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1140,7 +1140,7 @@ system_prompt = "no allowlist key at all"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "open");
+    env.set("AIVYX_PA_ROLE", "open");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1168,7 +1168,7 @@ system_prompt = "no allowlist key at all"
 fn role_with_empty_tool_allowlist_is_deny_all() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-deny-all");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1179,7 +1179,7 @@ tool_allowlist = []
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "locked");
+    env.set("AIVYX_PA_ROLE", "locked");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1202,12 +1202,12 @@ tool_allowlist = []
 }
 
 /// Active-role priority: `LoadOptions::role_override` beats the
-/// `AIVYX_ROLE` env var.
+/// `AIVYX_PA_ROLE` env var.
 #[test]
 fn role_override_beats_env_var() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-override");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1221,7 +1221,7 @@ system_prompt = "second"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "first");
+    env.set("AIVYX_PA_ROLE", "first");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1239,12 +1239,12 @@ system_prompt = "second"
 }
 
 /// Active-role priority: when `LoadOptions::role_override` is `None`
-/// the `AIVYX_ROLE` env var is honored.
+/// the `AIVYX_PA_ROLE` env var is honored.
 #[test]
 fn env_var_sets_active_role_when_no_override() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-env");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1258,7 +1258,7 @@ system_prompt = "secondary"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "secondary");
+    env.set("AIVYX_PA_ROLE", "secondary");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1282,7 +1282,7 @@ system_prompt = "secondary"
 fn active_role_not_in_config_is_typed_unknown_role_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-unknown");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1292,7 +1292,7 @@ system_prompt = "real"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "ghost-role");
+    env.set("AIVYX_PA_ROLE", "ghost-role");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1323,7 +1323,7 @@ system_prompt = "real"
 fn legacy_system_prompt_with_explicit_roles_warns_but_loads() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-legacy-conflict");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1335,8 +1335,8 @@ system_prompt = "from the explicit role"
     .unwrap();
     // Legacy env-level prompt — user forgot to remove it when
     // adopting roles.
-    env.set("AIVYX_SYSTEM_PROMPT", "legacy value that will be shadowed");
-    env.set("AIVYX_ROLE", "explicit");
+    env.set("AIVYX_PA_SYSTEM_PROMPT", "legacy value that will be shadowed");
+    env.set("AIVYX_PA_ROLE", "explicit");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1376,7 +1376,7 @@ system_prompt = "from the explicit role"
 fn explicit_role_with_default_legacy_prompt_emits_no_warning() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-silent");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1386,10 +1386,10 @@ system_prompt = "brand new role, no legacy baggage"
 "#,
     )
     .unwrap();
-    // Deliberately DO NOT set AIVYX_SYSTEM_PROMPT. The legacy field
+    // Deliberately DO NOT set AIVYX_PA_SYSTEM_PROMPT. The legacy field
     // falls through to DEFAULT_SYSTEM_PROMPT with source `Default`,
     // which must not trip the warning.
-    env.set("AIVYX_ROLE", "alpha");
+    env.set("AIVYX_PA_ROLE", "alpha");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1417,7 +1417,7 @@ system_prompt = "brand new role, no legacy baggage"
 fn role_with_only_name_populates_defaults_for_optional_fields() {
     let env = EnvScope::new();
     let tmp = TempDir::new("role-minimal");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1426,7 +1426,7 @@ name = "bare"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "bare");
+    env.set("AIVYX_PA_ROLE", "bare");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1515,7 +1515,7 @@ fn legacy_role_loads_with_default_capability_envelope() {
 
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13-legacy-role");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1525,7 +1525,7 @@ system_prompt = "You are a pair-programmer."
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "coder");
+    env.set("AIVYX_PA_ROLE", "coder");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1565,7 +1565,7 @@ system_prompt = "You are a pair-programmer."
 fn explicit_capability_scopes_parse_at_load_time() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13-scopes");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1576,7 +1576,7 @@ capability_scopes = ["fs.read", "shell.exec:git", "memory.write"]
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "shellrunner");
+    env.set("AIVYX_PA_ROLE", "shellrunner");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1609,7 +1609,7 @@ capability_scopes = ["fs.read", "shell.exec:git", "memory.write"]
 fn unknown_capability_scope_fails_loudly_at_load_time() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13-bad-scope");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1620,7 +1620,7 @@ capability_scopes = ["fs.read", "this.is.not.a.real.base"]
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "broken");
+    env.set("AIVYX_PA_ROLE", "broken");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1665,7 +1665,7 @@ fn trust_ceiling_parses_all_four_tiers_and_rejects_garbage() {
         ("Untrusted", TrustTier::Untrusted),
     ] {
         let tmp = TempDir::new(&format!("phase13-tier-{tier_str}"));
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             format!(
@@ -1678,7 +1678,7 @@ trust_ceiling = "{tier_str}"
             ),
         )
         .unwrap();
-        env.set("AIVYX_ROLE", "tiered");
+        env.set("AIVYX_PA_ROLE", "tiered");
 
         let opts = LoadOptions {
             toml_path: Some(toml_path),
@@ -1698,7 +1698,7 @@ trust_ceiling = "{tier_str}"
     // Garbage tier name surfaces as a TomlParse error (serde
     // rejects the unknown variant during `toml::from_str`).
     let tmp = TempDir::new("phase13-tier-garbage");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1709,7 +1709,7 @@ trust_ceiling = "Goat"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "tiered");
+    env.set("AIVYX_PA_ROLE", "tiered");
     let opts = LoadOptions {
         toml_path: Some(toml_path),
         require_api_key: false,
@@ -1736,7 +1736,7 @@ trust_ceiling = "Goat"
 fn parent_role_pointing_at_unknown_role_fails_loudly() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13-parent-typo");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1751,7 +1751,7 @@ parent_role = "no-such-role"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "child");
+    env.set("AIVYX_PA_ROLE", "child");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1788,7 +1788,7 @@ fn parent_role_cycle_is_detected_at_load_time() {
     {
         let env = EnvScope::new();
         let tmp = TempDir::new("phase13-self-cycle");
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             r#"
@@ -1799,7 +1799,7 @@ parent_role = "selfish"
 "#,
         )
         .unwrap();
-        env.set("AIVYX_ROLE", "selfish");
+        env.set("AIVYX_PA_ROLE", "selfish");
         let opts = LoadOptions {
             toml_path: Some(toml_path),
             require_api_key: false,
@@ -1827,7 +1827,7 @@ parent_role = "selfish"
     {
         let env = EnvScope::new();
         let tmp = TempDir::new("phase13-two-hop-cycle");
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             r#"
@@ -1843,7 +1843,7 @@ parent_role = "a"
 "#,
         )
         .unwrap();
-        env.set("AIVYX_ROLE", "a");
+        env.set("AIVYX_PA_ROLE", "a");
         let opts = LoadOptions {
             toml_path: Some(toml_path),
             require_api_key: false,
@@ -1878,7 +1878,7 @@ parent_role = "a"
 fn child_role_widening_parent_envelope_fails_at_load_time() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13t2-widen");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -1895,7 +1895,7 @@ capability_scopes = ["fs.read", "shell.exec"]
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "rogue");
+    env.set("AIVYX_PA_ROLE", "rogue");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -1937,7 +1937,7 @@ capability_scopes = ["fs.read", "shell.exec"]
 fn attenuation_walk_skips_empty_parent_to_grandparent() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13t2-skip-empty");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     // grandparent: fs.read only
     // parent: empty (sentinel — adds nothing)
     // child: tries to declare net.fetch
@@ -1964,7 +1964,7 @@ capability_scopes = ["net.fetch"]
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "child");
+    env.set("AIVYX_PA_ROLE", "child");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -2003,7 +2003,7 @@ capability_scopes = ["net.fetch"]
 fn child_qualifier_under_unqualified_parent_loads_cleanly() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13t2-qualifier-attenuation");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2020,7 +2020,7 @@ capability_scopes = ["fs.read:/etc/**"]
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "narrow");
+    env.set("AIVYX_PA_ROLE", "narrow");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -2051,7 +2051,7 @@ capability_scopes = ["fs.read:/etc/**"]
 fn implicit_parent_default_kicks_in_when_default_role_is_declared() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase13-implicit-parent");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2065,7 +2065,7 @@ system_prompt = "coder prompt"
 "#,
     )
     .unwrap();
-    env.set("AIVYX_ROLE", "coder");
+    env.set("AIVYX_PA_ROLE", "coder");
 
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -2106,7 +2106,7 @@ system_prompt = "coder prompt"
 fn mcp_server_entries_parse_from_toml() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-cfg");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2166,7 +2166,7 @@ fn mcp_server_env_literals_and_interpolation() {
     let env = EnvScope::new();
     env.set("CONDUIT_TEST_TOKEN", "ghp_secret123");
     let tmp = TempDir::new("mcp-env");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2208,7 +2208,7 @@ env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${CONDUIT_TEST_TOKEN}", LOG = "debug" }
 fn mcp_server_env_unset_var_is_a_config_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-env-unset");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2246,7 +2246,7 @@ env = { TOKEN = "${CONDUIT_DEFINITELY_UNSET_VAR}" }
 fn mcp_server_env_dollar_escape_is_literal() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-env-escape");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2281,7 +2281,7 @@ fn mcp_server_headers_interpolate_for_http() {
     let env = EnvScope::new();
     env.set("CONDUIT_BEARER", "tok-xyz");
     let tmp = TempDir::new("mcp-headers");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2323,7 +2323,7 @@ headers = { Authorization = "Bearer ${CONDUIT_BEARER}", X-Trace = "on" }
 fn mcp_server_headers_rejected_on_stdio() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-headers-stdio");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2358,7 +2358,7 @@ headers = { Authorization = "Bearer x" }
 fn no_mcp_server_section_gives_empty_vec() {
     let env = EnvScope::new();
     let tmp = TempDir::new("no-mcp");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2386,7 +2386,7 @@ api_key = "sk-test"
 fn mcp_server_sse_transport_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-sse");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2436,7 +2436,7 @@ command = "npx"
 fn mcp_server_http_transport_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-http");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2479,7 +2479,7 @@ url = "https://example.com/mcp2"
 fn mcp_server_http_missing_url_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-http-nourl");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "[anthropic]\napi_key = \"sk-test\"\n\n[[mcp_server]]\nname = \"x\"\ntransport = \"http\"\n",
@@ -2502,7 +2502,7 @@ fn mcp_server_http_missing_url_is_error() {
 fn mcp_server_sse_missing_url_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-sse-no-url");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2540,7 +2540,7 @@ transport = "sse"
 fn tool_process_basic_entry_loads() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-basic");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2633,7 +2633,7 @@ fn deckhand_applications_binary_path_override() {
 fn tool_process_disabled_entries_filtered() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-disabled");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2670,7 +2670,7 @@ enabled = false
 fn tool_process_sandbox_block_loads() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-sandbox");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2712,7 +2712,7 @@ args = ["--ro-bind", "/", "/", "--proc", "/proc", "--unshare-all", "--die-with-p
 fn tool_process_sandbox_empty_wrapper_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-sandbox-empty");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2748,7 +2748,7 @@ wrapper = "   "
 fn tool_process_without_sandbox_is_none() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-no-sandbox");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2782,7 +2782,7 @@ command = "python3"
 fn tool_process_empty_command_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tool-process-empty-cmd");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2819,7 +2819,7 @@ command = "   "
 fn mcp_server_sandbox_block_loads() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-sandbox-basic");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2860,7 +2860,7 @@ args = ["--ro-bind", "/", "/", "--proc", "/proc", "--unshare-all", "--die-with-p
 fn mcp_server_sandbox_empty_wrapper_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-sandbox-empty-wrapper");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2898,7 +2898,7 @@ fn mcp_server_sandbox_on_sse_transport_is_error() {
     // is operator confusion the loader should call out.
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-sandbox-sse");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2938,7 +2938,7 @@ wrapper = "bwrap"
 fn mcp_server_without_sandbox_is_none() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-no-sandbox");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -2972,7 +2972,7 @@ command = "/usr/local/bin/mcp"
 fn mcp_server_stdio_missing_command_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-stdio-no-cmd");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3019,7 +3019,7 @@ fn provider_defaults_to_anthropic() {
 #[test]
 fn provider_from_env_var() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "openai");
+    env.set("AIVYX_PA_PROVIDER", "openai");
     let opts = LoadOptions::test_env_only();
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     assert_eq!(cfg.provider.value, ProviderKind::OpenAi);
@@ -3030,7 +3030,7 @@ fn provider_from_env_var() {
 #[test]
 fn provider_invalid_env_var_is_error() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "gemini");
+    env.set("AIVYX_PA_PROVIDER", "gemini");
     let opts = LoadOptions::test_env_only();
     let err = AivyxConfig::load_from_env_and_toml(&opts).unwrap_err();
     assert!(matches!(err, ConfigError::Invalid { field: "provider", .. }));
@@ -3041,7 +3041,7 @@ fn provider_invalid_env_var_is_error() {
 fn provider_from_toml() {
     let env = EnvScope::new();
     let tmp = TempDir::new("provider-toml");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3083,7 +3083,7 @@ fn openai_constrain_tool_calls_round_trips_and_defaults_off() {
 
     // Omitted → false.
     let tmp = TempDir::new("emboss-constrain-default");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3111,7 +3111,7 @@ base_url = "http://localhost:8080"
 
     // Set → true.
     let tmp2 = TempDir::new("emboss-constrain-on");
-    let toml_path2 = tmp2.path().join("aivyx.toml");
+    let toml_path2 = tmp2.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path2,
         r#"
@@ -3140,9 +3140,9 @@ constrain_tool_calls = true
 #[test]
 fn openai_api_key_from_env_overrides_toml() {
     let env = EnvScope::new();
-    env.set("AIVYX_OPENAI_API_KEY", "sk-env-wins");
+    env.set("AIVYX_PA_OPENAI_API_KEY", "sk-env-wins");
     let tmp = TempDir::new("openai-env-over-toml");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3168,7 +3168,7 @@ api_key = "sk-toml-loses"
 #[test]
 fn validate_requires_openai_key_when_provider_is_openai() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "openai");
+    env.set("AIVYX_PA_PROVIDER", "openai");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3186,8 +3186,8 @@ fn validate_requires_openai_key_when_provider_is_openai() {
 #[test]
 fn validate_does_not_require_anthropic_key_when_provider_is_openai() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "openai");
-    env.set("AIVYX_OPENAI_API_KEY", "sk-test");
+    env.set("AIVYX_PA_PROVIDER", "openai");
+    env.set("AIVYX_PA_OPENAI_API_KEY", "sk-test");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3206,7 +3206,7 @@ fn validate_does_not_require_anthropic_key_when_provider_is_openai() {
 #[test]
 fn ollama_provider_from_env() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "ollama");
+    env.set("AIVYX_PA_PROVIDER", "ollama");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3225,7 +3225,7 @@ fn ollama_provider_from_env() {
 fn ollama_provider_from_toml() {
     let env = EnvScope::new();
     let tmp = TempDir::new("ollama-toml");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3253,7 +3253,7 @@ model = "llama3.1"
 #[test]
 fn ollama_validate_does_not_require_api_key() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "ollama");
+    env.set("AIVYX_PA_PROVIDER", "ollama");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3271,8 +3271,8 @@ fn ollama_validate_does_not_require_api_key() {
 #[test]
 fn ollama_accepts_optional_api_key() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "ollama");
-    env.set("AIVYX_OPENAI_API_KEY", "sk-optional");
+    env.set("AIVYX_PA_PROVIDER", "ollama");
+    env.set("AIVYX_PA_OPENAI_API_KEY", "sk-optional");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3330,7 +3330,7 @@ fn provider_kind_default_context_window_groups_local_llm_providers() {
 #[test]
 fn llamacpp_provider_from_env() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "llamacpp");
+    env.set("AIVYX_PA_PROVIDER", "llamacpp");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3352,7 +3352,7 @@ fn llamacpp_provider_serde_aliases_parse() {
     for alias in ["llamacpp", "llama-cpp", "llama_cpp"] {
         let env = EnvScope::new();
         let tmp = TempDir::new(&format!("llamacpp-toml-{alias}"));
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             format!(
@@ -3385,7 +3385,7 @@ model = "qwen3:32b"
 #[test]
 fn llamacpp_validate_does_not_require_api_key() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "llamacpp");
+    env.set("AIVYX_PA_PROVIDER", "llamacpp");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3403,7 +3403,7 @@ fn llamacpp_validate_does_not_require_api_key() {
 #[test]
 fn jan_provider_from_env() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "jan");
+    env.set("AIVYX_PA_PROVIDER", "jan");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3422,7 +3422,7 @@ fn jan_provider_from_env() {
 fn jan_provider_from_toml() {
     let env = EnvScope::new();
     let tmp = TempDir::new("jan-toml");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3449,7 +3449,7 @@ model = "qwen2.5-7b-instruct"
 #[test]
 fn jan_validate_does_not_require_api_key() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "jan");
+    env.set("AIVYX_PA_PROVIDER", "jan");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3471,7 +3471,7 @@ fn jan_validate_does_not_require_api_key() {
 #[test]
 fn mistralrs_provider_from_env() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "mistralrs");
+    env.set("AIVYX_PA_PROVIDER", "mistralrs");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3491,7 +3491,7 @@ fn mistralrs_provider_serde_aliases_parse() {
     for alias in ["mistralrs", "mistral-rs", "mistral_rs"] {
         let env = EnvScope::new();
         let tmp = TempDir::new(&format!("mistralrs-toml-{alias}"));
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             format!(
@@ -3524,7 +3524,7 @@ model = "qwen3-4b-q4_k_m.gguf"
 #[test]
 fn mistralrs_validate_requires_model_path() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "mistralrs");
+    env.set("AIVYX_PA_PROVIDER", "mistralrs");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3548,7 +3548,7 @@ fn mistralrs_validate_requires_model_path() {
 fn mistralrs_validate_passes_with_model_path() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mistralrs-passes");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3582,7 +3582,7 @@ model_path = "/models/qwen3-4b-q4_k_m.gguf"
 fn mistralrs_options_full_section_round_trip() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mistralrs-full");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3632,7 +3632,7 @@ fn mistralrs_constrain_tool_calls_defaults_off() {
     // section) both leave it off.
     let env = EnvScope::new();
     let tmp = TempDir::new("mistralrs-constrain-default");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3670,7 +3670,7 @@ fn agent_turn_timeout_secs_round_trips_and_defaults_none() {
 
     // Unset → None.
     let tmp = TempDir::new("bridle-timeout-default");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3695,7 +3695,7 @@ model = "qwen3"
 
     // Set → that value.
     let tmp2 = TempDir::new("bridle-timeout-set");
-    let toml_path2 = tmp2.path().join("aivyx.toml");
+    let toml_path2 = tmp2.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path2,
         r#"
@@ -3749,7 +3749,7 @@ fn mistralrs_display_canonical_form() {
 #[test]
 fn broker_provider_from_env() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "broker");
+    env.set("AIVYX_PA_PROVIDER", "broker");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3769,7 +3769,7 @@ fn broker_provider_serde_aliases_parse() {
     for alias in ["broker", "aivyx-broker", "aivyx_broker"] {
         let env = EnvScope::new();
         let tmp = TempDir::new(&format!("broker-toml-{alias}"));
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             format!(
@@ -3802,7 +3802,7 @@ model = "qwen3-32b"
 #[test]
 fn broker_validate_does_not_require_api_key() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "broker");
+    env.set("AIVYX_PA_PROVIDER", "broker");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: true,
@@ -3820,7 +3820,7 @@ fn broker_validate_does_not_require_api_key() {
 #[test]
 fn broker_base_url_defaults_to_none() {
     let env = EnvScope::new();
-    env.set("AIVYX_PROVIDER", "broker");
+    env.set("AIVYX_PA_PROVIDER", "broker");
     let opts = LoadOptions {
         toml_path: None,
         require_api_key: false,
@@ -3842,7 +3842,7 @@ fn broker_base_url_defaults_to_none() {
 fn broker_base_url_round_trips_from_toml() {
     let env = EnvScope::new();
     let tmp = TempDir::new("broker-base-url");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3898,7 +3898,7 @@ fn broker_display_canonical_form() {
 fn daemon_web_ui_true_yields_default_port() {
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-true");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3924,7 +3924,7 @@ web_ui = true
 fn daemon_web_ui_port_overrides_default() {
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-port");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3950,7 +3950,7 @@ web_ui_port = 9999
 fn daemon_web_ui_false_disables() {
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-false");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -3976,7 +3976,7 @@ web_ui = false
 fn daemon_web_ui_absent_means_none() {
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-absent");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -4034,7 +4034,7 @@ fn pack_trusted_publishers_validates_key_shape() {
 
     let env = EnvScope::new();
     let tmp = TempDir::new("pack-trust-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[pack]\ntrusted_publishers = [\"not-base64!\"]\n").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -4055,7 +4055,7 @@ fn gatehouse_off_host_without_token_is_refused() {
     // must fail AT CONFIG LOAD, naming both remedies.
     let env = EnvScope::new();
     let tmp = TempDir::new("gatehouse-refuse");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n",
@@ -4112,7 +4112,7 @@ fn daemon_web_ui_host_rejects_non_ip() {
     // A non-IP value is a hard config error, not a silent fallback.
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-host-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[daemon]\nweb_ui_host = \"not-an-ip\"\n").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -4208,7 +4208,7 @@ fn daemon_web_ui_allowed_origins_rejects_path() {
     // An entry with a path is not a bare origin → hard config error.
     let env = EnvScope::new();
     let tmp = TempDir::new("origins-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[daemon]\nweb_ui_allowed_origins = [\"https://studio.example/app\"]\n",
@@ -4238,13 +4238,13 @@ fn daemon_web_ui_allowed_origins_rejects_path() {
 fn bundled_flag_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-bundled");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
 [[mcp_server]]
 name = "web-search"
-command = "aivyx"
+command = "aivyx-pa"
 args = ["mcp-server", "web-search"]
 bundled = true
 "#,
@@ -4269,7 +4269,7 @@ bundled = true
 fn bundled_default_false() {
     let env = EnvScope::new();
     let tmp = TempDir::new("mcp-no-bundled");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4302,7 +4302,7 @@ args = ["-y", "@modelcontextprotocol/server-github"]
 fn profile_section_populates_all_fields_with_toml_source() {
     let env = EnvScope::new();
     let tmp = TempDir::new("profile-full");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4369,8 +4369,8 @@ behavioral_constraints = [
 fn profile_section_absent_synthesizes_default_with_assistant_name() {
     let env = EnvScope::new();
     let tmp = TempDir::new("profile-absent");
-    let toml_path = tmp.path().join("aivyx.toml");
-    // No [profile] section at all — legacy aivyx.toml shape.
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    // No [profile] section at all — legacy aivyx-pa.toml shape.
     std::fs::write(
         &toml_path,
         r#"
@@ -4405,7 +4405,7 @@ model = "claude-haiku-4-5-20251001"
 fn profile_section_partial_provides_some_defaults_some_toml() {
     let env = EnvScope::new();
     let tmp = TempDir::new("profile-partial");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     // Only assistant_name + primary_use_cases declared. The other
     // four fields must remain at their unset defaults.
     std::fs::write(
@@ -4453,7 +4453,7 @@ primary_use_cases = ["personal-finance analysis"]
 fn notify_target_entries_parse_telegram_and_webhook() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-cfg");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4515,7 +4515,7 @@ enabled = false
 fn no_notify_target_section_gives_empty_vec() {
     let env = EnvScope::new();
     let tmp = TempDir::new("no-notify");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4541,7 +4541,7 @@ api_key = "sk-test"
 fn notify_target_telegram_missing_chat_id_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-bad-telegram");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4581,7 +4581,7 @@ kind = "telegram"
 fn notify_target_webhook_missing_url_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-bad-webhook");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4611,7 +4611,7 @@ kind = "webhook"
 fn notify_target_webhook_rejects_non_http_url() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-bad-scheme");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4651,7 +4651,7 @@ url = "ftp://example.com/notify"
 fn notify_target_unknown_kind_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-bad-kind");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4692,7 +4692,7 @@ chat_id = "x"
 fn notify_target_duplicate_names_are_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-dup");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4738,7 +4738,7 @@ url = "https://example.com/x"
 fn notify_target_empty_name_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-empty-name");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4773,7 +4773,7 @@ url = "https://example.com/x"
 fn schedule_notify_target_loads_when_role_has_capability() {
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-ok");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4907,7 +4907,7 @@ cron = "0 0 2 * * * *"
 fn schedule_notify_target_unknown_target_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-unknown");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -4952,7 +4952,7 @@ notify_target = "phone"
 fn schedule_notify_target_role_lacks_capability_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-noscope");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5005,7 +5005,7 @@ fn schedule_notify_target_qualified_scope_grants_named_target() {
     // schedule named a different target it would fail.
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-qualified");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5049,7 +5049,7 @@ fn schedule_notify_target_semitrusted_role_is_error() {
     // role declaring notify.send loses it after intersection.
     let env = EnvScope::new();
     let tmp = TempDir::new("schedule-notify-semi");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5091,7 +5091,7 @@ notify_target = "phone"
 fn webhook_notify_target_validated_the_same_way() {
     let env = EnvScope::new();
     let tmp = TempDir::new("webhook-notify");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5132,7 +5132,7 @@ notify_target = "ops"
 fn file_watch_notify_target_validated_the_same_way() {
     let env = EnvScope::new();
     let tmp = TempDir::new("filewatch-notify");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5176,7 +5176,7 @@ fn trigger_without_notify_target_loads_normally() {
     // opt in to notify_target. Regression test.
     let env = EnvScope::new();
     let tmp = TempDir::new("no-notify-target");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5209,7 +5209,7 @@ fn notify_send_via_parent_role_grants_inherited_capability() {
     // its parent does. Should be granted via the parent chain.
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-inherited");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5264,7 +5264,7 @@ fn email_section_with_kind_email_target_loads_cleanly() {
     use secrecy::ExposeSecret;
     let env = EnvScope::new();
     let tmp = TempDir::new("email-happy");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5311,7 +5311,7 @@ to = "alice@example.com"
 fn email_kind_target_without_email_section_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-no-section");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5351,7 +5351,7 @@ to = "alice@example.com"
 fn email_tls_mode_none_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-tls-none");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5390,7 +5390,7 @@ from = "a@b.c"
 fn email_implicit_tls_picks_port_465_default() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-implicit");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5425,7 +5425,7 @@ from = "a@example.com"
 fn email_explicit_port_override_wins() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-explicit-port");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5459,7 +5459,7 @@ fn email_section_partial_config_is_error() {
     // [email] declared with host but no password.
     let env = EnvScope::new();
     let tmp = TempDir::new("email-partial");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5490,7 +5490,7 @@ from = "a@example.com"
 fn email_from_without_at_sign_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-bad-from");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5522,7 +5522,7 @@ from = "notanemail"
 fn email_to_without_at_sign_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-bad-to");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5559,7 +5559,7 @@ to = "no-at-sign"
 fn email_unknown_tls_mode_is_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("email-unknown-tls");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5602,7 +5602,7 @@ from = "a@example.com"
 fn web_ui_notify_target_parses_with_no_extra_fields() {
     let env = EnvScope::new();
     let tmp = TempDir::new("webui-target");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5639,7 +5639,7 @@ fn unknown_notify_target_kind_error_mentions_web_ui() {
     // unknown-kind error message must include web-ui.
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-unknown-kind");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5678,7 +5678,7 @@ kind = "carrier-pigeon"
 fn reflection_schedule_with_defaults_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-default");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5763,7 +5763,7 @@ fn reflection_schedule_skip_when_idle_staged_threshold_unvalidated() {
 fn reflection_schedule_skip_when_idle_with_zero_threshold_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("refl-cadence-zero");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[anthropic]\napi_key = \"sk-test\"\n\n\
@@ -5799,7 +5799,7 @@ fn reflection_schedule_skip_when_idle_with_zero_threshold_is_invalid() {
 fn reflection_schedule_disabled_entries_are_skipped() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-disabled");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5830,7 +5830,7 @@ enabled = false
 fn reflection_schedule_empty_cron_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-empty-cron");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5866,7 +5866,7 @@ cron = ""
 fn reflection_schedule_lookback_below_min_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-lookback-low");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5904,7 +5904,7 @@ lookback_window_secs = 30
 fn reflection_schedule_lookback_above_max_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-lookback-high");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5940,7 +5940,7 @@ lookback_window_secs = 999999999
 fn reflection_schedule_duplicate_name_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-dup");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -5980,7 +5980,7 @@ cron = "0 0 1 * * *"
 fn reflection_schedule_collision_with_schedule_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-vs-schedule");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6022,7 +6022,7 @@ cron = "0 0 1 * * *"
 fn reflection_schedule_unknown_role_override_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("reflection-bad-role");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6063,7 +6063,7 @@ role_override = "ghost-role"
 fn singular_notify_target_bridges_into_plural() {
     let env = EnvScope::new();
     let tmp = TempDir::new("singular-alias");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6112,7 +6112,7 @@ notify_target = "phone"
 fn plural_notify_targets_loads_full_list() {
     let env = EnvScope::new();
     let tmp = TempDir::new("plural-list");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6162,7 +6162,7 @@ notify_targets = ["phone", "desktop"]
 fn both_singular_and_plural_declared_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("both-forms");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6212,7 +6212,7 @@ notify_targets = ["phone"]
 fn default_target_resolves_into_empty_trigger_list() {
     let env = EnvScope::new();
     let tmp = TempDir::new("default-resolve");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6260,7 +6260,7 @@ prompt = "morning summary"
 fn default_target_does_not_overwrite_explicit_list() {
     let env = EnvScope::new();
     let tmp = TempDir::new("default-no-overwrite");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6309,7 +6309,7 @@ notify_targets = ["desktop"]
 fn multiple_default_targets_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("dup-default");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6365,7 +6365,7 @@ fn notify_when_variants_parse() {
     ] {
         let env = EnvScope::new();
         let tmp = TempDir::new(&format!("notify-when-{input}"));
-        let toml_path = tmp.path().join("aivyx.toml");
+        let toml_path = tmp.path().join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             format!(
@@ -6411,7 +6411,7 @@ notify_when = "{input}"
 fn notify_when_unknown_value_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("notify-when-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6461,7 +6461,7 @@ notify_when = "if_blue_moon"
 fn multi_target_with_one_unknown_name_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("multi-unknown");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6513,7 +6513,7 @@ notify_targets = ["phone", "ghost"]
 fn retry_fields_default_to_zero_count_and_default_backoff() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retry-defaults");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6548,7 +6548,7 @@ url = "https://example.com/x"
 fn retry_count_above_cap_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retry-too-high");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6587,7 +6587,7 @@ retry_count = 100
 fn retry_backoff_below_floor_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("backoff-too-low");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6627,7 +6627,7 @@ retry_backoff_ms_start = 50
 fn retry_explicit_values_parse() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retry-explicit");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6662,7 +6662,7 @@ retry_backoff_ms_start = 200
 fn rate_limit_partial_max_without_window_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rate-no-window");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6700,7 +6700,7 @@ rate_limit_max = 10
 fn rate_limit_partial_window_without_max_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rate-no-max");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6738,7 +6738,7 @@ rate_limit_window_secs = 3600
 fn rate_limit_zero_max_is_rejected() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rate-zero-max");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6776,7 +6776,7 @@ rate_limit_window_secs = 60
 fn rate_limit_both_set_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rate-both");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6815,7 +6815,7 @@ rate_limit_window_secs = 3600
 fn memory_retention_forever_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-forever");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6851,7 +6851,7 @@ retention = "forever"
 fn memory_retention_days_parses() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-days");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6885,7 +6885,7 @@ retention_days = 30
 fn memory_retention_multiple_rules_preserve_first_match_order() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-multi");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6927,7 +6927,7 @@ retention_days = 30
 fn memory_retention_empty_glob_rejects() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-empty-glob");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6962,7 +6962,7 @@ retention = "forever"
 fn memory_retention_unknown_retention_value_rejects() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-bad-value");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -6998,7 +6998,7 @@ retention = "until-summer"
 fn memory_retention_zero_days_rejects() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-zero-days");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7033,7 +7033,7 @@ retention_days = 0
 fn memory_retention_neither_form_rejects() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-no-policy");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7068,7 +7068,7 @@ topic_glob = "notes/*"
 fn memory_retention_both_forms_rejects() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-both-forms");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7105,7 +7105,7 @@ retention_days = 30
 fn memory_retention_invalid_glob_rejects() {
     let env = EnvScope::new();
     let tmp = TempDir::new("retention-bad-glob");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7158,9 +7158,9 @@ fn embedding_absent_section_is_none() {
 #[test]
 fn embedding_partial_section_applies_defaults() {
     let env = EnvScope::new();
-    env.clear("AIVYX_EMBEDDING_API_KEY");
+    env.clear("AIVYX_PA_EMBEDDING_API_KEY");
     let tmp = TempDir::new("embedding-defaults");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7207,9 +7207,9 @@ api_key = "sk-emb-toml"
 #[test]
 fn embedding_explicit_fields_win() {
     let env = EnvScope::new();
-    env.clear("AIVYX_EMBEDDING_API_KEY");
+    env.clear("AIVYX_PA_EMBEDDING_API_KEY");
     let tmp = TempDir::new("embedding-explicit");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7239,14 +7239,14 @@ dimensions = 768
     drop(env);
 }
 
-/// `AIVYX_EMBEDDING_API_KEY` beats the TOML `api_key` (env >
+/// `AIVYX_PA_EMBEDDING_API_KEY` beats the TOML `api_key` (env >
 /// TOML), matching the anthropic / openai key precedence.
 #[test]
 fn embedding_env_key_beats_toml_key() {
     let env = EnvScope::new();
-    env.set("AIVYX_EMBEDDING_API_KEY", "sk-emb-env");
+    env.set("AIVYX_PA_EMBEDDING_API_KEY", "sk-emb-env");
     let tmp = TempDir::new("embedding-env-wins");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7276,7 +7276,7 @@ api_key = "sk-emb-toml-loses"
 fn embedding_blank_base_url_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embedding-blank-url");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7310,7 +7310,7 @@ base_url = "   "
 fn embedding_zero_dimensions_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embedding-zero-dims");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7343,9 +7343,9 @@ dimensions = 0
 #[test]
 fn embedding_rag_knobs_explicit_win() {
     let env = EnvScope::new();
-    env.clear("AIVYX_EMBEDDING_API_KEY");
+    env.clear("AIVYX_PA_EMBEDDING_API_KEY");
     let tmp = TempDir::new("embedding-rag-explicit");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7375,7 +7375,7 @@ rag_min_similarity = 0.55
 fn embedding_rag_top_k_zero_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embedding-rag-topk-zero");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7409,7 +7409,7 @@ rag_top_k = 0
 fn embedding_rag_min_similarity_out_of_range_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embedding-rag-sim-oor");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7444,7 +7444,7 @@ rag_min_similarity = 1.5
 fn embedding_recall_window_turns_explicit_wins() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embedding-window-explicit");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7476,7 +7476,7 @@ recall_window_turns = 5
 fn embedding_recall_window_turns_zero_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embedding-window-zero");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7702,7 +7702,7 @@ fn embedding_recall_hybrid_explicit_false_honored() {
 fn embedding_ann_index_zero_threshold_when_armed_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("embed-ann-zero");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[embedding]\nann_index = true\n\
@@ -7741,7 +7741,7 @@ async fn embedding_key_hydrates_from_store() {
     use aivyx_storage::{KeyDomain, RedbStorage, StorageConfig};
 
     let env = EnvScope::new();
-    env.clear("AIVYX_EMBEDDING_API_KEY");
+    env.clear("AIVYX_PA_EMBEDDING_API_KEY");
 
     let tmp = TempDir::new("embedding-store-hydrate");
     let store_path = tmp.path().join("store.redb");
@@ -7755,7 +7755,7 @@ async fn embedding_key_hydrates_from_store() {
         .await
         .expect("put embedding key");
 
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         r#"
@@ -7798,7 +7798,7 @@ async fn embedding_store_key_without_section_stays_none() {
     use aivyx_storage::{KeyDomain, RedbStorage, StorageConfig};
 
     let env = EnvScope::new();
-    env.clear("AIVYX_EMBEDDING_API_KEY");
+    env.clear("AIVYX_PA_EMBEDDING_API_KEY");
     let tmp = TempDir::new("embedding-no-section");
     let store_path = tmp.path().join("store.redb");
     let master = MasterKey::from_raw([12u8; 32]);
@@ -7826,7 +7826,7 @@ async fn embedding_store_key_without_section_stays_none() {
 fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
     assert_env_guarded();
     let tmp = TempDir::new(tag);
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, body).unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -7844,7 +7844,7 @@ fn load_with_toml(body: &str, tag: &str) -> AivyxConfig {
 fn load_with_toml_result(body: &str, tag: &str) -> Result<AivyxConfig, ConfigError> {
     assert_env_guarded();
     let tmp = TempDir::new(tag);
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, body).unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -7925,7 +7925,7 @@ fn proactive_enabled_valid_with_signal_toggle() {
 fn proactive_enabled_requires_target() {
     let env = EnvScope::new();
     let tmp = TempDir::new("proactive-no-target");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[proactive]\nenabled = true\n")
         .unwrap();
     let opts = LoadOptions {
@@ -7952,7 +7952,7 @@ fn proactive_enabled_requires_target() {
 fn proactive_enabled_zero_cap_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("proactive-zero-cap");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[proactive]\nenabled = true\ntarget = \"ops\"\n\
@@ -7983,7 +7983,7 @@ fn proactive_enabled_zero_cap_is_invalid() {
 fn proactive_enabled_all_signals_off_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("proactive-no-signals");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[proactive]\nenabled = true\ntarget = \"ops\"\n\
@@ -8451,7 +8451,7 @@ fn graph_section_parses_and_validates() {
 
     // Enabled with a zero knob → Invalid.
     let tmp = TempDir::new("graph-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[graph]\nenabled = true\ninterval_secs = 0\n").unwrap();
     let opts = LoadOptions { toml_path: Some(toml_path), ..LoadOptions::test_env_only() };
     assert!(AivyxConfig::load_from_env_and_toml(&opts).is_err());
@@ -8461,7 +8461,7 @@ fn graph_section_parses_and_validates() {
 fn wiki_enabled_rejects_zero_knobs() {
     let _env = EnvScope::new();
     let tmp = TempDir::new("wiki-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[wiki]\nenabled = true\nmax_pages_per_sweep = 0\n").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -8489,7 +8489,7 @@ fn persona_lifecycle_helpfulness_decay_knobs() {
 
     // Non-negative threshold (armed) → Invalid.
     let tmp = TempDir::new("pl-help-bad-threshold");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8516,7 +8516,7 @@ fn persona_lifecycle_helpfulness_decay_knobs() {
 
     // Zero min-samples (armed) → Invalid.
     let tmp2 = TempDir::new("pl-help-zero-samples");
-    let toml2 = tmp2.path().join("aivyx.toml");
+    let toml2 = tmp2.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml2,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8575,7 +8575,7 @@ fn persona_lifecycle_pair_affinity_decay_knob() {
 
     // Negative pair floor (armed) → Invalid.
     let tmp = TempDir::new("pl-pair-neg");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8602,7 +8602,7 @@ fn persona_lifecycle_pair_affinity_decay_knob() {
 
     // Non-finite pair floor (armed) → Invalid.
     let tmp2 = TempDir::new("pl-pair-nan");
-    let toml2 = tmp2.path().join("aivyx.toml");
+    let toml2 = tmp2.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml2,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8668,7 +8668,7 @@ fn persona_lifecycle_enabled_valid_with_signal_toggle() {
 fn persona_lifecycle_enabled_bad_similarity_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("pl-bad-sim");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8702,7 +8702,7 @@ fn persona_lifecycle_enabled_bad_similarity_is_invalid() {
 fn persona_lifecycle_enabled_zero_min_facets_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("pl-zero-floor");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8733,7 +8733,7 @@ fn persona_lifecycle_enabled_zero_min_facets_is_invalid() {
 fn persona_lifecycle_enabled_all_signals_off_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("pl-no-signals");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_lifecycle]\nenabled = true\n\
@@ -8817,7 +8817,7 @@ fn recall_cluster_enabled_valid() {
 fn recall_cluster_enabled_zero_siblings_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rc-zero-siblings");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[recall_cluster]\nenabled = true\n\
@@ -8848,7 +8848,7 @@ fn recall_cluster_enabled_zero_siblings_is_invalid() {
 fn recall_cluster_enabled_nonpositive_affinity_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rc-bad-affinity");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[recall_cluster]\nenabled = true\n\
@@ -8949,7 +8949,7 @@ fn persona_consolidation_enabled_nonpositive_affinity_is_invalid()
 {
     let env = EnvScope::new();
     let tmp = TempDir::new("pc-bad-affinity");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_consolidation]\nenabled = true\n\
@@ -8983,7 +8983,7 @@ fn persona_consolidation_enabled_nonpositive_affinity_is_invalid()
 fn persona_consolidation_enabled_zero_samples_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("pc-zero-samples");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_consolidation]\nenabled = true\n\
@@ -9017,7 +9017,7 @@ fn persona_consolidation_enabled_zero_samples_is_invalid() {
 fn persona_consolidation_enabled_zero_cap_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("pc-zero-cap");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona_consolidation]\nenabled = true\n\
@@ -9166,7 +9166,7 @@ fn correction_consolidation_enabled_nonpositive_corrections_is_invalid()
 {
     let env = EnvScope::new();
     let tmp = TempDir::new("cc-bad-corrections");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[correction_consolidation]\nenabled = true\n\
@@ -9280,7 +9280,7 @@ fn loop_enabled_valid() {
 fn loop_enabled_zero_max_iterations_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("loop-bad-cap");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[loop]\nenabled = true\nmax_iterations = 0\n",
@@ -9348,7 +9348,7 @@ fn loop_gate_defaults() {
 fn loop_enabled_zero_gate_timeout_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("loop-bad-gate-timeout");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[loop]\nenabled = true\ngate_command = \"cargo test\"\n\
@@ -9503,7 +9503,7 @@ fn correction_judgment_parse_and_validate() {
     );
     // Enabled + 0 cap → Invalid.
     let tmp = TempDir::new("cj-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[correction_judgment]\nenabled = true\n\
@@ -9575,7 +9575,7 @@ fn sandbox_default_backend_parse_and_validate() {
     }
     // Unknown → Invalid.
     let tmp = TempDir::new("sb-bad");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[sandbox]\ndefault_backend = \"docker\"\n",
@@ -9732,7 +9732,7 @@ fn recall_judgment_enabled_valid() {
 fn recall_judgment_enabled_zero_cap_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("rj-zero-cap");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[recall_judgment]\nenabled = true\n\
@@ -9940,7 +9940,7 @@ fn skills_auto_propose_full_section_parses_every_field() {
 fn skills_auto_propose_empty_judge_model_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("sap-empty-model");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[skills.auto_propose]\nenabled = true\njudge_model = \"\"\n",
@@ -9969,7 +9969,7 @@ fn skills_auto_propose_empty_judge_model_is_invalid() {
 fn skills_auto_propose_zero_max_tokens_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("sap-zero-max");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[skills.auto_propose]\nenabled = true\njudge_max_tokens = 0\n",
@@ -9999,7 +9999,7 @@ fn skills_auto_propose_zero_max_tokens_is_invalid() {
 fn skills_auto_propose_threshold_above_one_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("sap-thresh-high");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[skills.auto_propose]\nenabled = true\n\
@@ -10033,7 +10033,7 @@ fn skills_auto_propose_threshold_above_one_is_invalid() {
 fn skills_auto_propose_fuzzy_below_zero_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("sap-fuzzy-neg");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[skills.auto_propose]\nenabled = true\n\
@@ -10064,7 +10064,7 @@ fn skills_auto_propose_fuzzy_below_zero_is_invalid() {
 fn skills_auto_propose_unknown_mode_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("sap-bad-mode");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[skills.auto_propose]\nenabled = true\n\
@@ -10245,7 +10245,7 @@ fn persona_auto_propose_per_category_override_works() {
 fn persona_auto_propose_per_category_threshold_out_of_range_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("pap-bad-thresh");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[persona.auto_propose.behavioral_preferences]\n\
@@ -10640,7 +10640,7 @@ fn resolve_gpt_oss_prompt_strategy_uses_few_shot_default() {
 #[test]
 fn phase_122_family_strategy_label_is_stable_lowercase() {
     // Labels match the TOML wire form so the operator's
-    // aivyx.toml can pass `prompt_strategy = "none"` /
+    // aivyx-pa.toml can pass `prompt_strategy = "none"` /
     // `prompt_strategy = "structured_injection"` /
     // `prompt_strategy = "few_shot_examples"` directly.
     assert_eq!(crate::OllamaFamilyStrategy::None.label(), "none");
@@ -10802,7 +10802,7 @@ fn phase_122_loader_parses_prompt_strategies_section() {
 fn phase_122_loader_rejects_unknown_strategy_string() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase122-bad-strategy");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[ollama.prompt_strategies]\n\
@@ -10849,7 +10849,7 @@ fn chapter_k_loader_parses_pricing_overrides() {
 fn chapter_k_loader_rejects_negative_rate() {
     let env = EnvScope::new();
     let tmp = TempDir::new("chapter-k-bad-pricing");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[pricing.bad-model]\ninput = -1.0\noutput = 5.0\n",
@@ -10923,7 +10923,7 @@ fn ballast_loader_parses_per_mission_caps() {
 fn chapter_k_loader_rejects_negative_budget_cap() {
     let env = EnvScope::new();
     let tmp = TempDir::new("chapter-k-bad-budget");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[budget]\nper_run_usd = -1.0\n").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -11025,7 +11025,7 @@ fn phase_120_threshold_one_is_valid() {
 fn phase_120_threshold_above_one_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase120-above");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[providers]\ntool_name_auto_correct_threshold = 1.5\n",
@@ -11054,7 +11054,7 @@ fn phase_120_threshold_above_one_is_invalid() {
 fn phase_120_threshold_negative_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("phase120-neg");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[providers]\ntool_name_auto_correct_threshold = -0.1\n",
@@ -11111,7 +11111,7 @@ fn tool_relevance_full_section_parses_all_fields() {
 fn tool_relevance_zero_max_keywords_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tr-bad-mk");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[tool_relevance]\nenabled = true\nmax_keywords = 0\n",
@@ -11140,7 +11140,7 @@ fn tool_relevance_zero_max_keywords_is_invalid() {
 fn tool_relevance_zero_min_outcomes_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tr-bad-mo");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[tool_relevance]\nenabled = true\nmin_outcomes_to_show = 0\n",
@@ -11169,7 +11169,7 @@ fn tool_relevance_zero_min_outcomes_is_invalid() {
 fn tool_relevance_zero_top_k_is_invalid() {
     let env = EnvScope::new();
     let tmp = TempDir::new("tr-bad-tk");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
         "\n[tool_relevance]\nenabled = true\ntop_k_per_section = 0\n",
@@ -11215,7 +11215,7 @@ fn tool_relevance_disabled_section_loads_with_enabled_false() {
 // ------------------------------------------------------------------
 
 /// No `[access]` section ⇒ `sandbox` ⇒ today's behavior: fs_root defaults
-/// to `$HOME/aivyx-sandbox`, confirm_destructive off. The byte-for-byte
+/// to `$HOME/aivyx-pa-sandbox`, confirm_destructive off. The byte-for-byte
 /// backwards-compat guarantee.
 #[test]
 fn access_absent_section_defaults_to_sandbox() {
@@ -11224,7 +11224,7 @@ fn access_absent_section_defaults_to_sandbox() {
         .expect("load");
     assert_eq!(cfg.access_level.value, AccessLevel::Sandbox);
     assert_eq!(cfg.access_level.source, FieldSource::Default);
-    assert!(cfg.fs_root.value.ends_with("aivyx-sandbox"));
+    assert!(cfg.fs_root.value.ends_with("aivyx-pa-sandbox"));
     assert_eq!(cfg.fs_root.source, FieldSource::Default);
     assert!(!cfg.confirm_destructive.value, "sandbox ⇒ no confirm gate");
     assert_eq!(cfg.confirm_destructive.source, FieldSource::Default);
@@ -11275,7 +11275,7 @@ fn access_workspace_uses_explicit_root() {
 fn access_workspace_without_root_is_typed_error() {
     let env = EnvScope::new();
     let tmp = TempDir::new("access-ws-noroot");
-    let toml_path = tmp.path().join("aivyx.toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(&toml_path, "\n[access]\nlevel = \"workspace\"\n").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
@@ -11494,7 +11494,7 @@ fn autonomy_unknown_level_is_rejected() {
 // Chapter O — agent workspace ([workspace] section)
 // ------------------------------------------------------------------
 
-/// Absent `[workspace]` ⇒ enabled, default path `$HOME/.aivyx/workspace`,
+/// Absent `[workspace]` ⇒ enabled, default path `$HOME/.aivyx-pa/workspace`,
 /// journaling on at the default interval.
 #[test]
 fn workspace_absent_section_defaults_enabled() {
@@ -11506,7 +11506,7 @@ fn workspace_absent_section_defaults_enabled() {
     assert_eq!(cfg.workspace_enabled.source, FieldSource::Default);
     assert_eq!(
         cfg.workspace_path.value,
-        PathBuf::from(home).join(".aivyx").join("workspace")
+        PathBuf::from(home).join(".aivyx-pa").join("workspace")
     );
     assert!(cfg.workspace_journaling_enabled.value);
     assert_eq!(
@@ -11537,11 +11537,11 @@ fn workspace_explicit_overrides() {
     drop(env);
 }
 
-/// `AIVYX_WORKSPACE` env beats the TOML path.
+/// `AIVYX_PA_WORKSPACE` env beats the TOML path.
 #[test]
 fn workspace_env_beats_toml_path() {
     let env = EnvScope::new();
-    env.set("AIVYX_WORKSPACE", "/tmp/env-ws");
+    env.set("AIVYX_PA_WORKSPACE", "/tmp/env-ws");
     let cfg = load_with_toml("\n[workspace]\npath = \"/tmp/toml-ws\"\n", "ws-env");
     assert_eq!(cfg.workspace_path.value, PathBuf::from("/tmp/env-ws"));
     assert_eq!(cfg.workspace_path.source, FieldSource::Env);

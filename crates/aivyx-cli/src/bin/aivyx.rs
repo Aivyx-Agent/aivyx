@@ -1,4 +1,4 @@
-//! `aivyx` — the reference CLI binary for Phase 3.
+//! `aivyx-pa` — the reference CLI binary for Phase 3.
 //!
 //! Wires every component from Phases 0–2 into a single interactive
 //! loop:
@@ -29,31 +29,31 @@
 //!
 //! Five optional variables:
 //!
-//! - `AIVYX_MODEL` — override the default model id (default:
+//! - `AIVYX_PA_MODEL` — override the default model id (default:
 //!   `claude-haiku-4-5-20251001`). Sent verbatim to the API.
-//! - `AIVYX_SYSTEM_PROMPT` — override the default system prompt.
-//! - `AIVYX_FS_ROOT` — directory under which the filesystem tools
+//! - `AIVYX_PA_SYSTEM_PROMPT` — override the default system prompt.
+//! - `AIVYX_PA_FS_ROOT` — directory under which the filesystem tools
 //!   (`fs.read`, `fs.write`, `fs.metadata`, and — on Local channels
 //!   only — `fs.delete`) are allowed to operate. Defaults to
-//!   `$HOME/aivyx-sandbox`. Created at startup if it does not exist.
+//!   `$HOME/aivyx-pa-sandbox`. Created at startup if it does not exist.
 //!   The binary's capability set grants `fs.read:<root>/**`,
 //!   `fs.write:<root>/**`, and `fs.metadata:<root>/**` for every
 //!   channel, plus `fs.delete:<root>/**` on Local channels, so the
 //!   LLM can exercise the tools without further wiring.
-//! - `AIVYX_STORAGE_PATH` — path to the encrypted redb store (Phase 5
-//!   task 4). Defaults to `$XDG_DATA_HOME/aivyx/store.redb` or
-//!   `$HOME/.local/share/aivyx/store.redb` otherwise. The sidecar
+//! - `AIVYX_PA_STORAGE_PATH` — path to the encrypted redb store (Phase 5
+//!   task 4). Defaults to `$XDG_DATA_HOME/aivyx-pa/store.redb` or
+//!   `$HOME/.local/share/aivyx-pa/store.redb` otherwise. The sidecar
 //!   salt file is the same path with a `.salt` suffix appended.
 //!   Parent directories are created at startup if missing.
-//! - `AIVYX_PASSPHRASE` — the passphrase the Argon2id master-key
+//! - `AIVYX_PA_PASSPHRASE` — the passphrase the Argon2id master-key
 //!   derivation feeds on. If unset or empty and stdin is a
 //!   terminal, the binary falls back to an interactive
-//!   `aivyx passphrase: ` prompt via `rpassword` (reads
+//!   `aivyx-pa passphrase: ` prompt via `rpassword` (reads
 //!   `/dev/tty` directly, echo-off). If unset **and** stdin is
 //!   not a terminal (systemd/launchd/scripted runs), the binary
 //!   exits with a clear error rather than hanging on a tty read
 //!   that will never come.
-//! - `AIVYX_MEMORY_MAX_PER_TOPIC` — override the per-topic GC
+//! - `AIVYX_PA_MEMORY_MAX_PER_TOPIC` — override the per-topic GC
 //!   tripwire for `memory.write` (Phase 7 task 5). Defaults to
 //!   [`aivyx_memory::DEFAULT_MAX_PER_TOPIC`] (10_000). Parsed as
 //!   `usize` once at startup; an unparseable value is a hard error
@@ -112,7 +112,7 @@ mod cost;
 mod daemon_service;
 #[path = "aivyx_modules/doctor.rs"]
 mod doctor;
-// Task 8 (Chapter Passport): `aivyx federation yubikey-init`. Compiled only
+// Task 8 (Chapter Passport): `aivyx-pa federation yubikey-init`. Compiled only
 // under the `yubikey` Cargo feature — this module names `aivyx-yubi` and
 // `aivyx-federation` (built with its own `yubikey` feature) directly, both
 // optional dependencies gated the same way (see `Cargo.toml`). `CliMode::
@@ -232,11 +232,11 @@ const PROMPT: &str = "> ";
 const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
 
 /// Default path the binary looks at for the TOML config file.
-/// `./aivyx.toml` relative to the current working directory — present
+/// `./aivyx-pa.toml` relative to the current working directory — present
 /// if the operator has written one, silently ignored if not. Absolute
-/// or elsewhere paths belong in `$AIVYX_CONFIG_PATH` (future amendment)
+/// or elsewhere paths belong in `$AIVYX_PA_CONFIG_PATH` (future amendment)
 /// or just be driven via env vars.
-const DEFAULT_TOML_PATH: &str = "aivyx.toml";
+const DEFAULT_TOML_PATH: &str = "aivyx-pa.toml";
 
 /// Optional `(tool, required capability scope)` pair returned by a
 /// registration-time trust gate — `build_shell_exec_for_channel`
@@ -486,7 +486,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("aivyx: {e}");
+            eprintln!("aivyx-pa: {e}");
             ExitCode::FAILURE
         }
     }
@@ -505,13 +505,13 @@ fn run() -> Result<(), String> {
     } = parse_cli_args()?;
 
     // ---- Phase 61: --version short-circuit -----------------------------
-    // Prints `aivyx <CARGO_PKG_VERSION>` to stdout and exits 0. Runs
+    // Prints `aivyx-pa <CARGO_PKG_VERSION>` to stdout and exits 0. Runs
     // before every other dispatch path so the probe never touches the
     // config loader, the storage layer, or the daemon socket — the
     // installer smoke test must succeed on a host with no config and
     // no running daemon.
     if mode == CliMode::Version {
-        println!("aivyx {}", env!("CARGO_PKG_VERSION"));
+        println!("aivyx-pa {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
@@ -626,7 +626,7 @@ fn run() -> Result<(), String> {
     // ---- Phase 58: profile inspection / edit (PRODUCT.md P13) ----------
     // The profile subcommands are synchronous file operations — no
     // tokio runtime, no daemon dispatch, no API key required. `show`
-    // reads `aivyx.toml` and prints the resolved Profile to stdout
+    // reads `aivyx-pa.toml` and prints the resolved Profile to stdout
     // (Q3(a)); `edit` opens `$EDITOR` against the `[profile]` section
     // (Q2(a), wired in Task 3).
     if let CliMode::Profile(sub) = mode {
@@ -649,7 +649,7 @@ fn run() -> Result<(), String> {
     // ---- Chapter N: access-level Settings command ----------------------
     // Synchronous file operations — no tokio runtime, no daemon, no
     // passphrase. `show` reads the resolved level + reach; `set` rewrites
-    // the `[access]` section of `aivyx.toml`.
+    // the `[access]` section of `aivyx-pa.toml`.
     if let CliMode::Access(sub) = mode {
         return match sub {
             AccessSubcommand::Show => access::run_access_show(),
@@ -774,7 +774,7 @@ fn run() -> Result<(), String> {
         });
     }
 
-    // ---- Chapter Tutor: `aivyx skills <teach|update|forget>` -----
+    // ---- Chapter Tutor: `aivyx-pa skills <teach|update|forget>` -----
     if let CliMode::Skills(sub) = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -849,7 +849,7 @@ fn run() -> Result<(), String> {
         });
     }
 
-    // Phase 78 — `aivyx learning`: read-only window into the
+    // Phase 78 — `aivyx-pa learning`: read-only window into the
     // self-learning loop. IPC-backed; terminal parity with the
     // Web UI Learning pane.
     if let CliMode::Learning { window_secs } = mode {
@@ -860,10 +860,10 @@ fn run() -> Result<(), String> {
         return rt.block_on(async move { learning::run_learning(window_secs).await });
     }
 
-    // Phase 173 — `aivyx loop <subcommand>`: autonomous loop
+    // Phase 173 — `aivyx-pa loop <subcommand>`: autonomous loop
     // control. IPC-backed; same minimal-runtime shape as
     // `learning`.
-    // Chapter Freight — `aivyx pack` is fully offline (no daemon, no
+    // Chapter Freight — `aivyx-pa pack` is fully offline (no daemon, no
     // runtime): keygen/build/inspect/install operate on files + config.
     if let CliMode::Pack(sub) = mode {
         return pack::run_pack(sub);
@@ -877,7 +877,7 @@ fn run() -> Result<(), String> {
         return rt.block_on(async move { loop_cli::run_loop(sub).await });
     }
 
-    // Phase 102 — `aivyx tools`: read-only tool-observability
+    // Phase 102 — `aivyx-pa tools`: read-only tool-observability
     // view. IPC-backed; same daemon-query shape as `learning`.
     if let CliMode::Tools { window_secs } = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -887,14 +887,14 @@ fn run() -> Result<(), String> {
         return rt.block_on(async move { tools::run_tools(window_secs).await });
     }
 
-    // Phase 103 — `aivyx tool init <path>`: scaffold a starter
+    // Phase 103 — `aivyx-pa tool init <path>`: scaffold a starter
     // Rust tool-process project at the target path. Pure sync fs
     // work, so it skips the tokio runtime the IPC subcommands need.
     if let CliMode::Tool(ToolSubcommand::Init { path, force }) = mode {
         return tool_init::run_tool_init(&path, force);
     }
 
-    // Phase 106 — `aivyx mcp recipes [<name>]`: print the
+    // Phase 106 — `aivyx-pa mcp recipes [<name>]`: print the
     // curated MCP recipes catalog (or one recipe's worked
     // snippet). Pure stdout emission — no storage, no daemon,
     // no tokio runtime.
@@ -902,26 +902,26 @@ fn run() -> Result<(), String> {
         return run_mcp_recipes(name.as_deref());
     }
 
-    // Chapter Conduit (CD.3) — `aivyx mcp status`. Pure stdout, reads the
+    // Chapter Conduit (CD.3) — `aivyx-pa mcp status`. Pure stdout, reads the
     // snapshot the daemon wrote at its last start; no provider/store/daemon.
     if let CliMode::Mcp(McpSubcommand::Status) = mode {
         return run_mcp_status();
     }
 
-    // Chapter J — `aivyx team roster`: render the default Nonagon. Pure
+    // Chapter J — `aivyx-pa team roster`: render the default Nonagon. Pure
     // stdout, no storage/provider/daemon (like `mcp recipes`). `team run`
     // takes the run_async path below — it needs the live provider + audit.
     if let CliMode::Team(TeamSubcommand::Roster { config }) = &mode {
         return team::run_roster(config.as_deref());
     }
 
-    // Chapter Roster (RO.4) — `aivyx team init`: write a starter team config
+    // Chapter Roster (RO.4) — `aivyx-pa team init`: write a starter team config
     // file (default Nonagon or a pack). Offline, like `roster` (no daemon).
     if let CliMode::Team(TeamSubcommand::Init { pack, out, force }) = &mode {
         return team::run_init(pack.as_deref(), out.as_deref(), *force);
     }
 
-    // Chapter L (L.5b) — `aivyx team start|list|status|approve|reject`: the
+    // Chapter L (L.5b) — `aivyx-pa team start|list|status|approve|reject`: the
     // daemon-run mission control surface. IPC-backed, same minimal-runtime
     // shape as `loop` / `tools` — no provider, no in-process assembly.
     if let CliMode::Team(sub) = &mode {
@@ -936,7 +936,7 @@ fn run() -> Result<(), String> {
     }
 
     // ---- Phase 64: identity export/import (Persona Phase 3) -----
-    // Daemon-IPC-backed for the Persona half; reads aivyx.toml
+    // Daemon-IPC-backed for the Persona half; reads aivyx-pa.toml
     // directly for the Profile half. Same minimal-runtime pattern
     // as the persona subcommands above.
     if let CliMode::Identity(sub) = mode {
@@ -975,7 +975,7 @@ fn run() -> Result<(), String> {
         {
             let _ = sub;
             return Err(
-                "aivyx federation: this binary was built without the `yubikey` feature \
+                "aivyx-pa federation: this binary was built without the `yubikey` feature \
                  (hardware-backed federation identity via a YubiKey's OpenPGP card applet). \
                  Rebuild with `cargo build -p aivyx-cli --features yubikey` (requires \
                  `pcscd`/libpcsclite available locally to build `pcsc-sys`). See \
@@ -990,7 +990,7 @@ fn run() -> Result<(), String> {
         CliMode::PrintRole(name) => Some(name.clone()),
         _ => None,
     };
-    // Phase 105 — `aivyx audit export` carries the same
+    // Phase 105 — `aivyx-pa audit export` carries the same
     // cold-start posture as `--verify-only`: no session, no
     // sandbox, no API key required. The dispatch lands after
     // storage open below; the params are extracted here so the
@@ -1005,7 +1005,7 @@ fn run() -> Result<(), String> {
         _ => None,
     };
     let audit_export_mode = audit_export_params.is_some();
-    // Chapter K — `aivyx cost` shares the same offline cold-start posture
+    // Chapter K — `aivyx-pa cost` shares the same offline cold-start posture
     // (no session / sandbox / API key); it dispatches after storage open.
     let cost_today: Option<bool> = match &mode {
         CliMode::Cost { today } => Some(*today),
@@ -1018,13 +1018,13 @@ fn run() -> Result<(), String> {
     // Phases 3 through 8 accreted is now a single call into
     // `aivyx_config::AivyxConfig::load_from_env_and_toml`. Env vars
     // keep their Phase 8 names (operators re-exporting them need no
-    // change), and a new optional `./aivyx.toml` file lives between
+    // change), and a new optional `./aivyx-pa.toml` file lives between
     // env and the encrypted store in the fall-through chain.
     //
     // `require_*` flags are derived from the CLI-arg decisions so the
     // validator's error messages land at the right point: verify-only
     // does not need `ANTHROPIC_API_KEY`, so the loader does not demand
-    // it; `--channel telegram` does need `AIVYX_TELEGRAM_TOKEN`, so a
+    // it; `--channel telegram` does need `AIVYX_PA_TELEGRAM_TOKEN`, so a
     // missing token surfaces as a clean `ConfigError::Missing` instead
     // of a Frankenstein "invalid request" on the first HTTP call.
     // `--print-role` is a debug exit mode that should not require
@@ -1036,7 +1036,7 @@ fn run() -> Result<(), String> {
     let print_role_mode = print_role.is_some();
     let load_opts = LoadOptions {
         toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
-        // Phase 105 — `aivyx audit export` shares `--verify-only`'s
+        // Phase 105 — `aivyx-pa audit export` shares `--verify-only`'s
         // posture: cold-start storage open via passphrase, no
         // session opened, no provider call made. No API key
         // required, regardless of `--channel`.
@@ -1054,7 +1054,7 @@ fn run() -> Result<(), String> {
         // Phase 11 Task 4 — `--role <name>` is now the highest-
         // priority source. `parse_cli_args` turns the flag into
         // `role_override`, which `aivyx-config`'s resolver honors
-        // above `AIVYX_ROLE` / TOML / `"default"`. A `None` here
+        // above `AIVYX_PA_ROLE` / TOML / `"default"`. A `None` here
         // means "no flag was passed — fall through to env/TOML."
         //
         // For `--print-role`, the print-role name *is* the active
@@ -1116,7 +1116,7 @@ fn run() -> Result<(), String> {
             let is_tty = io::stdin().is_terminal();
             let (early_print, fail_message) = early_validate_fail_output(is_tty, e);
             if let Some(msg) = early_print {
-                eprintln!("aivyx: {msg}");
+                eprintln!("aivyx-pa: {msg}");
             }
             let stdin = io::stdin();
             let mut reader = stdin.lock();
@@ -1128,7 +1128,7 @@ fn run() -> Result<(), String> {
                         .build()
                         .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
                     rt.block_on(init::run_init_wizard(None))?;
-                    eprintln!("\nNow run `aivyx` again to start.");
+                    eprintln!("\nNow run `aivyx-pa` again to start.");
                     return Ok(());
                 }
                 init::UnconfiguredFirstRunDecision::Fail => {
@@ -1176,12 +1176,12 @@ fn run() -> Result<(), String> {
     //    must stay the first-checked branch so deployments don't
     //    accidentally trip the interactive prompt. Phase 9 Task 3
     //    routes this through `config.passphrase` instead of re-
-    //    reading `AIVYX_PASSPHRASE` — the config layer has already
+    //    reading `AIVYX_PA_PASSPHRASE` — the config layer has already
     //    checked env and TOML in precedence order and the result
     //    is the single source of truth at this point in bring-up.
     // 2. Config has `None` and stdin is a terminal →
     //    `InteractivePrompt`. The user gets a one-line
-    //    `aivyx passphrase: ` echo-off prompt read from `/dev/tty`.
+    //    `aivyx-pa passphrase: ` echo-off prompt read from `/dev/tty`.
     // 3. Otherwise → bail with a clear message. Neither config nor
     //    tty means we have no interactive user *and* no configured
     //    source — continuing would either hang on a tty read that
@@ -1264,13 +1264,13 @@ fn run() -> Result<(), String> {
         {
             Ok(s) => s,
             Err(e) => {
-                // Backlog #2 — a non-TTY/piped `aivyx` opens the redb store
+                // Backlog #2 — a non-TTY/piped `aivyx-pa` opens the redb store
                 // cold here, before the daemon-vs-in-process dispatch in
                 // `run_async`. If a daemon is already running it holds the
                 // store lock, so this open fails with redb's opaque
                 // "Database already open. Cannot acquire lock." Turn that
                 // into an actionable message: send the turn to the daemon
-                // (`aivyx --headless`, which routes over IPC and never opens
+                // (`aivyx-pa --headless`, which routes over IPC and never opens
                 // the store), or stop the daemon. Only rewrite genuine lock
                 // collisions while a daemon is actually up; any other open
                 // failure keeps its original error.
@@ -1285,9 +1285,9 @@ fn run() -> Result<(), String> {
                     return Err(format!(
                         "a daemon is already running and holds the store \
                          lock at {storage_path:?}. Send non-interactive \
-                         turns to it with `aivyx --headless \"...\"` (routes \
+                         turns to it with `aivyx-pa --headless \"...\"` (routes \
                          over the daemon IPC), or stop the daemon first with \
-                         `aivyx daemon stop`."
+                         `aivyx-pa daemon stop`."
                     ));
                 }
                 return Err(format!(
@@ -1300,7 +1300,7 @@ fn run() -> Result<(), String> {
             return run_verify_only(storage, audit_chain_key).await;
         }
 
-        // Phase 105 — `aivyx audit export`. Shares the cold-start
+        // Phase 105 — `aivyx-pa audit export`. Shares the cold-start
         // storage open path with `--verify-only` (passphrase
         // required, no session, no daemon needed). Emits the chain
         // as JSONL on stdout; both `--from <seq>` and `--limit <N>`
@@ -1310,7 +1310,7 @@ fn run() -> Result<(), String> {
             return run_audit_export(storage, audit_chain_key, from, limit, event_type).await;
         }
 
-        // Chapter K — `aivyx cost`. Same cold-start posture: open the chain,
+        // Chapter K — `aivyx-pa cost`. Same cold-start posture: open the chain,
         // price its `LlmCost` events (with the operator's `[pricing]`
         // overrides over the built-in defaults), print the report, exit.
         if let Some(today) = cost_today {
@@ -1372,12 +1372,12 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
                     .map(|p| format!("  pid: {p}\n"))
                     .unwrap_or_default();
                 eprintln!(
-                    "aivyx daemon: running (protocol {version})\n  socket: {}\n{pid_str}",
+                    "aivyx-pa daemon: running (protocol {version})\n  socket: {}\n{pid_str}",
                     socket_path.display(),
                 );
             } else {
                 eprintln!(
-                    "aivyx daemon: not running\n  socket: {} (not listening)",
+                    "aivyx-pa daemon: not running\n  socket: {} (not listening)",
                     socket_path.display(),
                 );
             }
@@ -1385,17 +1385,17 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
         CliMode::DaemonStop => {
             if !aivyx_channel::daemon_client::daemon_is_running(&socket_path).await {
                 eprintln!(
-                    "aivyx daemon: not running — nothing to stop.\n  socket: {}",
+                    "aivyx-pa daemon: not running — nothing to stop.\n  socket: {}",
                     socket_path.display(),
                 );
                 return Ok(());
             }
             match aivyx_channel::daemon_client::daemon_stop(&socket_path).await {
                 Ok(reason) => {
-                    eprintln!("aivyx daemon: stopped ({reason})");
+                    eprintln!("aivyx-pa daemon: stopped ({reason})");
                 }
                 Err(e) => {
-                    eprintln!("aivyx daemon: stop failed — {e}");
+                    eprintln!("aivyx-pa daemon: stop failed — {e}");
                     return Err(e.to_string());
                 }
             }
@@ -1413,7 +1413,7 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
 /// with the local REPL's first turn output or a Telegram channel's
 /// outbound messages.
 fn print_config_banner(config: &AivyxConfig) {
-    eprintln!("aivyx config sources:");
+    eprintln!("aivyx-pa config sources:");
     eprintln!(
         "  provider          = {} ({})",
         config.provider.value,
@@ -1748,11 +1748,11 @@ fn should_early_validate(storage_path: &std::path::Path) -> bool {
 /// `AivyxConfig`/`LoadOptions`.
 ///
 /// The returned message is complete and prefix-free (no leading
-/// `"aivyx: "` — the caller adds that exactly once, at whichever of the
+/// `"aivyx-pa: "` — the caller adds that exactly once, at whichever of the
 /// two places actually prints it) and already carries its own
 /// mode-appropriate remedy: the default chat path's remedy is
-/// `aivyx init`, but for the 3 diagnostic modes `aivyx init` alone can
-/// never fix "no store exists" (it only ever writes `aivyx.toml`, never
+/// `aivyx-pa init`, but for the 3 diagnostic modes `aivyx-pa init` alone can
+/// never fix "no store exists" (it only ever writes `aivyx-pa.toml`, never
 /// creates a store — the store is created later by `run()`'s own
 /// passphrase/store-open sequence), so those modes get a remedy that
 /// actually resolves the condition.
@@ -1766,13 +1766,13 @@ fn early_validate_message(
     if verify_only || audit_export_mode || cost_mode {
         Err(format!(
             "no store exists yet at {storage_path:?} — nothing to verify/export/report on.\n\n\
-             Run `aivyx init` first if you haven't configured anything yet, then run \
-             `aivyx` once to create the store, then re-run this command."
+             Run `aivyx-pa init` first if you haven't configured anything yet, then run \
+             `aivyx-pa` once to create the store, then re-run this command."
         ))
     } else {
         validate().map_err(|e| {
             format!(
-                "{e}\n\nRun `aivyx init` to set this up (or `aivyx init \
+                "{e}\n\nRun `aivyx-pa init` to set this up (or `aivyx-pa init \
                  --template coder|researcher|personal` for a quick start)."
             )
         })
@@ -1788,11 +1788,11 @@ fn early_validate_message(
 /// was shown yet, so print nothing early and return the full message
 /// once, letting `main()`'s generic handler print it exactly one time.
 ///
-/// `full_message` is prefix-free (no leading `"aivyx: "`) — whichever
+/// `full_message` is prefix-free (no leading `"aivyx-pa: "`) — whichever
 /// of the two call sites actually prints it owns adding that prefix
 /// exactly once. Baking the prefix in here would double it on the
 /// non-TTY path, since `main()`'s generic error handler already adds
-/// its own `"aivyx: "` to anything this function returns as the second
+/// its own `"aivyx-pa: "` to anything this function returns as the second
 /// tuple element.
 fn early_validate_fail_output(is_tty: bool, full_message: String) -> (Option<String>, String) {
     if is_tty {
@@ -1808,7 +1808,7 @@ fn early_validate_fail_output(is_tty: bool, full_message: String) -> (Option<Str
 // Lantern LN.1 lifted them there so the daemon's `GetMcpStatus` handler,
 // the Studio screen, and this CLI all share one definition). This binary
 // keeps only the CLI display: the startup-log stderr formatter and the
-// `aivyx mcp status` renderer.
+// `aivyx-pa mcp status` renderer.
 // ---------------------------------------------------------------------
 
 /// Append a captured-stderr tail to a one-line startup error message.
@@ -1825,7 +1825,7 @@ fn format_stderr_tail(tail: &[String]) -> String {
     s
 }
 
-/// `aivyx mcp status` — render the daemon's last MCP startup snapshot.
+/// `aivyx-pa mcp status` — render the daemon's last MCP startup snapshot.
 fn run_mcp_status() -> Result<(), String> {
     use aivyx_channel::mcp_status;
     let snapshot = match mcp_status::read_snapshot() {
@@ -1837,7 +1837,7 @@ fn run_mcp_status() -> Result<(), String> {
             println!(
                 "No MCP status recorded yet ({where_}).\n\
                  Start the daemon with at least one `[[mcp_server]]` configured, \
-                 then re-run `aivyx mcp status`.",
+                 then re-run `aivyx-pa mcp status`.",
             );
             return Ok(());
         }
@@ -1888,51 +1888,51 @@ enum CliMode {
     VerifyOnly,
     /// `--print-role <name>`: render a role's capability envelope.
     PrintRole(String),
-    /// `aivyx daemon run`: launch the daemon in the foreground.
+    /// `aivyx-pa daemon run`: launch the daemon in the foreground.
     DaemonRun,
-    /// `aivyx daemon status`: check whether a daemon is running.
+    /// `aivyx-pa daemon status`: check whether a daemon is running.
     DaemonStatus,
-    /// `aivyx daemon stop`: send graceful shutdown to a running daemon.
+    /// `aivyx-pa daemon stop`: send graceful shutdown to a running daemon.
     DaemonStop,
-    /// `aivyx daemon install [--web-ui] [--no-start]` (Chapter Belay): install
+    /// `aivyx-pa daemon install [--web-ui] [--no-start]` (Chapter Belay): install
     /// the daemon as a persistent user service (systemd user unit + linger).
     DaemonInstall { web_ui: bool, start: bool },
-    /// `aivyx daemon uninstall`: stop, disable, and remove the service.
+    /// `aivyx-pa daemon uninstall`: stop, disable, and remove the service.
     DaemonUninstall,
-    /// `aivyx init`: interactive first-run setup wizard (Phase 44).
+    /// `aivyx-pa init`: interactive first-run setup wizard (Phase 44).
     /// Phase 66 added the optional template pre-fill via
-    /// `aivyx init --template <name>`. The wizard still walks the
+    /// `aivyx-pa init --template <name>`. The wizard still walks the
     /// operator through each prompt; the template sets the suggested
     /// defaults.
     Init(InitMode),
-    /// `aivyx connect [service]`: guided credential onboarding for
+    /// `aivyx-pa connect [service]`: guided credential onboarding for
     /// the Google productivity tools (Phase 182). `None` lists the
     /// connectable services + status; `Some(service)` runs the
     /// guided OAuth flow.
     Connect(Option<String>),
-    /// `aivyx mcp-server <name>`: bundled MCP server (Phase 46).
+    /// `aivyx-pa mcp-server <name>`: bundled MCP server (Phase 46).
     McpServer(String),
-    /// `aivyx profile <subcommand>`: Profile inspection / edit
+    /// `aivyx-pa profile <subcommand>`: Profile inspection / edit
     /// (Phase 58 — PRODUCT.md P13). Q1(a) at sign-off: nested
     /// [`ProfileSubcommand`] enum so future additions (e.g. `Reset`,
     /// `Reload`) stay additive without fragmenting `CliMode`.
     Profile(ProfileSubcommand),
-    /// `aivyx persona <subcommand>`: Persona inspection / revert
+    /// `aivyx-pa persona <subcommand>`: Persona inspection / revert
     /// (Phase 60 — PRODUCT.md P14 closure). Q1(c) at sign-off:
     /// nested enum with `Show`, `List`, and `Revert` variants.
     /// Revert carries its target delta id inline. All three
     /// subcommands talk to a running daemon over IPC.
     Persona(PersonaSubcommand),
-    /// `aivyx skills <teach|update|forget>`: Chapter Tutor — operator-initiated
+    /// `aivyx-pa skills <teach|update|forget>`: Chapter Tutor — operator-initiated
     /// skill authoring on the persona chain (over a running daemon's IPC),
     /// distinct from the agent's scope-gated `skills.teach` tool.
     Skills(SkillsSubcommand),
-    /// `aivyx --version` / `aivyx -V`: print `aivyx <version>` and
+    /// `aivyx-pa --version` / `aivyx-pa -V`: print `aivyx-pa <version>` and
     /// exit 0 (Phase 61 Task 2). Standard hygiene for binaries
     /// shipped via package managers and required by cargo-dist's
     /// installer smoke test.
     Version,
-    /// `aivyx --headless ["<task>"]`: unattended turn(s) over the
+    /// `aivyx-pa --headless ["<task>"]`: unattended turn(s) over the
     /// running daemon (Chapter H follow-on). The daemon refuses at any
     /// approval gate rather than parking for an operator; the process
     /// exit code reports the outcome (0 completed / 3 refused / 1
@@ -1941,13 +1941,13 @@ enum CliMode {
     /// newline-delimited turns from piped stdin as ONE multi-turn
     /// session, fail-fast on the first non-completed turn.
     Headless(Option<String>),
-    /// `aivyx identity <subcommand>`: Profile + Persona
+    /// `aivyx-pa identity <subcommand>`: Profile + Persona
     /// export/import (Phase 64). Closes the Phase 60
     /// deferral; lets operators move identity between hosts.
     /// Phase 64 ships export only; import lands in Phase 65
     /// per the implementation-time scope adjustment.
     Identity(IdentitySubcommand),
-    /// `aivyx federation <subcommand>`: Chapter Passport Task 8 —
+    /// `aivyx-pa federation <subcommand>`: Chapter Passport Task 8 —
     /// hardware-backed federation identity provisioning. Currently only
     /// `yubikey-init <instance-id> <key-binding-path>`. Distinct from
     /// `CliMode::Identity` above (Profile/Persona export/import) — this is
@@ -1957,85 +1957,85 @@ enum CliMode {
     /// even in a default build); only the actual dispatch requires the
     /// `yubikey` Cargo feature — see `run`'s `CliMode::Federation` arm.
     Federation(FederationSubcommand),
-    /// `aivyx notify <subcommand>`: Reach Milestone history /
+    /// `aivyx-pa notify <subcommand>`: Reach Milestone history /
     /// inspection (Phase 73 — Tier-2 polish). Talks to the
     /// running daemon over IPC; renders the notification
     /// history audit chain as a flat-text table for terminal
     /// operators. Web UI parity in the Notifications pane.
     Notify(NotifySubcommand),
-    /// `aivyx memory <subcommand>`: memory inspection /
+    /// `aivyx-pa memory <subcommand>`: memory inspection /
     /// management (Phase 74 — memory polish). IPC-backed;
     /// terminal parity with the Web UI Memory pane.
     Memory(MemorySubcommand),
-    /// `aivyx learning [--window <secs>]`: Phase 78 read-only
+    /// `aivyx-pa learning [--window <secs>]`: Phase 78 read-only
     /// view of what the self-learning loop has learned and why.
     /// IPC-backed; terminal parity with the Web UI Learning
     /// pane. `window_secs = None` → the daemon's default
     /// lookback.
     Learning { window_secs: Option<u64> },
-    /// `aivyx tools [--window <secs>]`: Phase 102 read-only
+    /// `aivyx-pa tools [--window <secs>]`: Phase 102 read-only
     /// tool-observability view — every registered tool
     /// annotated with audit-derived call/outcome stats.
     /// IPC-backed. `window_secs = None` → the whole audit
     /// chain.
     Tools { window_secs: Option<u64> },
-    /// `aivyx tool <subcommand>`: Phase 103 third-party-tool
+    /// `aivyx-pa tool <subcommand>`: Phase 103 third-party-tool
     /// authoring helpers. Currently only `init <path>` — a
     /// scaffolder for a runnable Rust tool-process starter.
     Tool(ToolSubcommand),
-    /// `aivyx audit <subcommand>`: Phase 105 read-only audit
+    /// `aivyx-pa audit <subcommand>`: Phase 105 read-only audit
     /// chain access. Currently only `export` — emit the
     /// chain as JSONL on stdout. Offline-only (cold-start
     /// storage open via the operator's passphrase) per Q3a.
     Audit(AuditSubcommand),
-    /// `aivyx access <subcommand>`: Chapter N — the operator-facing
+    /// `aivyx-pa access <subcommand>`: Chapter N — the operator-facing
     /// access-level Settings command. `show` prints the resolved level +
     /// reach + posture; `set <level>` rewrites the `[access]` section of
-    /// `aivyx.toml`. Synchronous file ops — no daemon, no passphrase.
+    /// `aivyx-pa.toml`. Synchronous file ops — no daemon, no passphrase.
     Access(AccessSubcommand),
-    /// `aivyx autonomy <subcommand>`: the autonomy-dial Settings command
+    /// `aivyx-pa autonomy <subcommand>`: the autonomy-dial Settings command
     /// (Chapter Reins). `show` renders the resolved level + posture; `set
     /// <level>` rewrites `[autonomy] level`. Synchronous file ops, load-time.
     Autonomy(AutonomySubcommand),
-    /// `aivyx workspace <subcommand>`: Chapter O — operator visibility into
+    /// `aivyx-pa workspace <subcommand>`: Chapter O — operator visibility into
     /// the agent's personal workspace. `ls [path]` / `cat <path>` / `path`.
     /// Read-only file ops — no daemon, no passphrase.
     Workspace(WorkspaceSubcommand),
-    /// `aivyx doctor`: Chapter P — first-run health check. Confirms the
+    /// `aivyx-pa doctor`: Chapter P — first-run health check. Confirms the
     /// configured provider works (for local: Ollama reachable, model present,
     /// a real non-empty test reply) and prints actionable fixes. No daemon.
     Doctor,
-    /// Chapter Keyring — `aivyx keyring <set|clear|status>`: manage the master
+    /// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`: manage the master
     /// passphrase in the OS credential store. No daemon / storage.
     Keyring(KeyringSubcommand),
-    /// `aivyx mcp <subcommand>`: Phase 106 curated-recipes
+    /// `aivyx-pa mcp <subcommand>`: Phase 106 curated-recipes
     /// catalog. Currently only `recipes [<name>]` — list or
     /// print MCP server recipes. Distinct from the
-    /// pre-existing `aivyx mcp-server <name>` (Phase 46),
-    /// which *runs* a bundled MCP server; `aivyx mcp
+    /// pre-existing `aivyx-pa mcp-server <name>` (Phase 46),
+    /// which *runs* a bundled MCP server; `aivyx-pa mcp
     /// recipes` is the *catalog* of recipes for the operator
-    /// to copy into `aivyx.toml`.
+    /// to copy into `aivyx-pa.toml`.
     Mcp(McpSubcommand),
-    /// `aivyx role <subcommand>`: Phase 119 — operator-side
+    /// `aivyx-pa role <subcommand>`: Phase 119 — operator-side
     /// role-config commands. Currently only `import <id>` —
     /// applies an Approved `RoleDefinitionSuggestion`
-    /// proposal to `aivyx.toml`'s `[roles.<name>]` section
+    /// proposal to `aivyx-pa.toml`'s `[roles.<name>]` section
     /// via the Task 3 atomic primitive and records the
     /// `AuditEvent::RoleDraftImported` event via daemon IPC.
     Role(RoleSubcommand),
-    /// `aivyx tool-relevance <subcommand>`: Phase 119 Task 6 —
+    /// `aivyx-pa tool-relevance <subcommand>`: Phase 119 Task 6 —
     /// closes the Phase 116 deferred inspection surface. Currently
     /// only `dump [--keyword-key <key>]` — renders the encrypted
     /// per-keyword-key relevance ledger as a human-readable table.
     /// IPC-backed.
     ToolRelevance(ToolRelevanceSubcommand),
-    /// `aivyx loop <subcommand>`: Phase 173 — the autonomous
+    /// `aivyx-pa loop <subcommand>`: Phase 173 — the autonomous
     /// loop (the Aivyx Ralph loop). IPC-backed; stocks the
     /// backlog + drives runs.
     Loop(LoopSubcommand),
-    /// Chapter Freight — `aivyx pack <subcommand>`: signed pack bundles.
+    /// Chapter Freight — `aivyx-pa pack <subcommand>`: signed pack bundles.
     Pack(PackSubcommand),
-    /// `aivyx tui [--role <name>]`: Phase 185 — the ratatui terminal
+    /// `aivyx-pa tui [--role <name>]`: Phase 185 — the ratatui terminal
     /// UI. A frontend client over the local daemon IPC (auto-spawns
     /// the daemon if needed), exactly like the default REPL — only
     /// rendered into a real terminal application. Opt-in; the REPL
@@ -2043,19 +2043,19 @@ enum CliMode {
     /// rides on the top-level `CliArgs::role` (parsed below); this
     /// variant carries no fields.
     Tui,
-    /// `aivyx team <subcommand>`: Chapter J — the Nonagon. `roster`
+    /// `aivyx-pa team <subcommand>`: Chapter J — the Nonagon. `roster`
     /// renders the default team (offline); `run "<mission>"` assembles
     /// the team in-process and hands the mission to the lead, whose
     /// specialist sub-turns land on the same HMAC chain.
     Team(TeamSubcommand),
-    /// `aivyx cost [--today]`: Chapter K — the priced spend report.
+    /// `aivyx-pa cost [--today]`: Chapter K — the priced spend report.
     /// Offline (cold-start storage like `audit export`): scans the chain's
     /// `LlmCost` events, prices them, and prints a per-model breakdown.
     /// `--today` scopes to the last 24h.
     Cost { today: bool },
 }
 
-/// Chapter Keyring — `aivyx keyring <subcommand>`.
+/// Chapter Keyring — `aivyx-pa keyring <subcommand>`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum KeyringSubcommand {
     /// Prompt for the master passphrase and store it in the OS keyring.
@@ -2066,14 +2066,14 @@ enum KeyringSubcommand {
     Status,
 }
 
-/// Chapter J — `aivyx team <subcommand>` variants. The optional
+/// Chapter J — `aivyx-pa team <subcommand>` variants. The optional
 /// `--config <path.toml>` loads a **vertical pack's** customised `TeamConfig`
 /// (e.g. the kitchen BOH Nonagon); omitted, the default 9-role Nonagon runs.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum TeamSubcommand {
-    /// `aivyx team roster [--config <path>]` — render a team. Offline.
+    /// `aivyx-pa team roster [--config <path>]` — render a team. Offline.
     Roster { config: Option<String> },
-    /// Chapter Roster (RO.4) — `aivyx team init [--pack <default|path.toml>]
+    /// Chapter Roster (RO.4) — `aivyx-pa team init [--pack <default|path.toml>]
     /// [--out <path>] [--force]`: write a starter team config file (the default
     /// Nonagon, or a pack loaded from a TOML path) the daemon adopts at startup
     /// and the Studio's Teams screen edits. Offline; refuses to overwrite.
@@ -2082,41 +2082,41 @@ enum TeamSubcommand {
         out: Option<String>,
         force: bool,
     },
-    /// `aivyx team run "<mission>" [--config <path>]` — run the lead.
+    /// `aivyx-pa team run "<mission>" [--config <path>]` — run the lead.
     Run {
         mission: String,
         config: Option<String>,
     },
-    /// Chapter L — `aivyx team start --plan <file.json> [--config <pack.toml>]`:
+    /// Chapter L — `aivyx-pa team start --plan <file.json> [--config <pack.toml>]`:
     /// submit an explicit mission plan to the daemon (durable, gate-pausable),
     /// optionally on a vertical-pack team.
     Start {
         plan_path: String,
         config: Option<String>,
     },
-    /// Chapter L — `aivyx team start "<goal>" [--config <pack.toml>]`: the daemon
+    /// Chapter L — `aivyx-pa team start "<goal>" [--config <pack.toml>]`: the daemon
     /// decomposes the goal into a plan (one LLM planning call) and runs it,
     /// optionally on a vertical-pack team.
     StartGoal {
         goal: String,
         config: Option<String>,
     },
-    /// Chapter L — `aivyx team list`: the daemon's mission feed.
+    /// Chapter L — `aivyx-pa team list`: the daemon's mission feed.
     List,
-    /// Chapter L — `aivyx team status [<id>]`: one mission's detail, or the
+    /// Chapter L — `aivyx-pa team status [<id>]`: one mission's detail, or the
     /// whole feed when no id is given.
     Status { mission_id: Option<String> },
-    /// Chapter L — `aivyx team approve <id> <step>`: pass a human gate.
+    /// Chapter L — `aivyx-pa team approve <id> <step>`: pass a human gate.
     Approve { mission_id: String, step: String },
-    /// Chapter L — `aivyx team reject <id> <step>`: reject a human gate.
+    /// Chapter L — `aivyx-pa team reject <id> <step>`: reject a human gate.
     Reject { mission_id: String, step: String },
-    /// Chapter Belay — `aivyx team abort <id>`: stop a running mission (it
+    /// Chapter Belay — `aivyx-pa team abort <id>`: stop a running mission (it
     /// halts gracefully at its next step boundary, preserving completed work).
     Abort { mission_id: String },
-    /// Chapter Mission Control — `aivyx team pause <id>`: pause a running
+    /// Chapter Mission Control — `aivyx-pa team pause <id>`: pause a running
     /// mission at its next step boundary — resumable, unlike abort.
     Pause { mission_id: String },
-    /// Chapter Mission Control — `aivyx team resume <id>`: resume a
+    /// Chapter Mission Control — `aivyx-pa team resume <id>`: resume a
     /// paused mission from its checkpoint.
     Resume { mission_id: String },
 }
@@ -2140,61 +2140,61 @@ impl TeamSubcommand {
     }
 }
 
-/// Chapter Freight — `aivyx pack <subcommand>` variants.
+/// Chapter Freight — `aivyx-pa pack <subcommand>` variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum PackSubcommand {
-    /// `aivyx pack keygen <keyfile>`
+    /// `aivyx-pa pack keygen <keyfile>`
     Keygen { keyfile: String },
-    /// `aivyx pack build <staging> --key <keyfile> --out <file>`
+    /// `aivyx-pa pack build <staging> --key <keyfile> --out <file>`
     Build {
         staging: String,
         key: String,
         out: String,
     },
-    /// `aivyx pack inspect <file> [--allow-untrusted]`
+    /// `aivyx-pa pack inspect <file> [--allow-untrusted]`
     Inspect { file: String, allow_untrusted: bool },
-    /// `aivyx pack install <file>`
+    /// `aivyx-pa pack install <file>`
     Install { file: String },
 }
 
-/// Phase 173 — `aivyx loop <subcommand>` variants.
+/// Phase 173 — `aivyx-pa loop <subcommand>` variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum LoopSubcommand {
-    /// `aivyx loop add <title> [body] [--body <text>] [--priority <n>]`
+    /// `aivyx-pa loop add <title> [body] [--body <text>] [--priority <n>]`
     Add {
         title: String,
         body: String,
         priority: Option<u32>,
     },
-    /// `aivyx loop list`
+    /// `aivyx-pa loop list`
     List,
-    /// `aivyx loop start [--max-iterations <n>]`
+    /// `aivyx-pa loop start [--max-iterations <n>]`
     Start { max_iterations: Option<u32> },
-    /// `aivyx loop stop`
+    /// `aivyx-pa loop stop`
     Stop,
-    /// `aivyx loop status`
+    /// `aivyx-pa loop status`
     Status,
-    /// `aivyx loop log [--limit <n>]`
+    /// `aivyx-pa loop log [--limit <n>]`
     Log { limit: Option<u32> },
-    /// `aivyx loop skip <story-id>`
+    /// `aivyx-pa loop skip <story-id>`
     Skip { story_id: String },
 }
 
-/// Phase 119 Task 6 — `aivyx tool-relevance <subcommand>` variants.
+/// Phase 119 Task 6 — `aivyx-pa tool-relevance <subcommand>` variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum ToolRelevanceSubcommand {
-    /// `aivyx tool-relevance dump [--keyword-key <key>]` — render
+    /// `aivyx-pa tool-relevance dump [--keyword-key <key>]` — render
     /// the Phase 116 relevance ledger as a flat table. With
     /// `--keyword-key`, restricts to the single key.
     Dump { keyword_key_filter: Option<String> },
 }
 
-/// Phase 119 Task 5 — `aivyx role <subcommand>` variants.
+/// Phase 119 Task 5 — `aivyx-pa role <subcommand>` variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum RoleSubcommand {
-    /// `aivyx role import <proposal-id> [--yes] [--force]` —
+    /// `aivyx-pa role import <proposal-id> [--yes] [--force]` —
     /// applies a Phase 118 `RoleDefinitionSuggestion`
-    /// proposal to `aivyx.toml`. Refuses to overwrite an
+    /// proposal to `aivyx-pa.toml`. Refuses to overwrite an
     /// existing role of the same name without `--force`.
     Import {
         proposal_id: String,
@@ -2203,23 +2203,23 @@ enum RoleSubcommand {
     },
 }
 
-/// Phase 73 — `aivyx notify` subcommand variants.
+/// Phase 73 — `aivyx-pa notify` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum NotifySubcommand {
-    /// `aivyx notify history [--target NAME] [--limit N]`.
+    /// `aivyx-pa notify history [--target NAME] [--limit N]`.
     /// Defaults: no target filter, limit 100.
     History { target: Option<String>, limit: u32 },
 }
 
-/// Phase 74 — `aivyx memory` subcommand variants.
+/// Phase 74 — `aivyx-pa memory` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum MemorySubcommand {
-    /// `aivyx memory list` — print every topic.
+    /// `aivyx-pa memory list` — print every topic.
     List,
-    /// `aivyx memory show <topic> [--limit N]` — entries for a
+    /// `aivyx-pa memory show <topic> [--limit N]` — entries for a
     /// topic, newest first. Default limit 32.
     Show { topic: String, limit: u32 },
-    /// `aivyx memory search <query> [--semantic] [--limit N]` —
+    /// `aivyx-pa memory search <query> [--semantic] [--limit N]` —
     /// search across topics + bodies. Default limit 32.
     /// `--semantic` requests embedding-ranked retrieval; the
     /// daemon transparently falls back to keyword (with a
@@ -2229,36 +2229,36 @@ enum MemorySubcommand {
         limit: u32,
         semantic: bool,
     },
-    /// `aivyx memory evict <topic> [--yes]` — delete every
+    /// `aivyx-pa memory evict <topic> [--yes]` — delete every
     /// entry under a topic. `--yes` skips the confirm prompt.
     Evict { topic: String, yes: bool },
-    /// `aivyx memory wiki [topic]` — list the agent's synthesized
+    /// `aivyx-pa memory wiki [topic]` — list the agent's synthesized
     /// knowledge-wiki pages, or show one topic's consolidated page.
     Wiki { topic: Option<String> },
-    /// `aivyx memory graph [entity]` — show the typed knowledge graph
+    /// `aivyx-pa memory graph [entity]` — show the typed knowledge graph
     /// (entity → predicate → entity), optionally filtered to one entity.
     Graph { entity: Option<String> },
-    /// `aivyx memory conflicts` — run the on-demand contradiction
+    /// `aivyx-pa memory conflicts` — run the on-demand contradiction
     /// detection pass and list contradictory stored facts to resolve.
     Conflicts,
-    /// `aivyx memory resolve <topic> --archive <seq>` — resolve a
+    /// `aivyx-pa memory resolve <topic> --archive <seq>` — resolve a
     /// conflict by deleting the losing entry (the one NOT true).
     Resolve { topic: String, archive: u64 },
-    /// `aivyx memory dismiss <id>` — mark a detected conflict a false
+    /// `aivyx-pa memory dismiss <id>` — mark a detected conflict a false
     /// positive so it isn't flagged again (both entries kept).
     Dismiss { id: String },
 }
 
-/// Phase 66 — `aivyx init` variant discriminator.
+/// Phase 66 — `aivyx-pa init` variant discriminator.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum InitMode {
-    /// Plain `aivyx init` — interactive wizard, no template
+    /// Plain `aivyx-pa init` — interactive wizard, no template
     /// pre-fill. Existing Phase 44 behavior.
     Interactive,
-    /// `aivyx init --template <name>` — wizard pre-filled from
+    /// `aivyx-pa init --template <name>` — wizard pre-filled from
     /// the named template (Q3(b) at Phase 66 sign-off).
     InteractiveFromTemplate { template_name: String },
-    /// `aivyx init --list-templates` or `aivyx init --template`
+    /// `aivyx-pa init --list-templates` or `aivyx-pa init --template`
     /// (no name). Prints available templates and exits per
     /// Q4(c) at sign-off.
     ListTemplates,
@@ -2267,13 +2267,13 @@ enum InitMode {
 /// Subcommand discriminator under [`CliMode::Identity`]. Phase 64.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum IdentitySubcommand {
-    /// `aivyx identity export <path>` — write the full identity
+    /// `aivyx-pa identity export <path>` — write the full identity
     /// bundle (Profile + Persona chain + effective snapshot) to
     /// the operator-supplied path as pretty-printed JSON with
     /// `0600` permissions. Daemon must be running (the Persona
     /// half is fetched over IPC).
     Export { path: PathBuf },
-    /// `aivyx identity import <path> [--force]` — Phase 65.
+    /// `aivyx-pa identity import <path> [--force]` — Phase 65.
     /// Replays the exported bundle onto the local chain. The
     /// daemon refuses on a non-empty existing chain unless
     /// `force` is set. Profile half remains a hand-edit per
@@ -2286,7 +2286,7 @@ enum IdentitySubcommand {
 /// fields only) — see [`CliMode::Federation`]'s doc comment for why.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum FederationSubcommand {
-    /// `aivyx federation yubikey-init <instance-id> <key-binding-path>` —
+    /// `aivyx-pa federation yubikey-init <instance-id> <key-binding-path>` —
     /// provision a YubiKey's OpenPGP card Signature slot as `instance-id`'s
     /// hardware-backed federation identity, then write the resulting
     /// `{instance_id, card_serial, public_key_base64}` binding record to
@@ -2298,7 +2298,7 @@ enum FederationSubcommand {
     },
 }
 
-/// Phase 113 — `aivyx persona list` filter discriminator.
+/// Phase 113 — `aivyx-pa persona list` filter discriminator.
 /// `All` = unfiltered (pre-Phase-113 behaviour); `AutoOnly` =
 /// only deltas whose `delta_id` starts with `pd-auto-` (the
 /// Phase 112 auto-accept synthesized prefix); `ManualOnly` =
@@ -2314,30 +2314,30 @@ enum PersonaListFilter {
 /// Subcommand discriminator under [`CliMode::Persona`]. Phase 60.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum PersonaSubcommand {
-    /// `aivyx persona show` — print the effective Persona snapshot.
+    /// `aivyx-pa persona show` — print the effective Persona snapshot.
     Show,
-    /// `aivyx persona list [--auto-only | --manual-only]` — print
+    /// `aivyx-pa persona list [--auto-only | --manual-only]` — print
     /// every approved delta in chain order with id, category, op,
     /// and approval timestamp. Phase 113 — the optional filter
     /// scopes to auto-accepted vs operator-approved entries by
     /// matching the `pd-auto-` `delta_id` prefix the Phase 112
     /// auto-proposer synthesizes.
     List { filter: PersonaListFilter },
-    /// `aivyx persona revert <delta_id>` — operator-initiated
+    /// `aivyx-pa persona revert <delta_id>` — operator-initiated
     /// revert. Daemon appends a `Revert` op delta and recomputes
     /// the shared runtime state so the next turn reflects the undo.
     Revert { target_delta_id: String },
-    /// `aivyx persona proposals <sub>` — Phase 70 review surface
+    /// `aivyx-pa persona proposals <sub>` — Phase 70 review surface
     /// for the reflection auto-loop's pending Persona proposals.
     Proposals(ProposalsSubcommand),
-    /// `aivyx persona conflicts` — Chapter Accord: on-demand detection of
+    /// `aivyx-pa persona conflicts` — Chapter Accord: on-demand detection of
     /// self-contradicting Soul facets (and facets that drift from operator
     /// Profile constraints).
     Conflicts,
-    /// `aivyx persona resolve <id> --remove <a|b>` — remove the chosen facet
+    /// `aivyx-pa persona resolve <id> --remove <a|b>` — remove the chosen facet
     /// of a detected contradiction (a `RemoveList` persona delta; reversible).
     Resolve { id: String, remove: char },
-    /// `aivyx persona dismiss <id>` — Chapter Accord "keep both": mark a
+    /// `aivyx-pa persona dismiss <id>` — Chapter Accord "keep both": mark a
     /// detected contradiction a false positive so it isn't re-flagged.
     Dismiss { id: String },
 }
@@ -2347,36 +2347,36 @@ enum PersonaSubcommand {
 /// IPC), distinct from the agent's scope-gated `skills.teach` tool.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum SkillsSubcommand {
-    /// `aivyx skills teach <name> <trigger> <procedure>` — add a new skill.
+    /// `aivyx-pa skills teach <name> <trigger> <procedure>` — add a new skill.
     Teach {
         name: String,
         trigger: String,
         procedure: String,
     },
-    /// `aivyx skills update <name> [--trigger T] [--procedure P]` — change an
+    /// `aivyx-pa skills update <name> [--trigger T] [--procedure P]` — change an
     /// existing skill's trigger and/or procedure.
     Update {
         name: String,
         trigger: Option<String>,
         procedure: Option<String>,
     },
-    /// `aivyx skills forget <name>` — remove an existing skill.
+    /// `aivyx-pa skills forget <name>` — remove an existing skill.
     Forget { name: String },
 }
 
 /// Phase 70 — operator-facing CLI for the proposal review flow.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum ProposalsSubcommand {
-    /// `aivyx persona proposals list [--status pending|approved|
+    /// `aivyx-pa persona proposals list [--status pending|approved|
     /// rejected|all]`. Defaults to `pending`.
     List { status: String },
-    /// `aivyx persona proposals show <id>`.
+    /// `aivyx-pa persona proposals show <id>`.
     Show { proposal_id: String },
-    /// `aivyx persona proposals approve <id>`. No edit-on-approve
-    /// in the CLI v1 (operator can `aivyx persona proposals show`
+    /// `aivyx-pa persona proposals approve <id>`. No edit-on-approve
+    /// in the CLI v1 (operator can `aivyx-pa persona proposals show`
     /// to inspect then use the Web UI Proposals pane for editing).
     Approve { proposal_id: String },
-    /// `aivyx persona proposals reject <id> [--reason TEXT]`.
+    /// `aivyx-pa persona proposals reject <id> [--reason TEXT]`.
     Reject {
         proposal_id: String,
         reason: Option<String>,
@@ -2387,51 +2387,51 @@ enum ProposalsSubcommand {
 /// — PRODUCT.md P13.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum ProfileSubcommand {
-    /// `aivyx profile show` — print the current Profile to stdout
-    /// in a labeled human-readable form. Reads `aivyx.toml` from
+    /// `aivyx-pa profile show` — print the current Profile to stdout
+    /// in a labeled human-readable form. Reads `aivyx-pa.toml` from
     /// disk per Q3(a) at sign-off.
     Show,
-    /// `aivyx profile edit` — surgical `[profile]` section edit in
+    /// `aivyx-pa profile edit` — surgical `[profile]` section edit in
     /// `$EDITOR` per Q2(a) at sign-off (wired in Task 3).
     Edit,
-    /// `aivyx profile apply-hint <id> [--yes]` — Phase 119 Task 4.
-    /// Applies an Approved ProfileHint to `aivyx.toml`'s [profile]
+    /// `aivyx-pa profile apply-hint <id> [--yes]` — Phase 119 Task 4.
+    /// Applies an Approved ProfileHint to `aivyx-pa.toml`'s [profile]
     /// section via the Task 3 atomic primitive, then records the
     /// `AuditEvent::ProfileHintApplied` event via daemon IPC.
     ApplyHint { proposal_id: String, yes: bool },
 }
 
-/// Phase 103 — `aivyx tool` subcommand variants.
+/// Phase 103 — `aivyx-pa tool` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum ToolSubcommand {
-    /// `aivyx tool init <path> [--force]` — scaffold a runnable
+    /// `aivyx-pa tool init <path> [--force]` — scaffold a runnable
     /// Rust tool-process starter at `path`. Refuses to write into
     /// a non-empty directory unless `--force`.
     Init { path: PathBuf, force: bool },
 }
 
-/// Phase 106 — `aivyx mcp` subcommand variants. Distinct
-/// from the Phase 46 `aivyx mcp-server <name>` runner — that
+/// Phase 106 — `aivyx-pa mcp` subcommand variants. Distinct
+/// from the Phase 46 `aivyx-pa mcp-server <name>` runner — that
 /// one *starts* a bundled MCP server on stdio; this one
 /// catalogs the curated recipes operators paste into
-/// `aivyx.toml`.
+/// `aivyx-pa.toml`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum McpSubcommand {
-    /// `aivyx mcp recipes [<name>]` — bare form lists every
+    /// `aivyx-pa mcp recipes [<name>]` — bare form lists every
     /// recipe with a one-line description; named form prints
     /// the worked snippet for `<name>`.
     Recipes { name: Option<String> },
-    /// Chapter Conduit (CD.3) — `aivyx mcp status`: render the
+    /// Chapter Conduit (CD.3) — `aivyx-pa mcp status`: render the
     /// snapshot the daemon wrote at its last start (per-server
     /// connected/failed, tool counts, and the failure reason +
     /// captured stderr for any that didn't come up).
     Status,
 }
 
-/// Phase 105 — `aivyx audit` subcommand variants.
+/// Phase 105 — `aivyx-pa audit` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum AuditSubcommand {
-    /// `aivyx audit export [--from <seq>] [--limit <N>]
+    /// `aivyx-pa audit export [--from <seq>] [--limit <N>]
     /// [--event-type <kind>]` — emit the audit chain as JSONL
     /// on stdout. Read-only, offline-only (cold-start storage
     /// open via the operator's passphrase). `--from`/`--limit`
@@ -2449,13 +2449,13 @@ enum AuditSubcommand {
     },
 }
 
-/// Chapter N — `aivyx access` subcommand variants.
+/// Chapter N — `aivyx-pa access` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum AccessSubcommand {
-    /// `aivyx access show` — print the resolved access level, the fs-root
+    /// `aivyx-pa access show` — print the resolved access level, the fs-root
     /// reach it derives, and the confirm-first posture.
     Show,
-    /// `aivyx access set <level> [--root <dir>] [--yes]` — rewrite the
+    /// `aivyx-pa access set <level> [--root <dir>] [--yes]` — rewrite the
     /// `[access]` section. `workspace`/`custom` need `--root`; expanded
     /// levels confirm unless `--yes`.
     Set {
@@ -2465,13 +2465,13 @@ enum AccessSubcommand {
     },
 }
 
-/// Subcommands for `aivyx autonomy` (Chapter Reins RN.6).
+/// Subcommands for `aivyx-pa autonomy` (Chapter Reins RN.6).
 #[derive(Debug, PartialEq)]
 enum AutonomySubcommand {
-    /// `aivyx autonomy show` — print the resolved level, the posture it
+    /// `aivyx-pa autonomy show` — print the resolved level, the posture it
     /// expands to, and any per-domain overrides + auto-approve allowlist.
     Show,
-    /// `aivyx autonomy set <level> [--yes]` — rewrite `[autonomy] level`. The
+    /// `aivyx-pa autonomy set <level> [--yes]` — rewrite `[autonomy] level`. The
     /// autonomy-granting levels (`autonomous`/`unleashed`) confirm unless `--yes`.
     Set {
         level: aivyx_config::AutonomyLevel,
@@ -2479,14 +2479,14 @@ enum AutonomySubcommand {
     },
 }
 
-/// Chapter O — `aivyx workspace` subcommand variants.
+/// Chapter O — `aivyx-pa workspace` subcommand variants.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum WorkspaceSubcommand {
-    /// `aivyx workspace path` — print the workspace directory.
+    /// `aivyx-pa workspace path` — print the workspace directory.
     Path,
-    /// `aivyx workspace ls [path]` — list the workspace (or a sub-path).
+    /// `aivyx-pa workspace ls [path]` — list the workspace (or a sub-path).
     Ls(Option<String>),
-    /// `aivyx workspace cat <path>` — print a file from the workspace.
+    /// `aivyx-pa workspace cat <path>` — print a file from the workspace.
     Cat(String),
 }
 
@@ -2524,13 +2524,13 @@ struct CliMcpSse {
 ///
 /// Recognized forms:
 ///
-/// - `aivyx` — local REPL, fresh session (default).
-/// - `aivyx --verify-only` — forensic verification path.
-/// - `aivyx --channel local` — explicit form of the default.
-/// - `aivyx --channel telegram` — Phase 8 Task 4 Telegram bot mode.
-/// - `aivyx --role <name>` — Phase 11 Task 4.
-/// - `aivyx --print-role <name>` — Phase 13 Task 4.
-/// - `aivyx daemon run` — Phase 17 Task 3 daemon foreground mode.
+/// - `aivyx-pa` — local REPL, fresh session (default).
+/// - `aivyx-pa --verify-only` — forensic verification path.
+/// - `aivyx-pa --channel local` — explicit form of the default.
+/// - `aivyx-pa --channel telegram` — Phase 8 Task 4 Telegram bot mode.
+/// - `aivyx-pa --role <name>` — Phase 11 Task 4.
+/// - `aivyx-pa --print-role <name>` — Phase 13 Task 4.
+/// - `aivyx-pa daemon run` — Phase 17 Task 3 daemon foreground mode.
 ///
 /// Mutual exclusions: `--verify-only` vs `--channel`, `--verify-only`
 /// vs `--print-role`, `daemon run` vs all other modes.
@@ -2546,7 +2546,7 @@ fn parse_cli_args() -> Result<CliArgs, String> {
 /// Pure + independently testable; the caller gates this on the web
 /// UI actually being enabled (a `webui` target is meaningless
 /// without a running Web UI server) and pushes the result into the
-/// runtime target list — never written back to `aivyx.toml`.
+/// runtime target list — never written back to `aivyx-pa.toml`.
 fn synthesize_default_webui_target(
     existing: &[aivyx_config::NotifyTargetConfig],
 ) -> Option<aivyx_config::NotifyTargetConfig> {
@@ -2594,7 +2594,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter H follow-on — `aivyx --headless "<task>"`: a one-shot
+    // Chapter H follow-on — `aivyx-pa --headless "<task>"`: a one-shot
     // unattended turn over the running daemon. Mutually exclusive with
     // every other mode (it is its own terminal dispatch), so it
     // short-circuits here like `--version`, before the channel/role
@@ -2748,7 +2748,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 other => {
                     return Err(format!(
                         "unrecognized argument after `tui`: `{other}`. \
-                         `aivyx tui` supports: --role <name>"
+                         `aivyx-pa tui` supports: --role <name>"
                     ));
                 }
             }
@@ -2771,18 +2771,18 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // returns a descriptive error that names what's supported.
     if !args.is_empty() && args[0] == "identity" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx identity` requires a subcommand. Supported: export <path>".to_string()
+            "`aivyx-pa identity` requires a subcommand. Supported: export <path>".to_string()
         })?;
         let subcommand = match sub.as_str() {
             "export" => {
                 let path = args.get(2).ok_or_else(|| {
-                    "`aivyx identity export` requires a path. Usage: \
-                     `aivyx identity export <path>`"
+                    "`aivyx-pa identity export` requires a path. Usage: \
+                     `aivyx-pa identity export <path>`"
                         .to_string()
                 })?;
                 if args.len() > 3 {
                     return Err(format!(
-                        "`aivyx identity export` accepts exactly one path argument. \
+                        "`aivyx-pa identity export` accepts exactly one path argument. \
                          Got extra args: `{}`",
                         args[3..].join(" ")
                     ));
@@ -2793,12 +2793,12 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "import" => {
                 // Phase 65 — replaces the Phase 64 deferral
-                // message. `aivyx identity import <path>
+                // message. `aivyx-pa identity import <path>
                 // [--force]`. The --force flag may appear in
                 // any trailing position; reject extras.
                 let path = args.get(2).ok_or_else(|| {
-                    "`aivyx identity import` requires a path. Usage: \
-                     `aivyx identity import <path> [--force]`"
+                    "`aivyx-pa identity import` requires a path. Usage: \
+                     `aivyx-pa identity import <path> [--force]`"
                         .to_string()
                 })?;
                 let mut force = false;
@@ -2810,7 +2810,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         force = true;
                     } else {
                         return Err(format!(
-                            "`aivyx identity import` accepts a path and \
+                            "`aivyx-pa identity import` accepts a path and \
                              optional --force. Got unexpected arg: `{extra}`",
                         ));
                     }
@@ -2845,25 +2845,25 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Federation`'s doc comment); only `run`'s dispatch arm requires it.
     if !args.is_empty() && args[0] == "federation" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx federation` requires a subcommand. Supported: yubikey-init <instance-id> \
+            "`aivyx-pa federation` requires a subcommand. Supported: yubikey-init <instance-id> \
              <key-binding-path>"
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
             "yubikey-init" => {
                 let instance_id = args.get(2).ok_or_else(|| {
-                    "`aivyx federation yubikey-init` requires an instance id. Usage: `aivyx \
+                    "`aivyx-pa federation yubikey-init` requires an instance id. Usage: `aivyx-pa \
                      federation yubikey-init <instance-id> <key-binding-path>`"
                         .to_string()
                 })?;
                 let key_binding_path = args.get(3).ok_or_else(|| {
-                    "`aivyx federation yubikey-init` requires a key-binding output path. Usage: \
-                     `aivyx federation yubikey-init <instance-id> <key-binding-path>`"
+                    "`aivyx-pa federation yubikey-init` requires a key-binding output path. Usage: \
+                     `aivyx-pa federation yubikey-init <instance-id> <key-binding-path>`"
                         .to_string()
                 })?;
                 if args.len() > 4 {
                     return Err(format!(
-                        "`aivyx federation yubikey-init` accepts exactly an instance id and an \
+                        "`aivyx-pa federation yubikey-init` accepts exactly an instance id and an \
                          output path. Got extra args: `{}`",
                         args[4..].join(" ")
                     ));
@@ -2892,13 +2892,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 73 — `aivyx notify <subcommand>` CLI surface.
+    // Phase 73 — `aivyx-pa notify <subcommand>` CLI surface.
     // Today only `history` is implemented; future Tier-2+
     // subcommands (e.g. `notify test <target>`) plug into the
     // same dispatcher.
     if !args.is_empty() && args[0] == "notify" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx notify` requires a subcommand. Supported: history".to_string()
+            "`aivyx-pa notify` requires a subcommand. Supported: history".to_string()
         })?;
         match sub.as_str() {
             "history" => {
@@ -2909,24 +2909,24 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     match args[idx].as_str() {
                         "--target" => {
                             let value = args.get(idx + 1).ok_or_else(|| {
-                                "`aivyx notify history --target` requires a name".to_string()
+                                "`aivyx-pa notify history --target` requires a name".to_string()
                             })?;
                             target = Some(value.clone());
                             idx += 2;
                         }
                         "--limit" => {
                             let value = args.get(idx + 1).ok_or_else(|| {
-                                "`aivyx notify history --limit` requires a value".to_string()
+                                "`aivyx-pa notify history --limit` requires a value".to_string()
                             })?;
                             let parsed: u32 = value.parse().map_err(|_| {
                                 format!(
-                                    "`aivyx notify history --limit` expects \
+                                    "`aivyx-pa notify history --limit` expects \
                                      a positive integer, got `{value}`"
                                 )
                             })?;
                             if parsed == 0 {
                                 return Err(
-                                    "`aivyx notify history --limit` must be ≥ 1".to_string()
+                                    "`aivyx-pa notify history --limit` must be ≥ 1".to_string()
                                 );
                             }
                             limit = parsed;
@@ -2934,7 +2934,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx notify \
+                                "unrecognized argument to `aivyx-pa notify \
                                  history`: `{other}`"
                             ));
                         }
@@ -2953,17 +2953,17 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "unrecognized `aivyx notify` subcommand: `{other}`. \
+                    "unrecognized `aivyx-pa notify` subcommand: `{other}`. \
                      Supported: history"
                 ));
             }
         }
     }
 
-    // Phase 74 — `aivyx memory <subcommand>` CLI surface.
+    // Phase 74 — `aivyx-pa memory <subcommand>` CLI surface.
     if !args.is_empty() && args[0] == "memory" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx memory` requires a subcommand. Supported: \
+            "`aivyx-pa memory` requires a subcommand. Supported: \
              list, show, search, evict"
                 .to_string()
         })?;
@@ -3001,14 +3001,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         let mem_sub = match sub.as_str() {
             "list" => {
                 if args.len() > 2 {
-                    return Err("`aivyx memory list` takes no arguments".into());
+                    return Err("`aivyx-pa memory list` takes no arguments".into());
                 }
                 MemorySubcommand::List
             }
             "show" => {
                 let topic = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx memory show` requires a topic".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa memory show` requires a topic".to_string())?;
                 let limit = parse_limit_from(args, 3)?;
                 MemorySubcommand::Show {
                     topic: topic.clone(),
@@ -3018,7 +3018,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "search" => {
                 let query = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx memory search` requires a query".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa memory search` requires a query".to_string())?;
                 // Hand-parsed (not `parse_limit_from`) because
                 // search additionally accepts the `--semantic`
                 // flag, which the shared limit parser rejects.
@@ -3049,7 +3049,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx \
+                                "unrecognized argument to `aivyx-pa \
                                  memory search`: `{other}`"
                             ));
                         }
@@ -3064,14 +3064,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "evict" => {
                 let topic = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx memory evict` requires a topic".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa memory evict` requires a topic".to_string())?;
                 let mut yes = false;
                 for a in &args[3..] {
                     match a.as_str() {
                         "--yes" => yes = true,
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx memory \
+                                "unrecognized argument to `aivyx-pa memory \
                                  evict`: `{other}`"
                             ));
                         }
@@ -3091,15 +3091,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "conflicts" => MemorySubcommand::Conflicts,
             "dismiss" => {
                 let id = args.get(2).filter(|s| !s.is_empty()).ok_or_else(|| {
-                    "`aivyx memory dismiss` needs a conflict <id> \
-                     (from `aivyx memory conflicts`)"
+                    "`aivyx-pa memory dismiss` needs a conflict <id> \
+                     (from `aivyx-pa memory conflicts`)"
                         .to_string()
                 })?;
                 MemorySubcommand::Dismiss { id: id.clone() }
             }
             "resolve" => {
                 let topic = args.get(2).filter(|t| !t.is_empty()).ok_or_else(|| {
-                    "`aivyx memory resolve` needs a <topic> and `--archive <seq>`".to_string()
+                    "`aivyx-pa memory resolve` needs a <topic> and `--archive <seq>`".to_string()
                 })?;
                 let mut archive: Option<u64> = None;
                 let mut idx = 3;
@@ -3116,14 +3116,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx memory \
+                                "unrecognized argument to `aivyx-pa memory \
                                  resolve`: `{other}`"
                             ));
                         }
                     }
                 }
                 let archive = archive.ok_or_else(|| {
-                    "`aivyx memory resolve` requires `--archive <seq>` (the entry \
+                    "`aivyx-pa memory resolve` requires `--archive <seq>` (the entry \
                      to delete)"
                         .to_string()
                 })?;
@@ -3134,7 +3134,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "unrecognized `aivyx memory` subcommand: `{other}`. \
+                    "unrecognized `aivyx-pa memory` subcommand: `{other}`. \
                      Supported: list, show, search, evict, wiki, graph, \
                      conflicts, resolve, dismiss"
                 ));
@@ -3152,7 +3152,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 78 — `aivyx learning [--window <secs>]`.
+    // Phase 78 — `aivyx-pa learning [--window <secs>]`.
     if !args.is_empty() && args[0] == "learning" {
         let mut window_secs: Option<u64> = None;
         let mut idx = 1;
@@ -3176,7 +3176,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 other => {
                     return Err(format!(
-                        "unrecognized argument to `aivyx learning`: \
+                        "unrecognized argument to `aivyx-pa learning`: \
                          `{other}`"
                     ));
                 }
@@ -3194,7 +3194,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 182 — `aivyx connect [service]`: guided credential
+    // Phase 182 — `aivyx-pa connect [service]`: guided credential
     // onboarding. No arg lists the connectable services; one arg
     // runs the guided OAuth flow for that service.
     if !args.is_empty() && args[0] == "connect" {
@@ -3202,13 +3202,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         if let Some(s) = &service {
             if s.starts_with("--") {
                 return Err(format!(
-                    "`aivyx connect` takes a service name, not a flag \
-                     (`{s}`). Run `aivyx connect` to list services."
+                    "`aivyx-pa connect` takes a service name, not a flag \
+                     (`{s}`). Run `aivyx-pa connect` to list services."
                 ));
             }
         }
         if args.len() > 2 {
-            return Err("`aivyx connect` takes at most one service name".into());
+            return Err("`aivyx-pa connect` takes at most one service name".into());
         }
         return Ok(CliArgs {
             mode: CliMode::Connect(service),
@@ -3222,13 +3222,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter Freight — `aivyx pack <subcommand>`: signed pack bundles.
+    // Chapter Freight — `aivyx-pa pack <subcommand>`: signed pack bundles.
     if !args.is_empty() && args[0] == "pack" {
         let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
         let take_one = |what: &str| -> Result<String, String> {
             match args.get(2) {
                 Some(v) if !v.starts_with('-') => Ok(v.clone()),
-                _ => Err(format!("`aivyx pack {sub}` requires {what}")),
+                _ => Err(format!("`aivyx-pa pack {sub}` requires {what}")),
             }
         };
         let pack_sub = match sub {
@@ -3254,15 +3254,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx pack build`: `{other}`"
+                                "unrecognized argument to `aivyx-pa pack build`: `{other}`"
                             ));
                         }
                     }
                 }
                 PackSubcommand::Build {
                     staging,
-                    key: key.ok_or("`aivyx pack build` requires `--key <keyfile>`")?,
-                    out: out.ok_or("`aivyx pack build` requires `--out <file>`")?,
+                    key: key.ok_or("`aivyx-pa pack build` requires `--key <keyfile>`")?,
+                    out: out.ok_or("`aivyx-pa pack build` requires `--out <file>`")?,
                 }
             }
             "inspect" => {
@@ -3272,7 +3272,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     Some("--allow-untrusted") => true,
                     Some(other) => {
                         return Err(format!(
-                            "unrecognized argument to `aivyx pack inspect`: `{other}`"
+                            "unrecognized argument to `aivyx-pa pack inspect`: `{other}`"
                         ));
                     }
                 };
@@ -3286,7 +3286,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             },
             other => {
                 return Err(format!(
-                    "unrecognized `aivyx pack` subcommand: `{other}`. \
+                    "unrecognized `aivyx-pa pack` subcommand: `{other}`. \
                      Supported: keygen, build, inspect, install"
                 ));
             }
@@ -3303,7 +3303,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 173 — `aivyx loop <subcommand>`: stock the backlog +
+    // Phase 173 — `aivyx-pa loop <subcommand>`: stock the backlog +
     // drive autonomous runs. IPC-backed.
     if !args.is_empty() && args[0] == "loop" {
         let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
@@ -3311,9 +3311,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "add" => {
                 let title = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx loop add` requires a <title>".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa loop add` requires a <title>".to_string())?;
                 if title.starts_with('-') {
-                    return Err("`aivyx loop add` requires a <title> before any \
+                    return Err("`aivyx-pa loop add` requires a <title> before any \
                          flags"
                         .to_string());
                 }
@@ -3333,7 +3333,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     match args[idx].as_str() {
                         "--body" => {
                             if !body.is_empty() {
-                                return Err("`aivyx loop add` got both a \
+                                return Err("`aivyx-pa loop add` got both a \
                                      positional body and `--body` — \
                                      pass one or the other"
                                     .to_string());
@@ -3358,7 +3358,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx loop \
+                                "unrecognized argument to `aivyx-pa loop \
                                  add`: `{other}`"
                             ));
                         }
@@ -3376,10 +3376,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "skip" => {
                 let story_id = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx loop skip` requires a <story-id>".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa loop skip` requires a <story-id>".to_string())?;
                 if args.len() > 3 {
                     return Err(format!(
-                        "unrecognized argument to `aivyx loop skip`: \
+                        "unrecognized argument to `aivyx-pa loop skip`: \
                          `{}`",
                         args[3]
                     ));
@@ -3411,7 +3411,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx loop \
+                                "unrecognized argument to `aivyx-pa loop \
                                  log`: `{other}`"
                             ));
                         }
@@ -3442,7 +3442,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx loop \
+                                "unrecognized argument to `aivyx-pa loop \
                                  start`: `{other}`"
                             ));
                         }
@@ -3451,13 +3451,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 LoopSubcommand::Start { max_iterations }
             }
             "" => {
-                return Err("`aivyx loop` requires a subcommand: add | list | \
+                return Err("`aivyx-pa loop` requires a subcommand: add | list | \
                      skip | start | status | stop | log"
                     .to_string());
             }
             other => {
                 return Err(format!(
-                    "unknown `aivyx loop` subcommand `{other}` \
+                    "unknown `aivyx-pa loop` subcommand `{other}` \
                      (expected: add | list | skip | start | status | \
                      stop | log)"
                 ));
@@ -3475,7 +3475,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter J — `aivyx team <subcommand>`: roster (offline) | run "<mission>".
+    // Chapter J — `aivyx-pa team <subcommand>`: roster (offline) | run "<mission>".
     if !args.is_empty() && args[0] == "team" {
         let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
         // Shared `--config <path>` parser over a tail of args.
@@ -3493,7 +3493,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                     other => {
                         return Err(format!(
-                            "unrecognized argument to `aivyx team {cmd}`: `{other}`"
+                            "unrecognized argument to `aivyx-pa team {cmd}`: `{other}`"
                         ));
                     }
                 }
@@ -3537,7 +3537,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx team init`: `{other}` \
+                                "unrecognized argument to `aivyx-pa team init`: `{other}` \
                                  (expected --pack | --out | --force)"
                             ));
                         }
@@ -3547,11 +3547,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "run" => {
                 let mission = args.get(2).ok_or_else(|| {
-                    "`aivyx team run` requires a \"<mission>\" argument".to_string()
+                    "`aivyx-pa team run` requires a \"<mission>\" argument".to_string()
                 })?;
                 if mission.starts_with('-') {
                     return Err(
-                        "`aivyx team run` expects the mission text before any flags".to_string()
+                        "`aivyx-pa team run` expects the mission text before any flags".to_string()
                     );
                 }
                 TeamSubcommand::Run {
@@ -3560,7 +3560,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
             }
             "start" => {
-                // `aivyx team start "<goal>" [--config <pack.toml>]` — daemon
+                // `aivyx-pa team start "<goal>" [--config <pack.toml>]` — daemon
                 // decomposes the goal — or `--plan <file.json>` — explicit plan.
                 let tail = args.get(2..).unwrap_or(&[]);
                 let mut plan_path: Option<String> = None;
@@ -3591,13 +3591,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other if other.starts_with('-') => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx team start`: `{other}`"
+                                "unrecognized argument to `aivyx-pa team start`: `{other}`"
                             ));
                         }
                         other => {
                             if goal.is_some() {
                                 return Err(
-                                    "`aivyx team start \"<goal>\"` takes a single quoted goal"
+                                    "`aivyx-pa team start \"<goal>\"` takes a single quoted goal"
                                         .to_string(),
                                 );
                             }
@@ -3608,7 +3608,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 match (plan_path, goal) {
                     (Some(_), Some(_)) => {
-                        return Err("`aivyx team start` takes either a \"<goal>\" or `--plan`, \
+                        return Err("`aivyx-pa team start` takes either a \"<goal>\" or `--plan`, \
                              not both"
                             .to_string());
                     }
@@ -3616,7 +3616,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     (None, Some(goal)) => TeamSubcommand::StartGoal { goal, config },
                     (None, None) => {
                         return Err(
-                            "`aivyx team start` requires a \"<goal>\" or `--plan <file.json>`"
+                            "`aivyx-pa team start` requires a \"<goal>\" or `--plan <file.json>`"
                                 .to_string(),
                         );
                     }
@@ -3625,7 +3625,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "list" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx team list` takes no arguments (got `{}`)",
+                        "`aivyx-pa team list` takes no arguments (got `{}`)",
                         args[2]
                     ));
                 }
@@ -3638,11 +3638,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let mission_id = args
                     .get(2)
                     .cloned()
-                    .ok_or_else(|| format!("`aivyx team {sub}` requires <mission-id> <step>"))?;
+                    .ok_or_else(|| format!("`aivyx-pa team {sub}` requires <mission-id> <step>"))?;
                 let step = args
                     .get(3)
                     .cloned()
-                    .ok_or_else(|| format!("`aivyx team {sub}` requires a <step> argument"))?;
+                    .ok_or_else(|| format!("`aivyx-pa team {sub}` requires a <step> argument"))?;
                 if sub == "approve" {
                     TeamSubcommand::Approve { mission_id, step }
                 } else {
@@ -3653,33 +3653,33 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let mission_id = args
                     .get(2)
                     .cloned()
-                    .ok_or_else(|| "`aivyx team abort` requires a <mission-id>".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa team abort` requires a <mission-id>".to_string())?;
                 TeamSubcommand::Abort { mission_id }
             }
             "pause" => {
                 let mission_id = args
                     .get(2)
                     .cloned()
-                    .ok_or_else(|| "`aivyx team pause` requires a <mission-id>".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa team pause` requires a <mission-id>".to_string())?;
                 TeamSubcommand::Pause { mission_id }
             }
             "resume" => {
                 let mission_id = args
                     .get(2)
                     .cloned()
-                    .ok_or_else(|| "`aivyx team resume` requires a <mission-id>".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa team resume` requires a <mission-id>".to_string())?;
                 TeamSubcommand::Resume { mission_id }
             }
             "" => {
                 return Err(
-                    "`aivyx team` requires a subcommand: roster | init | run | start | \
+                    "`aivyx-pa team` requires a subcommand: roster | init | run | start | \
                      list | status | approve | reject | abort | pause | resume"
                         .to_string(),
                 );
             }
             other => {
                 return Err(format!(
-                    "unknown `aivyx team` subcommand `{other}` (expected: roster | \
+                    "unknown `aivyx-pa team` subcommand `{other}` (expected: roster | \
                      init | run | start | list | status | approve | reject | abort | \
                      pause | resume)"
                 ));
@@ -3697,14 +3697,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter K — `aivyx cost [--today]`: the priced spend report (offline).
+    // Chapter K — `aivyx-pa cost [--today]`: the priced spend report (offline).
     if !args.is_empty() && args[0] == "cost" {
         let mut today = false;
         for arg in &args[1..] {
             match arg.as_str() {
                 "--today" => today = true,
                 other => {
-                    return Err(format!("unrecognized argument to `aivyx cost`: `{other}`"));
+                    return Err(format!("unrecognized argument to `aivyx-pa cost`: `{other}`"));
                 }
             }
         }
@@ -3720,8 +3720,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 102 — `aivyx tools [--window <secs>]`. Same `--window`
-    // grammar as `aivyx learning`.
+    // Phase 102 — `aivyx-pa tools [--window <secs>]`. Same `--window`
+    // grammar as `aivyx-pa learning`.
     if !args.is_empty() && args[0] == "tools" {
         let mut window_secs: Option<u64> = None;
         let mut idx = 1;
@@ -3745,7 +3745,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 other => {
                     return Err(format!(
-                        "unrecognized argument to `aivyx tools`: \
+                        "unrecognized argument to `aivyx-pa tools`: \
                          `{other}`"
                     ));
                 }
@@ -3763,20 +3763,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 103 — `aivyx tool <subcommand>`. The first sub-
+    // Phase 103 — `aivyx-pa tool <subcommand>`. The first sub-
     // subcommand is `init <path> [--force]`.
     if !args.is_empty() && args[0] == "tool" {
         let sub = args
             .get(1)
-            .ok_or_else(|| "`aivyx tool` requires a subcommand. Supported: init".to_string())?;
+            .ok_or_else(|| "`aivyx-pa tool` requires a subcommand. Supported: init".to_string())?;
         match sub.as_str() {
             "init" => {
                 let path_arg = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx tool init` requires a target path".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa tool init` requires a target path".to_string())?;
                 if path_arg.starts_with("--") {
                     return Err(format!(
-                        "`aivyx tool init` requires a target path \
+                        "`aivyx-pa tool init` requires a target path \
                          (got flag `{path_arg}` where a path was expected)"
                     ));
                 }
@@ -3787,7 +3787,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         "--force" => force = true,
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx tool init`: \
+                                "unrecognized argument to `aivyx-pa tool init`: \
                                  `{other}`"
                             ));
                         }
@@ -3806,14 +3806,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "unrecognized `aivyx tool` subcommand: `{other}`. \
+                    "unrecognized `aivyx-pa tool` subcommand: `{other}`. \
                      Supported: init"
                 ));
             }
         }
     }
 
-    // Phase 105 — `aivyx audit <subcommand>`. The first sub-
+    // Phase 105 — `aivyx-pa audit <subcommand>`. The first sub-
     // subcommand is `export [--from <seq>] [--limit <N>]`. Both
     // flags are optional and map onto the existing
     // `PersistentAuditLog::entries_range(from, limit)` reader;
@@ -3822,7 +3822,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     if !args.is_empty() && args[0] == "audit" {
         let sub = args
             .get(1)
-            .ok_or_else(|| "`aivyx audit` requires a subcommand. Supported: export".to_string())?;
+            .ok_or_else(|| "`aivyx-pa audit` requires a subcommand. Supported: export".to_string())?;
         match sub.as_str() {
             "export" => {
                 let mut from: Option<u64> = None;
@@ -3894,7 +3894,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx audit export`: \
+                                "unrecognized argument to `aivyx-pa audit export`: \
                                  `{other}`"
                             ));
                         }
@@ -3917,27 +3917,27 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "unrecognized `aivyx audit` subcommand: `{other}`. \
+                    "unrecognized `aivyx-pa audit` subcommand: `{other}`. \
                      Supported: export"
                 ));
             }
         }
     }
 
-    // Phase 106 — `aivyx mcp <subcommand>`. Distinct from the
-    // Phase 46 `aivyx mcp-server <name>` runner ("mcp-server"
+    // Phase 106 — `aivyx-pa mcp <subcommand>`. Distinct from the
+    // Phase 46 `aivyx-pa mcp-server <name>` runner ("mcp-server"
     // is one token, "mcp recipes" is two); the namespacing
     // matches the project pattern of one subcommand tree per
     // operator-facing surface.
     if !args.is_empty() && args[0] == "mcp" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx mcp` requires a subcommand. Supported: recipes, status".to_string()
+            "`aivyx-pa mcp` requires a subcommand. Supported: recipes, status".to_string()
         })?;
         match sub.as_str() {
             "status" => {
                 if let Some(extra) = args.get(2) {
                     return Err(format!(
-                        "unrecognized argument to `aivyx mcp status`: `{extra}`"
+                        "unrecognized argument to `aivyx-pa mcp status`: `{extra}`"
                     ));
                 }
                 return Ok(CliArgs {
@@ -3959,7 +3959,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let name = match args.get(2) {
                     Some(n) if n.starts_with("--") => {
                         return Err(format!(
-                            "unrecognized argument to `aivyx mcp recipes`: \
+                            "unrecognized argument to `aivyx-pa mcp recipes`: \
                              `{n}` (no flags are defined yet)"
                         ));
                     }
@@ -3969,7 +3969,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 if let Some(extra) = args.get(3) {
                     return Err(format!(
                         "unrecognized extra argument to \
-                         `aivyx mcp recipes`: `{extra}`"
+                         `aivyx-pa mcp recipes`: `{extra}`"
                     ));
                 }
                 return Ok(CliArgs {
@@ -3985,7 +3985,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "unrecognized `aivyx mcp` subcommand: `{other}`. \
+                    "unrecognized `aivyx-pa mcp` subcommand: `{other}`. \
                      Supported: recipes, status"
                 ));
             }
@@ -3996,10 +3996,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // (Phase 44, extended at Phase 66 with starter templates).
     //
     // Accepted forms:
-    //   `aivyx init`                          → interactive, no template
-    //   `aivyx init --template <name>`        → interactive, pre-filled
-    //   `aivyx init --template` (no name)     → list templates + exit
-    //   `aivyx init --list-templates`         → list templates + exit
+    //   `aivyx-pa init`                          → interactive, no template
+    //   `aivyx-pa init --template <name>`        → interactive, pre-filled
+    //   `aivyx-pa init --template` (no name)     → list templates + exit
+    //   `aivyx-pa init --list-templates`         → list templates + exit
     if !args.is_empty() && args[0] == "init" {
         let mut init_mode = InitMode::Interactive;
         let mut i = 1;
@@ -4032,7 +4032,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 other => {
                     return Err(format!(
-                        "`aivyx init`: unrecognized argument `{other}`. \
+                        "`aivyx-pa init`: unrecognized argument `{other}`. \
                          Supported: `--template <name>`, `--list-templates`",
                     ));
                 }
@@ -4054,33 +4054,33 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Q1(c) at sign-off: nested enum with show/list/revert variants.
     // Phase 70 adds `proposals` for the self-learning loop's
     // operator review surface.
-    // ---- Chapter Tutor: `aivyx skills <teach|update|forget>` -----
+    // ---- Chapter Tutor: `aivyx-pa skills <teach|update|forget>` -----
     if !args.is_empty() && args[0] == "skills" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx skills` requires a subcommand. Supported: \
+            "`aivyx-pa skills` requires a subcommand. Supported: \
              teach, update, forget"
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
             "teach" => {
                 let name = args.get(2).ok_or_else(|| {
-                    "`aivyx skills teach` usage: \
+                    "`aivyx-pa skills teach` usage: \
                      teach <name> <trigger> <procedure>"
                         .to_string()
                 })?;
                 let trigger = args.get(3).ok_or_else(|| {
-                    "`aivyx skills teach` requires a <trigger> \
+                    "`aivyx-pa skills teach` requires a <trigger> \
                      (when the skill applies)"
                         .to_string()
                 })?;
                 let procedure = args.get(4).ok_or_else(|| {
-                    "`aivyx skills teach` requires a <procedure> \
+                    "`aivyx-pa skills teach` requires a <procedure> \
                      (what to do)"
                         .to_string()
                 })?;
                 if args.len() > 5 {
                     return Err(format!(
-                        "`aivyx skills teach` takes exactly \
+                        "`aivyx-pa skills teach` takes exactly \
                          <name> <trigger> <procedure>. Quote multi-word \
                          values. Extra: `{}`",
                         args[5..].join(" ")
@@ -4094,7 +4094,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "update" => {
                 let name = args.get(2).ok_or_else(|| {
-                    "`aivyx skills update` usage: \
+                    "`aivyx-pa skills update` usage: \
                      update <name> [--trigger T] [--procedure P]"
                         .to_string()
                 })?;
@@ -4119,14 +4119,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "`aivyx skills update` unrecognized argument: \
+                                "`aivyx-pa skills update` unrecognized argument: \
                                  `{other}`. Supported: --trigger, --procedure."
                             ));
                         }
                     }
                 }
                 if trigger.is_none() && procedure.is_none() {
-                    return Err("`aivyx skills update` needs at least --trigger or \
+                    return Err("`aivyx-pa skills update` needs at least --trigger or \
                          --procedure."
                         .into());
                 }
@@ -4139,10 +4139,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "forget" => {
                 let name = args
                     .get(2)
-                    .ok_or_else(|| "`aivyx skills forget` requires a <name>".to_string())?;
+                    .ok_or_else(|| "`aivyx-pa skills forget` requires a <name>".to_string())?;
                 if args.len() > 3 {
                     return Err(format!(
-                        "`aivyx skills forget` accepts exactly one <name>. \
+                        "`aivyx-pa skills forget` accepts exactly one <name>. \
                          Got: `{}`",
                         args[3..].join(" ")
                     ));
@@ -4151,7 +4151,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "`aivyx skills` unknown subcommand `{other}`. \
+                    "`aivyx-pa skills` unknown subcommand `{other}`. \
                      Supported: teach, update, forget."
                 ));
             }
@@ -4170,7 +4170,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
     if !args.is_empty() && args[0] == "persona" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx persona` requires a subcommand. Supported: \
+            "`aivyx-pa persona` requires a subcommand. Supported: \
              show, list, revert, proposals"
                 .to_string()
         })?;
@@ -4178,7 +4178,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "show" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx persona show` does not accept additional arguments. \
+                        "`aivyx-pa persona show` does not accept additional arguments. \
                          Got: `{}`",
                         args[2..].join(" ")
                     ));
@@ -4204,14 +4204,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "`aivyx persona list` unrecognized argument: `{other}`. \
+                                "`aivyx-pa persona list` unrecognized argument: `{other}`. \
                                  Supported flags: --auto-only, --manual-only."
                             ));
                         }
                     }
                 }
                 if seen_auto && seen_manual {
-                    return Err("`aivyx persona list` --auto-only and --manual-only \
+                    return Err("`aivyx-pa persona list` --auto-only and --manual-only \
                          are mutually exclusive."
                         .into());
                 }
@@ -4219,13 +4219,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "revert" => {
                 let target = args.get(2).ok_or_else(|| {
-                    "`aivyx persona revert` requires a delta id. Usage: \
-                     `aivyx persona revert <delta_id>`"
+                    "`aivyx-pa persona revert` requires a delta id. Usage: \
+                     `aivyx-pa persona revert <delta_id>`"
                         .to_string()
                 })?;
                 if args.len() > 3 {
                     return Err(format!(
-                        "`aivyx persona revert` accepts exactly one delta id. \
+                        "`aivyx-pa persona revert` accepts exactly one delta id. \
                          Got: `{}`",
                         args[3..].join(" ")
                     ));
@@ -4237,7 +4237,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "proposals" => {
                 // Sub-subcommand: list / show / approve / reject.
                 let sub2 = args.get(2).ok_or_else(|| {
-                    "`aivyx persona proposals` requires a subcommand. \
+                    "`aivyx-pa persona proposals` requires a subcommand. \
                      Supported: list, show, approve, reject"
                         .to_string()
                 })?;
@@ -4250,7 +4250,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 "--status" => {
                                     idx += 1;
                                     let value = args.get(idx).ok_or_else(|| {
-                                        "`aivyx persona proposals list \
+                                        "`aivyx-pa persona proposals list \
                                          --status` requires a value"
                                             .to_string()
                                     })?;
@@ -4272,7 +4272,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 other => {
                                     return Err(format!(
                                         "unrecognized argument to \
-                                         `aivyx persona proposals list`: `{other}`"
+                                         `aivyx-pa persona proposals list`: `{other}`"
                                     ));
                                 }
                             }
@@ -4282,13 +4282,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                     "show" => {
                         let pid = args.get(3).ok_or_else(|| {
-                            "`aivyx persona proposals show` requires a \
+                            "`aivyx-pa persona proposals show` requires a \
                              proposal id"
                                 .to_string()
                         })?;
                         if args.len() > 4 {
                             return Err(format!(
-                                "`aivyx persona proposals show` accepts exactly \
+                                "`aivyx-pa persona proposals show` accepts exactly \
                                  one proposal id. Got: `{}`",
                                 args[4..].join(" ")
                             ));
@@ -4299,13 +4299,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                     "approve" => {
                         let pid = args.get(3).ok_or_else(|| {
-                            "`aivyx persona proposals approve` requires a \
+                            "`aivyx-pa persona proposals approve` requires a \
                              proposal id"
                                 .to_string()
                         })?;
                         if args.len() > 4 {
                             return Err(format!(
-                                "`aivyx persona proposals approve` accepts \
+                                "`aivyx-pa persona proposals approve` accepts \
                                  exactly one proposal id. Got: `{}`",
                                 args[4..].join(" ")
                             ));
@@ -4316,7 +4316,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                     "reject" => {
                         let pid = args.get(3).ok_or_else(|| {
-                            "`aivyx persona proposals reject` requires a \
+                            "`aivyx-pa persona proposals reject` requires a \
                              proposal id"
                                 .to_string()
                         })?;
@@ -4327,7 +4327,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 "--reason" => {
                                     idx += 1;
                                     let value = args.get(idx).ok_or_else(|| {
-                                        "`aivyx persona proposals reject \
+                                        "`aivyx-pa persona proposals reject \
                                              --reason` requires a value"
                                             .to_string()
                                     })?;
@@ -4336,7 +4336,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                                 other => {
                                     return Err(format!(
                                         "unrecognized argument to \
-                                         `aivyx persona proposals reject`: `{other}`"
+                                         `aivyx-pa persona proposals reject`: `{other}`"
                                     ));
                                 }
                             }
@@ -4349,7 +4349,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     }
                     other => {
                         return Err(format!(
-                            "unrecognized `aivyx persona proposals` \
+                            "unrecognized `aivyx-pa persona proposals` \
                              subcommand: `{other}`. \
                              Supported: list, show, approve, reject"
                         ));
@@ -4360,7 +4360,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "conflicts" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx persona conflicts` takes no arguments. Got: `{}`",
+                        "`aivyx-pa persona conflicts` takes no arguments. Got: `{}`",
                         args[2..].join(" ")
                     ));
                 }
@@ -4368,8 +4368,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "resolve" => {
                 let id = args.get(2).ok_or_else(|| {
-                    "`aivyx persona resolve` requires a conflict id. Usage: \
-                     `aivyx persona resolve <id> --remove <a|b>`"
+                    "`aivyx-pa persona resolve` requires a conflict id. Usage: \
+                     `aivyx-pa persona resolve <id> --remove <a|b>`"
                         .to_string()
                 })?;
                 let mut remove: Option<char> = None;
@@ -4389,14 +4389,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "unrecognized argument to `aivyx persona resolve`: `{other}`"
+                                "unrecognized argument to `aivyx-pa persona resolve`: `{other}`"
                             ));
                         }
                     }
                     idx += 1;
                 }
                 let remove = remove.ok_or_else(|| {
-                    "`aivyx persona resolve` requires `--remove <a|b>` to pick which \
+                    "`aivyx-pa persona resolve` requires `--remove <a|b>` to pick which \
                      facet of the conflict to remove"
                         .to_string()
                 })?;
@@ -4407,13 +4407,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "dismiss" => {
                 let id = args.get(2).ok_or_else(|| {
-                    "`aivyx persona dismiss` requires a conflict id. Usage: \
-                     `aivyx persona dismiss <id>`"
+                    "`aivyx-pa persona dismiss` requires a conflict id. Usage: \
+                     `aivyx-pa persona dismiss <id>`"
                         .to_string()
                 })?;
                 if args.len() > 3 {
                     return Err(format!(
-                        "`aivyx persona dismiss` accepts exactly one conflict id. Got: `{}`",
+                        "`aivyx-pa persona dismiss` accepts exactly one conflict id. Got: `{}`",
                         args[3..].join(" ")
                     ));
                 }
@@ -4446,14 +4446,14 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // and Edit variants today; future variants land additively.
     if !args.is_empty() && args[0] == "profile" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx profile` requires a subcommand. Supported: show, edit, apply-hint <id>"
+            "`aivyx-pa profile` requires a subcommand. Supported: show, edit, apply-hint <id>"
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
             "show" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx profile show` does not accept additional arguments. \
+                        "`aivyx-pa profile show` does not accept additional arguments. \
                          Got: `{}`",
                         args[2..].join(" ")
                     ));
@@ -4463,7 +4463,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "edit" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx profile edit` does not accept additional arguments. \
+                        "`aivyx-pa profile edit` does not accept additional arguments. \
                          Got: `{}`",
                         args[2..].join(" ")
                     ));
@@ -4479,21 +4479,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         yes = true;
                     } else if arg.starts_with('-') {
                         return Err(format!(
-                            "unrecognized flag for `aivyx profile apply-hint`: `{arg}`. \
+                            "unrecognized flag for `aivyx-pa profile apply-hint`: `{arg}`. \
                              Supported flag: --yes"
                         ));
                     } else if proposal_id.is_none() {
                         proposal_id = Some(arg.clone());
                     } else {
                         return Err(format!(
-                            "`aivyx profile apply-hint` takes exactly one proposal id. \
+                            "`aivyx-pa profile apply-hint` takes exactly one proposal id. \
                              Got extra argument: `{arg}`"
                         ));
                     }
                 }
                 let id = proposal_id.ok_or_else(|| {
-                    "`aivyx profile apply-hint` requires a proposal id. \
-                     Usage: `aivyx profile apply-hint <proposal-id> [--yes]`"
+                    "`aivyx-pa profile apply-hint` requires a proposal id. \
+                     Usage: `aivyx-pa profile apply-hint <proposal-id> [--yes]`"
                         .to_string()
                 })?;
                 ProfileSubcommand::ApplyHint {
@@ -4521,10 +4521,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter N — `aivyx access <show|set>`.
+    // Chapter N — `aivyx-pa access <show|set>`.
     if !args.is_empty() && args[0] == "access" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx access` requires a subcommand. Supported: show, \
+            "`aivyx-pa access` requires a subcommand. Supported: show, \
              set <level> [--root <dir>] [--yes]"
                 .to_string()
         })?;
@@ -4532,7 +4532,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "show" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx access show` takes no arguments. Got: `{}`",
+                        "`aivyx-pa access show` takes no arguments. Got: `{}`",
                         args[2..].join(" ")
                     ));
                 }
@@ -4555,7 +4555,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other if other.starts_with('-') => {
                             return Err(format!(
-                                "unrecognized flag for `aivyx access set`: `{other}`. \
+                                "unrecognized flag for `aivyx-pa access set`: `{other}`. \
                                  Supported: --root <dir>, --yes"
                             ));
                         }
@@ -4564,15 +4564,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "`aivyx access set` takes one level. Extra: `{other}`"
+                                "`aivyx-pa access set` takes one level. Extra: `{other}`"
                             ));
                         }
                     }
                     i += 1;
                 }
                 let level = level.ok_or_else(|| {
-                    "`aivyx access set` needs a level. \
-                     Usage: `aivyx access set <sandbox|workspace|home|full|custom> \
+                    "`aivyx-pa access set` needs a level. \
+                     Usage: `aivyx-pa access set <sandbox|workspace|home|full|custom> \
                      [--root <dir>] [--yes]`"
                         .to_string()
                 })?;
@@ -4597,10 +4597,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter Reins — `aivyx autonomy <show|set>`.
+    // Chapter Reins — `aivyx-pa autonomy <show|set>`.
     if !args.is_empty() && args[0] == "autonomy" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx autonomy` requires a subcommand. Supported: show, \
+            "`aivyx-pa autonomy` requires a subcommand. Supported: show, \
              set <level> [--yes]"
                 .to_string()
         })?;
@@ -4608,7 +4608,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "show" => {
                 if args.len() > 2 {
                     return Err(format!(
-                        "`aivyx autonomy show` takes no arguments. Got: `{}`",
+                        "`aivyx-pa autonomy show` takes no arguments. Got: `{}`",
                         args[2..].join(" ")
                     ));
                 }
@@ -4623,7 +4623,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         "--yes" | "-y" => yes = true,
                         other if other.starts_with('-') => {
                             return Err(format!(
-                                "unrecognized flag for `aivyx autonomy set`: `{other}`. \
+                                "unrecognized flag for `aivyx-pa autonomy set`: `{other}`. \
                                  Supported: --yes"
                             ));
                         }
@@ -4632,15 +4632,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         }
                         other => {
                             return Err(format!(
-                                "`aivyx autonomy set` takes one level. Extra: `{other}`"
+                                "`aivyx-pa autonomy set` takes one level. Extra: `{other}`"
                             ));
                         }
                     }
                     i += 1;
                 }
                 let level = level.ok_or_else(|| {
-                    "`aivyx autonomy set` needs a level. \
-                     Usage: `aivyx autonomy set \
+                    "`aivyx-pa autonomy set` needs a level. \
+                     Usage: `aivyx-pa autonomy set \
                      <manual|assisted|supervised|autonomous|unleashed> [--yes]`"
                         .to_string()
                 })?;
@@ -4665,10 +4665,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter O — `aivyx workspace <path|ls|cat>`.
+    // Chapter O — `aivyx-pa workspace <path|ls|cat>`.
     if !args.is_empty() && args[0] == "workspace" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx workspace` requires a subcommand. Supported: path, \
+            "`aivyx-pa workspace` requires a subcommand. Supported: path, \
              ls [path], cat <path>"
                 .to_string()
         })?;
@@ -4677,8 +4677,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "ls" | "list" => WorkspaceSubcommand::Ls(args.get(2).cloned()),
             "cat" => {
                 let p = args.get(2).ok_or_else(|| {
-                    "`aivyx workspace cat` needs a path. Usage: \
-                     `aivyx workspace cat <path>`"
+                    "`aivyx-pa workspace cat` needs a path. Usage: \
+                     `aivyx-pa workspace cat <path>`"
                         .to_string()
                 })?;
                 WorkspaceSubcommand::Cat(p.clone())
@@ -4703,7 +4703,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter Keyring — `aivyx keyring <set|clear|status>`.
+    // Chapter Keyring — `aivyx-pa keyring <set|clear|status>`.
     if !args.is_empty() && args[0] == "keyring" {
         let sub = match args.get(1).map(String::as_str) {
             Some("set") => KeyringSubcommand::Set,
@@ -4711,7 +4711,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             Some("status") | None => KeyringSubcommand::Status,
             Some(other) => {
                 return Err(format!(
-                    "unknown `aivyx keyring` subcommand: `{other}`. \
+                    "unknown `aivyx-pa keyring` subcommand: `{other}`. \
                      Supported: set, clear, status"
                 ));
             }
@@ -4728,11 +4728,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter P — `aivyx doctor` (no subcommands / args).
+    // Chapter P — `aivyx-pa doctor` (no subcommands / args).
     if !args.is_empty() && args[0] == "doctor" {
         if args.len() > 1 {
             return Err(format!(
-                "`aivyx doctor` takes no arguments. Got: `{}`",
+                "`aivyx-pa doctor` takes no arguments. Got: `{}`",
                 args[1..].join(" ")
             ));
         }
@@ -4748,10 +4748,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 119 Task 5 — `aivyx role <subcommand>`.
+    // Phase 119 Task 5 — `aivyx-pa role <subcommand>`.
     if !args.is_empty() && args[0] == "role" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx role` requires a subcommand. Supported: import <id>".to_string()
+            "`aivyx-pa role` requires a subcommand. Supported: import <id>".to_string()
         })?;
         let subcommand = match sub.as_str() {
             "import" => {
@@ -4765,21 +4765,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         force = true;
                     } else if arg.starts_with('-') {
                         return Err(format!(
-                            "unrecognized flag for `aivyx role import`: `{arg}`. \
+                            "unrecognized flag for `aivyx-pa role import`: `{arg}`. \
                              Supported flags: --yes, --force"
                         ));
                     } else if proposal_id.is_none() {
                         proposal_id = Some(arg.clone());
                     } else {
                         return Err(format!(
-                            "`aivyx role import` takes exactly one proposal id. \
+                            "`aivyx-pa role import` takes exactly one proposal id. \
                              Got extra argument: `{arg}`"
                         ));
                     }
                 }
                 let id = proposal_id.ok_or_else(|| {
-                    "`aivyx role import` requires a proposal id. \
-                     Usage: `aivyx role import <proposal-id> [--yes] [--force]`"
+                    "`aivyx-pa role import` requires a proposal id. \
+                     Usage: `aivyx-pa role import <proposal-id> [--yes] [--force]`"
                         .to_string()
                 })?;
                 RoleSubcommand::Import {
@@ -4807,10 +4807,10 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Phase 119 Task 6 — `aivyx tool-relevance <subcommand>`.
+    // Phase 119 Task 6 — `aivyx-pa tool-relevance <subcommand>`.
     if !args.is_empty() && args[0] == "tool-relevance" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx tool-relevance` requires a subcommand. \
+            "`aivyx-pa tool-relevance` requires a subcommand. \
              Supported: dump [--keyword-key <key>]"
                 .to_string()
         })?;
@@ -4823,19 +4823,19 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     if arg == "--keyword-key" {
                         let value = args.get(i + 1).ok_or_else(|| {
                             "`--keyword-key` requires a value. \
-                             Usage: `aivyx tool-relevance dump --keyword-key <key>`"
+                             Usage: `aivyx-pa tool-relevance dump --keyword-key <key>`"
                                 .to_string()
                         })?;
                         keyword_key_filter = Some(value.clone());
                         i += 2;
                     } else if arg.starts_with('-') {
                         return Err(format!(
-                            "unrecognized flag for `aivyx tool-relevance dump`: \
+                            "unrecognized flag for `aivyx-pa tool-relevance dump`: \
                              `{arg}`. Supported flag: --keyword-key <key>"
                         ));
                     } else {
                         return Err(format!(
-                            "`aivyx tool-relevance dump` does not accept \
+                            "`aivyx-pa tool-relevance dump` does not accept \
                              positional arguments. Got: `{arg}`"
                         ));
                     }
@@ -4864,11 +4864,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Check for `mcp-server <name>` subcommand — bundled MCP server (Phase 46).
     if !args.is_empty() && args[0] == "mcp-server" {
         let name = args.get(1).ok_or_else(|| {
-            "`aivyx mcp-server` requires a server name. Supported: web-search".to_string()
+            "`aivyx-pa mcp-server` requires a server name. Supported: web-search".to_string()
         })?;
         if args.len() > 2 {
             return Err(format!(
-                "`aivyx mcp-server {name}` does not accept additional arguments. \
+                "`aivyx-pa mcp-server {name}` does not accept additional arguments. \
                  Got: `{}`",
                 args[2..].join(" ")
             ));
@@ -5099,7 +5099,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 /// (env or TOML) supplied a passphrase. Phase 51 Task 4 fixes a
 /// quiet bug from that change: the helper always returned
 /// `PassphraseSource::Env` when the config had a value, even if
-/// the value came from TOML. That worked when `AIVYX_PASSPHRASE`
+/// the value came from TOML. That worked when `AIVYX_PA_PASSPHRASE`
 /// was set; it errored at startup with "env var not set" when
 /// only TOML was set, contradicting the config-loader contract.
 ///
@@ -5111,7 +5111,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 /// value is used directly.
 ///
 /// Policy:
-/// 1. `passphrase = Some(env)` → `Env` (re-read AIVYX_PASSPHRASE).
+/// 1. `passphrase = Some(env)` → `Env` (re-read AIVYX_PA_PASSPHRASE).
 /// 2. `passphrase = Some(non-env)` → `FromConfig(secret.clone())`.
 /// 3. `passphrase = None` and stdin is a tty → `InteractivePrompt`.
 /// 4. Otherwise → `Err` with a clear operator-facing message.
@@ -5133,22 +5133,22 @@ fn select_passphrase_source(
     match aivyx_channel::keyring_store::retrieve() {
         Ok(Some(secret)) => return Ok(PassphraseSource::FromConfig(secret)),
         Ok(None) => {}
-        Err(e) => eprintln!("aivyx: OS keyring not usable ({e}); trying other passphrase sources"),
+        Err(e) => eprintln!("aivyx-pa: OS keyring not usable ({e}); trying other passphrase sources"),
     }
     if io::stdin().is_terminal() {
         Ok(PassphraseSource::InteractivePrompt { confirm: new_store })
     } else {
         Err(format!(
             "no passphrase available: `{DEFAULT_ENV_VAR}` is not set, \
-             no `[aivyx] passphrase` in the TOML config, nothing in the OS \
-             keyring (`aivyx keyring set`), and stdin is not a terminal. \
+             no `[aivyx_pa] passphrase` in the TOML config, nothing in the OS \
+             keyring (`aivyx-pa keyring set`), and stdin is not a terminal. \
              Export the env var, set the TOML field, store it in the keyring, \
-             or run aivyx from an interactive shell."
+             or run aivyx-pa from an interactive shell."
         ))
     }
 }
 
-/// Chapter Keyring — `aivyx keyring <set|clear|status>`. Manages the master
+/// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`. Manages the master
 /// passphrase in the OS credential store; pure sync, no daemon/storage.
 fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
     use aivyx_channel::keyring_store;
@@ -5168,7 +5168,7 @@ fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
                 .map_err(|e| format!("could not store in the OS keyring: {e}"))?;
             println!(
                 "Stored the master passphrase in the OS keyring. The daemon will \
-                 use it automatically (no `AIVYX_PASSPHRASE` / TOML plaintext \
+                 use it automatically (no `AIVYX_PA_PASSPHRASE` / TOML plaintext \
                  needed for interactive runs)."
             );
             Ok(())
@@ -5186,7 +5186,7 @@ fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
             Ok(false) => {
                 println!(
                     "OS keyring: reachable — no master passphrase stored \
-                     (`aivyx keyring set` to store one)."
+                     (`aivyx-pa keyring set` to store one)."
                 );
                 Ok(())
             }
@@ -5651,14 +5651,14 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
         let Some((capabilities, dispatcher)) = self.deps.get() else {
             // Startup not finished yet — deny, don't guess.
             eprintln!(
-                "aivyx: tool process denied notify.dispatch (target {target}); \
+                "aivyx-pa: tool process denied notify.dispatch (target {target}); \
                  daemon startup not complete"
             );
             return;
         };
         if !notify_dispatch_granted(capabilities) {
             eprintln!(
-                "aivyx: tool process denied notify.dispatch (target {target}); \
+                "aivyx-pa: tool process denied notify.dispatch (target {target}); \
                  capability not held by the active role"
             );
             return;
@@ -5678,7 +5678,7 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
                 .dispatch(&target, &message, subject.as_deref())
                 .await
             {
-                eprintln!("aivyx: notify.dispatch failed (target {target}): {e}");
+                eprintln!("aivyx-pa: notify.dispatch failed (target {target}): {e}");
             }
         });
     }
@@ -5692,9 +5692,9 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
 fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path::PathBuf {
     let raw = match &config.kvcache_store_path {
         Some(sourced) => sourced.value.clone(),
-        None => match directories::ProjectDirs::from("", "", "aivyx") {
+        None => match directories::ProjectDirs::from("", "", "aivyx-pa") {
             Some(dirs) => dirs.data_local_dir().join("kvcache"),
-            None => std::env::temp_dir().join("aivyx").join("kvcache"),
+            None => std::env::temp_dir().join("aivyx-pa").join("kvcache"),
         },
     };
     std::fs::canonicalize(&raw).unwrap_or(raw)
@@ -5946,7 +5946,7 @@ async fn run_async(
         // Chapter Gatehouse — the interlock is enforced at config load;
         // the daemon needs no runtime branch on the acknowledgement flag.
         web_ui_insecure_no_auth: _,
-        // Chapter Freight — pack trust is read by the `aivyx pack` CLI
+        // Chapter Freight — pack trust is read by the `aivyx-pa pack` CLI
         // path, not the daemon.
         pack_trusted_publishers: _,
         memory_ttl_secs,
@@ -5970,7 +5970,7 @@ async fn run_async(
         // resolution site below via
         // `resolve_ollama_prompt_strategy(&model, &..)`.
         ollama_prompt_strategies: config_ollama_prompt_strategies,
-        // Chapter K — `[pricing]` overrides feed both the `aivyx cost`
+        // Chapter K — `[pricing]` overrides feed both the `aivyx-pa cost`
         // dispatch in `run()` (before `run_async`) and, since K.4.2, the
         // loop's dollar cap via the `pricing` table on `DaemonConfig` below.
         pricing: config_pricing,
@@ -6094,7 +6094,7 @@ async fn run_async(
     // above; this is the operator-pending side of P14's self-
     // learning loop. Scheduled reflection turns append Pending
     // rows here; operators resolve them via the Web UI Proposals
-    // pane / `aivyx persona proposals` CLI.
+    // pane / `aivyx-pa persona proposals` CLI.
     let persona_proposal_log =
         match aivyx_channel::persona_proposal::PersistentPersonaProposalLog::open(
             storage.domain(KeyDomain::PersonaProposals),
@@ -6111,7 +6111,7 @@ async fn run_async(
             }
         };
     // Phase 173 — the autonomous-loop backlog. Always opened
-    // (zero-config, like memory): the `aivyx loop add` CLI + the
+    // (zero-config, like memory): the `aivyx-pa loop add` CLI + the
     // loop tools need it even when no run is active. The driver
     // (armed only by `[loop]`) and both loop tools share this
     // one `Arc` so they see a single HMAC-chained backlog.
@@ -6148,7 +6148,7 @@ async fn run_async(
     // additive — it never disarms an explicitly-enabled loop, and `assisted`
     // adds nothing, so this is byte-identical to today when `[autonomy]` is
     // absent). Arming only makes the loop available; a run still needs an
-    // explicit `aivyx loop start`. It takes effect only when a `[loop]` section
+    // explicit `aivyx-pa loop start`. It takes effect only when a `[loop]` section
     // exists, since that is where the iteration/budget caps live — without one,
     // the level's intent is reported but no uncapped loop is conjured.
     let autonomy_posture =
@@ -6157,8 +6157,8 @@ async fn run_async(
         Some(c) if autonomy_posture.arms_loop(c.enabled) => {
             if !c.enabled {
                 eprintln!(
-                    "aivyx: autonomy level `{}` armed the loop (over `[loop]`'s \
-                         caps); start a run with `aivyx loop start`.",
+                    "aivyx-pa: autonomy level `{}` armed the loop (over `[loop]`'s \
+                         caps); start a run with `aivyx-pa loop start`.",
                     autonomy_level.value,
                 );
             }
@@ -6173,7 +6173,7 @@ async fn run_async(
         }
         None if autonomy_posture.loop_enabled => {
             eprintln!(
-                "aivyx: autonomy level `{}` would arm the loop, but there is no \
+                "aivyx-pa: autonomy level `{}` would arm the loop, but there is no \
                      `[loop]` section — add one (it carries the iteration/budget caps) \
                      to enable autonomous runs.",
                 autonomy_level.value,
@@ -6203,13 +6203,13 @@ async fn run_async(
             Ok(n) => {
                 if n > 0 {
                     eprintln!(
-                        "aivyx daemon: seeded persona chain with {n} delta(s) from [persona_seed]"
+                        "aivyx-pa daemon: seeded persona chain with {n} delta(s) from [persona_seed]"
                     );
                 }
                 n
             }
             Err(e) => {
-                eprintln!("aivyx daemon: persona seed failed (chain unchanged): {e}");
+                eprintln!("aivyx-pa daemon: persona seed failed (chain unchanged): {e}");
                 0
             }
         }
@@ -6297,7 +6297,7 @@ async fn run_async(
             // Phase 121 — route through the native OllamaProvider
             // (against `/api/chat` with JSONL streaming) instead of
             // the OpenAI-compat path. Q3a at Phase 121 sign-off:
-            // `provider = "ollama"` in aivyx.toml uses the new
+            // `provider = "ollama"` in aivyx-pa.toml uses the new
             // adapter transparently.
             use aivyx_llm::ollama::{
                 DEFAULT_OLLAMA_BASE_URL as OLLAMA_BASE, OllamaConfig,
@@ -6344,7 +6344,7 @@ async fn run_async(
             // Phase 133 — route through the OpenAI-compat provider
             // against `llama-server`'s default port. Defaults to
             // `http://localhost:8080`; operator overrides via
-            // `[llm] provider_base_url` in aivyx.toml.
+            // `[llm] provider_base_url` in aivyx-pa.toml.
             //
             // No native /api/chat equivalent — llama-server speaks
             // OpenAI-compat exclusively. The API key is accepted if
@@ -6372,7 +6372,7 @@ async fn run_async(
             // Phase 133 — route through the OpenAI-compat provider
             // against Jan's default port. Defaults to
             // `http://localhost:1337/v1`; operator overrides via
-            // `[llm] provider_base_url` in aivyx.toml.
+            // `[llm] provider_base_url` in aivyx-pa.toml.
             //
             // Jan's API mirrors api.openai.com/v1 exactly — no
             // server-side adaptation needed. The API key is accepted
@@ -6404,7 +6404,7 @@ async fn run_async(
                 let opts = &config_mistralrs_options;
                 let model_path = opts.model_path.as_ref().ok_or_else(|| {
                     "MistralRs provider selected but [mistralrs] model_path is missing. \
-                     Set `model_path = \"/abs/path/to/model.gguf\"` in aivyx.toml."
+                     Set `model_path = \"/abs/path/to/model.gguf\"` in aivyx-pa.toml."
                         .to_string()
                 })?;
                 let mut mr_cfg = MistralRsConfig::new(model_path.clone());
@@ -6431,9 +6431,9 @@ async fn run_async(
                 // pattern-bound earlier.
                 let _ = &config_mistralrs_options;
                 return Err(
-                    "MistralRs provider selected but this Aivyx binary was built \
+                    "MistralRs provider selected but this Aivyx PA binary was built \
                      without the `provider-mistral-rs` feature. \
-                     Rebuild with `cargo install --features recommended-providers aivyx` \
+                     Rebuild with `cargo install --features recommended-providers aivyx-pa` \
                      (or `--features provider-mistral-rs` for the lean variant) \
                      to enable embedded inference."
                         .to_string(),
@@ -6450,7 +6450,7 @@ async fn run_async(
             // different `base_url`. Defaults to
             // `http://127.0.0.1:8899` (aivyx-broker's own documented
             // default bind); operator overrides via `[broker] base_url`
-            // in aivyx.toml.
+            // in aivyx-pa.toml.
             //
             // Deliberately does NOT set `llamacpp_base_url_for_kvcache`
             // -- this run must never build a local `KvSlotPool` /
@@ -6502,7 +6502,7 @@ async fn run_async(
                     )),
                     Err(err) => {
                         eprintln!(
-                            "aivyx daemon: kvcache: failed to open store ({err}); disabled for this run"
+                            "aivyx-pa daemon: kvcache: failed to open store ({err}); disabled for this run"
                         );
                         None
                     }
@@ -6510,7 +6510,7 @@ async fn run_async(
             }
             None => {
                 eprintln!(
-                    "aivyx daemon: kvcache: [agent] provider = \"llama_cpp\" but /props probe \
+                    "aivyx-pa daemon: kvcache: [agent] provider = \"llama_cpp\" but /props probe \
                      failed or didn't look like a real llama-server response; disabled for \
                      this run"
                 );
@@ -6566,7 +6566,7 @@ async fn run_async(
                 entries: persona_seed_count,
                 categories: aivyx_channel::persona::seed_category_labels(seed),
             }) {
-                eprintln!("aivyx daemon: failed to audit persona seed: {e}");
+                eprintln!("aivyx-pa daemon: failed to audit persona seed: {e}");
             }
         }
     }
@@ -6578,19 +6578,19 @@ async fn run_async(
     let audit: Arc<dyn AuditHook> = persistent_audit;
 
     // ---- Chapter O: provision the agent's personal workspace ----------
-    // Idempotent: creates `~/.aivyx/workspace` + seed structure if absent.
+    // Idempotent: creates `~/.aivyx-pa/workspace` + seed structure if absent.
     // Independent of fs_root / the access level. `workspace_root` is then
     // the root for the `workspace.*` tools (O.2). `enabled = false` ⇒ None.
     let workspace_root: Option<std::path::PathBuf> = if workspace_enabled.value {
         let root = workspace_path.value;
         match aivyx_core::tools::workspace::provision_workspace(&root) {
             Ok(()) => {
-                eprintln!("aivyx workspace: {}", root.display());
+                eprintln!("aivyx-pa workspace: {}", root.display());
                 Some(root)
             }
             Err(e) => {
                 eprintln!(
-                    "aivyx workspace: failed to provision {}: {e} (workspace disabled)",
+                    "aivyx-pa workspace: failed to provision {}: {e} (workspace disabled)",
                     root.display()
                 );
                 None
@@ -7390,7 +7390,7 @@ async fn run_async(
                 }
                 Err(e) => {
                     eprintln!(
-                        "aivyx workspace: failed to build tools: {e} (workspace tools disabled)"
+                        "aivyx-pa workspace: failed to build tools: {e} (workspace tools disabled)"
                     );
                     Vec::new()
                 }
@@ -7518,7 +7518,7 @@ async fn run_async(
     // documents that the Local CLI's capability set transitively
     // grants access to all configured repos through the role's
     // own `git.read:**` or per-repo grant declarations in
-    // `aivyx.toml`. Underscore-prefixed to acknowledge the
+    // `aivyx-pa.toml`. Underscore-prefixed to acknowledge the
     // landing-site is intentional but the consumer is
     // role-config-driven.
     let _git_read_scope: Option<Scope> = if let Some(gc) = config_git {
@@ -7580,7 +7580,7 @@ async fn run_async(
         // Build a representative scope for the first repo so
         // the Local CLI's operator-held grants include
         // `git.read:<first_repo>/**`. Role-scoped grants in
-        // `aivyx.toml` can name per-repo scopes for finer
+        // `aivyx-pa.toml` can name per-repo scopes for finer
         // control.
         canonical_repos
             .first()
@@ -7702,7 +7702,7 @@ async fn run_async(
         }
         let judge = Arc::new(judge_builder);
         let _ = loop_complete_tool.set_judge(judge);
-        eprintln!("aivyx loop: completion verification ON — an LLM judge gates loop.complete");
+        eprintln!("aivyx-pa loop: completion verification ON — an LLM judge gates loop.complete");
     }
     tool_list.push(Arc::clone(&loop_complete_tool) as Arc<dyn Tool>);
     // Phase 175 — loop.note appends a learning to the reserved
@@ -7765,7 +7765,7 @@ async fn run_async(
         std::collections::HashMap::new();
     // Chapter Conduit (CD.3) — per-server stderr captures + the status
     // snapshot built across the startup loop and written for
-    // `aivyx mcp status`.
+    // `aivyx-pa mcp status`.
     let mut mcp_stderr_logs: std::collections::HashMap<String, aivyx_mcp::StderrLog> =
         std::collections::HashMap::new();
     let mut mcp_status_entries: Vec<aivyx_channel::mcp_status::McpServerStatusView> = Vec::new();
@@ -7853,7 +7853,7 @@ async fn run_async(
                         );
                         tool_list.extend(mcp_tools);
                         eprintln!(
-                            "aivyx: MCP server {:?} ({transport_label}) — {} tool(s) registered",
+                            "aivyx-pa: MCP server {:?} ({transport_label}) — {} tool(s) registered",
                             mcp_cfg.name, count,
                         );
                         mcp_status_entries.push(
@@ -7867,7 +7867,7 @@ async fn run_async(
                     Err(e) => {
                         let tail = stderr_tail();
                         eprintln!(
-                            "aivyx: MCP server {:?} tool discovery failed: {e}{}",
+                            "aivyx-pa: MCP server {:?} tool discovery failed: {e}{}",
                             mcp_cfg.name,
                             format_stderr_tail(&tail),
                         );
@@ -7886,7 +7886,7 @@ async fn run_async(
             Err(e) => {
                 let tail = stderr_tail();
                 eprintln!(
-                    "aivyx: MCP server {:?} failed to start: {e}{}",
+                    "aivyx-pa: MCP server {:?} failed to start: {e}{}",
                     mcp_cfg.name,
                     format_stderr_tail(&tail),
                 );
@@ -7899,20 +7899,20 @@ async fn run_async(
             }
         }
     }
-    // Chapter Conduit (CD.3) — persist the snapshot for `aivyx mcp
+    // Chapter Conduit (CD.3) — persist the snapshot for `aivyx-pa mcp
     // status`. Best-effort: a write failure must not abort startup.
     //
-    // Backlog #9 — write it ONLY from the actual daemon (`aivyx daemon run`).
+    // Backlog #9 — write it ONLY from the actual daemon (`aivyx-pa daemon run`).
     // `run_async` also runs for transient CLI invocations (a `--headless` turn,
     // the REPL), which build their own MCP bridges; letting those write would
     // clobber the running daemon's good snapshot with their ephemeral (often
-    // empty) state — the bug that made `aivyx mcp status` report "no servers"
+    // empty) state — the bug that made `aivyx-pa mcp status` report "no servers"
     // while the daemon's MCP was live (the snapshot's mtime kept moving with no
     // daemon restart). The snapshot represents daemon state, so only the daemon
     // owns it.
     if matches!(mode, CliMode::DaemonRun) {
         if let Err(e) = aivyx_channel::mcp_status::write_snapshot(&mcp_status_entries) {
-            eprintln!("aivyx: could not write MCP status snapshot: {e}");
+            eprintln!("aivyx-pa: could not write MCP status snapshot: {e}");
         }
     }
 
@@ -7963,7 +7963,7 @@ async fn run_async(
         && !config_tool_processes.is_empty()
     {
         eprintln!(
-            "aivyx: [sandbox] default_backend = auto but neither \
+            "aivyx-pa: [sandbox] default_backend = auto but neither \
              bwrap nor firejail is on PATH — tool processes will \
              run UNSANDBOXED. Install bubblewrap or firejail, or \
              set an explicit [tool_process.sandbox] block."
@@ -7983,7 +7983,7 @@ async fn run_async(
             if let Some(hint) =
                 connect::unauthenticated_hint(&tp_cfg.command, std::path::Path::new(&home))
             {
-                eprintln!("aivyx: {hint}");
+                eprintln!("aivyx-pa: {hint}");
             }
         }
         // Phase 52 — the operator's explicit [tool_process.sandbox]
@@ -8003,7 +8003,7 @@ async fn run_async(
             .map(|home| {
                 vec![
                     std::path::PathBuf::from(home)
-                        .join(".aivyx")
+                        .join(".aivyx-pa")
                         .join("tool-processes")
                         .join(&tp_cfg.name),
                 ]
@@ -8019,11 +8019,11 @@ async fn run_async(
         );
         match &spawn_sandbox {
             Some(s) => eprintln!(
-                "aivyx: tool process {:?} — sandboxed ({})",
+                "aivyx-pa: tool process {:?} — sandboxed ({})",
                 tp_cfg.name, s.wrapper
             ),
             None => eprintln!(
-                "aivyx: tool process {:?} — UNSANDBOXED (runs with \
+                "aivyx-pa: tool process {:?} — UNSANDBOXED (runs with \
                  your full user identity)",
                 tp_cfg.name
             ),
@@ -8051,7 +8051,7 @@ async fn run_async(
         let bridge = match aivyx_tool::ToolProcessBridge::spawn(spawn_cfg).await {
             Ok(b) => std::sync::Arc::new(b),
             Err(e) => {
-                eprintln!("aivyx: tool process {:?} failed to start: {e}", tp_cfg.name,);
+                eprintln!("aivyx-pa: tool process {:?} failed to start: {e}", tp_cfg.name,);
                 continue;
             }
         };
@@ -8066,7 +8066,7 @@ async fn run_async(
                 Some(s) => s,
                 None => {
                     eprintln!(
-                        "aivyx: tool process {:?} tool {:?} declared unparseable scope {:?} — \
+                        "aivyx-pa: tool process {:?} tool {:?} declared unparseable scope {:?} — \
                          skipped",
                         tp_cfg.name, descriptor.name, descriptor.required_scope,
                     );
@@ -8079,7 +8079,7 @@ async fn run_async(
                         Some(s) => s,
                         None => {
                             eprintln!(
-                                "aivyx: tool process {:?} tool {:?} has unparseable \
+                                "aivyx-pa: tool process {:?} tool {:?} has unparseable \
                                  scope_override {:?} — skipped",
                                 tp_cfg.name, descriptor.name, override_str,
                             );
@@ -8088,7 +8088,7 @@ async fn run_async(
                     };
                     if !parsed.is_granted_by(&declared) {
                         eprintln!(
-                            "aivyx: tool process {:?} tool {:?} scope_override {:?} is not \
+                            "aivyx-pa: tool process {:?} tool {:?} scope_override {:?} is not \
                              narrower than declared {:?} — skipped",
                             tp_cfg.name, descriptor.name, override_str, descriptor.required_scope,
                         );
@@ -8110,7 +8110,7 @@ async fn run_async(
             registered += 1;
         }
         eprintln!(
-            "aivyx: tool process {:?} — {} tool(s) registered",
+            "aivyx-pa: tool process {:?} — {} tool(s) registered",
             tp_cfg.name, registered,
         );
         tool_bridges.push(bridge);
@@ -8134,7 +8134,7 @@ async fn run_async(
 
     // ---- Chapter Herald — auto-provision a default in-Studio notify
     // target -------------------------------------------------------
-    // An operator with no `[[notify_target]]` in aivyx.toml would
+    // An operator with no `[[notify_target]]` in aivyx-pa.toml would
     // otherwise have zero way to be told a mission or schedule
     // finished short of watching the Studio's live poll. If the web
     // UI is running and no `webui`-kind target is already declared,
@@ -8212,7 +8212,7 @@ async fn run_async(
                     }),
                     Err(e) => {
                         eprintln!(
-                            "aivyx: failed to build SMTP transport from \
+                            "aivyx-pa: failed to build SMTP transport from \
                              [email] config: {e}"
                         );
                         None
@@ -8297,7 +8297,7 @@ async fn run_async(
     }
 
     // The operator's own real capability floor — moved here (earlier than
-    // the role envelope that used to be its only consumer) because `aivyx
+    // the role envelope that used to be its only consumer) because `aivyx-pa
     // team run --config <pack.toml>` needs it before assembling the pack's
     // team, to clamp the pack's own declared lead-role scopes against it
     // (closing the CLI capability-floor gap; mirrors what the daemon path
@@ -8317,7 +8317,7 @@ async fn run_async(
         !config_tool_processes.is_empty(),
     );
 
-    // Chapter J — `aivyx team run "<mission>"`. We now hold the live provider,
+    // Chapter J — `aivyx-pa team run "<mission>"`. We now hold the live provider,
     // the persistent HMAC audit hook, AND the daemon's full `tool_list` — so
     // assemble the team and run the lead in-process with specialists that get
     // their real (attenuated) tools. A one-shot command: it consumes
@@ -8335,7 +8335,7 @@ async fn run_async(
             Arc::clone(&audit),
             checkpointer.clone(),
             &cli_lead_scopes,
-            // Task 6 — `aivyx team run` runs inside this SAME `run_async`
+            // Task 6 — `aivyx-pa team run` runs inside this SAME `run_async`
             // invocation, after the provider-selection block above already
             // built `kv_cache_handles` (the same one the daemon path below
             // reuses) — no second `/props` probe needed here.
@@ -8384,12 +8384,12 @@ async fn run_async(
                             let (removed, added) = registry.replace_tools(&old_ids, new_tools);
                             server_tool_ids.insert(name.clone(), new_ids);
                             eprintln!(
-                                "aivyx: MCP server {name:?} signalled {changed:?} — \
+                                "aivyx-pa: MCP server {name:?} signalled {changed:?} — \
                                  hot-swapped tools ({removed} removed, {added} added)"
                             );
                         }
                         Err(e) => eprintln!(
-                            "aivyx: MCP server {name:?} list-changed rediscover failed: {e}"
+                            "aivyx-pa: MCP server {name:?} list-changed rediscover failed: {e}"
                         ),
                     }
                 }
@@ -8928,7 +8928,7 @@ async fn run_async(
         })?;
     // Phase 70 — register the proposal chain so agent-supplied
     // persona deltas also land in the Web UI Proposals pane /
-    // `aivyx persona proposals` CLI alongside the existing
+    // `aivyx-pa persona proposals` CLI alongside the existing
     // mission-gate flow.
     reflection_propose_tool
         .set_persona_proposal_log(Arc::clone(&persona_proposal_log))
@@ -8986,7 +8986,7 @@ async fn run_async(
         })?;
 
     // ---- Phase 17 Task 3: daemon-run branch ----------------------------
-    // If the operator invoked `aivyx daemon run`, launch the daemon
+    // If the operator invoked `aivyx-pa daemon run`, launch the daemon
     // server in the foreground. The daemon reuses the same agent,
     // provider, audit, and capability stack as the in-process path.
     if mode == CliMode::DaemonRun {
@@ -9142,10 +9142,10 @@ async fn run_async(
             }
             match state.reload().await {
                 Ok(n) if n > 0 => {
-                    eprintln!("aivyx team: reloaded {n} persisted team mission(s)");
+                    eprintln!("aivyx-pa team: reloaded {n} persisted team mission(s)");
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("aivyx team: mission reload failed — {e}"),
+                Err(e) => eprintln!("aivyx-pa team: mission reload failed — {e}"),
             }
             let deps = aivyx_channel::team_mission_driver::TeamRunDeps {
                 provider: Arc::clone(&provider),
@@ -9219,8 +9219,8 @@ async fn run_async(
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
-            // beside `aivyx.toml`), falling back to the built-in Nonagon when
-            // neither is present. `base_dir` is the loaded `aivyx.toml`'s
+            // beside `aivyx-pa.toml`), falling back to the built-in Nonagon when
+            // neither is present. `base_dir` is the loaded `aivyx-pa.toml`'s
             // directory (cwd for the default relative path).
             let team_base_dir = std::path::Path::new(DEFAULT_TOML_PATH)
                 .parent()
@@ -9341,7 +9341,7 @@ async fn run_async(
         });
 
         eprintln!(
-            "aivyx daemon {} — listening on {}",
+            "aivyx-pa daemon {} — listening on {}",
             env!("CARGO_PKG_VERSION"),
             socket_path.display(),
         );
@@ -9358,16 +9358,16 @@ async fn run_async(
                     .await
                     {
                         Ok(n) if n > 0 => {
-                            eprintln!("aivyx daemon: synced {n} schedule(s) from config");
+                            eprintln!("aivyx-pa daemon: synced {n} schedule(s) from config");
                         }
                         Err(e) => {
-                            eprintln!("aivyx daemon: failed to sync config schedules: {e}");
+                            eprintln!("aivyx-pa daemon: failed to sync config schedules: {e}");
                         }
                         _ => {}
                     }
                 }
                 Err(e) => {
-                    eprintln!("aivyx daemon: invalid schedule config: {e}");
+                    eprintln!("aivyx-pa daemon: invalid schedule config: {e}");
                 }
             }
         }
@@ -9393,7 +9393,7 @@ async fn run_async(
                             aivyx_channel::webhook::create_webhook(&webhook_domain, &record).await
                         {
                             eprintln!(
-                                "aivyx daemon: failed to sync webhook {:?}: {e}",
+                                "aivyx-pa daemon: failed to sync webhook {:?}: {e}",
                                 wh_cfg.name
                             );
                         } else {
@@ -9402,12 +9402,12 @@ async fn run_async(
                     }
                     Ok(Some(_)) => {} // already exists in storage
                     Err(e) => {
-                        eprintln!("aivyx daemon: webhook sync lookup failed: {e}");
+                        eprintln!("aivyx-pa daemon: webhook sync lookup failed: {e}");
                     }
                 }
             }
             if synced > 0 {
-                eprintln!("aivyx daemon: synced {synced} webhook(s) from config");
+                eprintln!("aivyx-pa daemon: synced {synced} webhook(s) from config");
             }
         }
 
@@ -9422,10 +9422,10 @@ async fn run_async(
             .await
             {
                 Ok(n) if n > 0 => {
-                    eprintln!("aivyx daemon: synced {n} file watch(es) from config");
+                    eprintln!("aivyx-pa daemon: synced {n} file watch(es) from config");
                 }
                 Err(e) => {
-                    eprintln!("aivyx daemon: file-watch config sync failed: {e}");
+                    eprintln!("aivyx-pa daemon: file-watch config sync failed: {e}");
                 }
                 _ => {}
             }
@@ -9568,7 +9568,7 @@ async fn run_async(
             role_override: role_override.clone(),
             // Chapter Roster (RO.2) — the resolved team-config write target for
             // the `SetTeamRoster` handler: the operator's `[team] config_path`
-            // (relative → joined to the `aivyx.toml` dir) or the conventional
+            // (relative → joined to the `aivyx-pa.toml` dir) or the conventional
             // `team.toml` beside it. Gated on the config file existing — an
             // env-only launch leaves it `None` and the handler refuses, exactly
             // like the other Settings writes.
@@ -9816,7 +9816,7 @@ async fn run_async(
                         role: Some(active_role_name.clone()),
                         prompt: PROMPT.to_string(),
                         banner: Some(format!(
-                            "aivyx {} (daemon) — type a message, ctrl-C to cancel, \
+                            "aivyx-pa {} (daemon) — type a message, ctrl-C to cancel, \
                              ctrl-D to exit.\n\
                              daemon: {}\n\
                              fs sandbox: {}\n\
@@ -9841,19 +9841,19 @@ async fn run_async(
                         Ok(_report) => return Ok(()),
                         Err(e) => {
                             eprintln!(
-                                "aivyx: daemon session failed ({e}), \
+                                "aivyx-pa: daemon session failed ({e}), \
                                  falling back to in-process."
                             );
                         }
                     }
                 } else {
                     eprintln!(
-                        "aivyx: no daemon at {}, using in-process mode.",
+                        "aivyx-pa: no daemon at {}, using in-process mode.",
                         sp.display(),
                     );
                 }
             } else {
-                eprintln!("aivyx: no socket path available, using in-process mode.");
+                eprintln!("aivyx-pa: no socket path available, using in-process mode.");
             }
 
             // In-process fallback (original Phase 3 path).
@@ -9916,7 +9916,7 @@ async fn run_async(
                 storage,
                 prompt: PROMPT.to_string(),
                 banner: Some(format!(
-                    "aivyx {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
+                    "aivyx-pa {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
                      fs sandbox: {}\n\
                      memory: live (recall persists across restarts)\n\
                      audit: persistent ({} events verified from disk)\n\
@@ -10004,7 +10004,7 @@ async fn run_async(
                 let transport = Arc::new(ReqwestTransport::new(token_str));
 
                 eprintln!(
-                    "aivyx {} (daemon) — telegram bot live\n\
+                    "aivyx-pa {} (daemon) — telegram bot live\n\
                      {}\n\
                      daemon: {}\n\
                      fs sandbox: {}\n\
@@ -10032,18 +10032,18 @@ async fn run_async(
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         eprintln!(
-                            "aivyx: daemon telegram session failed ({e}), \
+                            "aivyx-pa: daemon telegram session failed ({e}), \
                              falling back to in-process."
                         );
                     }
                 }
             } else {
-                eprintln!("aivyx: no socket path available, using in-process mode.");
+                eprintln!("aivyx-pa: no socket path available, using in-process mode.");
             }
 
             // In-process fallback (original Phase 8 path).
             eprintln!(
-                "aivyx {} — telegram bot live (in-process)\n\
+                "aivyx-pa {} — telegram bot live (in-process)\n\
                  {}\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
@@ -10122,7 +10122,7 @@ async fn run_async(
                 );
 
                 eprintln!(
-                    "aivyx {} (daemon) — discord bot live\n\
+                    "aivyx-pa {} (daemon) — discord bot live\n\
                      daemon: {}\n\
                      fs sandbox: {}\n\
                      memory: live (recall persists across restarts)\n\
@@ -10147,18 +10147,18 @@ async fn run_async(
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         eprintln!(
-                            "aivyx: daemon discord session failed ({e}), \
+                            "aivyx-pa: daemon discord session failed ({e}), \
                              falling back to in-process."
                         );
                     }
                 }
             } else {
-                eprintln!("aivyx: no socket path available, using in-process mode.");
+                eprintln!("aivyx-pa: no socket path available, using in-process mode.");
             }
 
             // In-process fallback (Phase 107 path).
             eprintln!(
-                "aivyx {} — discord bot live (in-process)\n\
+                "aivyx-pa {} — discord bot live (in-process)\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
                  audit: persistent ({} events verified from disk)",
@@ -10253,7 +10253,7 @@ async fn run_async(
                     Ok(transport) => {
                         let transport = std::sync::Arc::new(transport);
                         eprintln!(
-                            "aivyx {} (daemon) — slack bot live\n\
+                            "aivyx-pa {} (daemon) — slack bot live\n\
                              daemon: {}\n\
                              fs sandbox: {}\n\
                              memory: live (recall persists across restarts)\n\
@@ -10277,7 +10277,7 @@ async fn run_async(
                             Ok(()) => return Ok(()),
                             Err(e) => {
                                 eprintln!(
-                                    "aivyx: daemon slack session failed ({e}), \
+                                    "aivyx-pa: daemon slack session failed ({e}), \
                                      falling back to in-process."
                                 );
                             }
@@ -10285,18 +10285,18 @@ async fn run_async(
                     }
                     Err(e) => {
                         eprintln!(
-                            "aivyx: slack socket-mode connect failed ({e}), \
+                            "aivyx-pa: slack socket-mode connect failed ({e}), \
                              falling back to in-process."
                         );
                     }
                 }
             } else {
-                eprintln!("aivyx: no socket path available, using in-process mode.");
+                eprintln!("aivyx-pa: no socket path available, using in-process mode.");
             }
 
             // In-process fallback (Phase 108 path).
             eprintln!(
-                "aivyx {} — slack bot live (in-process)\n\
+                "aivyx-pa {} — slack bot live (in-process)\n\
                  fs sandbox: {}\n\
                  memory: live (recall persists across restarts)\n\
                  audit: persistent ({} events verified from disk)",
@@ -10367,7 +10367,7 @@ async fn run_async(
                 };
 
                 eprintln!(
-                    "aivyx {} — voice channel (Phase 138 streaming TTS)\n\
+                    "aivyx-pa {} — voice channel (Phase 138 streaming TTS)\n\
                      fs sandbox: {}\n\
                      audit: persistent ({} events verified from disk)",
                     env!("CARGO_PKG_VERSION"),
@@ -10521,7 +10521,7 @@ async fn run_async(
             {
                 let _ = &config_voice_options;
                 Err(
-                    "aivyx voice: this binary was built without the `channel-voice-full` \
+                    "aivyx-pa voice: this binary was built without the `channel-voice-full` \
                      feature (which bundles channel-voice + whisper-rs ASR + Kokoro TTS). \
                      Rebuild with `cargo install --features \
                      aivyx-channel/channel-voice-full aivyx-channel`. See INSTALL.md \
@@ -10884,7 +10884,7 @@ mod tests {
     // Phase 11 Task 4 — `--role <name>` CLI flag parser tests.
     //
     // These pin the binary's own arg parser. The higher-level priority
-    // chain (`--role` beats `AIVYX_ROLE` beats TOML beats `"default"`)
+    // chain (`--role` beats `AIVYX_PA_ROLE` beats TOML beats `"default"`)
     // is covered by `aivyx-config`'s test `role_override_beats_env_var`
     // and its siblings — the binary's contribution is turning the flag
     // into `LoadOptions::role_override`, which is what these tests
@@ -10949,7 +10949,7 @@ mod tests {
     fn role_flag_absent_leaves_role_none() {
         // No `--role` at all — the parser must return `None` so that
         // `LoadOptions::role_override = None` and the config layer
-        // falls through to `AIVYX_ROLE` / TOML / `"default"`.
+        // falls through to `AIVYX_PA_ROLE` / TOML / `"default"`.
         let parsed = parse_cli_args_from(&argv(&[])).expect("empty argv must parse");
         assert!(parsed.role.is_none());
     }
@@ -11059,7 +11059,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 102 — `aivyx tools` subcommand parse tests.
+    // Phase 102 — `aivyx-pa tools` subcommand parse tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -11091,7 +11091,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 103 — `aivyx tool init` parse tests.
+    // Phase 103 — `aivyx-pa tool init` parse tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -11140,7 +11140,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 105 — `aivyx audit export` parse tests.
+    // Phase 105 — `aivyx-pa audit export` parse tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -11239,7 +11239,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 106 — `aivyx mcp recipes` parse tests.
+    // Phase 106 — `aivyx-pa mcp recipes` parse tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -11252,7 +11252,7 @@ mod tests {
         ));
     }
 
-    // Chapter Conduit (CD.3/CD.4) — `aivyx mcp status` parse + snapshot.
+    // Chapter Conduit (CD.3/CD.4) — `aivyx-pa mcp status` parse + snapshot.
 
     #[test]
     fn mcp_status_subcommand_parses() {
@@ -11910,11 +11910,11 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Phase 13 Task 3 — `examples/aivyx.toml` worked-case regression
+    // Phase 13 Task 3 — `examples/aivyx-pa.toml` worked-case regression
     // ----------------------------------------------------------------
     //
     // These tests load the canonical worked example from
-    // `examples/aivyx.toml` (resolved via `CARGO_MANIFEST_DIR`) and
+    // `examples/aivyx-pa.toml` (resolved via `CARGO_MANIFEST_DIR`) and
     // pin the runtime envelopes for each of the four declared roles.
     // The example file is a teaching artifact; these tests are the
     // mechanical guarantee that the file's claims about each role's
@@ -11982,7 +11982,7 @@ mod tests {
         );
     }
 
-    /// Load `examples/aivyx.toml` from the repo root. Returns the
+    /// Load `examples/aivyx-pa.toml` from the repo root. Returns the
     /// loaded `AivyxConfig` with no env vars set; the example is
     /// designed to load without secrets via `require_api_key:
     /// false`.
@@ -11992,10 +11992,10 @@ mod tests {
             .join("..")
             .join("..")
             .join("examples")
-            .join("aivyx.toml");
+            .join("aivyx-pa.toml");
         assert!(
             example_path.exists(),
-            "examples/aivyx.toml must exist at {example_path:?}"
+            "examples/aivyx-pa.toml must exist at {example_path:?}"
         );
         // We need to pick *some* role for `LoadOptions` to succeed;
         // the example file declares all four roles and the active
@@ -12010,7 +12010,7 @@ mod tests {
             require_slack_tokens: false,
             role_override: Some("default".to_string()),
         };
-        AivyxConfig::load_from_env_and_toml(&opts).expect("examples/aivyx.toml must load cleanly")
+        AivyxConfig::load_from_env_and_toml(&opts).expect("examples/aivyx-pa.toml must load cleanly")
     }
 
     /// `coder` declares its own attenuation of `default` and runs
@@ -12187,7 +12187,7 @@ mod tests {
     //
     // Two layers: parse-time tests (mirror the existing `role_flag_*`
     // tests in shape) and functional tests that drive
-    // `render_role_envelope` against `examples/aivyx.toml` and assert
+    // `render_role_envelope` against `examples/aivyx-pa.toml` and assert
     // that the rendered string contains the load-bearing teaching
     // strings the operator needs to see.
     //
@@ -12693,7 +12693,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Phase 61 — `aivyx --version` / `-V` flag
+    // Phase 61 — `aivyx-pa --version` / `-V` flag
     // -----------------------------------------------------------------------
 
     #[test]
@@ -12738,7 +12738,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Phase 44 — `aivyx init` subcommand
+    // Phase 44 — `aivyx-pa init` subcommand
     // -----------------------------------------------------------------------
 
     #[test]
@@ -12782,7 +12782,7 @@ mod tests {
 
     #[test]
     fn parse_init_template_followed_by_flag_is_list_mode() {
-        // `aivyx init --template --list-templates` — the second
+        // `aivyx-pa init --template --list-templates` — the second
         // flag follows immediately, so --template has no name and
         // routes to list mode. Cleaner than erroring; intent is
         // recoverable.
@@ -12802,7 +12802,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Phase 46 — `aivyx mcp-server <name>` subcommand
+    // Phase 46 — `aivyx-pa mcp-server <name>` subcommand
     // -----------------------------------------------------------------------
 
     #[test]
@@ -12837,7 +12837,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 58 — `aivyx profile <subcommand>` parser tests.
+    // Phase 58 — `aivyx-pa profile <subcommand>` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -12929,7 +12929,7 @@ mod tests {
         assert!(err.contains("requires a proposal id"), "error: {err}");
     }
 
-    // ---- Chapter Freight — `aivyx pack` parsing ----------------
+    // ---- Chapter Freight — `aivyx-pa pack` parsing ----------------
 
     #[test]
     fn pack_build_parses_staging_key_and_out() {
@@ -13004,7 +13004,7 @@ mod tests {
         );
     }
 
-    // ---- Phase 177 — `aivyx loop skip` parsing ----------------
+    // ---- Phase 177 — `aivyx-pa loop skip` parsing ----------------
 
     #[test]
     fn loop_skip_parses_story_id() {
@@ -13068,7 +13068,7 @@ mod tests {
         assert!(err.contains("skip"), "help should mention skip: {err}");
     }
 
-    // ---- Chapter J — `aivyx team` parsing ---------------------
+    // ---- Chapter J — `aivyx-pa team` parsing ---------------------
 
     #[test]
     fn team_roster_parses() {
@@ -13267,7 +13267,7 @@ mod tests {
         );
     }
 
-    // ---- Chapter K — `aivyx cost` parsing ---------------------
+    // ---- Chapter K — `aivyx-pa cost` parsing ---------------------
 
     #[test]
     fn cost_parses_all_time_and_today() {
@@ -13441,7 +13441,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 60 — `aivyx persona <subcommand>` parser tests.
+    // Phase 60 — `aivyx-pa persona <subcommand>` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -13451,7 +13451,7 @@ mod tests {
         assert_eq!(parsed.mode, CliMode::Persona(PersonaSubcommand::Show));
     }
 
-    // ---- Chapter Tutor — `aivyx skills` parsing ----
+    // ---- Chapter Tutor — `aivyx-pa skills` parsing ----
 
     #[test]
     fn skills_teach_parses_positional_args() {
@@ -13606,7 +13606,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 70 — `aivyx persona proposals <subcommand>` parser tests.
+    // Phase 70 — `aivyx-pa persona proposals <subcommand>` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -13741,7 +13741,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 64 — `aivyx identity <subcommand>` parser tests.
+    // Phase 64 — `aivyx-pa identity <subcommand>` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -13838,7 +13838,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Chapter Passport Task 8 — `aivyx federation <subcommand>` parser
+    // Chapter Passport Task 8 — `aivyx-pa federation <subcommand>` parser
     // tests. These test argument parsing/dispatch only (present
     // regardless of the `yubikey` Cargo feature — see `CliMode::
     // Federation`'s doc comment) — the provisioning flow itself
@@ -13912,7 +13912,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 73 — `aivyx notify <subcommand>` parser tests.
+    // Phase 73 — `aivyx-pa notify <subcommand>` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -13970,7 +13970,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 74 — `aivyx memory <subcommand>` parser tests.
+    // Phase 74 — `aivyx-pa memory <subcommand>` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -14107,7 +14107,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 78 — `aivyx learning [--window <secs>]` parser tests.
+    // Phase 78 — `aivyx-pa learning [--window <secs>]` parser tests.
     // -----------------------------------------------------------------
 
     #[test]
@@ -14150,12 +14150,12 @@ mod tests {
 
     fn load_phase_122_config(extra: &str) -> AivyxConfig {
         let scratch = Scratch::new();
-        let toml_path = scratch.dir.join("aivyx.toml");
+        let toml_path = scratch.dir.join("aivyx-pa.toml");
         let body = format!(
             "[anthropic]\n\
              api_key = \"sk-test\"\n\
              \n\
-             [aivyx]\n\
+             [aivyx_pa]\n\
              passphrase = \"test\"\n\
              {extra}\n",
         );
@@ -14205,7 +14205,7 @@ mod tests {
         let path = effective_kvcache_store_path(&cfg);
         assert!(
             path.to_string_lossy()
-                .contains(".local/share/aivyx/kvcache"),
+                .contains(".local/share/aivyx-pa/kvcache"),
             "default kvcache path must be unchanged when no override is configured, got {path:?}"
         );
     }
@@ -14385,13 +14385,13 @@ mod early_validate_message_tests {
         let err = result.expect_err("diagnostic mode must always error when the gate fires");
         assert!(err.contains("nothing to verify/export/report on"), "{err}");
         assert!(
-            !err.starts_with("aivyx: "),
+            !err.starts_with("aivyx-pa: "),
             "early_validate_message must return a prefix-free message: {err}"
         );
         assert!(
-            err.contains("run `aivyx` once to create the store"),
+            err.contains("run `aivyx-pa` once to create the store"),
             "diagnostic-mode hint must name a remedy that actually creates a store, \
-             not just `aivyx init`: {err}"
+             not just `aivyx-pa init`: {err}"
         );
     }
 
@@ -14439,10 +14439,10 @@ mod early_validate_message_tests {
         let err = result.expect_err("default mode must surface validate()'s own error");
         assert!(err.contains("anthropic_api_key"), "{err}");
         assert!(
-            !err.starts_with("aivyx: "),
+            !err.starts_with("aivyx-pa: "),
             "early_validate_message must return a prefix-free message: {err}"
         );
-        assert!(err.contains("aivyx init"), "{err}");
+        assert!(err.contains("aivyx-pa init"), "{err}");
     }
 }
 
@@ -14463,9 +14463,9 @@ mod early_validate_fail_output_tests {
         assert_eq!(early, None);
         assert_eq!(fail, "full message");
         assert!(
-            !fail.starts_with("aivyx: "),
+            !fail.starts_with("aivyx-pa: "),
             "the non-TTY fail message must stay prefix-free -- main()'s generic \
-             handler adds \"aivyx: \" itself; baking it in here doubles it"
+             handler adds \"aivyx-pa: \" itself; baking it in here doubles it"
         );
     }
 }

@@ -1,4 +1,4 @@
-//! `aivyx loop` CLI — Phase 173 (the Aivyx Ralph loop).
+//! `aivyx-pa loop` CLI — Phase 173 (the Aivyx Ralph loop).
 //!
 //! IPC-backed control surface for the autonomous loop: stock the
 //! backlog (`add` / `list`) and drive runs (`start` / `stop` /
@@ -18,7 +18,7 @@ use aivyx_channel::loop_driver::LoopRunState;
 
 use crate::LoopSubcommand;
 
-/// `aivyx loop <subcommand>`.
+/// `aivyx-pa loop <subcommand>`.
 pub async fn run_loop(sub: LoopSubcommand) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -182,8 +182,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx loop: no daemon running on socket {} — start the daemon \
-         first with `aivyx daemon run`",
+        "aivyx-pa loop: no daemon running on socket {} — start the daemon \
+         first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }
@@ -201,7 +201,7 @@ fn status_label(status: &StoryStatus) -> &'static str {
 /// pick order), so the operator sees what runs next at the top.
 fn render_backlog(stories: &[Story]) -> String {
     if stories.is_empty() {
-        return "Backlog is empty. Add stories with `aivyx loop add \
+        return "Backlog is empty. Add stories with `aivyx-pa loop add \
                 <title>`.\n"
             .to_string();
     }
@@ -248,7 +248,7 @@ fn render_status(
     if !armed {
         out.push_str(
             "  driver: not armed (set `[loop] enabled = true` in \
-             aivyx.toml and restart the daemon)\n",
+             aivyx-pa.toml and restart the daemon)\n",
         );
     } else if state.active {
         out.push_str(&format!(

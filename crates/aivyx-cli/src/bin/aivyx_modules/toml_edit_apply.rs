@@ -1,11 +1,11 @@
-//! Phase 119 Task 3 — Atomic `aivyx.toml` editing primitive for the
+//! Phase 119 Task 3 — Atomic `aivyx-pa.toml` editing primitive for the
 //! Phase 118 apply-side commands.
 //!
-//! Two operator-facing CLI commands need to mutate `aivyx.toml`:
+//! Two operator-facing CLI commands need to mutate `aivyx-pa.toml`:
 //!
-//! - `aivyx profile apply-hint <id>` (Task 4) — set or append a single
+//! - `aivyx-pa profile apply-hint <id>` (Task 4) — set or append a single
 //!   `[profile]` field per an approved `ProfileFieldHint`.
-//! - `aivyx role import <id>` (Task 5) — add a new `[roles.<name>]`
+//! - `aivyx-pa role import <id>` (Task 5) — add a new `[roles.<name>]`
 //!   section per an approved `RoleDraft`.
 //!
 //! Both mutations share the same shape: parse the existing TOML with
@@ -14,8 +14,8 @@
 //!
 //! ## Why a dedicated module
 //!
-//! Phase 58's `aivyx profile edit` (CLI editor flow in `profile.rs`)
-//! already touches `aivyx.toml` via `toml_edit`. Phase 119 introduces
+//! Phase 58's `aivyx-pa profile edit` (CLI editor flow in `profile.rs`)
+//! already touches `aivyx-pa.toml` via `toml_edit`. Phase 119 introduces
 //! programmatic apply paths that don't go through `$EDITOR`; sharing
 //! the atomicity contract via this module avoids duplicating the
 //! write-to-tmp + rename pattern in two CLI subcommands.
@@ -270,7 +270,7 @@ fn write_atomic_with_0600(path: &Path, contents: &str) -> Result<(), TomlApplyEr
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "aivyx.toml".to_string());
+        .unwrap_or_else(|| "aivyx-pa.toml".to_string());
     let tmp_name = format!(".{}.phase119-tmp.{}", file_name, std::process::id());
     let tmp_path = parent.join(tmp_name);
 
@@ -411,7 +411,7 @@ mod tests {
              \n\
              [profile]\n\
              # Operator-declared identity.\n\
-             assistant_name = \"Aivyx\"\n\
+             assistant_name = \"Aivyx PA\"\n\
              \n\
              [roles.coder]\n\
              tool_allowlist = [\"fs.read\"]\n",
@@ -505,11 +505,11 @@ mod tests {
             tool_allowlist_additions: vec![],
             rationale: "...".into(),
         };
-        let err = apply_role_draft_to_doc(&mut doc, &role, false, "aivyx.toml").unwrap_err();
+        let err = apply_role_draft_to_doc(&mut doc, &role, false, "aivyx-pa.toml").unwrap_err();
         match err {
             TomlApplyError::RoleExists { name, path } => {
                 assert_eq!(name, "research-deploy");
-                assert_eq!(path, "aivyx.toml");
+                assert_eq!(path, "aivyx-pa.toml");
             }
             other => panic!("expected RoleExists, got {other:?}"),
         }
@@ -532,7 +532,7 @@ mod tests {
             tool_allowlist_additions: vec!["git.commit".into()],
             rationale: "...".into(),
         };
-        apply_role_draft_to_doc(&mut doc, &role, true, "aivyx.toml").expect("applies with force");
+        apply_role_draft_to_doc(&mut doc, &role, true, "aivyx-pa.toml").expect("applies with force");
         let out = doc.to_string();
         assert!(out.contains("inherits_from = \"research\""));
         assert!(out.contains("\"git.commit\""));
@@ -544,7 +544,7 @@ mod tests {
     fn role_draft_preserves_other_sections() {
         let mut doc = parse(
             "[profile]\n\
-             assistant_name = \"Aivyx\"\n\
+             assistant_name = \"Aivyx PA\"\n\
              \n\
              [roles.coder]\n\
              tool_allowlist = [\"fs.read\"]\n",
@@ -559,7 +559,7 @@ mod tests {
         apply_role_draft_to_doc(&mut doc, &role, false, "test.toml").expect("applies");
         let out = doc.to_string();
         assert!(out.contains("[profile]"));
-        assert!(out.contains("\"Aivyx\""));
+        assert!(out.contains("\"Aivyx PA\""));
         assert!(out.contains("[roles.coder]"));
         assert!(out.contains("\"fs.read\""));
         assert!(out.contains("[roles.researcher]"));
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn apply_profile_hint_to_path_creates_file_when_absent() {
         let dir = tempdir("create");
-        let path = dir.join("aivyx.toml");
+        let path = dir.join("aivyx-pa.toml");
         assert!(!path.exists());
         let hint = ProfileFieldHint {
             field: ProfileField::CommunicationStyle,
@@ -596,14 +596,14 @@ mod tests {
     fn apply_profile_hint_to_path_is_atomic_via_rename() {
         // The tmp-file + rename pattern leaves no debris behind
         // after a successful apply. Concretely: walk the parent
-        // directory after the apply and assert only `aivyx.toml`
-        // exists (no `.aivyx.toml.phase119-tmp.*` survivor).
+        // directory after the apply and assert only `aivyx-pa.toml`
+        // exists (no `.aivyx-pa.toml.phase119-tmp.*` survivor).
         let dir = tempdir("atomic");
-        let path = dir.join("aivyx.toml");
+        let path = dir.join("aivyx-pa.toml");
         std::fs::write(&path, "[profile]\n").unwrap();
         let hint = ProfileFieldHint {
             field: ProfileField::AssistantName,
-            suggested_value: "Aivyx".into(),
+            suggested_value: "Aivyx PA".into(),
             rationale: "...".into(),
         };
         apply_profile_hint_to_path(&path, &hint).expect("applies");
@@ -611,7 +611,7 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(entries, vec!["aivyx.toml".to_string()]);
+        assert_eq!(entries, vec!["aivyx-pa.toml".to_string()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -620,10 +620,10 @@ mod tests {
     fn apply_profile_hint_to_path_sets_0600_permissions() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempdir("perms");
-        let path = dir.join("aivyx.toml");
+        let path = dir.join("aivyx-pa.toml");
         let hint = ProfileFieldHint {
             field: ProfileField::AssistantName,
-            suggested_value: "Aivyx".into(),
+            suggested_value: "Aivyx PA".into(),
             rationale: "...".into(),
         };
         apply_profile_hint_to_path(&path, &hint).expect("applies");
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn apply_role_draft_to_path_refuses_overwrite_without_force() {
         let dir = tempdir("role-refuse");
-        let path = dir.join("aivyx.toml");
+        let path = dir.join("aivyx-pa.toml");
         std::fs::write(
             &path,
             "[roles.research-deploy]\ntool_allowlist = [\"git.status\"]\n",

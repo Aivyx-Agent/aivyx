@@ -11,7 +11,7 @@
 //! ## On-disk format
 //!
 //! Single JSON file at
-//! `~/.aivyx/tool-processes/toolkit/health.json` carrying
+//! `~/.aivyx-pa/tool-processes/toolkit/health.json` carrying
 //! watchers + per-watcher state + the recent-transitions
 //! ring buffer. State writes happen at most once per check
 //! interval per watcher; for typical operator scale

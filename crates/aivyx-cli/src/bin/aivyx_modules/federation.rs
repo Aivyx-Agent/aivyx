@@ -1,4 +1,4 @@
-//! `aivyx federation` CLI surface — hardware-backed federation identity
+//! `aivyx-pa federation` CLI surface — hardware-backed federation identity
 //! provisioning (Chapter Passport / `docs/FEDERATION.md`, Task 8).
 //!
 //! This whole module is compiled only under the `yubikey` Cargo feature
@@ -86,7 +86,7 @@ struct KeyBindingRecord {
     public_key_base64: String,
 }
 
-/// Entry point for `aivyx federation yubikey-init <instance-id>
+/// Entry point for `aivyx-pa federation yubikey-init <instance-id>
 /// <key-binding-path>`. See this module's doc comment for the full flow.
 pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<(), String> {
     // Fail fast on an invalid instance id before touching the card at all
@@ -100,14 +100,14 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // the authoritative rule `Identity::load_hardware` re-applies at the
     // end regardless (step 7).
     aivyx_federation::identity::validate_instance_id(instance_id)
-        .map_err(|e| format!("aivyx federation yubikey-init: {e}"))?;
+        .map_err(|e| format!("aivyx-pa federation yubikey-init: {e}"))?;
 
-    eprintln!("aivyx federation yubikey-init: discovering YubiKey (requires pcscd running)...");
+    eprintln!("aivyx-pa federation yubikey-init: discovering YubiKey (requires pcscd running)...");
     let mut card = discovery::discover_real_card()
-        .map_err(|e| format!("aivyx federation yubikey-init: {e}"))?;
+        .map_err(|e| format!("aivyx-pa federation yubikey-init: {e}"))?;
 
     let mut tx = card.transaction().map_err(YubiError::from).map_err(|e| {
-        format!("aivyx federation yubikey-init: failed to open a card transaction: {e}")
+        format!("aivyx-pa federation yubikey-init: failed to open a card transaction: {e}")
     })?;
 
     // Refuse on a still-factory-default PIN rather than changing it
@@ -116,16 +116,16 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // exactly once here, not in a retry loop.
     pin::require_pin_changed(&mut tx).map_err(|e| {
         format!(
-            "aivyx federation yubikey-init: {e}\n\n\
+            "aivyx-pa federation yubikey-init: {e}\n\n\
              This command never changes a PIN on your behalf — change both the \
              User and Admin PIN first via the standard OpenPGP-card PIN-change \
              command (e.g. `gpg --card-edit`, then `admin`, then `passwd`), then \
-             retry `aivyx federation yubikey-init`."
+             retry `aivyx-pa federation yubikey-init`."
         )
     })?;
 
     let admin_pin = rpassword::prompt_password("Admin PIN (input hidden): ")
-        .map_err(|e| format!("aivyx federation yubikey-init: failed to read Admin PIN: {e}"))?;
+        .map_err(|e| format!("aivyx-pa federation yubikey-init: failed to read Admin PIN: {e}"))?;
     let mut admin = tx
         .as_admin_card(SecretString::from(admin_pin))
         .map_err(YubiError::from)
@@ -158,7 +158,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
             // Nothing else in this command's output warns the operator of
             // that before they retry blindly.
             format!(
-                "aivyx federation yubikey-init: {description}\n\n\
+                "aivyx-pa federation yubikey-init: {description}\n\n\
                  Warning: this failed attempt just consumed one of the Admin PIN's limited \
                  real retry attempts, and the factory-default-PIN check that already ran \
                  earlier in this same command consumed one too. A blocked Admin PIN has NO \
@@ -169,19 +169,19 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
         })?;
 
     eprintln!(
-        "aivyx federation yubikey-init: generating an Ed25519 keypair in the Signature slot \
+        "aivyx-pa federation yubikey-init: generating an Ed25519 keypair in the Signature slot \
          (this overwrites any existing key in that slot)..."
     );
     let public_key = provision::generate_signature_key(&mut admin).map_err(|e| {
-        format!("aivyx federation yubikey-init: Signature-slot key generation failed: {e}")
+        format!("aivyx-pa federation yubikey-init: Signature-slot key generation failed: {e}")
     })?;
 
     eprintln!(
-        "aivyx federation yubikey-init: setting the Signature slot's touch policy to fixed \
+        "aivyx-pa federation yubikey-init: setting the Signature slot's touch policy to fixed \
          (every future signature will require a physical touch)..."
     );
     provision::set_signature_touch_policy_fixed(&mut admin).map_err(|e| {
-        format!("aivyx federation yubikey-init: setting the touch policy failed: {e}")
+        format!("aivyx-pa federation yubikey-init: setting the touch policy failed: {e}")
     })?;
 
     // `admin`'s last use was the call directly above -- NLL ends its
@@ -189,7 +189,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // directly (same pattern `aivyx-yubi`'s own
     // `sets_the_signature_touch_policy_to_fixed` test uses).
     let card_serial = discovery::read_serial(&mut tx).map_err(|e| {
-        format!("aivyx federation yubikey-init: failed to read the card's serial: {e}")
+        format!("aivyx-pa federation yubikey-init: failed to read the card's serial: {e}")
     })?;
 
     // Finding C-1 (CRITICAL): explicitly close the exclusive PC/SC
@@ -218,7 +218,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     };
     write_binding_record(key_binding_path, &record)?;
     eprintln!(
-        "aivyx federation yubikey-init: wrote binding record ({{instance_id: {}, card_serial: \
+        "aivyx-pa federation yubikey-init: wrote binding record ({{instance_id: {}, card_serial: \
          {}}}) to {}",
         record.instance_id,
         record.card_serial,
@@ -235,7 +235,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // reader.
     let verifying_signer = YubiKeySigner::new(SecretString::from(String::new())).map_err(|e| {
         format!(
-            "aivyx federation yubikey-init: wrote {} but a fresh re-discovery for verification \
+            "aivyx-pa federation yubikey-init: wrote {} but a fresh re-discovery for verification \
              failed: {e}",
             key_binding_path.display(),
         )
@@ -260,14 +260,14 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     )
     .map_err(|e| {
         format!(
-            "aivyx federation yubikey-init: wrote {} but the provisioned identity failed \
+            "aivyx-pa federation yubikey-init: wrote {} but the provisioned identity failed \
              verification against aivyx-federation's own load path: {e}",
             key_binding_path.display(),
         )
     })?;
     if identity.public_key_base64() != record.public_key_base64 {
         return Err(format!(
-            "aivyx federation yubikey-init: wrote {} but the verification pass read back a \
+            "aivyx-pa federation yubikey-init: wrote {} but the verification pass read back a \
              different public key than provisioning reported -- this should not happen; please \
              report this as a bug",
             key_binding_path.display(),
@@ -275,7 +275,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     }
 
     eprintln!(
-        "aivyx federation yubikey-init: post-provisioning check passed — a fresh re-discovery \
+        "aivyx-pa federation yubikey-init: post-provisioning check passed — a fresh re-discovery \
          of card {1} confirms its serial and Signature-slot public key match what provisioning \
          just wrote for instance `{0}`, and aivyx-federation's own Identity::load_hardware \
          (the real production load path) accepts them. This does NOT confirm the touch policy \

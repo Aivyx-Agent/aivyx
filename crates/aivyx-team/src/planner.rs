@@ -1,6 +1,6 @@
 //! Chapter L — goal → [`MissionPlan`] decomposition.
 //!
-//! The daemon path (`aivyx team run "<goal>"`) needs a concrete plan to drive
+//! The daemon path (`aivyx-pa team run "<goal>"`) needs a concrete plan to drive
 //! `run_until_pause`. Rather than run the full lead agent (capability stack,
 //! tools, the inline `decompose_task` that also *executes*), this makes one
 //! focused, tool-less LLM call: it asks the model to decompose a free-text

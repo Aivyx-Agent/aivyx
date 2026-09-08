@@ -6,7 +6,7 @@
 //! capability ceiling + tool allowlist — plus the Profile/Persona.
 //! So this is a Role editor, not an "agent" roster: no named android
 //! units, no "Tier 4", no 4.2TB memory. The fields map to the real
-//! `[roles.<name>]` keys in `aivyx.toml` / the `Role` struct.
+//! `[roles.<name>]` keys in `aivyx-pa.toml` / the `Role` struct.
 //!
 //! It keeps the GUI's identity (amber-on-near-black, panel separation)
 //! and its strongest idea — the **capability permission checklist** —
@@ -95,7 +95,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Role Editor", bold(FG)),
         ])),
         area,

@@ -7,7 +7,7 @@
 //!
 //! ## Shape (mirrors the graph extractor + correction judge)
 //!
-//! An LLM pass, **on demand** (the operator runs `aivyx memory conflicts`
+//! An LLM pass, **on demand** (the operator runs `aivyx-pa memory conflicts`
 //! or the Studio asks) rather than on a cron — so there is zero
 //! background cost and no new config surface. One batched call classifies
 //! every multi-entry non-internal topic's recent entries and returns the

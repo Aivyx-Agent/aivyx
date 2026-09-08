@@ -10,12 +10,12 @@ pub use aivyx_google_oauth::storage::{load_tokens, save_tokens, StorageError};
 
 /// Resolves the default token storage path for the
 /// Calendar tool process:
-/// `$HOME/.aivyx/tool-processes/calendar/tokens.json`.
+/// `$HOME/.aivyx-pa/tool-processes/calendar/tokens.json`.
 pub fn default_token_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("calendar")
             .join("tokens.json"),

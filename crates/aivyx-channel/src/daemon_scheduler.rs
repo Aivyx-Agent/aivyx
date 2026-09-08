@@ -122,7 +122,7 @@ pub async fn run_scheduler(
         {
             Ok(dur) => dur,
             Err(e) => {
-                eprintln!("aivyx scheduler: tick error: {e}");
+                eprintln!("aivyx-pa scheduler: tick error: {e}");
                 MAX_TICK_INTERVAL
             }
         };
@@ -242,7 +242,7 @@ async fn fire_team_mission_schedule(
                     "schedule {:?}'s pack_config {path:?} failed to load: {e}",
                     sched.schedule_id
                 );
-                eprintln!("aivyx scheduler: {msg}");
+                eprintln!("aivyx-pa scheduler: {msg}");
                 notify_team_mission_failure(sched, &msg, report_ctx).await;
                 return;
             }
@@ -255,7 +255,7 @@ async fn fire_team_mission_schedule(
     {
         Ok(mission_id) => {
             eprintln!(
-                "aivyx scheduler: schedule {:?} started team mission {mission_id}",
+                "aivyx-pa scheduler: schedule {:?} started team mission {mission_id}",
                 sched.schedule_id
             );
         }
@@ -264,7 +264,7 @@ async fn fire_team_mission_schedule(
                 "schedule {:?} failed to start a team mission: {e}",
                 sched.schedule_id
             );
-            eprintln!("aivyx scheduler: {msg}");
+            eprintln!("aivyx-pa scheduler: {msg}");
             notify_team_mission_failure(sched, &msg, report_ctx).await;
         }
     }
@@ -299,7 +299,7 @@ async fn notify_team_mission_failure(
     let subject = format!("cron: {}", sched.schedule_id);
     for target in &targets {
         if let Err(e) = notify.dispatch(target, message, Some(&subject)).await {
-            eprintln!("aivyx scheduler: team-mission-failure notify to {target:?} failed: {e}");
+            eprintln!("aivyx-pa scheduler: team-mission-failure notify to {target:?} failed: {e}");
         }
     }
 }
@@ -316,7 +316,7 @@ async fn fire_schedule(
         match team_missions {
             Some(svc) => fire_team_mission_schedule(sched, tm, svc, report_ctx).await,
             None => eprintln!(
-                "aivyx scheduler: schedule {:?} targets a team mission but no \
+                "aivyx-pa scheduler: schedule {:?} targets a team mission but no \
                  TeamMissionService is wired — skipping",
                 sched.schedule_id
             ),
@@ -335,7 +335,7 @@ async fn fire_schedule(
             return;
         }
         eprintln!(
-            "aivyx scheduler: schedule {:?} is report_kind=digest but no digest \
+            "aivyx-pa scheduler: schedule {:?} is report_kind=digest but no digest \
              builder is wired — falling back to the LLM prompt",
             sched.schedule_id
         );
@@ -367,7 +367,7 @@ async fn run_digest_report(ctx: &ReportContext, sched: &ScheduleRecord) {
 
     let text = ctx.digest.run(since_secs, now_secs).await;
     eprintln!(
-        "aivyx scheduler: deterministic digest written ({} chars) for {:?}",
+        "aivyx-pa scheduler: deterministic digest written ({} chars) for {:?}",
         text.len(),
         sched.schedule_id
     );
@@ -385,7 +385,7 @@ async fn run_digest_report(ctx: &ReportContext, sched: &ScheduleRecord) {
             for target in &targets {
                 if let Err(e) = notify.dispatch(target, &text, Some(&subject)).await {
                     eprintln!(
-                        "aivyx scheduler: digest notify to {target:?} failed: {e}"
+                        "aivyx-pa scheduler: digest notify to {target:?} failed: {e}"
                     );
                 }
             }
@@ -405,7 +405,7 @@ async fn update_last_fired(store: &DomainHandle, sched: &ScheduleRecord) {
     updated.last_fired_at = Some(now_ms);
     if let Err(e) = schedule::update_schedule(store, &updated).await {
         eprintln!(
-            "aivyx scheduler: failed to update last_fired_at for {:?}: {e}",
+            "aivyx-pa scheduler: failed to update last_fired_at for {:?}: {e}",
             sched.schedule_id,
         );
     }

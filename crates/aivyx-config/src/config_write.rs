@@ -1,7 +1,7 @@
-//! Chapter U — section-scoped writes back to `aivyx.toml`.
+//! Chapter U — section-scoped writes back to `aivyx-pa.toml`.
 //!
-//! Before Chapter U, the only writer of `aivyx.toml` was the CLI's
-//! `aivyx access set` (`crates/aivyx-cli/.../access.rs`): it loaded the file
+//! Before Chapter U, the only writer of `aivyx-pa.toml` was the CLI's
+//! `aivyx-pa access set` (`crates/aivyx-cli/.../access.rs`): it loaded the file
 //! into a [`toml_edit::DocumentMut`], patched the `[access]` keys in place,
 //! and wrote the document back at `0600` — patching keys in place rather than
 //! re-serializing the whole config (which would reflow the file and drop the
@@ -36,7 +36,7 @@ use toml_edit::{value, DocumentMut};
 
 use crate::{AccessLevel, AutonomyLevel};
 
-/// Failure modes for a section-scoped `aivyx.toml` rewrite. Carries enough
+/// Failure modes for a section-scoped `aivyx-pa.toml` rewrite. Carries enough
 /// structure that the daemon can map a write failure to a typed IPC error;
 /// the CLI renders the `Display` string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +125,7 @@ impl std::fmt::Display for ConfigWriteError {
             ConfigWriteError::InvalidMemoryProfile { reason } => write!(f, "invalid memory profile: {reason}"),
             ConfigWriteError::InvalidEmbeddingConfig { reason } => write!(f, "invalid embedding config: {reason}"),
             ConfigWriteError::InvalidProactiveConfig { reason } => write!(f, "invalid proactive config: {reason}"),
-            ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx.toml: {reason}"),
+            ConfigWriteError::Parse { reason } => write!(f, "failed to parse aivyx-pa.toml: {reason}"),
             ConfigWriteError::Io { reason } => write!(f, "{reason}"),
         }
     }
@@ -137,7 +137,7 @@ impl std::error::Error for ConfigWriteError {}
 /// other section and the operator's comments.
 ///
 /// Sets `level`, sets-or-clears `root` (per the level's root rules), and sets
-/// `confirm_destructive = is_expanded()` — exactly what `aivyx access set`
+/// `confirm_destructive = is_expanded()` — exactly what `aivyx-pa access set`
 /// wrote before Chapter U. A missing file is treated as empty (the section is
 /// created). The result is written at `0600`.
 ///
@@ -249,7 +249,7 @@ pub fn write_agent_cycle_detection(path: &Path, enabled: bool) -> Result<(), Con
 /// `SetProfile` handler fills from IPC. Mirrors the loader's `RawProfile`
 /// shape (Chapter V §9.1): all fields optional, with **clear-on-`None`**
 /// semantics — a `None` removes the key (the loader falls back to its default,
-/// e.g. `assistant_name` → `"Aivyx"`), a `Some` writes it.
+/// e.g. `assistant_name` → `"Aivyx PA"`), a `Some` writes it.
 ///
 /// Values are normalized on write: scalars are trimmed (an all-whitespace
 /// scalar clears the key), and list entries are trimmed with empties dropped —
@@ -266,7 +266,7 @@ pub struct ProfileWrite {
 
 /// Rewrite the `[profile]` section of the TOML file at `path`, preserving every
 /// other section and the operator's comments — the surgical-splice posture of
-/// `aivyx profile edit`, but driven by structured fields instead of an editor
+/// `aivyx-pa profile edit`, but driven by structured fields instead of an editor
 /// round-trip.
 ///
 /// Each field follows clear-on-`None` (see [`ProfileWrite`]): a present value
@@ -526,7 +526,7 @@ pub fn write_mcp_server_section(
                     // loader itself rejects a sandbox block on a non-stdio
                     // transport (`aivyx-config/src/lib.rs`'s mcp_servers
                     // parsing), and that rejection aborts loading the
-                    // *entire* aivyx.toml, not just this one entry. If this
+                    // *entire* aivyx-pa.toml, not just this one entry. If this
                     // upsert switched the entry's transport away from
                     // stdio, carrying the old sandbox block over would
                     // brick the daemon at next boot — the exact failure
@@ -572,7 +572,7 @@ pub fn remove_mcp_server_section(path: &Path, name: &str) -> Result<(), ConfigWr
 /// resolved secret value (see the design spec's binding secret-field
 /// convention) — the second-order failure mode is worse than the leak
 /// itself, since a naive edit-and-save round-trip would bake the resolved
-/// secret back into `aivyx.toml` as a literal, permanently destroying the
+/// secret back into `aivyx-pa.toml` as a literal, permanently destroying the
 /// `${VAR}` placeholder. A missing file reads as an empty list (mirrors
 /// [`load_document`]'s missing-file-is-empty posture); a malformed file
 /// (bad TOML syntax) is a real error the caller should surface rather than
@@ -1874,13 +1874,13 @@ mod tests {
         let path = temp_toml("preserve");
         std::fs::write(
             &path,
-            "# my config\n[profile]\nassistant_name = \"Aivyx\"\n\n[access]\nlevel = \"sandbox\"\n",
+            "# my config\n[profile]\nassistant_name = \"Aivyx PA\"\n\n[access]\nlevel = \"sandbox\"\n",
         )
         .unwrap();
         write_access_section(&path, AccessLevel::Full, None).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("# my config"), "comment preserved: {out}");
-        assert!(out.contains("assistant_name = \"Aivyx\""), "other section preserved: {out}");
+        assert!(out.contains("assistant_name = \"Aivyx PA\""), "other section preserved: {out}");
         assert!(out.contains("level = \"full\""), "{out}");
         std::fs::remove_file(&path).ok();
     }
@@ -2050,7 +2050,7 @@ mod tests {
         )
         .unwrap();
         let p = ProfileWrite {
-            assistant_name: Some("Aivyx".to_string()),
+            assistant_name: Some("Aivyx PA".to_string()),
             ..Default::default()
         };
         write_profile_section(&path, &p).unwrap();
@@ -2058,7 +2058,7 @@ mod tests {
         assert!(out.contains("# top comment"), "comment preserved: {out}");
         assert!(out.contains("provider = \"ollama\""), "[agent] preserved: {out}");
         assert!(out.contains("level = \"home\""), "[access] preserved: {out}");
-        assert!(out.contains("assistant_name = \"Aivyx\""), "{out}");
+        assert!(out.contains("assistant_name = \"Aivyx PA\""), "{out}");
         std::fs::remove_file(&path).ok();
     }
 
@@ -2318,7 +2318,7 @@ mod tests {
     /// block, not carry it over. `sandbox` is stdio-only in the loader
     /// (`aivyx-config/src/lib.rs`'s mcp_servers parsing rejects a sandbox
     /// block on a non-stdio transport), and that rejection aborts loading
-    /// the *entire* aivyx.toml — not just this one entry — bricking the
+    /// the *entire* aivyx-pa.toml — not just this one entry — bricking the
     /// daemon at next start. This is the same failure class the headers-on-
     /// stdio fix below exists to prevent, reintroduced through the
     /// unrelated-key preservation loop added to fix "sandbox destroyed on

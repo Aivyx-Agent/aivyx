@@ -126,12 +126,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     }
 }
 
-/// The view selector: `▌ AIVYX  1 Chat · 2 Dashboard · …` with the
+/// The view selector: `▌ AIVYX PA  1 Chat · 2 Dashboard · …` with the
 /// active view amber, on the dark status fill.
 fn render_tab_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     let mut spans = vec![
         Span::styled("▌", bold(palette::AMBER)),
-        Span::styled(" AIVYX  ", bold(palette::AMBER)),
+        Span::styled(" AIVYX PA  ", bold(palette::AMBER)),
     ];
     for (i, v) in View::ALL.iter().enumerate() {
         if i > 0 {
@@ -284,7 +284,7 @@ fn render_mission_stream(frame: &mut Frame, area: Rect, state: &AppState) {
             Line::from(""),
             Line::from(Span::styled("— no missions running —", fg(palette::DIM))),
             Line::from(Span::styled(
-                "Run one with `aivyx team run \"<mission>\"`; the lead's DAG",
+                "Run one with `aivyx-pa team run \"<mission>\"`; the lead's DAG",
                 fg(palette::DIMMER),
             )),
             Line::from(Span::styled(
@@ -1373,7 +1373,7 @@ mod tests {
         terminal.draw(|f| render(f, &state)).unwrap();
         let text = buffer_text(&terminal);
         assert!(text.contains("no missions running"), "empty-state hint shown");
-        assert!(text.contains("aivyx team run"), "points at the command");
+        assert!(text.contains("aivyx-pa team run"), "points at the command");
     }
 
     #[test]

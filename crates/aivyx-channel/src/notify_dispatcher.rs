@@ -262,7 +262,7 @@ pub fn build_notify_dispatcher(
                     format!(
                         "notify_target `{}` (kind = telegram) requires a configured \
                          [telegram] token; either remove the target or add \
-                         `[telegram] token = \"...\"` to aivyx.toml",
+                         `[telegram] token = \"...\"` to aivyx-pa.toml",
                         target.name
                     )
                 })?;
@@ -300,7 +300,7 @@ pub fn build_notify_dispatcher(
                     format!(
                         "notify_target `{}` (kind = web-ui) requires the \
                          Web UI server to be enabled; either remove the \
-                         target or enable the Web UI in aivyx.toml",
+                         target or enable the Web UI in aivyx-pa.toml",
                         target.name,
                     )
                 })?;
@@ -669,7 +669,7 @@ mod tests {
         let mut rx = bc.subscribe();
         let d = build_notify_dispatcher(&targets, None, None, Some(Arc::clone(&bc)))
             .expect("ok");
-        d.dispatch("desktop", "build done", Some("Aivyx"))
+        d.dispatch("desktop", "build done", Some("Aivyx PA"))
             .await
             .expect("dispatch");
         let frame = rx.recv().await.expect("recv");
@@ -677,7 +677,7 @@ mod tests {
             crate::notify_webui::WebUiBroadcastFrame::DesktopNotification(
                 crate::notify_webui::DesktopNotificationFrame { title, body },
             ) => {
-                assert_eq!(title, "Aivyx");
+                assert_eq!(title, "Aivyx PA");
                 assert_eq!(body, "build done");
             }
             other => panic!("expected DesktopNotification, got {other:?}"),

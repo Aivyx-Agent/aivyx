@@ -1503,7 +1503,7 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
 // own parallel session task**, writing into the same shared store.
 // After both sessions drop, we reopen the store cold, verify the
 // persistent audit chain via `verify_from_disk` (the exact same code
-// path `aivyx --verify-only` takes at startup), and replay the
+// path `aivyx-pa --verify-only` takes at startup), and replay the
 // decoded events to assert both chats' memory writes landed in the
 // chain with SemiTrusted tier, Telegram platform, and the narrowed
 // `memory.write:topic:notes` scope that Phase 4's R1 rule produces.
@@ -1955,7 +1955,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
     //
     // Same pattern as `audit_persistence_e2e.rs`'s session B: open a
     // fresh `RedbStorage` handle against the same path, run
-    // `verify_from_disk` (exactly what `aivyx --verify-only` does),
+    // `verify_from_disk` (exactly what `aivyx-pa --verify-only` does),
     // then open the log and inspect its entries to assert the
     // per-chat shape survived the AEAD seal → redb row → reopen
     // scan → HMAC replay pipeline.
@@ -2716,7 +2716,7 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
 //    chain reopens cleanly and HMAC-replays to exactly 12 verified
 //    entries, proving the concurrent producer path doesn't corrupt
 //    the chain even when three inner tasks write in parallel.
-// 4. **`AIVYX_TELEGRAM_CHAT_ID` optional** — `chat_filter: None` is
+// 4. **`AIVYX_PA_TELEGRAM_CHAT_ID` optional** — `chat_filter: None` is
 //    the new Phase 9 default and it accepts all three chats without
 //    the operator having to list them.
 //

@@ -255,8 +255,8 @@ mod tests {
             "/home/alice/certs/server.pem",
             "/home/alice/certs/tls.key",
             // Aivyx's own crown jewels:
-            "/home/alice/.config/aivyx/daemon.env",
-            "/home/alice/.local/share/aivyx/store.redb",
+            "/home/alice/.config/aivyx-pa/daemon.env",
+            "/home/alice/.local/share/aivyx-pa/store.redb",
         ] {
             assert!(g.classify(Path::new(p)).is_some(), "should block {p}");
         }

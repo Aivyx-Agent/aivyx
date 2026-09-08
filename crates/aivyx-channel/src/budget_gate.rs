@@ -5,7 +5,7 @@
 //! implementation: at the start of each LLM-backed turn it
 //!
 //! 1. sums **committed** spend over the last 24h from the HMAC chain's
-//!    `LlmCost` events (the same rolling window `aivyx cost --today` uses),
+//!    `LlmCost` events (the same rolling window `aivyx-pa cost --today` uses),
 //! 2. prices a conservative **estimate** for the upcoming turn (the planner's
 //!    whole `max_tokens` output budget at the model's rate), and
 //! 3. **reserves** that estimate against a [`BudgetEnforcer`], which checks
@@ -36,7 +36,7 @@ const DAY: Duration = Duration::from_secs(24 * 3600);
 
 /// Map an audit `TokenUsage` to the cost crate's `TokenCounts`
 /// (cache_creation ⇒ cache_write, cache_read ⇒ cache_read). Mirrors the
-/// `aivyx cost` mapping so committed spend is priced identically.
+/// `aivyx-pa cost` mapping so committed spend is priced identically.
 fn to_counts(u: &TokenUsage) -> TokenCounts {
     TokenCounts {
         input: u.input_tokens as u64,
@@ -106,7 +106,7 @@ impl ChannelBudgetGate {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!(
-                        "aivyx budget: chain read failed at seq={cursor} ({e}); \
+                        "aivyx-pa budget: chain read failed at seq={cursor} ({e}); \
                          treating committed day spend as $0 for this turn"
                     );
                     return 0.0;

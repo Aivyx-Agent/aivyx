@@ -3,7 +3,7 @@
 //! Connects to a running daemon over the Unix domain socket,
 //! manages a session, and supports multi-turn interaction. Includes
 //! auto-spawn logic: if no daemon is listening, spawns one via
-//! `aivyx daemon run` and waits for the socket to appear.
+//! `aivyx-pa daemon run` and waits for the socket to appear.
 //!
 //! Phase 16 shipped the single-turn PoC (`run_poc_client`).
 //! Phase 17 Task 2 added multi-turn on the server side.
@@ -116,7 +116,7 @@ impl DaemonSession {
                     buf.drain(..consumed);
                     if !lost_sessions.is_empty() || !lost_turns.is_empty() {
                         eprintln!(
-                            "aivyx: daemon recovered from an unclean shutdown — \
+                            "aivyx-pa: daemon recovered from an unclean shutdown — \
                              {} session(s) and {} in-flight turn(s) were lost.",
                             lost_sessions.len(),
                             lost_turns.len(),
@@ -182,7 +182,7 @@ impl DaemonSession {
 
     /// Chapter H — submit an **unattended** turn: the daemon refuses (records
     /// the reason) at any approval gate rather than parking for an operator.
-    /// Used by `aivyx --headless "<task>"`.
+    /// Used by `aivyx-pa --headless "<task>"`.
     pub async fn submit_input_headless(
         &mut self,
         text: String,
@@ -449,7 +449,7 @@ pub async fn daemon_stop(socket_path: &Path) -> Result<String, DaemonError> {
 }
 
 /// Phase 60 — fetch the daemon's current effective Persona snapshot
-/// over IPC. Used by `aivyx persona show` and by the Web UI's
+/// over IPC. Used by `aivyx-pa persona show` and by the Web UI's
 /// Persona pane.
 pub async fn get_effective_persona(
     socket_path: &Path,
@@ -960,7 +960,7 @@ pub async fn get_learning_insights(
 }
 
 /// Phase 102 — fetch per-tool observability stats from the daemon.
-/// Backs `aivyx tools [--window <secs>]`. `window_secs = None`
+/// Backs `aivyx-pa tools [--window <secs>]`. `window_secs = None`
 /// scopes the answer to the whole audit chain.
 pub async fn get_tool_stats(
     socket_path: &Path,
@@ -1532,7 +1532,7 @@ pub async fn evict_memory_topic(
 
 /// Phase 119 — operator-CLI ApplyProfileHint over IPC. Sends the
 /// apply-record request after the CLI has already mutated
-/// `aivyx.toml` via the Task 3 atomic primitive; the daemon's job is
+/// `aivyx-pa.toml` via the Task 3 atomic primitive; the daemon's job is
 /// to record the `AuditEvent::ProfileHintApplied` entry. Returns the
 /// error message on a daemon-side failure (audit log unconfigured,
 /// chain append error, etc.); the caller decides whether to surface
@@ -1834,7 +1834,7 @@ pub async fn resolve_persona_proposal(
 
 /// Phase 64 Task 3 — full-fidelity Persona chain dump over IPC.
 /// Single-shot response (no pagination). Used by
-/// `aivyx identity export` to read the chain into memory before
+/// `aivyx-pa identity export` to read the chain into memory before
 /// writing the export bundle to disk. Returns the chain in order
 /// and the effective state at fetch time.
 pub async fn export_persona_chain(
@@ -2103,7 +2103,7 @@ async fn send_query(
                 buf.drain(..consumed);
                 if !lost_sessions.is_empty() || !lost_turns.is_empty() {
                     eprintln!(
-                        "aivyx: daemon recovered from an unclean shutdown — \
+                        "aivyx-pa: daemon recovered from an unclean shutdown — \
                          {} session(s) and {} in-flight turn(s) were lost.",
                         lost_sessions.len(),
                         lost_turns.len(),
@@ -2156,13 +2156,13 @@ fn daemon_log_stdio(socket_path: &Path) -> (std::process::Stdio, std::process::S
 /// Spawn a daemon process in the background and wait for its socket
 /// to appear. Returns the socket path on success.
 ///
-/// Uses `tokio::process::Command` to launch `aivyx daemon run` as a
+/// Uses `tokio::process::Command` to launch `aivyx-pa daemon run` as a
 /// detached child. The daemon's stdout/stderr are redirected to a
 /// sibling `daemon.log` rather than inherited: a background daemon
 /// must not print onto the launching terminal — in the TUI the
 /// startup banner bleeds under the alternate screen, and in the REPL
 /// it interleaves with the prompt. The banner + ongoing logs stay
-/// recoverable in the log file. (A direct `aivyx daemon run` is
+/// recoverable in the log file. (A direct `aivyx-pa daemon run` is
 /// unaffected — it does not go through this path and keeps writing to
 /// the operator's terminal.)
 pub async fn spawn_daemon_and_wait(
@@ -2297,7 +2297,7 @@ mod tests {
     /// to the first frontend after an unclean restart. `send_query` must
     /// skip it and still return the response (the one-shot query path
     /// skips the session handshake, so it meets the notice here — the
-    /// observed `aivyx memory wiki`/`list` post-restart failure).
+    /// observed `aivyx-pa memory wiki`/`list` post-restart failure).
     #[tokio::test]
     async fn send_query_skips_recovery_notice_before_the_response() {
         use aivyx_ipc::protocol::QueryResponsePayload;

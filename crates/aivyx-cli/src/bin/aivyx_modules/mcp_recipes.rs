@@ -1,4 +1,4 @@
-//! Phase 106 — `aivyx mcp recipes` curated catalog.
+//! Phase 106 — `aivyx-pa mcp recipes` curated catalog.
 //!
 //! The substrate piece of the recipes catalog. The
 //! canonical reference is `docs/MCP_RECIPES.md`; this module
@@ -30,12 +30,12 @@
 /// allocation at startup, no per-recipe `String` cost.
 #[derive(Debug, Clone, Copy)]
 pub struct Recipe {
-    /// Short slug used as the `aivyx mcp recipes <name>`
+    /// Short slug used as the `aivyx-pa mcp recipes <name>`
     /// lookup key. Stable; recipes must not be renamed once
     /// shipped without filing it as a renaming note in
     /// `docs/MCP_RECIPES.md`.
     pub name: &'static str,
-    /// One-line description shown by `aivyx mcp recipes`
+    /// One-line description shown by `aivyx-pa mcp recipes`
     /// (no arg). Keep under ~70 chars so the listing fits
     /// in a terminal column without wrapping.
     pub description: &'static str,
@@ -353,7 +353,7 @@ wrapper = "bwrap"
 args = [
     "--ro-bind", "/usr", "/usr",
     "--ro-bind", "/etc", "/etc",
-    "--bind", "/home/me/.aivyx/kg-memory", "/home/me/.aivyx/kg-memory",
+    "--bind", "/home/me/.aivyx-pa/kg-memory", "/home/me/.aivyx-pa/kg-memory",
     "--dev", "/dev", "--proc", "/proc",
     "--unshare-net",
     "--",
@@ -396,7 +396,7 @@ args = [
         toml_snippet: r#"# Everything MCP server — the official reference / test
 # server that exposes one of each tool kind so an operator
 # can verify Aivyx's MCP wiring without paying for a
-# real-API setup. Useful first thing after `aivyx init`.
+# real-API setup. Useful first thing after `aivyx-pa init`.
 #
 # Required env: none.
 # Capability scopes the agent gets: mcp.call:everything:*
@@ -455,7 +455,7 @@ args = ["--mcp-server"]
 # spawned over stdio (there's no separate `cwd` field to point it
 # elsewhere) -- bind that same directory, read-write, so its
 # fs/shell tools can actually reach your project; substitute the
-# real path, matching wherever your aivyx daemon runs. No
+# real path, matching wherever your aivyx-pa daemon runs. No
 # --unshare-net here (unlike filesystem/time/everything above):
 # aivyx-coder needs network to reach its own configured local LLM
 # backend (Ollama/vLLM/llama-server).
@@ -486,7 +486,7 @@ args = [
 /// with the candidate list when `name` is not in the set.
 ///
 /// The returned `String` is the exact bytes that
-/// `aivyx mcp recipes <name>` writes to stdout — no header,
+/// `aivyx-pa mcp recipes <name>` writes to stdout — no header,
 /// no trailing summary, just the snippet plus a final
 /// newline if the snippet didn't already end with one.
 pub fn render_recipe(name: &str) -> Result<String, RecipeError> {
@@ -505,7 +505,7 @@ pub fn render_recipe(name: &str) -> Result<String, RecipeError> {
     }
 }
 
-/// Render the bare `aivyx mcp recipes` listing — one line
+/// Render the bare `aivyx-pa mcp recipes` listing — one line
 /// per recipe with the name padded to the longest name in
 /// the set so the descriptions line up.
 pub fn render_listing() -> String {
@@ -520,7 +520,7 @@ pub fn render_listing() -> String {
         ));
     }
     out.push_str(
-        "\nRun `aivyx mcp recipes <name>` to print a recipe's full \
+        "\nRun `aivyx-pa mcp recipes <name>` to print a recipe's full \
          TOML snippet.\nSee docs/MCP_RECIPES.md for the canonical \
          catalog.\n",
     );

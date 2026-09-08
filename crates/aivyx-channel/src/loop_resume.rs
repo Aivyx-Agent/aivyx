@@ -8,8 +8,8 @@
 //!
 //! Semantics = operator intent, written at exactly the two operator-driven
 //! transitions:
-//! - `aivyx loop start` → marker **active**
-//! - `aivyx loop stop`  → marker **idle**
+//! - `aivyx-pa loop start` → marker **active**
+//! - `aivyx-pa loop stop`  → marker **idle**
 //!
 //! A crash, panic, or `systemctl restart` never touches it, so the marker
 //! stays active across those → the loop resumes. A clean run-end (backlog

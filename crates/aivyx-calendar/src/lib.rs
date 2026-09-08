@@ -2,7 +2,7 @@
 //!
 //! Google Calendar third-party tool process for Aivyx.
 //! Chapter F #2 — Phase 128. Ships as a separate binary the
-//! operator installs and wires into `aivyx.toml` via
+//! operator installs and wires into `aivyx-pa.toml` via
 //! `[[tool_process]]`. Per PRODUCT.md P10 (substrate is closed
 //! at thirteen tools forever; calendar is third-party
 //! territory).
@@ -16,7 +16,7 @@
 //!   threshold). Same operator-provided Google Cloud
 //!   OAuth app pattern; auth-code exchange; refresh-token
 //!   flow; per-tool-process token file storage at
-//!   `~/.aivyx/tool-processes/calendar/tokens.json` (0600
+//!   `~/.aivyx-pa/tool-processes/calendar/tokens.json` (0600
 //!   perms).
 //! - [`auth_cli`] — `aivyx-calendar auth init / status /
 //!   revoke` operator-facing CLI subcommand surface.

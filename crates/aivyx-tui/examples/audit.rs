@@ -4,7 +4,7 @@
 //! HMAC-SHA256 hash chain over canonical JSON (RFC 8785 / JCS), so the
 //! log is **offline-verifiable** and tamper-evident — a headline Aivyx
 //! property and the payoff of the `⚑ / chain ✓` motif running through
-//! the other screens. This is the `aivyx audit` surface: a left event
+//! the other screens. This is the `aivyx-pa audit` surface: a left event
 //! stream, and on the right the selected event's full record plus its
 //! place in the chain (its HMAC, the previous link, verification).
 //!
@@ -107,7 +107,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Audit Log", bold(FG)),
         ])),
         area,

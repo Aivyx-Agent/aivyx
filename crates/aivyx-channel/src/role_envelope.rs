@@ -17,7 +17,7 @@
 //!
 //! Phase 14 Task 1 consumed that deferral. The fn moved here
 //! verbatim; the Phase 13 binary-internal regression tests against
-//! `examples/aivyx.toml` stayed in `src/bin/aivyx.rs` and now call
+//! `examples/aivyx-pa.toml` stayed in `src/bin/aivyx.rs` and now call
 //! through to this module via `aivyx_channel::assemble_role_
 //! envelope`. A small set of pure-fn unit tests against hand-rolled
 //! `Role` values (no TOML loader in the call path) lives at the
@@ -162,7 +162,7 @@ mod tests {
     //!    the binary) means a future refactor that accidentally
     //!    aligned the empty-child and parent envelopes would
     //!    break this test first, before the binary's
-    //!    `examples/aivyx.toml` regression ever runs.
+    //!    `examples/aivyx-pa.toml` regression ever runs.
 
     use super::*;
     use aivyx_config::{FieldSource, Sourced, ToolAllowlist};

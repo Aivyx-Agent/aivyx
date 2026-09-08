@@ -1,4 +1,4 @@
-//! `run_session` — the reusable REPL loop shared by the `aivyx` binary
+//! `run_session` — the reusable REPL loop shared by the `aivyx-pa` binary
 //! and Phase 3 task 5's end-to-end integration test.
 //!
 //! ## Why this lives in the library
@@ -440,7 +440,7 @@ where
         Ok(Some(bytes)) => match decode_session_marker(&bytes) {
             Some(prior) => {
                 eprintln!(
-                    "aivyx: resuming — prior session {} opened {}s ago, last turn index {}",
+                    "aivyx-pa: resuming — prior session {} opened {}s ago, last turn index {}",
                     prior.session_uuid_hex(),
                     now_secs().saturating_sub(prior.opened_at_secs),
                     prior.last_turn_index,
@@ -448,7 +448,7 @@ where
             }
             None => {
                 eprintln!(
-                    "aivyx: session marker present but unparseable ({} bytes); starting fresh",
+                    "aivyx-pa: session marker present but unparseable ({} bytes); starting fresh",
                     bytes.len()
                 );
             }
@@ -458,7 +458,7 @@ where
             // enough UX for "new session starting."
         }
         Err(e) => {
-            eprintln!("aivyx: session marker read failed ({e}); starting fresh");
+            eprintln!("aivyx-pa: session marker read failed ({e}); starting fresh");
         }
     }
 
@@ -656,7 +656,7 @@ fn decode_session_marker(bytes: &[u8]) -> Option<SessionMarker> {
 async fn write_session_marker(sessions: &aivyx_storage::DomainHandle, marker: &SessionMarker) {
     let encoded = marker.encode();
     if let Err(e) = sessions.put(SESSION_MARKER_KEY, &encoded).await {
-        eprintln!("aivyx: session marker write failed ({e}); continuing");
+        eprintln!("aivyx-pa: session marker write failed ({e}); continuing");
     }
 }
 

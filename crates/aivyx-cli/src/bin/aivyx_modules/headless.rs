@@ -1,4 +1,4 @@
-//! `aivyx --headless "<task>"` — one-shot unattended turn (Chapter H
+//! `aivyx-pa --headless "<task>"` — one-shot unattended turn (Chapter H
 //! follow-on (a)).
 //!
 //! Chapter H made the daemon's turn path *honor* an unattended posture:
@@ -25,7 +25,7 @@ use std::path::Path;
 use aivyx_channel::daemon_client::{DaemonSession, daemon_is_running};
 use aivyx_channel::daemon_ipc::{FrontendType, default_socket_path};
 
-/// Entry point for `aivyx --headless "<task>"`.
+/// Entry point for `aivyx-pa --headless "<task>"`.
 ///
 /// Returns `Err` for setup failures (no daemon, transport error) so the
 /// caller renders them like any other CLI error (exit 1). A turn that
@@ -41,7 +41,7 @@ pub async fn run_headless(task: &str) -> Result<(), String> {
         .await
         .map_err(|e| {
             format!(
-                "aivyx --headless: failed to connect to the daemon on {} — {e}",
+                "aivyx-pa --headless: failed to connect to the daemon on {} — {e}",
                 socket_path.display(),
             )
         })?;
@@ -49,7 +49,7 @@ pub async fn run_headless(task: &str) -> Result<(), String> {
     let (events, outcome) = session
         .submit_input_headless(task.to_string())
         .await
-        .map_err(|e| format!("aivyx --headless: turn failed — {e}"))?;
+        .map_err(|e| format!("aivyx-pa --headless: turn failed — {e}"))?;
     let _ = session.disconnect().await;
 
     // Stream the turn's output exactly as the interactive daemon REPL
@@ -63,17 +63,17 @@ pub async fn run_headless(task: &str) -> Result<(), String> {
         // `completed: <final_message>` — the final message already
         // streamed as Text events; print the terminal line to stderr so
         // stdout stays the agent's answer.
-        eprintln!("aivyx --headless: {outcome}");
+        eprintln!("aivyx-pa --headless: {outcome}");
         return Ok(());
     }
 
     // A turn that ran but did not complete. Surface why on stderr and
     // exit with the classified code so cron/batch callers can branch.
-    eprintln!("aivyx --headless: {outcome}");
+    eprintln!("aivyx-pa --headless: {outcome}");
     std::process::exit(code);
 }
 
-/// Chapter Wire — `aivyx --headless` with no task: read newline-
+/// Chapter Wire — `aivyx-pa --headless` with no task: read newline-
 /// delimited turns from piped stdin and run them as consecutive turns
 /// of ONE daemon session (conversation continuity, session-partitioned
 /// memory, and consecutive-turn signals like the correction proxy all
@@ -88,10 +88,10 @@ pub async fn run_headless_stdin() -> Result<(), String> {
     use std::io::{BufRead, IsTerminal};
 
     if std::io::stdin().is_terminal() {
-        return Err("`aivyx --headless` without a task reads turns from piped \
+        return Err("`aivyx-pa --headless` without a task reads turns from piped \
              stdin — pipe newline-delimited turns in (e.g. `printf \
-             \"first\\nsecond\\n\" | aivyx --headless`) or pass a single \
-             task: `aivyx --headless \"<task>\"`"
+             \"first\\nsecond\\n\" | aivyx-pa --headless`) or pass a single \
+             task: `aivyx-pa --headless \"<task>\"`"
             .to_string());
     }
 
@@ -102,14 +102,14 @@ pub async fn run_headless_stdin() -> Result<(), String> {
         .await
         .map_err(|e| {
             format!(
-                "aivyx --headless: failed to connect to the daemon on {} — {e}",
+                "aivyx-pa --headless: failed to connect to the daemon on {} — {e}",
                 socket_path.display(),
             )
         })?;
 
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
-        let line = line.map_err(|e| format!("aivyx --headless: stdin read failed — {e}"))?;
+        let line = line.map_err(|e| format!("aivyx-pa --headless: stdin read failed — {e}"))?;
         let task = line.trim();
         if task.is_empty() {
             continue;
@@ -117,11 +117,11 @@ pub async fn run_headless_stdin() -> Result<(), String> {
         let (events, outcome) = session
             .submit_input_headless(task.to_string())
             .await
-            .map_err(|e| format!("aivyx --headless: turn failed — {e}"))?;
+            .map_err(|e| format!("aivyx-pa --headless: turn failed — {e}"))?;
         for event in &events {
             print!("{}", event.render_for_cli());
         }
-        eprintln!("aivyx --headless: {outcome}");
+        eprintln!("aivyx-pa --headless: {outcome}");
         let code = headless_exit_code(&outcome);
         if code != 0 {
             let _ = session.disconnect().await;
@@ -137,8 +137,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx --headless: no daemon running on socket {} — \
-         start the daemon first with `aivyx daemon run`",
+        "aivyx-pa --headless: no daemon running on socket {} — \
+         start the daemon first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }

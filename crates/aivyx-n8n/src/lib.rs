@@ -39,12 +39,12 @@ pub use n8n_client::{N8nClient, N8nClientError, N8nConfig};
 pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
 
 /// Default config path
-/// `$HOME/.aivyx/tool-processes/n8n/config.toml`.
+/// `$HOME/.aivyx-pa/tool-processes/n8n/config.toml`.
 pub fn default_config_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         std::path::PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("n8n")
             .join("config.toml"),

@@ -13,7 +13,7 @@ import sys
 # actually arrived. The tool is only advertised when the var is present,
 # so its mere presence is evidence of delivery (and existing tests that
 # expect exactly two tools are unaffected).
-ENV_PROBE_VAR = "AIVYX_MCP_ENV_PROBE"
+ENV_PROBE_VAR = "AIVYX_PA_MCP_ENV_PROBE"
 
 TOOLS = [
     {

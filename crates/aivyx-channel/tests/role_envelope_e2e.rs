@@ -23,7 +23,7 @@
 //! directory, which compiles as an **external** crate against
 //! `aivyx-channel`'s public API — if the walker were still
 //! crate-private, this file would not link. The binary-internal
-//! `examples/aivyx.toml` regression tests in
+//! `examples/aivyx-pa.toml` regression tests in
 //! `src/bin/aivyx.rs` continue to pin the same envelopes from
 //! the binary's side; this file is the matching pin from the
 //! library's side.
@@ -84,7 +84,7 @@ fn local_channel_floor_with_sandbox(sandbox: &str) -> Vec<Scope> {
     ]
 }
 
-/// Load `examples/aivyx.toml` from the repo root. The path is
+/// Load `examples/aivyx-pa.toml` from the repo root. The path is
 /// resolved via `CARGO_MANIFEST_DIR`, which for this integration
 /// test crate is `crates/aivyx-channel/` — the same anchor the
 /// binary-internal tests use, so the relative `../../examples/`
@@ -102,10 +102,10 @@ fn load_example_config() -> AivyxConfig {
         .join("..")
         .join("..")
         .join("examples")
-        .join("aivyx.toml");
+        .join("aivyx-pa.toml");
     assert!(
         example_path.exists(),
-        "examples/aivyx.toml must exist at {example_path:?}"
+        "examples/aivyx-pa.toml must exist at {example_path:?}"
     );
     let opts = LoadOptions {
         toml_path: Some(example_path),
@@ -116,7 +116,7 @@ fn load_example_config() -> AivyxConfig {
         role_override: Some("default".to_string()),
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .expect("examples/aivyx.toml must load cleanly via aivyx-config")
+        .expect("examples/aivyx-pa.toml must load cleanly via aivyx-config")
 }
 
 /// Collect an envelope's scopes as a sorted `Vec<String>` for
@@ -127,7 +127,7 @@ fn envelope_strings(envelope: &aivyx_capability::CapabilitySet) -> Vec<String> {
     out
 }
 
-/// `default` is the root role in `examples/aivyx.toml`. It has
+/// `default` is the root role in `examples/aivyx-pa.toml`. It has
 /// no parent, so `assemble_role_envelope` returns its declared
 /// set verbatim (no intersection upward). Composed with
 /// `CEILING_TRUSTED` it keeps every declared scope, since each

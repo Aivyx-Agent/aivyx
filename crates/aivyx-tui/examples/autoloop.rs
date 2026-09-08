@@ -5,7 +5,7 @@
 //! stories, re-arming itself each iteration until the backlog is empty
 //! or a cap trips — with iteration / wall-clock / token caps and
 //! **driver-side gate verification**, plus a cross-iteration progress
-//! log. This is the `aivyx loop` surface: the backlog on the left, the
+//! log. This is the `aivyx-pa loop` surface: the backlog on the left, the
 //! live run (current story, caps usage, gates, progress log) on the
 //! right.
 //!
@@ -115,7 +115,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Autonomous Loop", bold(FG)),
         ])),
         area,

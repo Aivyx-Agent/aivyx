@@ -355,7 +355,7 @@ impl TriggerDispatch {
         notify_when: aivyx_config::NotifyWhen,
     ) -> Duration {
         eprintln!(
-            "aivyx trigger: firing {source} {trigger_id:?} (prompt={prompt:?}, mission={wrap_mission})",
+            "aivyx-pa trigger: firing {source} {trigger_id:?} (prompt={prompt:?}, mission={wrap_mission})",
         );
 
         let channel = (self.channel_factory)(FrontendType::Local);
@@ -381,19 +381,19 @@ impl TriggerDispatch {
                     description,
                 );
                 if let Err(e) = mission::create_mission(store, &record).await {
-                    eprintln!("aivyx trigger: failed to create mission for {trigger_id}: {e}");
+                    eprintln!("aivyx-pa trigger: failed to create mission for {trigger_id}: {e}");
                     None
                 } else {
                     // Transition to Running immediately.
                     let _ = mission::transition_to_running(&mut record);
                     if let Err(e) = mission::update_mission(store, &record).await {
-                        eprintln!("aivyx trigger: failed to start mission {mid}: {e}");
+                        eprintln!("aivyx-pa trigger: failed to start mission {mid}: {e}");
                     }
                     Some(mid)
                 }
             } else {
                 eprintln!(
-                    "aivyx trigger: wrap_mission requested for {trigger_id} but no mission store configured"
+                    "aivyx-pa trigger: wrap_mission requested for {trigger_id} but no mission store configured"
                 );
                 None
             }
@@ -408,7 +408,7 @@ impl TriggerDispatch {
         let elapsed = start.elapsed();
 
         eprintln!(
-            "aivyx trigger: {source} {trigger_id:?} turn outcome: {outcome:?} ({elapsed:.1?})",
+            "aivyx-pa trigger: {source} {trigger_id:?} turn outcome: {outcome:?} ({elapsed:.1?})",
         );
 
         // Complete or fail the mission based on turn outcome.
@@ -442,7 +442,7 @@ impl TriggerDispatch {
                         // park behind a gate no one will answer. Record the
                         // refusal and end the mission, like the non-success arm.
                         eprintln!(
-                            "aivyx trigger: escalation refused (headless) on mission {mid}: {reason}",
+                            "aivyx-pa trigger: escalation refused (headless) on mission {mid}: {reason}",
                         );
                         // H.6 — land the refusal on the audit chain (best-
                         // effort; a failed append must not derail the mission
@@ -458,7 +458,7 @@ impl TriggerDispatch {
                             };
                             if let Err(e) = al.append(event) {
                                 eprintln!(
-                                    "aivyx trigger: failed to audit headless refusal for {mid}: {e}",
+                                    "aivyx-pa trigger: failed to audit headless refusal for {mid}: {e}",
                                 );
                             }
                         }
@@ -481,7 +481,7 @@ impl TriggerDispatch {
                         )
                         .map_err(|e| format!("add gate: {e}"))?;
                         eprintln!(
-                            "aivyx trigger: escalation gate {gate_id} created on mission {mid}",
+                            "aivyx-pa trigger: escalation gate {gate_id} created on mission {mid}",
                         );
                         // Mission stays in GatePending (set by add_gate).
                     }
@@ -495,7 +495,7 @@ impl TriggerDispatch {
             .await;
 
             if let Err(e) = result {
-                eprintln!("aivyx trigger: mission lifecycle error for {mid}: {e}");
+                eprintln!("aivyx-pa trigger: mission lifecycle error for {mid}: {e}");
             }
         }
 
@@ -531,7 +531,7 @@ impl TriggerDispatch {
                 if !gate_passes {
                     let condition = notify_when.condition_label().to_string();
                     eprintln!(
-                        "aivyx trigger: auto-notify skipped (notify_when = \
+                        "aivyx-pa trigger: auto-notify skipped (notify_when = \
                          {condition}) for {source} {trigger_id:?} → targets \
                          {notify_targets:?}",
                     );
@@ -551,7 +551,7 @@ impl TriggerDispatch {
                     // Q2(a) at Phase 63 — empty response skips
                     // every target. Audit per target.
                     eprintln!(
-                        "aivyx trigger: auto-notify skipped (empty response) \
+                        "aivyx-pa trigger: auto-notify skipped (empty response) \
                          for {source} {trigger_id:?} → targets {notify_targets:?}",
                     );
                     for target in &notify_targets {
@@ -640,7 +640,7 @@ impl TriggerDispatch {
                                 window_secs,
                             } => {
                                 eprintln!(
-                                    "aivyx trigger: auto-notify skipped \
+                                    "aivyx-pa trigger: auto-notify skipped \
                                      (rate-limit exhausted: {max}/{window_secs}s) \
                                      for {source} {trigger_id:?} → target \
                                      `{target}`",
@@ -652,14 +652,14 @@ impl TriggerDispatch {
                             }
                             DispatchOutcome::Backend(Ok(())) => {
                                 eprintln!(
-                                    "aivyx trigger: auto-notify dispatched for \
+                                    "aivyx-pa trigger: auto-notify dispatched for \
                                      {source} {trigger_id:?} → target `{target}`",
                                 );
                                 AutoNotifyOutcomeSummary::Delivered
                             }
                             DispatchOutcome::Backend(Err(e)) => {
                                 eprintln!(
-                                    "aivyx trigger: auto-notify FAILED for \
+                                    "aivyx-pa trigger: auto-notify FAILED for \
                                      {source} {trigger_id:?} → target \
                                      `{target}`: {e}",
                                 );
@@ -741,7 +741,7 @@ pub fn emit_auto_notify_audit(
     // internal drain task.
     if let Err(e) = log.append(event) {
         eprintln!(
-            "aivyx trigger: audit log append failed for AutoNotifyDispatched \
+            "aivyx-pa trigger: audit log append failed for AutoNotifyDispatched \
              ({trigger_source} {trigger_id:?} → {target_name}): {e}"
         );
     }
@@ -782,7 +782,7 @@ async fn dispatch_with_retry(
             Err(e) if attempt + 1 < total_attempts && is_transient_failure(&e) => {
                 let backoff_ms = backoff_ms_start.saturating_mul(1u64 << attempt);
                 eprintln!(
-                    "aivyx trigger: auto-notify attempt {} of {} for target \
+                    "aivyx-pa trigger: auto-notify attempt {} of {} for target \
                      `{target}` failed ({e}); retrying in {backoff_ms}ms",
                     attempt + 1,
                     total_attempts,

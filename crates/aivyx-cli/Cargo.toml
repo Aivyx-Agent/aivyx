@@ -24,7 +24,7 @@ dist = true
 ignored = ["cron"]
 
 [[bin]]
-name = "aivyx"
+name = "aivyx-pa"
 path = "src/bin/aivyx.rs"
 
 [features]

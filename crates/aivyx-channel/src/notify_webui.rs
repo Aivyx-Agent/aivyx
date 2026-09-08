@@ -159,9 +159,9 @@ impl NotifyBackend for NotifyWebUiBackend {
     ) -> Result<(), NotifyError> {
         // Web UI desktop notifications carry both a title and a
         // body; if the caller didn't provide a subject we fall
-        // back to a generic "Aivyx" title so the browser
+        // back to a generic "Aivyx PA" title so the browser
         // notification has something to display in its header.
-        let title = subject.unwrap_or("Aivyx").to_string();
+        let title = subject.unwrap_or("Aivyx PA").to_string();
         let body = message.to_string();
         self.broadcaster
             .broadcast(WebUiBroadcastFrame::DesktopNotification(
@@ -185,7 +185,7 @@ mod tests {
         // Zero receivers — per Q1(a), this must not error.
         assert_eq!(bc.receiver_count(), 0);
         backend
-            .send("build done", Some("Aivyx"))
+            .send("build done", Some("Aivyx PA"))
             .await
             .expect("Ok with no subscribers");
     }
@@ -228,7 +228,7 @@ mod tests {
                     title,
                     body,
                 }) => {
-                    assert_eq!(title, "Aivyx");
+                    assert_eq!(title, "Aivyx PA");
                     assert_eq!(body, "hello");
                 }
                 other => panic!("expected DesktopNotification, got {other:?}"),
@@ -248,7 +248,7 @@ mod tests {
                 title,
                 body,
             }) => {
-                assert_eq!(title, "Aivyx");
+                assert_eq!(title, "Aivyx PA");
                 assert_eq!(body, "no subject");
             }
             other => panic!("expected DesktopNotification, got {other:?}"),

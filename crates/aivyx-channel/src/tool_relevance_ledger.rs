@@ -27,7 +27,7 @@
 //! ## Operator-readability
 //!
 //! Entries are JSON-serialized for diagnostic dumpability via
-//! a future `aivyx tool-relevance dump` CLI (deferred — the
+//! a future `aivyx-pa tool-relevance dump` CLI (deferred — the
 //! Phase 116 surface is the system-prompt section, which
 //! covers operator-readability through the LLM's prompt
 //! view). The ledger is encrypted at rest via
@@ -181,7 +181,7 @@ impl PersistentToolRelevanceLedger {
     /// Phase 119 Task 6 — operator-inspection iteration. Returns
     /// every `(keyword_key, RelevanceEntry)` pair in the ledger,
     /// optionally filtered to a single keyword key for the
-    /// `aivyx tool-relevance dump --keyword-key <key>` flow.
+    /// `aivyx-pa tool-relevance dump --keyword-key <key>` flow.
     ///
     /// The storage layer's `scan_prefix` with an empty prefix walks
     /// every row in the domain (same path
@@ -211,7 +211,7 @@ impl PersistentToolRelevanceLedger {
         for (key_bytes, value_bytes) in rows {
             let Ok(key) = std::str::from_utf8(&key_bytes) else {
                 eprintln!(
-                    "aivyx tool-relevance: skipping non-UTF8 keyword key in ledger"
+                    "aivyx-pa tool-relevance: skipping non-UTF8 keyword key in ledger"
                 );
                 continue;
             };
@@ -227,7 +227,7 @@ impl PersistentToolRelevanceLedger {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!(
-                        "aivyx tool-relevance: skipping malformed entry for \
+                        "aivyx-pa tool-relevance: skipping malformed entry for \
                          keyword key `{key}`: {e}"
                     );
                     continue;
@@ -302,7 +302,7 @@ pub async fn record_turn_outcomes(
                     .await
                 {
                     eprintln!(
-                        "aivyx tool-relevance: record_outcome failed for \
+                        "aivyx-pa tool-relevance: record_outcome failed for \
                          tool ({keyword_key}, {identifier}): {e}"
                     );
                 }
@@ -328,7 +328,7 @@ pub async fn record_turn_outcomes(
                     .await
                 {
                     eprintln!(
-                        "aivyx tool-relevance: record_outcome failed for \
+                        "aivyx-pa tool-relevance: record_outcome failed for \
                          skill ({keyword_key}, {skill_name}): {e}"
                     );
                 }

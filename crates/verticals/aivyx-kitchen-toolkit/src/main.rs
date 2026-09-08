@@ -1,7 +1,7 @@
 //! `aivyx-kitchen-toolkit` binary entry point — Chapter Brigade (BG.1).
 //!
-//! The daemon spawns this via `[[tool_process]]` in `aivyx.toml`. On startup we:
-//! 1. load the operator config from `~/.aivyx/tool-processes/kitchen/config.toml`
+//! The daemon spawns this via `[[tool_process]]` in `aivyx-pa.toml`. On startup we:
+//! 1. load the operator config from `~/.aivyx-pa/tool-processes/kitchen/config.toml`
 //!    (KitchenDB base_url + api_key + organization_id);
 //! 2. build the shared `reqwest::Client` + the `KitchenClient`;
 //! 3. register the `kitchen.read` tools and hand them to the multi-tool harness.

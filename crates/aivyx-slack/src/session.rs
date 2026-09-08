@@ -4,7 +4,7 @@
 //! `aivyx_discord::run_discord_session`.
 //!
 //! Slack's Socket Mode is push-based like Discord's Gateway —
-//! one outbound WebSocket connection from aivyx, events arrive
+//! one outbound WebSocket connection from aivyx-pa, events arrive
 //! continuously, no `get_updates` cursor. That puts Slack on
 //! the **two-piece** session-driver shape Phase 107 named
 //! (`docs/ADAPTER_PATTERN.md`'s three-data-point update):
@@ -24,7 +24,7 @@
 //! - Builds `ConcreteAgent` from [`SlackSessionConfig`] in each
 //!   inner task. Why a separate config type: `aivyx-slack`
 //!   cannot depend on `aivyx-channel` without creating a
-//!   package cycle (the `aivyx` binary lives in `aivyx-channel`
+//!   package cycle (the `aivyx-pa` binary lives in `aivyx-channel`
 //!   and imports `aivyx_slack::run_slack_session`).
 //! - Rotates the channel's cancellation token per turn (Phase
 //!   3 monotonic-token fix).
@@ -277,7 +277,7 @@ struct PartitionRoute {
 
 /// Drive a multi-channel Slack session to completion against
 /// a real bot token + app-level token. Production entry point
-/// for the `aivyx --channel slack` binary path.
+/// for the `aivyx-pa --channel slack` binary path.
 ///
 /// ## Parameters
 ///

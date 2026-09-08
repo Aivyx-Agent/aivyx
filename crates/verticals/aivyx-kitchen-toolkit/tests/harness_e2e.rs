@@ -106,7 +106,7 @@ fn scratch_home() -> std::path::PathBuf {
         std::process::id(),
         N.fetch_add(1, Ordering::SeqCst),
     ));
-    std::fs::create_dir_all(dir.join(".aivyx/tool-processes/kitchen")).unwrap();
+    std::fs::create_dir_all(dir.join(".aivyx-pa/tool-processes/kitchen")).unwrap();
     dir
 }
 
@@ -118,7 +118,7 @@ async fn real_binary_serves_inventory_list_over_the_harness() {
     // A temp HOME with a config.toml pointing at the mock.
     let home = scratch_home();
     std::fs::write(
-        home.join(".aivyx/tool-processes/kitchen/config.toml"),
+        home.join(".aivyx-pa/tool-processes/kitchen/config.toml"),
         format!("[kitchen_db]\nbase_url = \"{base}\"\napi_key = \"K\"\norganization_id = \"ORG\"\n"),
     )
     .unwrap();

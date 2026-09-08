@@ -1,7 +1,7 @@
 //! Chapter Keyring — the master passphrase in the OS credential store.
 //!
 //! Removes the plaintext-secret-at-rest weakness for **interactive / desktop**
-//! use: instead of `AIVYX_PASSPHRASE` in the environment or `[aivyx]
+//! use: instead of `AIVYX_PA_PASSPHRASE` in the environment or `[aivyx_pa]
 //! passphrase` in the TOML (both plaintext), the operator stores the master
 //! passphrase once in the OS keyring (Secret Service on Linux, Keychain on
 //! macOS, Credential Manager on Windows), and the daemon reads it from there at
@@ -10,7 +10,7 @@
 //! ## Scope + honesty
 //!
 //! This helps the case where a Secret Service / Keychain is actually reachable —
-//! a desktop session or an interactive `aivyx` run. The **headless systemd user
+//! a desktop session or an interactive `aivyx-pa` run. The **headless systemd user
 //! service under linger** (Chapter Anchor's "runs for days" install) has no
 //! login session / Secret Service, so it keeps using the `0600 daemon.env`
 //! file; the keyring is an *additional* source, not a replacement there. Every
@@ -20,7 +20,7 @@
 use secrecy::{ExposeSecret, SecretString};
 
 /// Keyring service name (the application) and account (which secret).
-const SERVICE: &str = "aivyx";
+const SERVICE: &str = "aivyx-pa";
 const ACCOUNT: &str = "master-passphrase";
 
 #[derive(Debug, thiserror::Error)]
@@ -90,7 +90,7 @@ mod tests {
     // service/account the way a real Secret Service / Keychain does. These
     // tests therefore validate the error-mapping + call shape (the part that's
     // ours); true store→retrieve persistence is confirmed manually against a
-    // live keyring (documented in the module header + `aivyx keyring` help).
+    // live keyring (documented in the module header + `aivyx-pa keyring` help).
     #[test]
     fn retrieve_maps_missing_secret_to_none() {
         use_mock();

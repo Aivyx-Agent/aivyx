@@ -15,12 +15,12 @@
 //! The driver owns a shared [`LoopRunState`] the daemon IPC
 //! handlers (Phase 173 Task 5) flip:
 //!
-//! - `aivyx loop start` → [`request_start`] sets `active` + the
+//! - `aivyx-pa loop start` → [`request_start`] sets `active` + the
 //!   per-run `max_iterations` and wakes the driver via a
 //!   `Notify`.
-//! - `aivyx loop stop` → [`request_stop`] clears `active`; the
+//! - `aivyx-pa loop stop` → [`request_stop`] clears `active`; the
 //!   driver checks between iterations and ends the run.
-//! - `aivyx loop status` → [`snapshot`] reads the state.
+//! - `aivyx-pa loop status` → [`snapshot`] reads the state.
 //!
 //! ## Termination (fully autonomous, capped)
 //!
@@ -210,7 +210,7 @@ async fn verify_and_close(
         )
         .await;
     eprintln!(
-        "aivyx loop: verify-and-close for '{}' — {}: {}",
+        "aivyx-pa loop: verify-and-close for '{}' — {}: {}",
         candidate.title,
         if v.passed { "CLOSED" } else { "left pending" },
         v.reason,
@@ -549,7 +549,7 @@ pub fn gate_stop_reason(
 /// are durable (the HMAC-chained `PersistentLoopBacklog`); the
 /// *run* is not. So a daemon crash/restart mid-run does **not**
 /// auto-resume: the stories remain pending and the operator (or an
-/// autostart hook) must re-issue `aivyx loop start`. This is the
+/// autostart hook) must re-issue `aivyx-pa loop start`. This is the
 /// conservative default — auto-resuming an autonomous, possibly
 /// code-committing loop on every boot is a deliberate safety
 /// decision, tracked as an opt-in follow-up rather than assumed.
@@ -602,7 +602,7 @@ impl SharedLoopState {
         if let Some(store) = &self.resume_store {
             if let Err(e) = crate::loop_resume::set_run_active(store, active).await
             {
-                eprintln!("aivyx loop: failed to persist run marker: {e}");
+                eprintln!("aivyx-pa loop: failed to persist run marker: {e}");
             }
         }
     }
@@ -616,7 +616,7 @@ impl SharedLoopState {
         }
     }
 
-    /// Read-only snapshot for `aivyx loop status`.
+    /// Read-only snapshot for `aivyx-pa loop status`.
     pub fn snapshot(&self) -> LoopRunState {
         self.state.read().expect("loop state lock").clone()
     }
@@ -679,21 +679,21 @@ impl SharedLoopState {
     }
 
     /// Phase 177 — record the run-window token total for the
-    /// operator-facing `aivyx loop status` surface.
+    /// operator-facing `aivyx-pa loop status` surface.
     fn record_tokens(&self, tokens: u64) {
         let mut s = self.state.write().expect("loop state lock");
         s.tokens_used = tokens;
     }
 
     /// Chapter K — record the run-window priced spend (USD → cents) for the
-    /// `aivyx loop status` surface.
+    /// `aivyx-pa loop status` surface.
     fn record_cost(&self, usd: f64) {
         let mut s = self.state.write().expect("loop state lock");
         s.spent_cents = (usd * 100.0).round() as u64;
     }
 
     /// Chapter Circuit (CI.5) — record the live consecutive-idle count
-    /// (the CI.1 stall-breaker streak) for the `aivyx loop status` surface.
+    /// (the CI.1 stall-breaker streak) for the `aivyx-pa loop status` surface.
     fn record_idle(&self, consecutive_idle: u32) {
         let mut s = self.state.write().expect("loop state lock");
         s.consecutive_idle = consecutive_idle;
@@ -713,7 +713,7 @@ impl SharedLoopState {
 /// `request_stop`), which clears `active`. But if an iteration
 /// panics, the driver task dies with `active` still `true` and no
 /// driver behind it — and because [`SharedLoopState::request_start`]
-/// no-ops while `active`, every future `aivyx loop start` would
+/// no-ops while `active`, every future `aivyx-pa loop start` would
 /// silently refuse ("already running"), wedging the loop until a
 /// daemon restart. This guard, scoped to a single run, runs on
 /// unwind and clears the flag so the next start can proceed. The
@@ -806,7 +806,7 @@ pub async fn run_loop_driver(
 
         // A run is active — drive iterations.
         eprintln!(
-            "aivyx loop: run started (max_iterations={}, gate={}, \
+            "aivyx-pa loop: run started (max_iterations={}, gate={}, \
              max_run_secs={:?}, max_run_tokens={:?}, max_run_usd={:?}, \
              stall_breaker={})",
             shared.max_iterations(),
@@ -835,7 +835,7 @@ pub async fn run_loop_driver(
             if !outcome.is_green() {
                 let reason = gate_stop_reason(&outcome, 0);
                 shared.finish_run(&reason);
-                eprintln!("aivyx loop: run not started — {reason}");
+                eprintln!("aivyx-pa loop: run not started — {reason}");
                 continue;
             }
         }
@@ -874,7 +874,7 @@ pub async fn run_loop_driver(
                 budget_start_seq,
             );
             // Phase 177 — surface the live run-window spend so
-            // `aivyx loop status` can show it approaching the cap.
+            // `aivyx-pa loop status` can show it approaching the cap.
             shared.record_tokens(tokens_used);
             // Chapter K — the priced run-window spend for the dollar cap.
             let spent_usd = read_run_cost(audit_log.as_ref(), budget_start_seq, &pricing);
@@ -894,7 +894,7 @@ pub async fn run_loop_driver(
             if let Some(reason) = decision.stop_reason() {
                 shared.finish_run(reason);
                 eprintln!(
-                    "aivyx loop: run ended — {reason} (after {} \
+                    "aivyx-pa loop: run ended — {reason} (after {} \
                      iteration(s))",
                     shared.iteration(),
                 );
@@ -914,7 +914,7 @@ pub async fn run_loop_driver(
                         let iter = shared.iteration() + 1;
                         shared.record_iteration();
                         eprintln!(
-                            "aivyx loop: iteration {iter} — delegating story {} to \
+                            "aivyx-pa loop: iteration {iter} — delegating story {} to \
                              the team ({})",
                             story.id,
                             assessment.explain(),
@@ -951,7 +951,7 @@ pub async fn run_loop_driver(
                                         .unwrap_or_default();
                                     let v = j.verify(&story.title, &story.body, &result).await;
                                     eprintln!(
-                                        "aivyx loop: delegated completion verdict for '{}' — {}: {}",
+                                        "aivyx-pa loop: delegated completion verdict for '{}' — {}: {}",
                                         story.title,
                                         if v.passed { "ACCEPTED" } else { "REJECTED" },
                                         v.reason,
@@ -1028,7 +1028,7 @@ pub async fn run_loop_driver(
                                  iteration(s) (stall breaker)"
                             );
                             shared.finish_run(&reason);
-                            eprintln!("aivyx loop: run ended — {reason}");
+                            eprintln!("aivyx-pa loop: run ended — {reason}");
                             break;
                         }
                         continue;
@@ -1052,7 +1052,7 @@ pub async fn run_loop_driver(
             let prompt = build_iteration_prompt(&notes);
 
             eprintln!(
-                "aivyx loop: iteration {iter} firing ({remaining} \
+                "aivyx-pa loop: iteration {iter} firing ({remaining} \
                  stor{} remaining, {} progress note(s) injected)",
                 if remaining == 1 { "y" } else { "ies" },
                 notes.len(),
@@ -1092,7 +1092,7 @@ pub async fn run_loop_driver(
                 if !outcome.is_green() {
                     let reason = gate_stop_reason(&outcome, iter);
                     shared.finish_run(&reason);
-                    eprintln!("aivyx loop: run ended — {reason}");
+                    eprintln!("aivyx-pa loop: run ended — {reason}");
                     break;
                 }
             }
@@ -1124,7 +1124,7 @@ pub async fn run_loop_driver(
             let made_progress = remaining_after < remaining
                 || (note_after.is_some() && note_after != note_before);
             let should_stop = stall.record(made_progress);
-            // CI.5 — surface the live idle streak for `aivyx loop status`.
+            // CI.5 — surface the live idle streak for `aivyx-pa loop status`.
             shared.record_idle(stall.consecutive_idle);
             if should_stop {
                 let reason = format!(
@@ -1133,7 +1133,7 @@ pub async fn run_loop_driver(
                 );
                 shared.finish_run(&reason);
                 eprintln!(
-                    "aivyx loop: run ended — {reason} (after {} iteration(s))",
+                    "aivyx-pa loop: run ended — {reason} (after {} iteration(s))",
                     shared.iteration(),
                 );
                 break;

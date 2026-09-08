@@ -7,7 +7,7 @@
 //! | Seam              | Production                   | Test                  |
 //! |-------------------|------------------------------|-----------------------|
 //! | Agent             | `ConcreteAgent` + LLM        | `FakeStreamingAgent`  |
-//! | Socket path       | `$XDG_RUNTIME_DIR/aivyx/...` | `$TMPDIR/<unique>`    |
+//! | Socket path       | `$XDG_RUNTIME_DIR/aivyx-pa/...` | `$TMPDIR/<unique>`    |
 //! | ChannelContext     | `LocalChannel<Stdout>`       | `LocalChannel<Vec>`   |
 
 use std::path::PathBuf;

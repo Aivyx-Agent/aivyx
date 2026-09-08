@@ -24,7 +24,7 @@
 //! - Builds the `ConcreteAgent` from [`DiscordSessionConfig`] in
 //!   each inner task. Why a separate config type: `aivyx-discord`
 //!   cannot depend on `aivyx-channel` without creating a package
-//!   cycle (the `aivyx` binary lives in `aivyx-channel` and
+//!   cycle (the `aivyx-pa` binary lives in `aivyx-channel` and
 //!   imports `aivyx_discord::run_discord_session`). The shape
 //!   mirrors `TelegramSessionConfig` and `aivyx_channel::SessionConfig`
 //!   minus the local-only fields.
@@ -370,10 +370,10 @@ struct ChannelRoute {
 }
 
 /// Drive a multi-channel Discord session to completion against
-/// a real bot token. Production entry point for the `aivyx
+/// a real bot token. Production entry point for the `aivyx-pa
 /// --channel discord` binary path.
 ///
-/// One aivyx process, one Gateway shard, N Discord channels.
+/// One aivyx-pa process, one Gateway shard, N Discord channels.
 /// Each channel id the bot sees gets its own [`DiscordChannel`]
 /// instance with a stable `session_partition()` keyed on the
 /// snowflake — so memory partitions and audit-chain events

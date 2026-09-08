@@ -122,7 +122,7 @@ pub struct TeamMissionRecord {
     pub spend_usd: f64,
     /// Chapter Muster — the id of the `[[schedule]]` entry that started
     /// this mission, if any. `None` for every mission started any other
-    /// way (manual `aivyx team run`, the Studio, the autonomous loop's
+    /// way (manual `aivyx-pa team run`, the Studio, the autonomous loop's
     /// auto-delegation, ...). `#[serde(default)]` keeps pre-existing
     /// records decoding.
     #[serde(default)]
@@ -282,7 +282,7 @@ pub struct TeamMissionView {
     pub lead: String,
     pub phase: TeamMissionPhase,
     /// The step id awaiting an operator decision, when `phase ==
-    /// AwaitingApproval` — what `aivyx team approve|reject <id> <step>` /
+    /// AwaitingApproval` — what `aivyx-pa team approve|reject <id> <step>` /
     /// the approve/reject affordances target.
     pub pending_gate: Option<String>,
     /// Why the mission `Halted` (budget cap detail, or "aborted by operator"),

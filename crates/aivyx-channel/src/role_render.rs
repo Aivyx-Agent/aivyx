@@ -32,7 +32,7 @@
 //! 2. **Cross-crate reachability.** Future downstream consumers
 //!    (the Daemon Migration milestone's IPC frontends, for one)
 //!    will need the "explain a role's effective envelope" surface
-//!    without depending on the `aivyx` binary. Keeping it
+//!    without depending on the `aivyx-pa` binary. Keeping it
 //!    library-side from Phase 15 onward avoids a second lift later.
 //!
 //! ## Surface
@@ -64,7 +64,7 @@ use crate::assemble_role_envelope;
 ///
 /// Phase 8 Task 4 introduced the first non-`Local` variant
 /// (`Telegram`). Pre-Phase-8 configs only knew `Local`, and the
-/// `Default` choice stays `Local` so a bare `aivyx` invocation
+/// `Default` choice stays `Local` so a bare `aivyx-pa` invocation
 /// opens the local REPL with no flags required.
 ///
 /// Lifted from the binary to the channel library in Phase 15

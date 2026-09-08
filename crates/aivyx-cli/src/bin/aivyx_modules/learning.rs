@@ -1,4 +1,4 @@
-//! `aivyx learning` CLI — Phase 78.
+//! `aivyx-pa learning` CLI — Phase 78.
 //!
 //! Terminal parity with the Web UI Learning pane. Read-only:
 //! a window into what the self-learning loop has learned and
@@ -23,7 +23,7 @@ use aivyx_channel::recall_insights::{LearningDigest, ProposalProvenance};
 use aivyx_channel::recall_judgment::{RecallJudgment, RecallJudgmentStat};
 use aivyx_channel::reflection_scheduler::RecentReflectionStat;
 
-/// `aivyx learning [--window <secs>]`
+/// `aivyx-pa learning [--window <secs>]`
 pub async fn run_learning(window_secs: Option<u64>) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -72,8 +72,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx learning: no daemon running on socket {} — \
-         start the daemon first with `aivyx daemon run`",
+        "aivyx-pa learning: no daemon running on socket {} — \
+         start the daemon first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }

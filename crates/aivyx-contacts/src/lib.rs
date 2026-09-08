@@ -4,7 +4,7 @@
 //! Aivyx. **Chapter Contacts — the first Broaden-track domain**
 //! (closes the contacts/CRM slice of backend-audit F4). Ships as
 //! a separate binary the operator installs and wires into
-//! `aivyx.toml` via `[[tool_process]]`. Per PRODUCT.md P10 (the
+//! `aivyx-pa.toml` via `[[tool_process]]`. Per PRODUCT.md P10 (the
 //! substrate is closed at thirteen tools forever; contacts is
 //! third-party territory, like Gmail / Calendar / Drive).
 //!
@@ -71,13 +71,13 @@ pub const DEFAULT_CONTACTS_SCOPES: &[&str] =
     &["https://www.googleapis.com/auth/contacts"];
 
 /// Service-specific token storage path
-/// (`$HOME/.aivyx/tool-processes/contacts/tokens.json`).
+/// (`$HOME/.aivyx-pa/tool-processes/contacts/tokens.json`).
 /// Returns `None` when `$HOME` is unset.
 pub fn default_token_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         std::path::PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("contacts")
             .join("tokens.json"),

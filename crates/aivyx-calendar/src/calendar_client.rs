@@ -83,7 +83,7 @@ pub struct CalendarClient {
     /// (workspace admin scenarios) can shorten
     /// it via [`with_writable_calendars_cache_ttl`]
     /// or the env var
-    /// `AIVYX_CALENDAR_CACHE_TTL_SECS`.
+    /// `AIVYX_PA_CALENDAR_CACHE_TTL_SECS`.
     writable_calendars_cache_ttl: Duration,
 }
 
@@ -113,7 +113,7 @@ pub const WRITABLE_CALENDARS_CACHE_TTL: Duration = Duration::from_secs(300);
 /// non-numeric and zero values fall back to
 /// the default.
 fn cache_ttl_from_env_or_default() -> Duration {
-    match std::env::var("AIVYX_CALENDAR_CACHE_TTL_SECS") {
+    match std::env::var("AIVYX_PA_CALENDAR_CACHE_TTL_SECS") {
         Ok(raw) => match raw.trim().parse::<u64>() {
             Ok(n) if n >= 1 => Duration::from_secs(n),
             _ => WRITABLE_CALENDARS_CACHE_TTL,
@@ -428,7 +428,7 @@ mod tests {
     use super::*;
 
     // Env vars are process-global. Serialize every test that mutates
-    // the shared `AIVYX_CALENDAR_CACHE_TTL_SECS` key so `cargo test`
+    // the shared `AIVYX_PA_CALENDAR_CACHE_TTL_SECS` key so `cargo test`
     // parallelism can't make one test's `remove_var` race with
     // another's `set_var`. Same pattern as aivyx-channel::passphrase.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn cache_ttl_env_var_overrides_default() {
         let _lock = env_lock();
-        let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
+        let key = "AIVYX_PA_CALENDAR_CACHE_TTL_SECS";
         unsafe { std::env::set_var(key, "60") };
         let ttl = cache_ttl_from_env_or_default();
         unsafe { std::env::remove_var(key) };
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn cache_ttl_env_var_invalid_falls_back_to_default() {
         let _lock = env_lock();
-        let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
+        let key = "AIVYX_PA_CALENDAR_CACHE_TTL_SECS";
         unsafe { std::env::set_var(key, "not a number") };
         let ttl = cache_ttl_from_env_or_default();
         unsafe { std::env::remove_var(key) };
@@ -641,7 +641,7 @@ mod tests {
         // operator surprise; same posture as
         // Phase 166's PDF cap env-var.
         let _lock = env_lock();
-        let key = "AIVYX_CALENDAR_CACHE_TTL_SECS";
+        let key = "AIVYX_PA_CALENDAR_CACHE_TTL_SECS";
         unsafe { std::env::set_var(key, "0") };
         let ttl = cache_ttl_from_env_or_default();
         unsafe { std::env::remove_var(key) };

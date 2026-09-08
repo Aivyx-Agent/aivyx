@@ -249,11 +249,11 @@ impl ContextProvider for SkillTriggerContext {
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
             Some((idx, score)) => eprintln!(
-                "aivyx skills: injected procedure {:?} (trigger match {:.2}, runner-up {:?} at {:.2})",
+                "aivyx-pa skills: injected procedure {:?} (trigger match {:.2}, runner-up {:?} at {:.2})",
                 skill.name, best_score, skills[idx].name, score,
             ),
             None => eprintln!(
-                "aivyx skills: injected procedure {:?} (trigger match {:.2})",
+                "aivyx-pa skills: injected procedure {:?} (trigger match {:.2})",
                 skill.name, best_score,
             ),
         }

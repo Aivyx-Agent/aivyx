@@ -1,4 +1,4 @@
-//! `aivyx doctor` — first-run health check for the local on-ramp (Chapter P).
+//! `aivyx-pa doctor` — first-run health check for the local on-ramp (Chapter P).
 //!
 //! Confirms the path actually works end to end and, when it doesn't, says
 //! *why* and *what to do* — instead of leaving a new user with a blank first
@@ -17,12 +17,12 @@ use aivyx_llm::ollama::{
 };
 use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolDescriptor};
 
-const DOCTOR_TOML_PATH: &str = "aivyx.toml";
+const DOCTOR_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// `aivyx doctor` — run the health checks and report.
+/// `aivyx-pa doctor` — run the health checks and report.
 pub async fn run_doctor() -> Result<(), String> {
     let cfg = load_config_for_inspection()?;
-    println!("aivyx doctor — checking your setup\n");
+    println!("aivyx-pa doctor — checking your setup\n");
 
     let provider_ok = match cfg.provider.value {
         ProviderKind::Ollama => check_ollama(&cfg).await,
@@ -45,14 +45,14 @@ pub async fn run_doctor() -> Result<(), String> {
     check_service();
 
     // Chapter Gatehouse — VITRINE.md §13 operator UX note: a forgotten
-    // Studio auth token used to mean grepping aivyx.toml by hand to
+    // Studio auth token used to mean grepping aivyx-pa.toml by hand to
     // recover it. Informational only, same as check_service() above —
     // never fails the doctor.
     check_gatehouse(&cfg);
 
     println!();
     if all_ok {
-        println!("✓ Looks good — your agent is ready. Run `aivyx` to start.");
+        println!("✓ Looks good — your agent is ready. Run `aivyx-pa` to start.");
         Ok(())
     } else {
         Err("one or more checks failed — see the notes above.".into())
@@ -71,7 +71,7 @@ fn check_service() {
                 Some(true) => pass("running — survives logout/reboot"),
                 Some(false) => println!(
                     "  ⚠ installed but not running\n     \
-                     → start it: `systemctl --user start aivyx-daemon` (or re-run `aivyx daemon install`)"
+                     → start it: `systemctl --user start aivyx-daemon` (or re-run `aivyx-pa daemon install`)"
                 ),
                 None => {}
             }
@@ -79,23 +79,23 @@ fn check_service() {
         None => {
             println!(
                 "  • not installed as a service — fine for interactive use.\n     \
-                 → for a 'runs for days' agent: `aivyx daemon install`"
+                 → for a 'runs for days' agent: `aivyx-pa daemon install`"
             );
         }
     }
 }
 
 /// VITRINE.md §13 — "a future 'reveal/regenerate token' affordance (CLI
-/// `aivyx doctor` hint or Settings) would smooth this": an operator who
-/// forgot their Studio auth token had to read `aivyx.toml` directly to
+/// `aivyx-pa doctor` hint or Settings) would smooth this": an operator who
+/// forgot their Studio auth token had to read `aivyx-pa.toml` directly to
 /// recover it (that's exactly what a rig recovery looked like). This is
 /// the "reveal" half — printing the token doctor already loaded to check
 /// the interlock, rather than sending the operator to grep the TOML file
 /// themselves. No new privilege: doctor already reads the full config,
-/// and the operator already has direct read access to `aivyx.toml` on
+/// and the operator already has direct read access to `aivyx-pa.toml` on
 /// their own disk. "Regenerate" (writing a fresh token) is a mutating
 /// action and stays out of scope for this read-only command — it's a
-/// `[daemon] web_ui_auth_token` edit in `aivyx.toml`, or a future
+/// `[daemon] web_ui_auth_token` edit in `aivyx-pa.toml`, or a future
 /// Settings-screen affordance.
 /// The branch `check_gatehouse` prints, split out as pure/testable logic
 /// (no `AivyxConfig` needed) from the `println!` side effects.
@@ -134,7 +134,7 @@ fn check_gatehouse(cfg: &AivyxConfig) {
             println!(
                 "  ⚠ bound off-host ({host}) with no `[daemon] web_ui_auth_token` set\n     \
                  → anyone who can reach this host can drive the agent; set a token \
-                 (e.g. `openssl rand -hex 32`) in aivyx.toml, or \
+                 (e.g. `openssl rand -hex 32`) in aivyx-pa.toml, or \
                  `web_ui_insecure_no_auth = true` if a reverse proxy already \
                  authenticates. See docs/GATEHOUSE.md."
             );
@@ -143,7 +143,7 @@ fn check_gatehouse(cfg: &AivyxConfig) {
             println!(
                 "  • no auth token set — fine for loopback-only use.\n     \
                  → to expose the Studio off-host, set both `web_ui_host` and \
-                 `web_ui_auth_token` in aivyx.toml (see docs/GATEHOUSE.md)."
+                 `web_ui_auth_token` in aivyx-pa.toml (see docs/GATEHOUSE.md)."
             );
         }
     }
@@ -183,7 +183,7 @@ async fn check_ollama(cfg: &AivyxConfig) -> bool {
     if !models.iter().any(|m| m == &model) {
         fail(
             &format!("model `{model}` is not downloaded"),
-            &format!("Pull it with `ollama pull {model}` (or `aivyx init` to pick/pull a model)."),
+            &format!("Pull it with `ollama pull {model}` (or `aivyx-pa init` to pick/pull a model)."),
         );
         return false;
     }
@@ -285,12 +285,12 @@ fn check_cloud(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
     };
     if has_key {
         pass("an API key is configured");
-        println!("  (run `aivyx init` to re-verify the key against the provider)");
+        println!("  (run `aivyx-pa init` to re-verify the key against the provider)");
         true
     } else {
         fail(
             "no API key configured for this provider",
-            "Run `aivyx init` to set one, or switch to a local model with `[agent] provider = \"ollama\"`.",
+            "Run `aivyx-pa init` to set one, or switch to a local model with `[agent] provider = \"ollama\"`.",
         );
         false
     }
@@ -335,7 +335,7 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
         } else {
             println!(
                 "  semantic memory is off (no [embedding] provider)\n     → run \
-                 `aivyx init`, or add an [embedding] section (a local Ollama running \
+                 `aivyx-pa init`, or add an [embedding] section (a local Ollama running \
                  {model}, or OpenAI) to enable recall.",
                 model = crate::init::RECOMMENDED_EMBED_MODEL
             );
@@ -397,11 +397,11 @@ fn is_local_base_url(url: &str) -> bool {
         || url.contains(":11434")
 }
 
-/// `~/.aivyx/tool-processes/kitchen/config.toml` — the kitchen vertical's
+/// `~/.aivyx-pa/tool-processes/kitchen/config.toml` — the kitchen vertical's
 /// presence marker. `Some(path)` iff the file exists (the vertical is installed).
 fn kitchen_config_path(home: &Path) -> Option<PathBuf> {
     let p = home
-        .join(".aivyx")
+        .join(".aivyx-pa")
         .join("tool-processes")
         .join("kitchen")
         .join("config.toml");
@@ -443,8 +443,8 @@ async fn check_kitchen(home: &Path) -> bool {
                     pass("[[tool_process]] kitchen is wired");
                 } else {
                     fail(
-                        "the kitchen tool process isn't wired in aivyx.toml",
-                        "Run `aivyx connect kitchen` to wire it.",
+                        "the kitchen tool process isn't wired in aivyx-pa.toml",
+                        "Run `aivyx-pa connect kitchen` to wire it.",
                     );
                     ok = false;
                 }
@@ -453,15 +453,15 @@ async fn check_kitchen(home: &Path) -> bool {
             None => {
                 fail(
                     &format!("could not parse {}", toml_path.display()),
-                    "Fix the TOML, then re-run `aivyx doctor`.",
+                    "Fix the TOML, then re-run `aivyx-pa doctor`.",
                 );
                 ok = false;
             }
         },
         None => {
             fail(
-                "no aivyx.toml found to wire the kitchen tool process into",
-                "Run `aivyx connect kitchen` from your config directory.",
+                "no aivyx-pa.toml found to wire the kitchen tool process into",
+                "Run `aivyx-pa connect kitchen` from your config directory.",
             );
             ok = false;
         }
@@ -481,7 +481,7 @@ async fn check_kitchen(home: &Path) -> bool {
 }
 
 /// Check `[team] config_path` is set to a pack file that loads as a valid
-/// `TeamConfig` (resolved against the `aivyx.toml` directory).
+/// `TeamConfig` (resolved against the `aivyx-pa.toml` directory).
 fn check_team_pack(doc: &toml_edit::DocumentMut, toml_path: &Path) -> bool {
     let Some(rel) = doc
         .get("team")
@@ -492,7 +492,7 @@ fn check_team_pack(doc: &toml_edit::DocumentMut, toml_path: &Path) -> bool {
     else {
         fail(
             "no [team] config_path — the kitchen brigade won't auto-load",
-            "Run `aivyx connect kitchen` (it plants kitchen-boh.toml and sets the pointer).",
+            "Run `aivyx-pa connect kitchen` (it plants kitchen-boh.toml and sets the pointer).",
         );
         return false;
     };
@@ -632,11 +632,11 @@ mod tests {
     fn check_team_pack_flags_missing_and_unloadable() {
         // No [team] config_path → fail.
         let doc: toml_edit::DocumentMut = "".parse().unwrap();
-        assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx.toml")));
+        assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx-pa.toml")));
         // Set but pointing at a nonexistent file → fail.
         let doc: toml_edit::DocumentMut = "[team]\nconfig_path = \"no-such-pack.toml\"\n"
             .parse()
             .unwrap();
-        assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx.toml")));
+        assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx-pa.toml")));
     }
 }

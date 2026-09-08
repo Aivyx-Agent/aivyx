@@ -230,7 +230,7 @@ pub async fn consolidate_corrections(
             }
             Err(e) => {
                 eprintln!(
-                    "aivyx correction-consolidation: \
+                    "aivyx-pa correction-consolidation: \
                      append_pending failed for {pid}: {e}",
                 );
             }

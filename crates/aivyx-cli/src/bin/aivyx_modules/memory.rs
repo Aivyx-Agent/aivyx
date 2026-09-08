@@ -1,4 +1,4 @@
-//! `aivyx memory` CLI — Phase 74.
+//! `aivyx-pa memory` CLI — Phase 74.
 //!
 //! Terminal parity with the Web UI Memory pane. IPC-backed
 //! (the substrate lives in encrypted storage; the daemon's
@@ -19,7 +19,7 @@ use aivyx_channel::daemon_ipc::{MemoryEntrySummary, default_socket_path};
 use aivyx_channel::knowledge_graph::{GraphEntity, GraphTriple};
 use aivyx_channel::knowledge_wiki::{WikiPage, WikiPageSummary};
 
-/// `aivyx memory list`
+/// `aivyx-pa memory list`
 pub async fn run_memory_list() -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -30,7 +30,7 @@ pub async fn run_memory_list() -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx memory show <topic> [--limit N]`
+/// `aivyx-pa memory show <topic> [--limit N]`
 pub async fn run_memory_show(topic: &str, limit: u32) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -41,7 +41,7 @@ pub async fn run_memory_show(topic: &str, limit: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx memory search <query> [--semantic] [--limit N]`
+/// `aivyx-pa memory search <query> [--semantic] [--limit N]`
 pub async fn run_memory_search(query: &str, limit: u32, semantic: bool) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -55,7 +55,7 @@ pub async fn run_memory_search(query: &str, limit: u32, semantic: bool) -> Resul
     };
     if semantic && fell_back {
         eprintln!(
-            "aivyx memory search: semantic unavailable \
+            "aivyx-pa memory search: semantic unavailable \
              (no [embedding] config, provider error, or empty \
              vector index) — showing keyword results"
         );
@@ -64,7 +64,7 @@ pub async fn run_memory_search(query: &str, limit: u32, semantic: bool) -> Resul
     Ok(())
 }
 
-/// `aivyx memory evict <topic> [--yes]`
+/// `aivyx-pa memory evict <topic> [--yes]`
 pub async fn run_memory_evict(topic: &str, yes: bool) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -80,18 +80,18 @@ pub async fn run_memory_evict(topic: &str, yes: bool) -> Result<(), String> {
             .map_err(|e| format!("failed to read confirmation: {e}"))?;
         let answer = line.trim().to_lowercase();
         if answer != "y" && answer != "yes" {
-            eprintln!("aivyx memory evict: aborted (no confirmation)");
+            eprintln!("aivyx-pa memory evict: aborted (no confirmation)");
             return Ok(());
         }
     }
     let deleted = evict_memory_topic(&socket_path, topic)
         .await
         .map_err(|e| format!("evict failed: {e}"))?;
-    eprintln!("aivyx memory evict: ok — deleted {deleted} entries from `{topic}`");
+    eprintln!("aivyx-pa memory evict: ok — deleted {deleted} entries from `{topic}`");
     Ok(())
 }
 
-/// `aivyx memory wiki [topic]` — list synthesized knowledge-wiki pages, or show
+/// `aivyx-pa memory wiki [topic]` — list synthesized knowledge-wiki pages, or show
 /// one topic's consolidated page (summary + backlinks). CLI parity with the
 /// Studio Wiki screen.
 pub async fn run_memory_wiki(topic: Option<String>) -> Result<(), String> {
@@ -114,7 +114,7 @@ pub async fn run_memory_wiki(topic: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx memory graph [entity]` — show the typed knowledge graph (entity →
+/// `aivyx-pa memory graph [entity]` — show the typed knowledge graph (entity →
 /// predicate → entity), optionally filtered to triples touching `entity`.
 pub async fn run_memory_graph(entity: Option<String>) -> Result<(), String> {
     let socket_path = default_socket_path()?;
@@ -126,7 +126,7 @@ pub async fn run_memory_graph(entity: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx memory conflicts` — run the on-demand contradiction pass.
+/// `aivyx-pa memory conflicts` — run the on-demand contradiction pass.
 pub async fn run_memory_conflicts() -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -137,7 +137,7 @@ pub async fn run_memory_conflicts() -> Result<(), String> {
     Ok(())
 }
 
-/// `aivyx memory resolve <topic> --archive <seq>`
+/// `aivyx-pa memory resolve <topic> --archive <seq>`
 pub async fn run_memory_resolve(topic: &str, archive_seq: u64) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -155,7 +155,7 @@ pub async fn run_memory_resolve(topic: &str, archive_seq: u64) -> Result<(), Str
     Ok(())
 }
 
-/// `aivyx memory dismiss <id>` — mark a detected conflict a false positive.
+/// `aivyx-pa memory dismiss <id>` — mark a detected conflict a false positive.
 pub async fn run_memory_dismiss(id: &str) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -171,8 +171,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx memory: no daemon running on socket {} — \
-         start the daemon first with `aivyx daemon run`",
+        "aivyx-pa memory: no daemon running on socket {} — \
+         start the daemon first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }
@@ -223,15 +223,15 @@ fn render_conflicts(conflicts: &[MemoryConflict]) -> String {
         // keep-b archives side a; keep-a archives side b (each under its
         // own topic — matters for cross-topic conflicts).
         out.push_str(&format!(
-            "  keep b: aivyx memory resolve {} --archive {}\n",
+            "  keep b: aivyx-pa memory resolve {} --archive {}\n",
             c.a.topic, c.a.seq,
         ));
         out.push_str(&format!(
-            "  keep a: aivyx memory resolve {} --archive {}\n",
+            "  keep a: aivyx-pa memory resolve {} --archive {}\n",
             c.b.topic, c.b.seq,
         ));
         out.push_str(&format!(
-            "  keep both (not a conflict): aivyx memory dismiss {}\n\n",
+            "  keep both (not a conflict): aivyx-pa memory dismiss {}\n\n",
             c.id,
         ));
     }
@@ -262,7 +262,7 @@ fn render_wiki_list(pages: &[WikiPageSummary]) -> String {
         ));
     }
     out.push_str(&format!(
-        "\n({} page(s)) — `aivyx memory wiki <topic>` for the full page\n",
+        "\n({} page(s)) — `aivyx-pa memory wiki <topic>` for the full page\n",
         pages.len()
     ));
     out
@@ -417,11 +417,11 @@ mod tests {
         assert!(s.contains("Perth"));
         assert!(s.contains("Sydney"));
         // keep-b archives the older (seq 3); keep-a archives the newer (seq 7).
-        assert!(s.contains("keep b: aivyx memory resolve operator-note --archive 3"));
-        assert!(s.contains("keep a: aivyx memory resolve operator-note --archive 7"));
+        assert!(s.contains("keep b: aivyx-pa memory resolve operator-note --archive 3"));
+        assert!(s.contains("keep a: aivyx-pa memory resolve operator-note --archive 7"));
         // The conflict id + a dismiss command are shown for false positives.
         assert!(s.contains(&format!("[{}]", c.id)), "id shown: {s}");
-        assert!(s.contains(&format!("aivyx memory dismiss {}", c.id)));
+        assert!(s.contains(&format!("aivyx-pa memory dismiss {}", c.id)));
         assert!(s.contains("(1 conflict(s))"));
     }
 
@@ -448,8 +448,8 @@ mod tests {
         // Cross-topic scope header names both.
         assert!(s.contains("home-airport ✕ operator-notes"), "{s}");
         // Each resolve command targets the right topic.
-        assert!(s.contains("keep b: aivyx memory resolve home-airport --archive 2"));
-        assert!(s.contains("keep a: aivyx memory resolve operator-notes --archive 5"));
+        assert!(s.contains("keep b: aivyx-pa memory resolve home-airport --archive 2"));
+        assert!(s.contains("keep a: aivyx-pa memory resolve operator-notes --archive 5"));
     }
 
     #[test]

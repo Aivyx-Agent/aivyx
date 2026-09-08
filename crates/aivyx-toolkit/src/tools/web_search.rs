@@ -2,7 +2,7 @@
 //!
 //! Phase 125 Task 3. First tool in the Chapter G #1 bundle.
 //! Operator provides a Brave API key in
-//! `~/.aivyx/tool-processes/toolkit/config.toml`; the tool
+//! `~/.aivyx-pa/tool-processes/toolkit/config.toml`; the tool
 //! issues a single GET to Brave's web-search endpoint and
 //! returns a snake-cased trimmed result list.
 //!

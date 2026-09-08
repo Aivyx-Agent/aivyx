@@ -1,4 +1,4 @@
-//! `aivyx pack` — Chapter Freight (FR.2): the operator/publisher CLI
+//! `aivyx-pa pack` — Chapter Freight (FR.2): the operator/publisher CLI
 //! over the `aivyx-pack` bundle format.
 //!
 //! - `keygen <keyfile>` — publisher-side keypair (secret 0600; prints
@@ -10,7 +10,7 @@
 //! - `inspect <file>` — verify against the trusted set + print the
 //!   manifest (`--allow-untrusted` prints anyway, loudly).
 //! - `install <file>` — verify → host-target + min-daemon checks →
-//!   unpack to `~/.aivyx/packs/<name>/<version>/` → wire the config the
+//!   unpack to `~/.aivyx-pa/packs/<name>/<version>/` → wire the config the
 //!   Mise way (`[[tool_process]]` entries; `[team] config_path` only if
 //!   absent).
 //!
@@ -29,7 +29,7 @@ use super::connect::{append_tool_process, find_aivyx_toml, tool_process_present}
 use super::connect_kitchen::set_team_config_path_if_absent;
 use crate::PackSubcommand;
 
-/// Entry point for `aivyx pack <subcommand>`.
+/// Entry point for `aivyx-pa pack <subcommand>`.
 pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
     match sub {
         PackSubcommand::Keygen { keyfile } => {
@@ -100,7 +100,7 @@ fn install(file: &Path) -> Result<(), String> {
 
     // Unpack to the versioned install dir.
     let install_dir = home
-        .join(".aivyx/packs")
+        .join(".aivyx-pa/packs")
         .join(&manifest.name)
         .join(&manifest.version);
     std::fs::create_dir_all(&install_dir)
@@ -110,7 +110,7 @@ fn install(file: &Path) -> Result<(), String> {
 
     // Wire the config the Mise way.
     let toml_path = find_aivyx_toml(&home)
-        .ok_or_else(|| "no aivyx.toml found (cwd or home) — run `aivyx init` first".to_string())?;
+        .ok_or_else(|| "no aivyx-pa.toml found (cwd or home) — run `aivyx-pa init` first".to_string())?;
     let text = std::fs::read_to_string(&toml_path)
         .map_err(|e| format!("read {}: {e}", toml_path.display()))?;
     let mut doc: toml_edit::DocumentMut = text
@@ -190,7 +190,7 @@ fn set_last_tool_process_args(doc: &mut toml_edit::DocumentMut, args: &[String])
 fn trusted_publishers() -> Result<Vec<String>, String> {
     let home = dirs_home()?;
     let toml_path = find_aivyx_toml(&home)
-        .ok_or_else(|| "no aivyx.toml found (cwd or home) — run `aivyx init` first".to_string())?;
+        .ok_or_else(|| "no aivyx-pa.toml found (cwd or home) — run `aivyx-pa init` first".to_string())?;
     let opts = LoadOptions {
         toml_path: Some(toml_path.clone()),
         require_api_key: false,

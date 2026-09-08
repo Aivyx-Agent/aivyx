@@ -16,7 +16,7 @@
 //!
 //! `frankenstein` is a deliberately-thin wrapper around the Bot API
 //! (just serde types + an `AsyncTelegramApi` trait) rather than a
-//! framework like `teloxide`. We want that thinness: **aivyx's turn
+//! framework like `teloxide`. We want that thinness: **aivyx-pa's turn
 //! loop is already the dispatcher**, and a framework that owns its
 //! own event loop would fight the agent's control flow. Frankenstein
 //! exposes `get_updates` and `send_message` as plain async calls, and

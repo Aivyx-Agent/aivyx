@@ -343,7 +343,7 @@ impl SystemPromptRefiner for PersonaContextRefiner {
         // visible convention as recall / GC / backfill. The
         // structured Phase 78-surface extension is Task 6.
         eprintln!(
-            "aivyx persona: injected {}/{} facets",
+            "aivyx-pa persona: injected {}/{} facets",
             kept.len(),
             facets.len()
         );

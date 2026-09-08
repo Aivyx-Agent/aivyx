@@ -178,7 +178,7 @@ pub async fn propose_specialized_skills(
     let pages = match wiki_store.all_pages().await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("aivyx skill-authoring: wiki all_pages failed: {e}");
+            eprintln!("aivyx-pa skill-authoring: wiki all_pages failed: {e}");
             return stat;
         }
     };
@@ -324,7 +324,7 @@ pub async fn propose_specialized_skills(
             .append_pending(proposal_id, now_ms, source_label.to_string(), op)
             .await
         {
-            eprintln!("aivyx skill-authoring: append failed for {}: {e}", page.topic);
+            eprintln!("aivyx-pa skill-authoring: append failed for {}: {e}", page.topic);
             continue;
         }
         stat.filed += 1;

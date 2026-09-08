@@ -837,7 +837,7 @@ pub async fn run_reflection_scheduler(
                 .unwrap_or(boot_anchor);
             let Some(next_fire) = next_fire_after(&sched.cron, anchor) else {
                 eprintln!(
-                    "aivyx reflection: schedule {:?} produced no next fire — \
+                    "aivyx-pa reflection: schedule {:?} produced no next fire — \
                      cron pattern may be unreachable",
                     sched.name,
                 );
@@ -865,7 +865,7 @@ pub async fn run_reflection_scheduler(
                         last_fired_audit_len.get(&sched.name)
                     {
                         eprintln!(
-                            "aivyx reflection: schedule {:?} — \
+                            "aivyx-pa reflection: schedule {:?} — \
                              skipped (audit-growth {} \
                              below threshold {})",
                             sched.name,
@@ -956,14 +956,14 @@ async fn fire_reflection(
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "aivyx reflection: schedule {:?} failed to summarize outcomes: {e}",
+                "aivyx-pa reflection: schedule {:?} failed to summarize outcomes: {e}",
                 sched.name,
             );
             return;
         }
     };
     eprintln!(
-        "aivyx reflection: schedule {:?} firing — {} outcome summaries in \
+        "aivyx-pa reflection: schedule {:?} firing — {} outcome summaries in \
          the {}s lookback",
         sched.name,
         summaries.len(),
@@ -1104,7 +1104,7 @@ async fn run_recall_feedback_pass(
                     )
                     .await;
                 eprintln!(
-                    "aivyx recall-feedback: schedule {:?} — {} entr{} \
+                    "aivyx-pa recall-feedback: schedule {:?} — {} entr{} \
                      scored, {promoted} promoted, {filed} proposal(s) \
                      filed",
                     sched.name,
@@ -1135,7 +1135,7 @@ async fn run_recall_feedback_pass(
                         .await
                     {
                         eprintln!(
-                            "aivyx helpfulness-ledger: schedule \
+                            "aivyx-pa helpfulness-ledger: schedule \
                              {:?} fold error: {e}",
                             sched.name,
                         );
@@ -1145,7 +1145,7 @@ async fn run_recall_feedback_pass(
                             .await
                             .unwrap_or(0);
                         eprintln!(
-                            "aivyx helpfulness-ledger: folded \
+                            "aivyx-pa helpfulness-ledger: folded \
                              {folded} topic(s), pruned {pruned}",
                         );
                     }
@@ -1247,7 +1247,7 @@ async fn run_recall_feedback_pass(
                             .await
                         {
                             eprintln!(
-                                "aivyx cooccurrence: schedule \
+                                "aivyx-pa cooccurrence: schedule \
                                  {:?} fold error: {e}",
                                 sched.name,
                             );
@@ -1257,7 +1257,7 @@ async fn run_recall_feedback_pass(
                                 .await
                                 .unwrap_or(0);
                             eprintln!(
-                                "aivyx cooccurrence: folded \
+                                "aivyx-pa cooccurrence: folded \
                                  {folded} pair(s), pruned \
                                  {pruned}",
                             );
@@ -1293,7 +1293,7 @@ async fn run_recall_feedback_pass(
                                 )
                                 .await;
                             eprintln!(
-                                "aivyx correction-judgment: schedule \
+                                "aivyx-pa correction-judgment: schedule \
                                  {:?} — judged {} (rework {}, praise \
                                  {}, unrelated {}, structural {})",
                                 sched.name,
@@ -1327,7 +1327,7 @@ async fn run_recall_feedback_pass(
                             .await
                         {
                             eprintln!(
-                                "aivyx correction-ledger: schedule \
+                                "aivyx-pa correction-ledger: schedule \
                                  {:?} fold error: {e}",
                                 sched.name,
                             );
@@ -1337,7 +1337,7 @@ async fn run_recall_feedback_pass(
                                 .await
                                 .unwrap_or(0);
                             eprintln!(
-                                "aivyx correction-ledger: folded \
+                                "aivyx-pa correction-ledger: folded \
                                  {folded} topic(s), pruned {pruned}",
                             );
                         }
@@ -1348,7 +1348,7 @@ async fn run_recall_feedback_pass(
         Ok(_) => {}
         Err(e) => {
             eprintln!(
-                "aivyx recall-feedback: schedule {:?} recall-log read \
+                "aivyx-pa recall-feedback: schedule {:?} recall-log read \
                  error: {e}",
                 sched.name,
             );
@@ -1380,14 +1380,14 @@ async fn run_recall_feedback_pass(
                     ledger.record_window(&counts, now_secs).await
                 {
                     eprintln!(
-                        "aivyx correction-signal: schedule {:?} tool \
+                        "aivyx-pa correction-signal: schedule {:?} tool \
                          fold error: {e}",
                         sched.name,
                     );
                 } else {
                     let _ = ledger.prune(now_secs).await;
                     eprintln!(
-                        "aivyx correction-signal: schedule {:?} — \
+                        "aivyx-pa correction-signal: schedule {:?} — \
                          attributed {n} tool key(s)",
                         sched.name,
                     );
@@ -1401,14 +1401,14 @@ async fn run_recall_feedback_pass(
     match deps.recall_log.gc_older_than(cutoff).await {
         Ok(n) if n > 0 => {
             eprintln!(
-                "aivyx recall-feedback: gc clamped {n} old recall \
+                "aivyx-pa recall-feedback: gc clamped {n} old recall \
                  event(s)"
             );
         }
         Ok(_) => {}
         Err(e) => {
             eprintln!(
-                "aivyx recall-feedback: recall-log gc error: {e}"
+                "aivyx-pa recall-feedback: recall-log gc error: {e}"
             );
         }
     }
@@ -1444,7 +1444,7 @@ async fn run_proactive_pass(
         }
         Err(e) => {
             eprintln!(
-                "aivyx proactive: schedule {:?} memory scan \
+                "aivyx-pa proactive: schedule {:?} memory scan \
                  error: {e}",
                 sched.name,
             );
@@ -1518,7 +1518,7 @@ async fn run_proactive_pass(
             capped += 1;
             continue;
         }
-        let subject = format!("Aivyx — proactive ({:?})", item.kind);
+        let subject = format!("Aivyx PA — proactive ({:?})", item.kind);
         let body = format!("{}\n\n(why: {})", item.summary, item.reason);
         match deps
             .notify
@@ -1543,7 +1543,7 @@ async fn run_proactive_pass(
             }
             Err(e) => {
                 eprintln!(
-                    "aivyx proactive: dispatch to {:?} failed: {e}",
+                    "aivyx-pa proactive: dispatch to {:?} failed: {e}",
                     deps.config.target,
                 );
             }
@@ -1552,7 +1552,7 @@ async fn run_proactive_pass(
 
     if surfaced > 0 || deduped > 0 || capped > 0 {
         eprintln!(
-            "aivyx proactive: schedule {:?} — surfaced {surfaced} \
+            "aivyx-pa proactive: schedule {:?} — surfaced {surfaced} \
              (deduped {deduped}, capped {capped})",
             sched.name,
         );
@@ -1573,7 +1573,7 @@ async fn run_proactive_pass(
     if let Ok(n) = deps.proactive_log.gc_older_than(cutoff).await {
         if n > 0 {
             eprintln!(
-                "aivyx proactive: gc clamped {n} old dedup row(s)"
+                "aivyx-pa proactive: gc clamped {n} old dedup row(s)"
             );
         }
     }
@@ -1768,7 +1768,7 @@ async fn run_persona_lifecycle_pass(
                 }
                 Err(e) => {
                     eprintln!(
-                        "aivyx persona-lifecycle: schedule \
+                        "aivyx-pa persona-lifecycle: schedule \
                          {:?} append_pending failed: {e}",
                         sched.name,
                     );
@@ -1779,7 +1779,7 @@ async fn run_persona_lifecycle_pass(
 
     if proposed > 0 || deduped > 0 {
         eprintln!(
-            "aivyx persona-lifecycle: schedule {:?} — \
+            "aivyx-pa persona-lifecycle: schedule {:?} — \
              proposed {proposed} (deduped {deduped})",
             sched.name,
         );
@@ -1837,7 +1837,7 @@ async fn run_skill_retrofold_pass(
         Ok(e) => e,
         Err(e) => {
             eprintln!(
-                "aivyx skill-effectiveness: retro-fold audit read \
+                "aivyx-pa skill-effectiveness: retro-fold audit read \
                  failed for schedule {:?}: {e}",
                 sched.name,
             );
@@ -1859,7 +1859,7 @@ async fn run_skill_retrofold_pass(
     }
     if n > 0 {
         eprintln!(
-            "aivyx skill-effectiveness: retro-folded {n} corrected \
+            "aivyx-pa skill-effectiveness: retro-folded {n} corrected \
              skill turn(s) for schedule {:?}",
             sched.name,
         );
@@ -1895,7 +1895,7 @@ async fn run_skill_refinement_pass(
     .await;
     if stat.filed > 0 {
         eprintln!(
-            "aivyx skill-refinement: filed {} refinement proposal(s) \
+            "aivyx-pa skill-refinement: filed {} refinement proposal(s) \
              ({} considered) for schedule {:?}",
             stat.filed, stat.considered, sched.name,
         );
@@ -1931,7 +1931,7 @@ async fn run_skill_authoring_pass(
     .await;
     if stat.filed > 0 {
         eprintln!(
-            "aivyx skill-authoring: filed {} specialized-skill proposal(s) \
+            "aivyx-pa skill-authoring: filed {} specialized-skill proposal(s) \
              ({} considered) for schedule {:?}",
             stat.filed, stat.considered, sched.name,
         );
@@ -2045,7 +2045,7 @@ async fn run_persona_consolidation_pass(
     let llm_note =
         if stat.llm_unavailable { " (LLM unavailable)" } else { "" };
     eprintln!(
-        "aivyx persona-consolidation: schedule {:?} — \
+        "aivyx-pa persona-consolidation: schedule {:?} — \
          filed {}{super_note}{llm_note}",
         sched.name, stat.filed,
     );
@@ -2104,7 +2104,7 @@ async fn run_correction_consolidation_pass(
     let llm_note =
         if stat.llm_unavailable { " (LLM unavailable)" } else { "" };
     eprintln!(
-        "aivyx correction-consolidation: schedule {:?} — \
+        "aivyx-pa correction-consolidation: schedule {:?} — \
          filed {}{llm_note}",
         sched.name, stat.filed,
     );
@@ -2233,7 +2233,7 @@ async fn file_supersession(
         .await
     {
         eprintln!(
-            "aivyx persona-consolidation: append_pending \
+            "aivyx-pa persona-consolidation: append_pending \
              failed for new (AppendList) supersession half \
              {}: {e}",
             cand.new_proposal_id,
@@ -2278,7 +2278,7 @@ async fn file_supersession(
         // The new facet is already filed (one-way linkage).
         // Log and continue — the operator can still review.
         eprintln!(
-            "aivyx persona-consolidation: append_pending \
+            "aivyx-pa persona-consolidation: append_pending \
              failed for old (RemoveList) supersession half \
              {}: {e}",
             remove_id,
@@ -2459,7 +2459,7 @@ async fn run_recall_judgment_pass(
             deps.recall_log.update_event(key, event).await
         {
             eprintln!(
-                "aivyx recall-judgment: schedule {:?} \
+                "aivyx-pa recall-judgment: schedule {:?} \
                  update_event failed for row {}: {e}",
                 sched.name, row_i,
             );
@@ -2472,7 +2472,7 @@ async fn run_recall_judgment_pass(
         ""
     };
     eprintln!(
-        "aivyx recall-judgment: schedule {:?} — judged {} \
+        "aivyx-pa recall-judgment: schedule {:?} — judged {} \
          (used={}, irrelevant={}, hurt={}, skipped={}){note}",
         sched.name, judged, used, irrelevant, hurt, skipped,
     );

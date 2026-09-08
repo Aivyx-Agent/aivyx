@@ -1,8 +1,8 @@
-//! `aivyx init` — interactive first-run setup wizard (Phase 44).
+//! `aivyx-pa init` — interactive first-run setup wizard (Phase 44).
 //!
 //! Detects whether Ollama is running locally and defaults to it,
 //! walks the user through provider and model selection, and writes
-//! a ready-to-use `aivyx.toml` config file.
+//! a ready-to-use `aivyx-pa.toml` config file.
 
 use std::io::{self, BufRead, IsTerminal, Write as IoWrite};
 use std::path::Path;
@@ -18,7 +18,7 @@ use aivyx_llm::verify::{VerifyError, VerifyProvider, verify_provider_credentials
 use aivyx_channel::profile_draft::{DraftedProfile, IdentityAnswers, draft_identity};
 
 /// Default config file name (matches `aivyx-config` convention).
-const CONFIG_FILE: &str = "aivyx.toml";
+const CONFIG_FILE: &str = "aivyx-pa.toml";
 
 /// Default Anthropic model id presented to the operator on the
 /// model-name prompt. Phase 104 refresh: was
@@ -477,7 +477,7 @@ async fn collect_and_verify_cloud(
     if prompt_yes_no("Write the config anyway?", false, reader, writer)? {
         Ok((model, Some(key)))
     } else {
-        Err("provider verification failed; aivyx.toml not written".into())
+        Err("provider verification failed; aivyx-pa.toml not written".into())
     }
 }
 
@@ -545,7 +545,7 @@ fn decide_service_install(
 
 /// Whether to proceed writing a config that points at a storage path
 /// where a store already exists (e.g. from an earlier accidental bare
-/// `aivyx` run, or any prior install). Pure with respect to OS calls,
+/// `aivyx-pa` run, or any prior install). Pure with respect to OS calls,
 /// mirroring `decide_service_install`'s own testability shape — the
 /// caller does the actual `Path::exists()` check and only calls this
 /// when it's already true.
@@ -607,7 +607,7 @@ pub(crate) fn decide_unconfigured_first_run(
 /// -> Result<(), String>` signature matches this parameter directly.
 ///
 /// Never returns `Err` for an install failure -- by the time this runs,
-/// `aivyx.toml` is already written; a failed service install is a
+/// `aivyx-pa.toml` is already written; a failed service install is a
 /// separate, later concern, not a wizard failure. Only genuinely
 /// propagates `Err` if writing the prompt/output itself fails (matches
 /// `prompt_yes_no`'s own convention elsewhere in this file).
@@ -628,14 +628,14 @@ fn offer_service_install(
             writeln!(
                 writer,
                 "  (background service already installed — {status}; \
-                 `aivyx doctor` has details)"
+                 `aivyx-pa doctor` has details)"
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
         }
         ServiceInstallDecision::Declined => {
             writeln!(
                 writer,
-                "  aivyx daemon install       — run it as a background service (survives logout/reboot)"
+                "  aivyx-pa daemon install       — run it as a background service (survives logout/reboot)"
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
         }
@@ -643,14 +643,14 @@ fn offer_service_install(
             writeln!(
                 writer,
                 "  (next: the store passphrase the service will use — set \
-                 AIVYX_PASSPHRASE beforehand to skip the prompt)"
+                 AIVYX_PA_PASSPHRASE beforehand to skip the prompt)"
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
             match run_install(web_ui, true) {
                 Ok(()) => {
                     writeln!(
                         writer,
-                        "  Installed as a background service — `aivyx doctor` has details"
+                        "  Installed as a background service — `aivyx-pa doctor` has details"
                     )
                     .map_err(|write_err| format!("write error: {write_err}"))?;
                 }
@@ -658,7 +658,7 @@ fn offer_service_install(
                     writeln!(
                         writer,
                         "  Couldn't install as a background service: {e}\n  \
-                         (if this left a partial install behind, `aivyx daemon uninstall` \
+                         (if this left a partial install behind, `aivyx-pa daemon uninstall` \
                          cleans it up)"
                     )
                     .map_err(|write_err| format!("write error: {write_err}"))?;
@@ -712,7 +712,7 @@ impl PersonaSeedFields {
     }
 }
 
-/// Captures all wizard answers needed to render `aivyx.toml`.
+/// Captures all wizard answers needed to render `aivyx-pa.toml`.
 struct InitConfig {
     provider: Provider,
     model: String,
@@ -765,9 +765,9 @@ struct EmbeddingFields {
     api_key: Option<String>,
 }
 
-/// Render a ready-to-use `aivyx.toml` from the wizard answers.
+/// Render a ready-to-use `aivyx-pa.toml` from the wizard answers.
 fn render_toml(cfg: &InitConfig) -> String {
-    let mut out = String::from("# Generated by `aivyx init`\n\n");
+    let mut out = String::from("# Generated by `aivyx-pa init`\n\n");
 
     // [agent] section
     let provider_str = match cfg.provider {
@@ -926,7 +926,7 @@ fn render_web_search_section(cfg: &InitConfig) -> String {
     String::from(
         "\n[[mcp_server]]\n\
          name = \"web-search\"\n\
-         command = \"aivyx\"\n\
+         command = \"aivyx-pa\"\n\
          args = [\"mcp-server\", \"web-search\"]\n\
          bundled = true\n",
     )
@@ -1228,7 +1228,7 @@ async fn run_identity_builder(
     w(
         writer,
         "This is who you'll be working with. You can refine it \
-         any time later in aivyx.toml.",
+         any time later in aivyx-pa.toml.",
     )?;
 
     let assisted = provider.is_some()
@@ -1374,7 +1374,7 @@ fn manual_identity(
     )
     .map_err(|e| format!("write error: {e}"))?;
 
-    let name_default = defaults.assistant_name.as_deref().unwrap_or("Aivyx");
+    let name_default = defaults.assistant_name.as_deref().unwrap_or("Aivyx PA");
     let assistant_name = opt(prompt_line(
         &format!("  Name [{name_default}]: "),
         reader,
@@ -1456,7 +1456,7 @@ impl IdentityFields {
 /// first-person summary of the identity the operator just shaped,
 /// rendered before anything is written. Pure + unit-testable.
 fn render_identity_summary(f: &IdentityFields) -> String {
-    let name = f.assistant_name.as_deref().unwrap_or("Aivyx");
+    let name = f.assistant_name.as_deref().unwrap_or("Aivyx PA");
     let mut s = String::from("\n— Meet your assistant —\n\n");
     s.push_str(&format!("  I'm {name}.\n"));
     if let Some(who) = &f.operator_profile {
@@ -1566,15 +1566,15 @@ fn build_wizard_provider(
 /// sensible defaults matching `aivyx-config` resolution logic.
 fn default_paths() -> (String, String) {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let fs_root = format!("{home}/aivyx-sandbox");
+    let fs_root = format!("{home}/aivyx-pa-sandbox");
     // Mirror aivyx-config's own storage_path default resolution exactly
     // (crates/aivyx-config/src/lib.rs: XDG_DATA_HOME first, falling back
     // to $HOME/.local/share) -- Task 2's store-collision guard checks
     // this same path, so a divergence here would let it silently miss
     // an orphaned store that actually lives at the XDG path.
     let storage_path = match std::env::var("XDG_DATA_HOME") {
-        Ok(xdg) if !xdg.is_empty() => format!("{xdg}/aivyx/store.redb"),
-        _ => format!("{home}/.local/share/aivyx/store.redb"),
+        Ok(xdg) if !xdg.is_empty() => format!("{xdg}/aivyx-pa/store.redb"),
+        _ => format!("{home}/.local/share/aivyx-pa/store.redb"),
     };
     (fs_root, storage_path)
 }
@@ -1597,7 +1597,7 @@ fn write_config(path: &Path, contents: &str) -> Result<(), String> {
 
 /// Phase 66 — values extracted from a starter template that the
 /// wizard uses as prompt defaults AND as the splice-back base for
-/// the final `aivyx.toml`. Each `Option` field is `None` when
+/// the final `aivyx-pa.toml`. Each `Option` field is `None` when
 /// the corresponding TOML key wasn't present in the template —
 /// the wizard falls back to its existing hardcoded default in
 /// that case.
@@ -1784,7 +1784,7 @@ fn render_with_template(
     }
 
     let mut out = format!(
-        "# Generated by `aivyx init --template {template_name}`\n\
+        "# Generated by `aivyx-pa init --template {template_name}`\n\
          # Customize freely; the template's structure is preserved.\n\n",
     );
     out.push_str(&doc.to_string());
@@ -1833,7 +1833,7 @@ fn template_declares_web_search(doc: &toml_edit::DocumentMut) -> bool {
 /// the template's content (assistant_name, primary_use_case,
 /// communication_style, provider, model, fs root, storage path),
 /// then writes the operator-modified template content as the
-/// final `aivyx.toml` so the template's role declarations + MCP
+/// final `aivyx-pa.toml` so the template's role declarations + MCP
 /// servers + commented sections all survive. When `None`, the
 /// wizard runs the existing Phase 44 path with hardcoded defaults
 /// and the minimal `render_toml` output.
@@ -1898,7 +1898,7 @@ async fn collect_persona_seed(
                     .collect();
                 render_seed_summary(writer, &seed)?;
                 if prompt_yes_no(
-                    "  Use this? (you can refine it any time in aivyx.toml)",
+                    "  Use this? (you can refine it any time in aivyx-pa.toml)",
                     true,
                     reader,
                     writer,
@@ -2021,7 +2021,7 @@ pub async fn run_init_wizard(
 async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<(), String> {
     // 1. TTY check — bail if not interactive.
     if !io::stdin().is_terminal() {
-        return Err("`aivyx init` requires an interactive terminal".into());
+        return Err("`aivyx-pa init` requires an interactive terminal".into());
     }
 
     let stdin = io::stdin();
@@ -2270,9 +2270,9 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     };
 
     // Store-collision guard — closes the compounding half of the
-    // first-launch audit finding: writing a fresh aivyx.toml that
+    // first-launch audit finding: writing a fresh aivyx-pa.toml that
     // points at a storage path where a store already exists (e.g.
-    // from an earlier accidental bare `aivyx` run) would let a
+    // from an earlier accidental bare `aivyx-pa` run) would let a
     // different passphrase on first launch silently fail to decrypt
     // it later, with no indication why.
     if Path::new(&storage_path).exists() {
@@ -2365,7 +2365,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         eprintln!("\nRunning a quick health check…");
         if let Err(e) = crate::doctor::run_doctor().await {
             eprintln!("{e}");
-            eprintln!("(Run `aivyx doctor` again any time to re-check.)");
+            eprintln!("(Run `aivyx-pa doctor` again any time to re-check.)");
         }
     }
 
@@ -2380,7 +2380,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
              Permissions set to 0600 (owner-only)."
         );
     }
-    eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PASSPHRASE).");
+    eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PA_PASSPHRASE).");
     // Be transparent about the unattended routines we just wrote — surprise
     // autonomous activity erodes trust.
     if cfg.provider == Provider::Ollama {
@@ -2404,9 +2404,9 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     }
     let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
     eprintln!("\nNext steps:");
-    eprintln!("  aivyx                      — chat with your agent in the terminal");
+    eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
     eprintln!(
-        "  aivyx daemon run --web-ui  — run the daemon + open the Studio at \
+        "  aivyx-pa daemon run --web-ui  — run the daemon + open the Studio at \
          http://127.0.0.1:{web_ui_port}"
     );
     // Chapter Anchor — the runs-for-days path: a real service so the agent keeps
@@ -2431,7 +2431,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             crate::daemon_service::run_install,
         )?;
     }
-    eprintln!("  aivyx doctor               — re-check your setup any time");
+    eprintln!("  aivyx-pa doctor            — re-check your setup any time");
     if cfg.provider == Provider::Ollama {
         eprintln!(
             "\nOn a capable GPU (e.g. a 24GB card) you can run a bigger model with more \
@@ -2608,7 +2608,7 @@ mod tests {
     #[test]
     fn identity_summary_falls_back_to_default_name() {
         let s = render_identity_summary(&IdentityFields::default());
-        assert!(s.contains("I'm Aivyx."));
+        assert!(s.contains("I'm Aivyx PA."));
     }
 
     #[tokio::test]
@@ -3056,7 +3056,7 @@ mod tests {
         })
         .unwrap();
         let out = String::from_utf8(output).unwrap();
-        assert!(out.contains("aivyx daemon install"));
+        assert!(out.contains("aivyx-pa daemon install"));
         assert!(out.contains("survives logout/reboot"));
     }
 
@@ -3725,7 +3725,7 @@ mod tests {
         let toml = render_toml(&cfg);
         assert!(toml.contains("[[mcp_server]]"));
         assert!(toml.contains("name = \"web-search\""));
-        assert!(toml.contains("command = \"aivyx\""));
+        assert!(toml.contains("command = \"aivyx-pa\""));
         assert!(toml.contains("args = [\"mcp-server\", \"web-search\"]"));
         assert!(toml.contains("bundled = true"));
     }
@@ -3922,7 +3922,7 @@ mod tests {
              [embedding]\nbase_url = \"http://x\"\nmodel = \"custom-embed\"\ndimensions = 1024\n\
              [memory]\nprofile = \"lite\"\n\
              [persona_seed]\ncharacter_traits = [\"curated\"]\n\
-             [[mcp_server]]\nname = \"web-search\"\ncommand = \"aivyx\"\nargs = [\"mcp-server\", \"web-search\"]\n"
+             [[mcp_server]]\nname = \"web-search\"\ncommand = \"aivyx-pa\"\nargs = [\"mcp-server\", \"web-search\"]\n"
             .parse()
             .unwrap();
         let out = render_with_template(&cfg, "custom", doc);

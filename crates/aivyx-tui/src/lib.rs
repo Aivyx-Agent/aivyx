@@ -30,7 +30,7 @@
 //!   panic-safe raw-mode / alternate-screen restore. Operator-verified.
 //! - [`app`] — [`run`](app::run): the async event loop that connects
 //!   the daemon (auto-spawning if needed), reads keys, and performs
-//!   submit / cancel / gate-resolve round-trips. The `aivyx tui`
+//!   submit / cancel / gate-resolve round-trips. The `aivyx-pa tui`
 //!   command dispatches into it. Operator-verified.
 
 pub mod app;

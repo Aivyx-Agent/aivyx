@@ -185,7 +185,7 @@ pub async fn run_web_ui_server(
     // miss that the Studio (a powerful agent) is now reachable off-host.
     if !host.is_loopback() {
         eprintln!(
-            "aivyx web ui: WARNING — binding {host} (non-loopback). The Studio \
+            "aivyx-pa web ui: WARNING — binding {host} (non-loopback). The Studio \
              is exposed beyond this host. Put TLS in front, and set \
              `[daemon] web_ui_allowed_origins` for the hostnames you serve. See \
              docs/DOCKER.md. If a client can't connect even though this \
@@ -199,14 +199,14 @@ pub async fn run_web_ui_server(
         // may add auth), but make the exposure impossible to miss.
         if auth_token.is_none() {
             eprintln!(
-                "aivyx web ui: WARNING — no `[daemon] web_ui_auth_token` set \
+                "aivyx-pa web ui: WARNING — no `[daemon] web_ui_auth_token` set \
                  while bound off-host: ANYONE who can reach {addr} can drive \
                  the agent, read memory, and change config. Set a token."
             );
         }
     }
     if auth_token.is_some() {
-        eprintln!("aivyx web ui: auth token required for the control plane (/ws)");
+        eprintln!("aivyx-pa web ui: auth token required for the control plane (/ws)");
     }
     let listener = TcpListener::bind(addr)
         .await
@@ -215,7 +215,7 @@ pub async fn run_web_ui_server(
             source,
         })?;
 
-    eprintln!("aivyx web ui: listening on http://{addr}");
+    eprintln!("aivyx-pa web ui: listening on http://{addr}");
 
     let socket_path = Arc::new(socket_path);
 
@@ -225,7 +225,7 @@ pub async fn run_web_ui_server(
                 match result {
                     Ok(conn) => conn,
                     Err(e) => {
-                        eprintln!("aivyx web ui: accept error: {e}");
+                        eprintln!("aivyx-pa web ui: accept error: {e}");
                         continue;
                     }
                 }
@@ -254,7 +254,7 @@ pub async fn run_web_ui_server(
             )
             .await
             {
-                eprintln!("aivyx web ui: connection error: {e}");
+                eprintln!("aivyx-pa web ui: connection error: {e}");
             }
         });
     }
@@ -371,7 +371,7 @@ fn log_rejected_token_once(ip: std::net::IpAddr) {
         std::sync::OnceLock::new();
     let map = LAST_LOGGED.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     if should_log_rejected_token(map, ip, std::time::Instant::now()) {
-        eprintln!("aivyx web ui: rejected token from {ip}");
+        eprintln!("aivyx-pa web ui: rejected token from {ip}");
     }
 }
 
@@ -469,7 +469,7 @@ async fn handle_connection(
                     stream,
                     "401 Unauthorized",
                     "text/plain; charset=utf-8",
-                    "WWW-Authenticate: Basic realm=\"Aivyx Studio\"\r\n",
+                    "WWW-Authenticate: Basic realm=\"Aivyx PA Studio\"\r\n",
                     b"unauthorized: web UI auth token required",
                 )
                 .await;
@@ -923,7 +923,7 @@ async fn handle_websocket(
                             let json = match serde_json::to_string(&envelope) {
                                 Ok(j) => j,
                                 Err(e) => {
-                                    eprintln!("aivyx web ui: serialize error: {e}");
+                                    eprintln!("aivyx-pa web ui: serialize error: {e}");
                                     continue;
                                 }
                             };
@@ -938,7 +938,7 @@ async fn handle_websocket(
                         }
                         Err(FrameError::IncompleteBuf) => break,
                         Err(e) => {
-                            eprintln!("aivyx web ui: ipc decode error: {e}");
+                            eprintln!("aivyx-pa web ui: ipc decode error: {e}");
                             return;
                         }
                     }
@@ -976,7 +976,7 @@ async fn handle_websocket(
                 let frontend_msg: FrontendMessage = match serde_json::from_str(&text) {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("aivyx web ui: invalid WS message: {e}");
+                        eprintln!("aivyx-pa web ui: invalid WS message: {e}");
                         continue;
                     }
                 };
@@ -984,7 +984,7 @@ async fn handle_websocket(
                 let frame = match encode_frame(&frontend_msg) {
                     Ok(f) => f,
                     Err(e) => {
-                        eprintln!("aivyx web ui: encode error: {e}");
+                        eprintln!("aivyx-pa web ui: encode error: {e}");
                         continue;
                     }
                 };
@@ -1036,7 +1036,7 @@ async fn handle_websocket(
                 let json = match serde_json::to_string(&envelope) {
                     Ok(j) => j,
                     Err(e) => {
-                        eprintln!("aivyx web ui: broadcast serialize error: {e}");
+                        eprintln!("aivyx-pa web ui: broadcast serialize error: {e}");
                         continue;
                     }
                 };

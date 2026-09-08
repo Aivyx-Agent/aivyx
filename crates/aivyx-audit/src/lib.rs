@@ -185,7 +185,7 @@ pub enum AuditEvent {
     /// for the same call so the skill name lands in cleartext
     /// without exposing the rest of the tool input. Phase 116's
     /// `record_turn_outcomes` reads this variant to populate
-    /// per-skill ledger rows; the operator-side `aivyx audit
+    /// per-skill ledger rows; the operator-side `aivyx-pa audit
     /// export --event-type SkillInvocation` filter accepts the
     /// label.
     SkillInvocation {
@@ -289,7 +289,7 @@ pub enum AuditEvent {
     /// `PersonaProposalResolved` (which records the *approve*
     /// gesture that lands the chain entry); this event records
     /// the *act-on-approval* gesture that mutates
-    /// `aivyx.toml`'s `[profile]` section.
+    /// `aivyx-pa.toml`'s `[profile]` section.
     ///
     /// Forensic walks can answer "the operator approved this
     /// hint AND acted on it" definitively by pairing this
@@ -319,7 +319,7 @@ pub enum AuditEvent {
         /// `"behavioral_constraints"`).
         field: String,
         /// The value the operator approved + the apply wrote
-        /// into `aivyx.toml`. For scalar fields this is the
+        /// into `aivyx-pa.toml`. For scalar fields this is the
         /// new scalar value; for list fields this is the
         /// appended entry (apply does not delete; it adds).
         applied_value: String,
@@ -329,7 +329,7 @@ pub enum AuditEvent {
     /// `RoleDefinitionSuggestion` proposal. Mirrors
     /// `ProfileHintApplied` for the second Phase 118
     /// category; records the act-on-approval gesture that
-    /// adds a `[roles.<name>]` section to `aivyx.toml`.
+    /// adds a `[roles.<name>]` section to `aivyx-pa.toml`.
     RoleDraftImported {
         /// The session whose CLI invocation fired the import.
         session_id: SessionId,
@@ -378,7 +378,7 @@ pub enum AuditEvent {
 
     /// Chapter U — an operator changed a config section via the Settings IPC
     /// (`SetAccessLevel` / `SetBudget`) — the daemon's first config-**write**
-    /// path. The audit-chain record of a settings mutation: which `aivyx.toml`
+    /// path. The audit-chain record of a settings mutation: which `aivyx-pa.toml`
     /// section was rewritten and a human-readable summary of the new value(s).
     ///
     /// Self-contained per D4 (readable without joining siblings). The change is
@@ -387,7 +387,7 @@ pub enum AuditEvent {
     /// Every field is owned + `Eq` + `Serialize`, so the chain HMAC is computed
     /// over canonical JSON without surprises (the HeadlessRefusal precedent).
     ConfigChanged {
-        /// The `aivyx.toml` section rewritten: `"access"` or `"budget"`.
+        /// The `aivyx-pa.toml` section rewritten: `"access"` or `"budget"`.
         section: String,
         /// Human-readable summary of the new value(s), e.g.
         /// `"access level = home"` or
@@ -536,7 +536,7 @@ pub enum SkillAutoProposalOutcomeSummary {
     /// Judge fired and judged the candidate worth proposing,
     /// but confidence was below the auto-accept threshold.
     /// Landed in the proposal chain as Pending — the
-    /// operator will resolve via `aivyx persona proposals`.
+    /// operator will resolve via `aivyx-pa persona proposals`.
     Staged,
     /// Judge declared the candidate a semantic duplicate of an
     /// existing skill. Nothing written.
@@ -2139,7 +2139,7 @@ mod tests {
             session_id: SessionId::new(),
             proposal_id: "pp-x".into(),
             field: "assistant_name".into(),
-            applied_value: "Aivyx".into(),
+            applied_value: "Aivyx PA".into(),
         };
         let json = serde_json::to_value(&event).unwrap();
         // The `#[serde(tag = "kind")]` discriminator picks the
@@ -2147,7 +2147,7 @@ mod tests {
         // readable forensic walks rely on this.
         assert_eq!(json["kind"], "ProfileHintApplied");
         assert_eq!(json["field"], "assistant_name");
-        assert_eq!(json["applied_value"], "Aivyx");
+        assert_eq!(json["applied_value"], "Aivyx PA");
         assert_eq!(json["proposal_id"], "pp-x");
     }
 
@@ -2795,7 +2795,7 @@ mod tests {
         let event = AuditEvent::TeamMissionChannelDenied {
             platform: "telegram".to_string(),
             goal: "close the books".to_string(),
-            reason: "channel not authorized via team_run_channel in aivyx.toml".to_string(),
+            reason: "channel not authorized via team_run_channel in aivyx-pa.toml".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serialize");
         let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");

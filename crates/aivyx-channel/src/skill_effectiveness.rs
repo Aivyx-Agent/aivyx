@@ -140,7 +140,7 @@ pub async fn record_turn_skills(
     let folds: Vec<(String, f32)> =
         skills.into_iter().map(|s| (s, net)).collect();
     if let Err(e) = ledger.record_window(&folds, now_secs).await {
-        eprintln!("aivyx skill-effectiveness: record_window failed: {e}");
+        eprintln!("aivyx-pa skill-effectiveness: record_window failed: {e}");
     }
 }
 
@@ -215,7 +215,7 @@ pub async fn retrofold_corrected_skill_turns(
     let folds: Vec<(String, f32)> = folds.into_iter().collect();
     if let Err(e) = ledger.record_window(&folds, now_secs).await {
         eprintln!(
-            "aivyx skill-effectiveness: retro-fold record_window \
+            "aivyx-pa skill-effectiveness: retro-fold record_window \
              failed: {e}"
         );
         return 0;

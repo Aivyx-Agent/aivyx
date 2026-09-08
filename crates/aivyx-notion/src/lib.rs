@@ -2,7 +2,7 @@
 //!
 //! Notion third-party tool process for Aivyx. Chapter F #5
 //! — Phase 130. Ships as a separate binary the operator
-//! installs and wires into `aivyx.toml` via
+//! installs and wires into `aivyx-pa.toml` via
 //! `[[tool_process]]`. Per PRODUCT.md P10 (substrate is
 //! closed at thirteen tools forever; productivity APIs are
 //! third-party territory).
@@ -13,7 +13,7 @@
 //! the OAuth 2.0 flow Gmail / Calendar / Drive use. The
 //! operator creates an "internal integration" in Notion's
 //! Integrations dashboard, copies the generated token, and
-//! pastes it into `~/.aivyx/tool-processes/notion/config.toml`.
+//! pastes it into `~/.aivyx-pa/tool-processes/notion/config.toml`.
 //! No callback flow, no token refresh, no token storage on
 //! disk beyond the operator's config file. This crate
 //! therefore does NOT depend on `aivyx-google-oauth`.
@@ -78,13 +78,13 @@ pub const NOTION_VERSION: &str = "2022-06-28";
 pub const NOTION_API_BASE: &str = "https://api.notion.com/v1";
 
 /// Default config file path:
-/// `$HOME/.aivyx/tool-processes/notion/config.toml`.
+/// `$HOME/.aivyx-pa/tool-processes/notion/config.toml`.
 /// Returns `None` when `$HOME` is unset.
 pub fn default_config_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         std::path::PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("notion")
             .join("config.toml"),

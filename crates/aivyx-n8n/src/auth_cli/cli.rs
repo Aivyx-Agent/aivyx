@@ -30,7 +30,7 @@ SUBCOMMANDS:
 When run with no arguments, the binary enters IPC-loop mode.
 
 CONFIG FILE
-    Expected at ~/.aivyx/tool-processes/n8n/config.toml with:
+    Expected at ~/.aivyx-pa/tool-processes/n8n/config.toml with:
 
         n8n_base_url = \"https://n8n.example.com\"
         n8n_api_key = \"ntn_XXXX\"

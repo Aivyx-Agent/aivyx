@@ -14,7 +14,7 @@
 //!   opinion.
 //! - [`storage::default_token_path`] — gmail-specific token
 //!   file location resolution
-//!   (`~/.aivyx/tool-processes/gmail/tokens.json`).
+//!   (`~/.aivyx-pa/tool-processes/gmail/tokens.json`).
 //!
 //! See the Phase 129 entry doc for the lift rationale (Q2a
 //! Recommended; collapses three would-be in-tree copies of

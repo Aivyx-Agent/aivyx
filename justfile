@@ -22,7 +22,7 @@ build-web:
     # and embeds everything under dist/, so the .br files are dead weight.
     find crates/aivyx-web/dist -name '*.br' -delete
     @echo "bundle → crates/aivyx-web/dist/; rebuild the daemon to embed it:"
-    @echo "  cargo build -p aivyx-cli --bin aivyx --release"
+    @echo "  cargo build -p aivyx-cli --bin aivyx-pa --release"
 
 # Verify the web app compiles to wasm (the cheap guard CI runs; no dx needed).
 check-web:
@@ -50,7 +50,7 @@ pack-kitchen:
     cargo build --release -p aivyx-kitchen-toolkit
     mkdir -p .pack-dev
     if [ ! -f .pack-dev/dev-signing.key ]; then
-        cargo run --release -p aivyx-cli --bin aivyx -- pack keygen .pack-dev/dev-signing.key
+        cargo run --release -p aivyx-cli --bin aivyx-pa -- pack keygen .pack-dev/dev-signing.key
     fi
     stage=".pack-dev/stage-kitchen"
     rm -rf "$stage" && mkdir -p "$stage/bin" "$stage/config"
@@ -69,5 +69,5 @@ pack-kitchen:
     bin = "aivyx-kitchen-toolkit"
     MANIFEST
     out=".pack-dev/kitchen-$ver-$triple.aivyxpack"
-    target/release/aivyx pack build "$stage" --key .pack-dev/dev-signing.key --out "$out"
+    target/release/aivyx-pa pack build "$stage" --key .pack-dev/dev-signing.key --out "$out"
     echo "bundle: $out"

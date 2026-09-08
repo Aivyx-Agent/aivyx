@@ -36,7 +36,7 @@ pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
     aivyx_auth_cli::default_config_path(SERVICE_SUBDIR).ok_or_else(|| {
         ConfigFileError::Substrate(aivyx_auth_cli::ConfigFileError::NotFound {
             path: PathBuf::from(format!(
-                "~/.aivyx/tool-processes/{SERVICE_SUBDIR}/config.toml"
+                "~/.aivyx-pa/tool-processes/{SERVICE_SUBDIR}/config.toml"
             )),
         })
     })

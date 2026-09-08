@@ -425,7 +425,7 @@ struct SettingsState {
     snapshot: Option<SettingsSnapshot>,
     /// Last write outcome: `(ok, message)`. `None` until the first write.
     notice: Option<(bool, String)>,
-    /// True after a successful write — a write updates aivyx.toml but the
+    /// True after a successful write — a write updates aivyx-pa.toml but the
     /// running daemon won't pick it up until it restarts.
     restart_required: bool,
     /// POLISH_WAVES.md sub-project 7 plan 3 — `[memory] profile`.
@@ -493,7 +493,7 @@ struct AgentsState {
     deltas: Vec<PersonaDeltaSummary>,
     /// Last write/action outcome: `(ok, message)`. `None` until the first one.
     notice: Option<(bool, String)>,
-    /// True after a successful **Profile** write — `aivyx.toml` is updated but
+    /// True after a successful **Profile** write — `aivyx-pa.toml` is updated but
     /// the running daemon won't pick it up until restart (Profile is load-time).
     /// Persona actions are live (the daemon recomputes runtime state), so they
     /// never set this.
@@ -1160,7 +1160,7 @@ fn App() -> Element {
     };
 
     rsx! {
-        document::Title { "Aivyx Studio" }
+        document::Title { "Aivyx PA Studio" }
         document::Link { rel: "icon", href: FAVICON }
         document::Stylesheet { href: STITCH_CSS }
         style { {font_faces()} }
@@ -1185,7 +1185,7 @@ fn App() -> Element {
                         // daemon process, compared across reconnects — see
                         // `apply_server_info`'s own doc comment above)
                         // detects "the daemon restarted," not "a new bundle
-                        // shipped" — a plain `aivyx daemon stop && aivyx
+                        // shipped" — a plain `aivyx-pa daemon stop && aivyx-pa
                         // daemon run` with no code change still changes
                         // `boot_id`. The copy below says what's actually
                         // known, not what's merely likely.
@@ -1411,8 +1411,8 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
     rsx! {
         aside { class: "sidebar",
             div { class: "brand-lockup",
-                img { src: LOGOMARK, alt: "Aivyx" }
-                span { class: "wordmark", "AIVYX" }
+                img { src: LOGOMARK, alt: "Aivyx PA" }
+                span { class: "wordmark", "AIVYX PA" }
             }
             nav { "aria-label": "Primary",
                 for (header, items) in groups {
@@ -1610,7 +1610,7 @@ fn StatusBar(connected: bool, agent_name: String) -> Element {
                 if connected { "DAEMON · CONNECTED" } else { "DAEMON · OFFLINE" }
             }
             div { class: "seg seg-mid", "{agent}" }
-            div { class: "seg seg-ver", {format!("AIVYX · v{}", env!("CARGO_PKG_VERSION"))} }
+            div { class: "seg seg-ver", {format!("AIVYX PA · v{}", env!("CARGO_PKG_VERSION"))} }
         }
     }
 }
@@ -2338,7 +2338,7 @@ fn NotificationsPanel() -> Element {
                         div { class: "glass-card empty",
                             p { class: "label-tech",
                                 if state.targets.is_empty() {
-                                    "No notify targets configured yet — add a [[notify_target]] to aivyx.toml, or the Studio's own target arms automatically once one is running."
+                                    "No notify targets configured yet — add a [[notify_target]] to aivyx-pa.toml, or the Studio's own target arms automatically once one is running."
                                 } else {
                                     "No notifications dispatched yet."
                                 }
@@ -4313,7 +4313,7 @@ fn MemoryPanel() -> Element {
 
 /// POLISH_WAVES.md sub-project 5, item E — the currently-selected topic's
 /// open conflicts (if any), with resolve/dismiss actions matching the
-/// CLI's own `aivyx memory conflicts` semantics exactly: "keep this one"
+/// CLI's own `aivyx-pa memory conflicts` semantics exactly: "keep this one"
 /// deletes the OTHER side (`ResolveMemoryConflict` names the loser's own
 /// `topic`/`seq` as `archive_seq`); "not a conflict" dismisses the pair as
 /// a false positive without deleting anything.
@@ -4790,11 +4790,11 @@ fn SkillCard(view: SkillView) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// MCP screen — Chapter Lantern (LN.3). The web port of `aivyx mcp status`:
+// MCP screen — Chapter Lantern (LN.3). The web port of `aivyx-pa mcp status`:
 // each configured MCP server's last-start health (connected + tool count,
 // or failed + reason + captured stderr), read from the daemon's snapshot
 // over GetMcpStatus. Read-only — adding/removing servers stays in
-// aivyx.toml (the screen shows, it does not edit).
+// aivyx-pa.toml (the screen shows, it does not edit).
 // ---------------------------------------------------------------------------
 
 fn reminders_query() -> FrontendMessage {
@@ -5516,7 +5516,7 @@ fn GalleryPanel() -> Element {
             } else if !g.available {
                 div { class: "glass-card empty",
                     p { class: "label-tech",
-                        "No `comfyui` MCP server is configured. Add a `[[mcp_server]]` block named \"comfyui\" in aivyx.toml pointing at a running ComfyUI instance, then restart the daemon."
+                        "No `comfyui` MCP server is configured. Add a `[[mcp_server]]` block named \"comfyui\" in aivyx-pa.toml pointing at a running ComfyUI instance, then restart the daemon."
                     }
                 }
             } else if g.images.is_empty() {
@@ -5568,7 +5568,7 @@ fn GalleryPanel() -> Element {
 // tool the daemon has registered: name, description, capability base, and
 // the minimum trust tier a channel needs before the tool becomes reachable
 // at all (see `TrustTier::min_for_scope` in aivyx-capability). Distinct
-// from the MCP screen (server health) and from `aivyx tools` / GetToolStats
+// from the MCP screen (server health) and from `aivyx-pa tools` / GetToolStats
 // (audit-derived call counts) — this is a pure registry browse, grouped by
 // domain (the tool name's leading segment: `fs.read` → `fs`).
 // ---------------------------------------------------------------------------
@@ -6324,7 +6324,7 @@ fn SettingsPanel() -> Element {
                     strong { "Saved — restart the daemon to apply." }
                     p { class: "label-tech",
                         "Settings are read once at startup. Run  "
-                        code { "aivyx daemon stop && aivyx daemon run" }
+                        code { "aivyx-pa daemon stop && aivyx-pa daemon run" }
                     }
                 }
             }
@@ -6348,7 +6348,7 @@ fn SettingsPanel() -> Element {
                         class: "input",
                         value: "{level}",
                         onchange: move |e| level.set(e.value()),
-                        option { value: "sandbox", "sandbox — ~/aivyx-sandbox" }
+                        option { value: "sandbox", "sandbox — ~/aivyx-pa-sandbox" }
                         option { value: "workspace", "workspace — a chosen directory" }
                         option { value: "home", "home — your home directory" }
                         option { value: "full", "full — the whole machine" }
@@ -6408,7 +6408,7 @@ fn SettingsPanel() -> Element {
                 }
                 p { class: "label-tech sub",
                     "Per-domain overrides and the auto-approve allowlist are edited in "
-                    code { "aivyx.toml" }
+                    code { "aivyx-pa.toml" }
                     " for now. Takes effect on the next restart."
                 }
                 div { class: "actions",
@@ -6498,7 +6498,7 @@ fn SettingsPanel() -> Element {
                 }
             }
 
-            // ── Provider / model (read-only — change via `aivyx init`) ──
+            // ── Provider / model (read-only — change via `aivyx-pa init`) ──
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Model" } span { class: "chip", "read-only" } }
                 div { class: "kv-grid",
@@ -6513,7 +6513,7 @@ fn SettingsPanel() -> Element {
                         div { {if snap.embeddings_available { "available" } else { "off" }} }
                     }
                 }
-                p { class: "label-tech sub", "Change the provider, model, or keys with  " code { "aivyx init" } }
+                p { class: "label-tech sub", "Change the provider, model, or keys with  " code { "aivyx-pa init" } }
             }
 
             if let Some(cfg) = settings().memory_profile.clone() {
@@ -6757,7 +6757,7 @@ fn VoicePanel() -> Element {
                     strong { "Saved — restart voice to apply." }
                     p { class: "label-tech",
                         "[voice] is read when the voice channel starts. Stop and re-run  "
-                        code { "aivyx --channel voice" }
+                        code { "aivyx-pa --channel voice" }
                     }
                 }
             }
@@ -6847,7 +6847,7 @@ fn VoicePanel() -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Launch" } }
                 p { class: "label-tech", "Start voice as its own foreground process on this machine:" }
-                pre { class: "launch-cmd", "aivyx --channel voice" }
+                pre { class: "launch-cmd", "aivyx-pa --channel voice" }
                 p { class: "label-tech sub", "The audio loop (mic → Whisper → agent → Kokoro → speakers) runs on the host, not in the browser." }
             }
 
@@ -6947,7 +6947,7 @@ fn parse_opt_f32(s: &str) -> Option<f32> {
 // V.3 ships the **Profile editor** half: the operator-declared `[profile]`
 // layer (assistant name, operator context, communication style, and three
 // declared lists). A save round-trips through `SetProfile`, the daemon rewrites
-// `[profile]` in `aivyx.toml`, and — because Profile is read at startup — the
+// `[profile]` in `aivyx-pa.toml`, and — because Profile is read at startup — the
 // screen shows the same "restart to apply" banner the Settings writes do. The
 // agent's self-learned *Persona* governance panel is V.4.
 // ---------------------------------------------------------------------------
@@ -7048,7 +7048,7 @@ fn AgentsPanel() -> Element {
                     strong { "Saved — restart the daemon to apply." }
                     p { class: "label-tech",
                         "The Profile shapes every turn's system prompt at startup. Run  "
-                        code { "aivyx daemon stop && aivyx daemon run" }
+                        code { "aivyx-pa daemon stop && aivyx-pa daemon run" }
                     }
                 }
             }
@@ -7071,7 +7071,7 @@ fn AgentsPanel() -> Element {
                 div { class: "field-row",
                     label { class: "label-tech", "Assistant name" }
                     input {
-                        class: "input", placeholder: "Aivyx (default)",
+                        class: "input", placeholder: "Aivyx PA (default)",
                         value: "{name}", oninput: move |e| name.set(e.value()),
                     }
                 }
@@ -7200,7 +7200,7 @@ fn AgentsPanel() -> Element {
 /// — the learned voice, via the X.3 `SeedOnboardingCard`; (3) Access — how far
 /// the agent reaches, via `SetAccessLevel`. The operator authors every field;
 /// the LLM only drafts. Targets a running daemon (the cold-start path is
-/// `aivyx init`); Profile + access are load-time so a restart applies them.
+/// `aivyx-pa init`); Profile + access are load-time so a restart applies them.
 #[component]
 fn OnboardingPanel(view: Signal<View>) -> Element {
     let step = use_signal(|| 0u8);
@@ -7229,7 +7229,7 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
                 }
                 if let Some(line) = model_line {
                     p { class: "muted", style: "font-size:12px;",
-                        "{line} — set the provider/model with `aivyx init` or in your config."
+                        "{line} — set the provider/model with `aivyx-pa init` or in your config."
                     }
                 }
                 div { class: "step-rail",
@@ -7387,7 +7387,7 @@ fn OnboardingProfileStep(step: Signal<u8>) -> Element {
 /// Chapter Roster (RO.4) — onboarding "Team" step. Shows the active roster (the
 /// default Nonagon on a fresh install, fetched via `GetTeamRoster`) and routes
 /// to the full Teams editor (RO.3). Keeping the default is a no-op; pack presets
-/// are an `aivyx team init` CLI affordance (the team engine isn't wasm, so the
+/// are an `aivyx-pa team init` CLI affordance (the team engine isn't wasm, so the
 /// browser can't construct a pack — it edits the loaded one). Read-only here.
 #[component]
 fn OnboardingTeamStep(step: Signal<u8>, view: Signal<View>) -> Element {
@@ -7442,7 +7442,7 @@ fn OnboardingAccessStep(step: Signal<u8>, view: Signal<View>) -> Element {
                 class: "input",
                 value: "{level}",
                 onchange: move |e| level.set(e.value()),
-                option { value: "sandbox", "sandbox — ~/aivyx-sandbox" }
+                option { value: "sandbox", "sandbox — ~/aivyx-pa-sandbox" }
                 option { value: "home", "home — your home directory" }
                 option { value: "full", "full — the whole machine" }
             }
@@ -8896,7 +8896,7 @@ fn TeamsPanel() -> Element {
                     strong { "Saved — restart the daemon to run the new team." }
                     p { class: "label-tech",
                         "The team is assembled at startup. Run  "
-                        code { "aivyx daemon stop && aivyx daemon run" }
+                        code { "aivyx-pa daemon stop && aivyx-pa daemon run" }
                     }
                 }
             }
@@ -10372,7 +10372,7 @@ async fn read_task(
                     let mut s = settings.write();
                     s.snapshot = Some(snap);
                     s.restart_required = restart_required;
-                    s.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                    s.notice = Some((true, "Saved to aivyx-pa.toml.".to_string()));
                 }
                 // POLISH_WAVES.md sub-project 7 plan 3 — the 3
                 // Settings-coverage sections. Get* (on screen mount)
@@ -10438,7 +10438,7 @@ async fn read_task(
                     let mut v = voice.write();
                     v.snapshot = Some(snap);
                     v.restart_required = restart_required;
-                    v.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                    v.notice = Some((true, "Saved to aivyx-pa.toml.".to_string()));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ProfileApplied { profile, restart_required },
@@ -10447,7 +10447,7 @@ async fn read_task(
                     let mut a = agents.write();
                     a.profile = Some(profile);
                     a.restart_required = restart_required;
-                    a.notice = Some((true, "Saved to aivyx.toml.".to_string()));
+                    a.notice = Some((true, "Saved to aivyx-pa.toml.".to_string()));
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::GetEffectivePersona { persona },

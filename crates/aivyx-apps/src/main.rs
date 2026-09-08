@@ -1,6 +1,6 @@
 //! `aivyx-apps` binary entry point (Chapter Deckhand).
 //!
-//! The daemon spawns this binary via `[[tool_process]]` in `aivyx.toml` when
+//! The daemon spawns this binary via `[[tool_process]]` in `aivyx-pa.toml` when
 //! the operator opts in with `[applications]`. It registers the six `app.*`
 //! tools and runs the multi-tool harness (same shape as `aivyx-toolkit`).
 //!

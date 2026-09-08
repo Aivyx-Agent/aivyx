@@ -22,7 +22,7 @@ pub mod transport;
 #[cfg(test)]
 mod tests;
 
-// Phase 108 Task 5 — public surface the `aivyx` binary
+// Phase 108 Task 5 — public surface the `aivyx-pa` binary
 // consumes from the `--channel slack` dispatch arm. Mirrors
 // `aivyx-discord` / `aivyx-telegram` re-export shape.
 pub use session::{

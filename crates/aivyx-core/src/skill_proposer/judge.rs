@@ -505,7 +505,7 @@ one and draft the refinement in the shape that category expects. \
 - CommunicationStyle — the assistant's overall tone (scalar; \
   rare). Draft: { kind: \"ScalarSet\", value: string }.\n\
 - ProfileHint (Phase 118) — a NOTED suggestion that the \
-  operator-declared `[profile]` block in aivyx.toml could be \
+  operator-declared `[profile]` block in aivyx-pa.toml could be \
   refined. Targets one of six declared Profile fields: \
   AssistantName, OperatorProfile, CommunicationStyle, \
   PrimaryUseCases, BehavioralPreferences, BehavioralConstraints. \
@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn user_prompt_lists_existing_persona_state_across_categories() {
         let persona = ExistingPersonaSnapshot {
-            assistant_name: Some("Aivyx".into()),
+            assistant_name: Some("Aivyx PA".into()),
             behavioral_preferences: vec![
                 "prefer terse replies".into(),
                 "use code blocks for shell commands".into(),
@@ -1022,7 +1022,7 @@ mod tests {
         };
         let p = build_user_prompt(&req);
         assert!(p.contains("AssistantName"));
-        assert!(p.contains("Aivyx"));
+        assert!(p.contains("Aivyx PA"));
         assert!(p.contains("BehavioralPreferences"));
         assert!(p.contains("prefer terse replies"));
         assert!(p.contains("LearnedSkill"));
@@ -1171,14 +1171,14 @@ mod tests {
     fn parses_scalar_set_response() {
         let raw = r#"{"is_worth_proposing":true,"confidence":0.96,
           "category":"AssistantName",
-          "proposed_draft":{"kind":"ScalarSet","value":"Aivyx"},
+          "proposed_draft":{"kind":"ScalarSet","value":"Aivyx PA"},
           "is_duplicate_of":null}"#;
         let r = parse_judge_response(raw).expect("parse");
         assert!(r.is_worth_proposing);
         assert_eq!(r.category.as_deref(), Some("AssistantName"));
         match r.proposed_draft.as_ref().unwrap() {
             ProposedDraft::ScalarSet { value } => {
-                assert_eq!(value, "Aivyx");
+                assert_eq!(value, "Aivyx PA");
             }
             other => panic!("expected ScalarSet, got {other:?}"),
         }
@@ -1432,7 +1432,7 @@ that's my call."#;
             confidence: 0.97,
             category: Some("AssistantName".into()),
             proposed_draft: Some(ProposedDraft::ScalarSet {
-                value: "Aivyx".into(),
+                value: "Aivyx PA".into(),
             }),
             is_duplicate_of: None,
             reasoning: None,
@@ -1457,7 +1457,7 @@ that's my call."#;
     #[test]
     fn existing_persona_snapshot_round_trips() {
         let original = ExistingPersonaSnapshot {
-            assistant_name: Some("Aivyx".into()),
+            assistant_name: Some("Aivyx PA".into()),
             behavioral_preferences: vec!["terse".into()],
             learned_skills: vec![ExistingSkillSnapshot {
                 name: "x".into(),

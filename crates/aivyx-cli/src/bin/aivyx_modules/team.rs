@@ -1,10 +1,10 @@
-//! `aivyx team` CLI — Chapter J (the Nonagon).
+//! `aivyx-pa team` CLI — Chapter J (the Nonagon).
 //!
 //! Two subcommands:
 //!
-//! - `aivyx team roster` — render the default Nonagon (the 9 roles + their
+//! - `aivyx-pa team roster` — render the default Nonagon (the 9 roles + their
 //!   scopes/trust). Offline: pure rendering, no provider, no storage.
-//! - `aivyx team run "<mission>"` — assemble the team in-process and hand the
+//! - `aivyx-pa team run "<mission>"` — assemble the team in-process and hand the
 //!   mission to the **lead** agent. The lead drives via its orchestration
 //!   tools (`decompose_task` → delegate → `verify`/`synthesize`); every
 //!   specialist sub-turn is built by the [`SpecialistPool`] over the **same
@@ -25,7 +25,7 @@ use aivyx_team::{TeamAssembly, TeamConfig, default_nonagon};
 use async_trait::async_trait;
 
 /// Render the team roster as an operator-readable block. Pure — the unit of
-/// `aivyx team roster`.
+/// `aivyx-pa team roster`.
 pub fn render_roster(config: &TeamConfig) -> String {
     let specialists = config.specialists().count();
     let mut out = format!(
@@ -60,8 +60,8 @@ pub fn render_roster(config: &TeamConfig) -> String {
     }
     out.push_str(
         "\nNote: scopes above are each member's own declared ask. Actual \
-         grants are computed when the team runs (`aivyx team run` /\n\
-         `aivyx team start`) against your own configured authority, and \
+         grants are computed when the team runs (`aivyx-pa team run` /\n\
+         `aivyx-pa team start`) against your own configured authority, and \
          may be narrower.\n",
     );
     out
@@ -104,8 +104,8 @@ fn load_and_clamp_team(config: Option<&str>, lead_scopes: &[String]) -> Result<T
 /// Resolve the daemon's startup team (Chapter Roster RO.1). Resolution order:
 ///
 /// 1. `[team] config_path` set → load that file (a relative path is resolved
-///    against `base_dir`, the directory of the loaded `aivyx.toml`).
-/// 2. unset → the conventional `team.toml` beside `aivyx.toml`, if it exists.
+///    against `base_dir`, the directory of the loaded `aivyx-pa.toml`).
+/// 2. unset → the conventional `team.toml` beside `aivyx-pa.toml`, if it exists.
 /// 3. neither → the built-in [`default_nonagon`] (byte-identical to the
 ///    pre-RO.1 daemon).
 ///
@@ -129,12 +129,12 @@ pub fn resolve_daemon_team_config(configured: Option<&Path>, base_dir: &Path) ->
     };
     match TeamConfig::load(&path) {
         Ok(cfg) => {
-            eprintln!("aivyx team: loaded team config from {}", path.display());
+            eprintln!("aivyx-pa team: loaded team config from {}", path.display());
             cfg
         }
         Err(e) => {
             eprintln!(
-                "aivyx team: WARNING — failed to load team config {} ({e}); \
+                "aivyx-pa team: WARNING — failed to load team config {} ({e}); \
                  falling back to the default Nonagon",
                 path.display()
             );
@@ -144,8 +144,8 @@ pub fn resolve_daemon_team_config(configured: Option<&Path>, base_dir: &Path) ->
 }
 
 /// The team-config **write target** (Chapter Roster RO.2): the configured
-/// `[team] config_path` (a relative path joined to `base_dir`, the `aivyx.toml`
-/// directory), else the conventional `team.toml` beside `aivyx.toml`. Unlike
+/// `[team] config_path` (a relative path joined to `base_dir`, the `aivyx-pa.toml`
+/// directory), else the conventional `team.toml` beside `aivyx-pa.toml`. Unlike
 /// [`resolve_daemon_team_config`] this always yields a path — the file may not
 /// exist yet, and the `SetTeamRoster` writer creates it.
 pub fn team_write_target(configured: Option<&Path>, base_dir: &Path) -> PathBuf {
@@ -156,13 +156,13 @@ pub fn team_write_target(configured: Option<&Path>, base_dir: &Path) -> PathBuf 
     }
 }
 
-/// `aivyx team roster [--config <path>]` — print a team. Offline.
+/// `aivyx-pa team roster [--config <path>]` — print a team. Offline.
 pub fn run_roster(config: Option<&str>) -> Result<(), String> {
     print!("{}", render_roster(&load_team(config)?));
     Ok(())
 }
 
-/// Resolve the source team for `aivyx team init`: the default Nonagon (no
+/// Resolve the source team for `aivyx-pa team init`: the default Nonagon (no
 /// `--pack` or `--pack default`) or a pack loaded from a TOML path. Pure.
 fn init_source(pack: Option<&str>) -> Result<TeamConfig, String> {
     match pack {
@@ -172,7 +172,7 @@ fn init_source(pack: Option<&str>) -> Result<TeamConfig, String> {
     }
 }
 
-/// `aivyx team init [--pack <default|path.toml>] [--out <path>] [--force]` —
+/// `aivyx-pa team init [--pack <default|path.toml>] [--out <path>] [--force]` —
 /// write a starter team config file the daemon adopts at startup (Chapter
 /// Roster RO.1) and the Studio's Teams screen edits (RO.3). Offline; shares the
 /// RO.2 writer (`write_team_config`: validate → `to_toml` → `0600`). Refuses to
@@ -206,7 +206,7 @@ pub fn run_init(pack: Option<&str>, out: Option<&str>, force: bool) -> Result<()
     Ok(())
 }
 
-/// `aivyx team run "<mission>"` — assemble the default team and run the lead
+/// `aivyx-pa team run "<mission>"` — assemble the default team and run the lead
 /// over `mission`. Called from `run_async` with the live provider + the
 /// persistent `AuditHook`, so specialist sub-turns land on the HMAC chain.
 #[allow(clippy::too_many_arguments)]
@@ -507,7 +507,7 @@ mod tests {
         assert_eq!(team.name, "default-nonagon");
     }
 
-    // --- Chapter Roster (RO.4): `aivyx team init` -----------------------------
+    // --- Chapter Roster (RO.4): `aivyx-pa team init` -----------------------------
 
     #[test]
     fn init_source_defaults_to_nonagon_and_loads_a_pack_path() {
@@ -575,7 +575,7 @@ mod tests {
     fn roster_shows_a_declared_not_guaranteed_caveat() {
         let out = render_roster(&default_nonagon());
         assert!(
-            out.contains("declared") && out.contains("aivyx team run"),
+            out.contains("declared") && out.contains("aivyx-pa team run"),
             "roster output should caveat that scopes are declared, not \
              guaranteed, and point at where the real grant happens: {out}"
         );

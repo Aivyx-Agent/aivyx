@@ -18,7 +18,7 @@ use aivyx_memory::Memory;
 /// archives. The single source of truth now lives in the substrate crate
 /// (`aivyx_memory`) so the lowest reader (`memory.read` wildcard) can share it;
 /// re-exported here so this crate's ~dozen call sites keep the same path. Every
-/// enumerating surface (digest, `aivyx memory list`, wildcard recall, search,
+/// enumerating surface (digest, `aivyx-pa memory list`, wildcard recall, search,
 /// wiki/graph sweeps, RAG recall) hides it via [`is_internal_topic`].
 pub use aivyx_memory::{is_internal_topic, INTERNAL_TOPIC_PREFIX};
 

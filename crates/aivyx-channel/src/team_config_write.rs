@@ -2,7 +2,7 @@
 //!
 //! The Studio's Teams screen (and the `SetTeamRoster` IPC) persists a whole
 //! `[team]`-rooted file. Unlike the Chapter U section writers (which patch one
-//! section of `aivyx.toml` with `toml_edit`), the team file is owned end-to-end
+//! section of `aivyx-pa.toml` with `toml_edit`), the team file is owned end-to-end
 //! by the team config, so the writer is just **validate → serialize → write**:
 //! [`TeamConfig::validate`] (names / scopes / lead-is-a-member / ≤9 specialists),
 //! [`TeamConfig::to_toml`], then [`aivyx_config::write_toml_0600`] (the shared

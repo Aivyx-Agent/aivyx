@@ -226,7 +226,7 @@ impl Tool for ToolProxy {
                         }
                         Some(ToolEventPayload::Log { level, message }) => {
                             eprintln!(
-                                "aivyx tool {tool_name:?} [{level}]: {message}"
+                                "aivyx-pa tool {tool_name:?} [{level}]: {message}"
                             );
                         }
                         None => break,

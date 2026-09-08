@@ -2,7 +2,7 @@
 //!
 //! Obsidian vault third-party tool process for Aivyx.
 //! Chapter F #6 — Phase 130. Ships as a separate binary
-//! the operator installs and wires into `aivyx.toml` via
+//! the operator installs and wires into `aivyx-pa.toml` via
 //! `[[tool_process]]`.
 //!
 //! ## Why no API client
@@ -44,12 +44,12 @@ pub use vault_client::{VaultClient, VaultConfig, VaultError, MARKDOWN_EXT};
 pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
 
 /// Default config file path:
-/// `$HOME/.aivyx/tool-processes/obsidian/config.toml`.
+/// `$HOME/.aivyx-pa/tool-processes/obsidian/config.toml`.
 pub fn default_config_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         std::path::PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("obsidian")
             .join("config.toml"),

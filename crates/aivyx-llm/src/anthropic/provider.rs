@@ -58,7 +58,7 @@ pub struct AnthropicConfig {
     /// per-document cap). Operators with custom
     /// plans override either via
     /// [`with_pdf_page_cap`] or the env-var
-    /// `AIVYX_ANTHROPIC_PDF_PAGE_CAP` checked
+    /// `AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP` checked
     /// in [`AnthropicConfig::new`].
     pub pdf_page_cap: usize,
 }
@@ -92,7 +92,7 @@ impl AnthropicConfig {
 /// constant default. Pure substrate so the
 /// env-var resolution can be tested.
 fn pdf_page_cap_from_env_or_default() -> usize {
-    match std::env::var("AIVYX_ANTHROPIC_PDF_PAGE_CAP") {
+    match std::env::var("AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP") {
         Ok(raw) => match raw.trim().parse::<usize>() {
             Ok(n) if n >= 1 => n,
             _ => ANTHROPIC_PDF_PAGE_CAP,
@@ -206,7 +206,7 @@ fn build_request_body(
              document content blocks (e.g. PDFs) require Claude 3.5 or newer \
              (claude-3-5-*, claude-3-7-*, claude-opus-4-*, claude-sonnet-4-*, \
              claude-haiku-4-*, or a newer-prefix variant). Pick a supported \
-             model in your aivyx.toml or attach the document to a model that \
+             model in your aivyx-pa.toml or attach the document to a model that \
              accepts it.",
             model = request.model
         )));
@@ -225,7 +225,7 @@ fn build_request_body(
     // Phase 166 — the cap is now operator-
     // tunable via `AnthropicConfig::pdf_page_cap`
     // (env-var fallback
-    // `AIVYX_ANTHROPIC_PDF_PAGE_CAP`).
+    // `AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP`).
     if let Some(over_cap) = first_pdf_over_page_cap(request, pdf_page_cap)? {
         return Err(LlmError::Config(format!(
             "PDF document block exceeds the configured Anthropic page cap: \
@@ -962,7 +962,7 @@ mod tests {
     // Env vars are process-global. Run every env-touching test under
     // one mutex so `cargo test` parallelism can't make one test's
     // `remove_var` race with another's `set_var` on the shared
-    // `AIVYX_ANTHROPIC_PDF_PAGE_CAP` key. Same pattern as
+    // `AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP` key. Same pattern as
     // aivyx-channel::passphrase and aivyx-config.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1923,7 +1923,7 @@ mod tests {
 
     #[test]
     fn pdf_page_cap_default_matches_constant() {
-        // `AnthropicConfig::new` reads AIVYX_ANTHROPIC_PDF_PAGE_CAP,
+        // `AnthropicConfig::new` reads AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP,
         // so this must hold `env_lock` like the sibling env-var tests
         // — without it, a parallel sibling's set_var races this read.
         let _lock = env_lock();
@@ -1946,7 +1946,7 @@ mod tests {
         // Two sibling tests below also set this key — serialize them
         // under `env_lock` so the set/remove can't race.
         let _lock = env_lock();
-        let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
+        let key = "AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP";
         // SAFETY: serialized through `env_lock`.
         unsafe { std::env::set_var(key, "250") };
         let result = pdf_page_cap_from_env_or_default();
@@ -1957,7 +1957,7 @@ mod tests {
     #[test]
     fn pdf_page_cap_env_var_invalid_falls_back_to_default() {
         let _lock = env_lock();
-        let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
+        let key = "AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP";
         unsafe { std::env::set_var(key, "not a number") };
         let result = pdf_page_cap_from_env_or_default();
         unsafe { std::env::remove_var(key) };
@@ -1971,7 +1971,7 @@ mod tests {
         // Treat as invalid; fall back to
         // default.
         let _lock = env_lock();
-        let key = "AIVYX_ANTHROPIC_PDF_PAGE_CAP";
+        let key = "AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP";
         unsafe { std::env::set_var(key, "0") };
         let result = pdf_page_cap_from_env_or_default();
         unsafe { std::env::remove_var(key) };

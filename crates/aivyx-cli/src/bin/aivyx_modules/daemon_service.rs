@@ -1,4 +1,4 @@
-//! `aivyx daemon install` — first-class persistent service (Chapter Anchor).
+//! `aivyx-pa daemon install` — first-class persistent service (Chapter Anchor).
 //!
 //! A local-first agent meant to run for *days* needs a supported way to stay
 //! running. Today the only paths are the Docker appliance (Chapter Harbor) and
@@ -9,18 +9,18 @@
 //!
 //! ## AN.0 design decisions
 //!
-//! - **Linux = a systemd *user* unit** at `~/.config/systemd/user/aivyx-daemon.service`,
+//! - **Linux = a systemd *user* unit** at `~/.config/systemd/user/aivyx-pa-daemon.service`,
 //!   plus `loginctl enable-linger <user>` so it runs **without an active login
 //!   session** (the runs-for-days requirement). Not a system unit — no root, no
 //!   sudo; the agent is the user's, not the machine's.
 //! - **macOS = a launchd `LaunchAgent`** plist at
-//!   `~/Library/LaunchAgents/com.aivyx.daemon.plist` (rendered in AN.2).
+//!   `~/Library/LaunchAgents/com.aivyx-pa.daemon.plist` (rendered in AN.2).
 //! - **Windows = out of scope** for now (documented; the desktop app covers it).
-//! - **Command surface:** `aivyx daemon install [--web-ui] [--no-start]` and
-//!   `aivyx daemon uninstall` (wired in AN.1).
+//! - **Command surface:** `aivyx-pa daemon install [--web-ui] [--no-start]` and
+//!   `aivyx-pa daemon uninstall` (wired in AN.1).
 //! - **Secret handling (the real decision):** the unit references an *optional*
 //!   env file (`EnvironmentFile=-<path>`, mode `0o600`) rather than baking the
-//!   passphrase into the unit (the hand-rolled rig version put `AIVYX_PASSPHRASE`
+//!   passphrase into the unit (the hand-rolled rig version put `AIVYX_PA_PASSPHRASE`
 //!   plaintext into the unit's `--setenv`, world-readable in `systemctl cat`).
 //!   `daemon install` captures the passphrase (from the env or a prompt) and
 //!   writes the `0o600` env file (AN.1); the **rendered unit carries no secret**,
@@ -63,13 +63,13 @@ impl Platform {
 }
 
 /// The unit / plist name (stable across platforms for `status`/`uninstall`).
-pub const SERVICE_UNIT: &str = "aivyx-daemon.service";
+pub const SERVICE_UNIT: &str = "aivyx-pa-daemon.service";
 /// The launchd label (macOS, AN.2).
-pub const LAUNCHD_LABEL: &str = "com.aivyx.daemon";
+pub const LAUNCHD_LABEL: &str = "com.aivyx-pa.daemon";
 
 /// Where the secret env file lives (referenced by the unit, written 0o600 by
 /// `install`). Relative to the user's config dir.
-pub const ENV_FILE_REL: &str = "aivyx/daemon.env";
+pub const ENV_FILE_REL: &str = "aivyx-pa/daemon.env";
 
 /// A resolved install plan — the concrete paths + contents an install will
 /// write. Pure data so a `--dry-run`/preview (AN.1) can show exactly what will
@@ -119,7 +119,7 @@ pub fn render_systemd_unit(
 /// passphrase is written, and it lives at rest under owner-only permissions
 /// (set by the caller) — never in the unit, never in the process table.
 pub fn render_env_file(passphrase: &str) -> String {
-    format!("AIVYX_PASSPHRASE={passphrase}\n")
+    format!("AIVYX_PA_PASSPHRASE={passphrase}\n")
 }
 
 /// Compute the concrete Linux install plan — pure over its inputs so the paths
@@ -146,31 +146,31 @@ pub fn plan_linux(
     }
 }
 
-/// `aivyx daemon install` — install + (by default) start the daemon as a
+/// `aivyx-pa daemon install` — install + (by default) start the daemon as a
 /// persistent user service. Linux now; macOS in AN.2.
 pub fn run_install(web_ui: bool, start: bool) -> Result<(), String> {
     match Platform::detect() {
         Platform::Linux => install_linux(web_ui, start),
         Platform::MacOs => install_macos(web_ui, start),
         Platform::Unsupported => Err(
-            "no supported service manager on this platform — run `aivyx daemon run` \
+            "no supported service manager on this platform — run `aivyx-pa daemon run` \
              directly, or use the Docker appliance (docs/INSTALL.md)."
                 .into(),
         ),
     }
 }
 
-/// `aivyx daemon uninstall` — stop, disable, and remove the service.
+/// `aivyx-pa daemon uninstall` — stop, disable, and remove the service.
 pub fn run_uninstall() -> Result<(), String> {
     match Platform::detect() {
         Platform::Linux => uninstall_linux(),
         Platform::MacOs => uninstall_macos(),
-        Platform::Unsupported => Err("no service was installed by aivyx on this platform.".into()),
+        Platform::Unsupported => Err("no service was installed by aivyx-pa on this platform.".into()),
     }
 }
 
 /// The installed unit/plist path, if the service is installed on this host.
-/// `None` when not installed (or unsupported platform). Used by `aivyx doctor`.
+/// `None` when not installed (or unsupported platform). Used by `aivyx-pa doctor`.
 pub fn installed_unit_path() -> Option<PathBuf> {
     let path = match Platform::detect() {
         Platform::Linux => user_config_dir()
@@ -241,17 +241,17 @@ fn install_linux(web_ui: bool, start: bool) -> Result<(), String> {
     }
 
     eprintln!(
-        "aivyx daemon: installed as a user service.\n  \
+        "aivyx-pa daemon: installed as a user service.\n  \
          unit:   {}\n  \
          env:    {} (0600)\n  \
-         status: systemctl --user status aivyx-daemon\n  \
-         logs:   journalctl --user -u aivyx-daemon -f{}",
+         status: systemctl --user status aivyx-pa-daemon\n  \
+         logs:   journalctl --user -u aivyx-pa-daemon -f{}",
         plan.unit_path.display(),
         plan.env_file_path.display(),
         if start {
             "\n  (started; runs across reboots via linger)"
         } else {
-            "\n  (enabled; start with `systemctl --user start aivyx-daemon`)"
+            "\n  (enabled; start with `systemctl --user start aivyx-pa-daemon`)"
         },
     );
     Ok(())
@@ -280,11 +280,11 @@ fn uninstall_linux() -> Result<(), String> {
 
     if removed {
         eprintln!(
-            "aivyx daemon: service uninstalled (unit + env file removed). \
+            "aivyx-pa daemon: service uninstalled (unit + env file removed). \
              Linger was left enabled; disable with `loginctl disable-linger`."
         );
     } else {
-        eprintln!("aivyx daemon: no installed service found — nothing to remove.");
+        eprintln!("aivyx-pa daemon: no installed service found — nothing to remove.");
     }
     Ok(())
 }
@@ -323,7 +323,7 @@ pub fn render_launchd_plist(
          \x20   <key>ProgramArguments</key>\n    <array>\n{program_args}    </array>\n\
          \x20   <key>WorkingDirectory</key>\n    <string>{workdir}</string>\n\
          \x20   <key>EnvironmentVariables</key>\n    <dict>\n\
-         \x20       <key>AIVYX_PASSPHRASE</key>\n        <string>{pass}</string>\n    </dict>\n\
+         \x20       <key>AIVYX_PA_PASSPHRASE</key>\n        <string>{pass}</string>\n    </dict>\n\
          \x20   <key>RunAtLoad</key>\n    <true/>\n\
          \x20   <key>KeepAlive</key>\n    <dict>\n        <key>SuccessfulExit</key>\n        <false/>\n    </dict>\n\
          </dict>\n\
@@ -384,9 +384,9 @@ fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
     }
 
     eprintln!(
-        "aivyx daemon: installed as a launchd LaunchAgent.\n  \
+        "aivyx-pa daemon: installed as a launchd LaunchAgent.\n  \
          plist:  {} (0600 — carries the passphrase)\n  \
-         logs:   log show --predicate 'process == \"aivyx\"'{}",
+         logs:   log show --predicate 'process == \"aivyx-pa\"'{}",
         plist_path.display(),
         if start {
             "\n  (started; runs at login)"
@@ -412,9 +412,9 @@ fn uninstall_macos() -> Result<(), String> {
         removed = true;
     }
     if removed {
-        eprintln!("aivyx daemon: launchd service uninstalled (plist removed).");
+        eprintln!("aivyx-pa daemon: launchd service uninstalled (plist removed).");
     } else {
-        eprintln!("aivyx daemon: no installed service found — nothing to remove.");
+        eprintln!("aivyx-pa daemon: no installed service found — nothing to remove.");
     }
     Ok(())
 }
@@ -430,10 +430,10 @@ fn current_uid() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The passphrase for the unattended service: `AIVYX_PASSPHRASE` if set+non-empty
+/// The passphrase for the unattended service: `AIVYX_PA_PASSPHRASE` if set+non-empty
 /// (the established policy), else a no-echo prompt.
 fn resolve_passphrase() -> Result<String, String> {
-    if let Ok(v) = std::env::var("AIVYX_PASSPHRASE") {
+    if let Ok(v) = std::env::var("AIVYX_PA_PASSPHRASE") {
         if !v.is_empty() {
             return Ok(v);
         }
@@ -449,7 +449,7 @@ fn resolve_passphrase() -> Result<String, String> {
 
 fn current_exe_path() -> Result<String, String> {
     std::env::current_exe()
-        .map_err(|e| format!("resolve aivyx binary path: {e}"))
+        .map_err(|e| format!("resolve aivyx-pa binary path: {e}"))
         .map(|p| p.display().to_string())
 }
 
@@ -464,11 +464,11 @@ fn user_config_dir() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".config"))
 }
 
-/// The daemon loads `aivyx.toml` from its working directory — use the install
+/// The daemon loads `aivyx-pa.toml` from its working directory — use the install
 /// cwd when it holds a config, else `$HOME`.
 fn install_working_dir() -> String {
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("aivyx.toml").exists() {
+        if cwd.join("aivyx-pa.toml").exists() {
             return cwd.display().to_string();
         }
     }
@@ -528,71 +528,71 @@ mod tests {
     #[test]
     fn systemd_unit_has_the_load_bearing_directives() {
         let unit = render_systemd_unit(
-            "/home/u/.local/bin/aivyx",
+            "/home/u/.local/bin/aivyx-pa",
             false,
-            "/home/u/.config/aivyx/daemon.env",
+            "/home/u/.config/aivyx-pa/daemon.env",
             "/home/u",
         );
-        assert!(unit.contains("ExecStart=/home/u/.local/bin/aivyx daemon run\n"));
+        assert!(unit.contains("ExecStart=/home/u/.local/bin/aivyx-pa daemon run\n"));
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("WantedBy=default.target")); // user-unit auto-start target
         // optional env-file reference (the `-`), so a missing secret file doesn't
         // wedge the unit at load time.
-        assert!(unit.contains("EnvironmentFile=-/home/u/.config/aivyx/daemon.env"));
+        assert!(unit.contains("EnvironmentFile=-/home/u/.config/aivyx-pa/daemon.env"));
         assert!(unit.contains("WorkingDirectory=/home/u"));
     }
 
     #[test]
     fn web_ui_flag_is_threaded_into_execstart() {
-        let with = render_systemd_unit("/b/aivyx", true, "/e", "/w");
-        assert!(with.contains("ExecStart=/b/aivyx daemon run --web-ui\n"));
-        let without = render_systemd_unit("/b/aivyx", false, "/e", "/w");
-        assert!(without.contains("ExecStart=/b/aivyx daemon run\n"));
+        let with = render_systemd_unit("/b/aivyx-pa", true, "/e", "/w");
+        assert!(with.contains("ExecStart=/b/aivyx-pa daemon run --web-ui\n"));
+        let without = render_systemd_unit("/b/aivyx-pa", false, "/e", "/w");
+        assert!(without.contains("ExecStart=/b/aivyx-pa daemon run\n"));
         assert!(!without.contains("--web-ui"));
     }
 
     #[test]
     fn unit_never_contains_a_secret() {
         // The rendered unit references the env-file path but never a passphrase.
-        let unit = render_systemd_unit("/b/aivyx", true, "/home/u/.config/aivyx/daemon.env", "/w");
+        let unit = render_systemd_unit("/b/aivyx-pa", true, "/home/u/.config/aivyx-pa/daemon.env", "/w");
         assert!(!unit.to_lowercase().contains("passphrase"));
-        assert!(!unit.contains("AIVYX_PASSPHRASE"));
+        assert!(!unit.contains("AIVYX_PA_PASSPHRASE"));
     }
 
     #[test]
     fn plan_resolves_unit_and_env_paths_under_config_dir() {
         let plan = plan_linux(
             Path::new("/home/u/.config"),
-            "/home/u/.local/bin/aivyx",
+            "/home/u/.local/bin/aivyx-pa",
             "/home/u",
             false,
         );
         assert_eq!(
             plan.unit_path,
-            PathBuf::from("/home/u/.config/systemd/user/aivyx-daemon.service")
+            PathBuf::from("/home/u/.config/systemd/user/aivyx-pa-daemon.service")
         );
         assert_eq!(
             plan.env_file_path,
-            PathBuf::from("/home/u/.config/aivyx/daemon.env")
+            PathBuf::from("/home/u/.config/aivyx-pa/daemon.env")
         );
         // the unit references that exact env-file path
         assert!(
             plan.unit_contents
-                .contains("EnvironmentFile=-/home/u/.config/aivyx/daemon.env")
+                .contains("EnvironmentFile=-/home/u/.config/aivyx-pa/daemon.env")
         );
     }
 
     #[test]
     fn env_file_holds_the_passphrase_and_nothing_else() {
-        assert_eq!(render_env_file("s3cr3t"), "AIVYX_PASSPHRASE=s3cr3t\n");
+        assert_eq!(render_env_file("s3cr3t"), "AIVYX_PA_PASSPHRASE=s3cr3t\n");
     }
 
     #[test]
     fn launchd_plist_is_well_formed_with_load_bearing_keys() {
-        let plist = render_launchd_plist("/usr/local/bin/aivyx", false, "/Users/u", "pw");
+        let plist = render_launchd_plist("/usr/local/bin/aivyx-pa", false, "/Users/u", "pw");
         assert!(plist.starts_with("<?xml version=\"1.0\""));
-        assert!(plist.contains("<key>Label</key>\n    <string>com.aivyx.daemon</string>"));
-        assert!(plist.contains("<string>/usr/local/bin/aivyx</string>"));
+        assert!(plist.contains("<key>Label</key>\n    <string>com.aivyx-pa.daemon</string>"));
+        assert!(plist.contains("<string>/usr/local/bin/aivyx-pa</string>"));
         assert!(plist.contains("<string>daemon</string>"));
         assert!(plist.contains("<string>run</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>\n    <true/>"));
@@ -603,19 +603,19 @@ mod tests {
 
     #[test]
     fn launchd_plist_threads_web_ui_and_carries_the_secret() {
-        let with = render_launchd_plist("/b/aivyx", true, "/w", "pw");
+        let with = render_launchd_plist("/b/aivyx-pa", true, "/w", "pw");
         assert!(with.contains("<string>--web-ui</string>"));
-        let without = render_launchd_plist("/b/aivyx", false, "/w", "pw");
+        let without = render_launchd_plist("/b/aivyx-pa", false, "/w", "pw");
         assert!(!without.contains("--web-ui"));
         // macOS DOES carry the secret in the plist (0600) — the documented
         // platform difference from Linux's env-file.
-        assert!(without.contains("<key>AIVYX_PASSPHRASE</key>\n        <string>pw</string>"));
+        assert!(without.contains("<key>AIVYX_PA_PASSPHRASE</key>\n        <string>pw</string>"));
     }
 
     #[test]
     fn launchd_plist_xml_escapes_values() {
         // a passphrase with XML-special chars must not break the plist
-        let plist = render_launchd_plist("/b/aivyx", false, "/w", "a&b<c>\"d'");
+        let plist = render_launchd_plist("/b/aivyx-pa", false, "/w", "a&b<c>\"d'");
         assert!(plist.contains("a&amp;b&lt;c&gt;&quot;d&apos;"));
         assert!(!plist.contains("a&b<c>"));
     }

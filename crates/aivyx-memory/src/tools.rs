@@ -127,7 +127,7 @@ pub const DEFAULT_WILDCARD_READ_LIMIT: usize = 4;
 /// enough that a runaway loop gets caught long before the substrate
 /// chokes.
 ///
-/// The binary reads `AIVYX_MEMORY_MAX_PER_TOPIC` once at startup and
+/// The binary reads `AIVYX_PA_MEMORY_MAX_PER_TOPIC` once at startup and
 /// passes the resolved cap through `MemoryWriteTool::set_max_per_topic`.
 /// Tests override it with the same builder. No ambient global config.
 pub const DEFAULT_MAX_PER_TOPIC: usize = 10_000;
@@ -716,7 +716,7 @@ impl MemoryWriteTool {
 
     /// Override the per-topic write cap. Returns `self` for the
     /// builder-style chaining the binary uses when
-    /// `AIVYX_MEMORY_MAX_PER_TOPIC` is set, and that tests use to drive
+    /// `AIVYX_PA_MEMORY_MAX_PER_TOPIC` is set, and that tests use to drive
     /// the tripwire with a manageable number of seeded entries.
     ///
     /// A cap of `0` is legal and means "refuse every write" — useful

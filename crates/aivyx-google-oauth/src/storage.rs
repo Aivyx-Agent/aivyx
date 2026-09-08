@@ -1,7 +1,7 @@
 //! Per-tool-process token file storage.
 //!
 //! Phase 123 Task 2 — Q3a (re-asked) Recommended: per-tool-
-//! process file at `~/.aivyx/tool-processes/gmail/tokens.json`
+//! process file at `~/.aivyx-pa/tool-processes/gmail/tokens.json`
 //! with 0600 perms.
 //!
 //! ## Why a file, not the redb store
@@ -68,14 +68,14 @@ pub enum StorageError {
 }
 
 /// Default path for the Gmail tool process's token file.
-/// Resolves to `$HOME/.aivyx/tool-processes/gmail/tokens.json`.
+/// Resolves to `$HOME/.aivyx-pa/tool-processes/gmail/tokens.json`.
 /// Returns `None` if `$HOME` is unset (operator-conservative;
 /// the binary will surface a clear error rather than guessing
 /// a path).
 pub fn default_token_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let path = PathBuf::from(home)
-        .join(".aivyx")
+        .join(".aivyx-pa")
         .join("tool-processes")
         .join("gmail")
         .join("tokens.json");
@@ -374,7 +374,7 @@ mod tests {
         let s = p.to_string_lossy();
         let home_s = home.to_string_lossy();
         assert!(s.starts_with(home_s.as_ref()), "{s} should start with {home_s}");
-        assert!(s.contains(".aivyx"), "{s}");
+        assert!(s.contains(".aivyx-pa"), "{s}");
         assert!(s.contains("tool-processes"), "{s}");
         assert!(s.contains("gmail"), "{s}");
         assert!(s.ends_with("tokens.json"), "{s}");

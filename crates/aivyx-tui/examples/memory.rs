@@ -3,7 +3,7 @@
 //! Aivyx keeps an encrypted local memory store (redb) organized by
 //! topic, with semantic recall over embeddings and a recall-feedback
 //! loop that learns which memories actually helped. This is the
-//! `aivyx memory list / show / search` surface: a topics column, the
+//! `aivyx-pa memory list / show / search` surface: a topics column, the
 //! entries under the selected topic (the selected one expanded with
 //! its metadata), and a search bar with a keyword↔semantic toggle +
 //! recall stats. No "4.2TB indexed" — it's a local KB/MB store of
@@ -76,7 +76,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Memory", bold(FG)),
         ])),
         area,

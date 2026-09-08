@@ -489,7 +489,7 @@ async fn sandbox_wrapper_passes_through_stdio_end_to_end() {
             // command. Universal POSIX shape; proves the
             // wrapper-then-command spawn path works without
             // depending on a real sandbox tool.
-            args: vec!["AIVYX_SANDBOX_PROBE=1".into()],
+            args: vec!["AIVYX_PA_SANDBOX_PROBE=1".into()],
         }),
         notification_sink: None,
     };

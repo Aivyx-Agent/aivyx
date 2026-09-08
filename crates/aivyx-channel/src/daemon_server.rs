@@ -197,7 +197,7 @@ pub struct DaemonConfig {
     /// Read-only at daemon runtime per Q5(a) load-time semantics;
     /// served to the Web UI Profile pane via the `GetProfile`
     /// inspection query. Always populated — the synthesized default
-    /// is supplied when `aivyx.toml` has no `[profile]` section.
+    /// is supplied when `aivyx-pa.toml` has no `[profile]` section.
     pub profile: Arc<aivyx_config::Profile>,
     /// Phase 60 — persistent Persona delta chain (PRODUCT.md P14).
     /// The daemon uses it for both inspection queries
@@ -483,7 +483,7 @@ pub struct DaemonConfig {
     /// driver built `Pricing::new()` internally, ignoring overrides).
     /// Defaults to an empty table for test fixtures that don't price.
     pub pricing: aivyx_cost::Pricing,
-    /// Chapter U — path to the `aivyx.toml` the daemon was loaded from, so the
+    /// Chapter U — path to the `aivyx-pa.toml` the daemon was loaded from, so the
     /// Settings IPC handlers (`GetSettings` / `SetAccessLevel` / `SetBudget`)
     /// can re-read the on-disk values and write sections back via the shared
     /// `aivyx_config::config_write` helper. `None` ⇒ the daemon was launched
@@ -504,7 +504,7 @@ pub struct DaemonConfig {
     pub role_override: Option<String>,
     /// Chapter Roster (RO.2) — the resolved team-config write target: the
     /// operator's `[team] config_path` (or the conventional `team.toml` beside
-    /// `aivyx.toml`), pre-resolved by the binary. `None` ⇒ env-only launch (no
+    /// `aivyx-pa.toml`), pre-resolved by the binary. `None` ⇒ env-only launch (no
     /// config file); the `SetTeamRoster` handler then refuses, like the other
     /// write handlers. Writes here are load-time — adopted on the next start.
     pub team_config_write_path: Option<PathBuf>,
@@ -722,7 +722,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let recovery_notice = detect_crash_recovery(&state_path);
     if let Some(ref stale) = recovery_notice {
         eprintln!(
-            "aivyx daemon: detected unclean shutdown (pid {}, started at {}). \
+            "aivyx-pa daemon: detected unclean shutdown (pid {}, started at {}). \
              Lost sessions: {:?}, lost turns: {:?}",
             stale.pid, stale.started_at, stale.sessions, stale.in_flight_turns,
         );
@@ -806,7 +806,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 crate::webhook_listener::run_webhook_listener(wh_dispatch, store, port, wh_shutdown)
                     .await
             {
-                eprintln!("aivyx webhook listener error: {e}");
+                eprintln!("aivyx-pa webhook listener error: {e}");
             }
         })
     });
@@ -823,7 +823,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // Phase 173 — spawn the autonomous-loop driver iff the
     // `[loop]` section is armed (loop_state is `Some`) AND the
     // backlog is present. The driver idles (no CPU) until an
-    // `aivyx loop start` flips the shared run state; it then
+    // `aivyx-pa loop start` flips the shared run state; it then
     // fires TriggerSource::Loop turns until the backlog drains
     // or the max-iterations cap is hit.
     let _loop_driver_handle = match (&loop_state, &loop_backlog) {
@@ -855,7 +855,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 .map(|c| c.progress_inject_count)
                 .unwrap_or(0);
             eprintln!(
-                "aivyx loop: driver armed (max_iterations ceiling={}, \
+                "aivyx-pa loop: driver armed (max_iterations ceiling={}, \
                  gate={}, max_run_secs={:?}, progress_inject={})",
                 loop_config.as_ref().map(|c| c.max_iterations).unwrap_or(0),
                 if ld_gate.is_some() { "on" } else { "off" },
@@ -946,13 +946,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     .unwrap_or(0);
                 if state.request_start(cfg.max_iterations, now_ms) {
                     eprintln!(
-                        "aivyx loop: resume_on_boot — resuming an interrupted \
+                        "aivyx-pa loop: resume_on_boot — resuming an interrupted \
                          run ({pending} pending stories)"
                     );
                 }
             } else if marker_active {
                 eprintln!(
-                    "aivyx loop: resume_on_boot set, but the backlog is empty \
+                    "aivyx-pa loop: resume_on_boot set, but the backlog is empty \
                      — nothing to resume"
                 );
             }
@@ -1284,7 +1284,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             };
             for sched in &rs_schedules {
                 eprintln!(
-                    "aivyx reflection schedule {:?} registered (cron={:?}, \
+                    "aivyx-pa reflection schedule {:?} registered (cron={:?}, \
                      lookback={}s)",
                     sched.name, sched.cron, sched.lookback_window_secs,
                 );
@@ -1310,7 +1310,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         }
         (None, false) => {
             eprintln!(
-                "aivyx daemon: {} [[reflection_schedule]] entries configured \
+                "aivyx-pa daemon: {} [[reflection_schedule]] entries configured \
                  but no audit log is available — reflection scheduler not \
                  spawned (outcome summaries require the audit chain)",
                 reflection_schedules.len(),
@@ -1341,7 +1341,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             )
             .await
             {
-                eprintln!("aivyx web ui error: {e}");
+                eprintln!("aivyx-pa web ui error: {e}");
             }
         })
     });
@@ -1443,14 +1443,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                             match result {
                                 Ok(n) if n > 0 => {
                                     eprintln!(
-                                        "aivyx memory gc: expired {n} entries \
+                                        "aivyx-pa memory gc: expired {n} entries \
                                          ({} rule(s) applied)",
                                         rules.len(),
                                     );
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
-                                    eprintln!("aivyx memory gc error: {e}");
+                                    eprintln!("aivyx-pa memory gc error: {e}");
                                 }
                             }
                           }
@@ -1467,14 +1467,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                               {
                                   Ok(n) if n > 0 => {
                                       eprintln!(
-                                          "aivyx memory embed: backfilled \
+                                          "aivyx-pa memory embed: backfilled \
                                            {n} vector(s)"
                                       );
                                   }
                                   Ok(_) => {}
                                   Err(e) => {
                                       eprintln!(
-                                          "aivyx memory embed backfill \
+                                          "aivyx-pa memory embed backfill \
                                            error: {e}"
                                       );
                                   }
@@ -1499,7 +1499,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
 
     // Piece C (2026-08-23) — build the daemon's own per-channel-type
     // `/team run` authorization once at startup, re-reading the same
-    // `aivyx.toml` this process itself loaded (`config_toml_path`) —
+    // `aivyx-pa.toml` this process itself loaded (`config_toml_path`) —
     // deliberately not trusting anything the connecting channel-adapter
     // process claims about its own authorization. `None` (env-only
     // launch, no config file) or a failed re-read both fail closed to
@@ -1537,7 +1537,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             },
             Err(e) => {
                 eprintln!(
-                    "aivyx daemon: WARNING — failed to re-read {} for /team run channel \
+                    "aivyx-pa daemon: WARNING — failed to re-read {} for /team run channel \
                      authorization: {e}; falling back to all-channels-denied (fail closed)",
                     p.display()
                 );
@@ -1551,7 +1551,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // the daemon actually granted; log it once at startup next to
     // the other startup-time daemon state.
     eprintln!(
-        "aivyx daemon: /team run channel authorization — telegram: {}, discord: {}, slack: {}",
+        "aivyx-pa daemon: /team run channel authorization — telegram: {}, discord: {}, slack: {}",
         channel_trigger_authz.telegram, channel_trigger_authz.discord, channel_trigger_authz.slack
     );
 
@@ -1561,7 +1561,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 match result {
                     Ok(conn) => conn,
                     Err(e) => {
-                        eprintln!("aivyx daemon: accept error: {e}");
+                        eprintln!("aivyx-pa daemon: accept error: {e}");
                         continue;
                     }
                 }
@@ -1631,7 +1631,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 // and dropping the socket) is an expected lifecycle event,
                 // not a fault — don't spam it at error level.
                 if !e.is_clean_disconnect() {
-                    eprintln!("aivyx daemon: connection handler error: {e}");
+                    eprintln!("aivyx-pa daemon: connection handler error: {e}");
                 }
             }
         });
@@ -1647,7 +1647,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
 
 /// Piece C (2026-08-23) — the daemon's own, independently-loaded
 /// per-channel-type authorization for `/team run <goal>`. Built once
-/// at daemon startup from the same `aivyx.toml` every process reads
+/// at daemon startup from the same `aivyx-pa.toml` every process reads
 /// (see the construction site below) — deliberately *not* trusting
 /// anything the connecting channel-adapter process claims about its
 /// own authorization, since that process is a separate, potentially
@@ -1730,23 +1730,23 @@ async fn handle_run_team_mission_channel(
         // appended to the persistent audit chain, mirroring the success
         // branch's own TeamMissionChannelTriggered pattern below.
         eprintln!(
-            "aivyx daemon: /team run denied for channel {} (not authorized via \
-             team_run_channel in aivyx.toml)",
+            "aivyx-pa daemon: /team run denied for channel {} (not authorized via \
+             team_run_channel in aivyx-pa.toml)",
             channel_trigger_audit_platform(platform)
         );
         if let Some(log) = audit_log {
             if let Err(e) = log.append(aivyx_audit::AuditEvent::TeamMissionChannelDenied {
                 platform: channel_trigger_audit_platform(platform),
                 goal: goal.clone(),
-                reason: "channel not authorized via team_run_channel in aivyx.toml".into(),
+                reason: "channel not authorized via team_run_channel in aivyx-pa.toml".into(),
             }) {
-                eprintln!("aivyx daemon: failed to audit denied channel team trigger: {e}");
+                eprintln!("aivyx-pa daemon: failed to audit denied channel team trigger: {e}");
             }
         }
         return DaemonMessage::Error {
             code: "team_run_channel_denied".into(),
             message: "this channel is not authorized to start team missions (operator \
-                      opt-in required via team_run_channel in aivyx.toml)"
+                      opt-in required via team_run_channel in aivyx-pa.toml)"
                 .into(),
         };
     }
@@ -1765,7 +1765,7 @@ async fn handle_run_team_mission_channel(
                     goal: goal.clone(),
                     mission_id: mission_id.clone(),
                 }) {
-                    eprintln!("aivyx daemon: failed to audit channel team trigger: {e}");
+                    eprintln!("aivyx-pa daemon: failed to audit channel team trigger: {e}");
                 }
             }
             DaemonMessage::TeamMissionChannelStarted { mission_id }
@@ -1918,7 +1918,7 @@ struct ConnectionContext {
     gate_policy: GatePolicy,
     /// Piece C — per-channel-type authorization for `/team run`.
     channel_trigger_authz: ChannelTriggerAuthz,
-    /// Chapter U — path to the loaded `aivyx.toml` for the Settings IPC
+    /// Chapter U — path to the loaded `aivyx-pa.toml` for the Settings IPC
     /// write handlers (`SetAccessLevel` / `SetBudget`) + the `GetSettings`
     /// on-disk re-read. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<PathBuf>,
@@ -2253,7 +2253,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             Ok(e) => e,
                                             Err(e) => {
                                                 eprintln!(
-                                                    "aivyx tool-relevance: \
+                                                    "aivyx-pa tool-relevance: \
                                                      audit walk failed ({e})"
                                                 );
                                                 return;
@@ -2566,7 +2566,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 && let TurnOutcome::Escalated { reason, .. } = &outcome
                             {
                                 eprintln!(
-                                    "aivyx daemon: escalation refused (headless) on session {sid}: {reason}",
+                                    "aivyx-pa daemon: escalation refused (headless) on session {sid}: {reason}",
                                 );
                                 if let Some(al) = &audit_log {
                                     let event = aivyx_audit::AuditEvent::HeadlessRefusal {
@@ -2576,7 +2576,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     };
                                     if let Err(e) = al.append(event) {
                                         eprintln!(
-                                            "aivyx daemon: failed to audit headless refusal: {e}",
+                                            "aivyx-pa daemon: failed to audit headless refusal: {e}",
                                         );
                                     }
                                 }
@@ -3412,7 +3412,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                         } => {
                             // Phase 119 — operator's act-on-approval
                             // gesture for a ProfileHint. The CLI has
-                            // already mutated aivyx.toml via the Task 3
+                            // already mutated aivyx-pa.toml via the Task 3
                             // atomic primitive; this handler's only
                             // job is to record the audit event so
                             // forensic walks can pair the apply with
@@ -3986,7 +3986,7 @@ async fn handle_query(
     loop_state: Option<&crate::loop_driver::SharedLoopState>,
     loop_config: Option<&aivyx_config::LoopConfig>,
     team_missions: Option<&crate::team_mission_driver::TeamMissionService>,
-    // Chapter U — the loaded `aivyx.toml` path for the Settings write
+    // Chapter U — the loaded `aivyx-pa.toml` path for the Settings write
     // handlers. `None` ⇒ env-only launch; the write handlers refuse.
     config_toml_path: Option<&Path>,
     // Piece C follow-up — see `DaemonConfig::role_override`'s own doc
@@ -4170,7 +4170,7 @@ async fn handle_query(
                 return QueryResponsePayload::QueryError {
                     code: "no_tool_relevance_ledger".into(),
                     message: "daemon has no tool-relevance ledger configured \
-                         (enable `[tool_relevance]` in aivyx.toml)"
+                         (enable `[tool_relevance]` in aivyx-pa.toml)"
                         .into(),
                 };
             };
@@ -4260,7 +4260,7 @@ async fn handle_query(
                 return QueryResponsePayload::LoopControl {
                     ok: false,
                     message: "the [loop] section is not armed (set \
-                              `[loop] enabled = true` in aivyx.toml and \
+                              `[loop] enabled = true` in aivyx-pa.toml and \
                               restart the daemon)"
                         .into(),
                 };
@@ -4739,7 +4739,7 @@ async fn handle_query(
         }
         QueryPayload::ExportPersonaChain => {
             // Phase 64 Task 3 — full-fidelity chain dump for the
-            // `aivyx identity export` flow. Single-shot response
+            // `aivyx-pa identity export` flow. Single-shot response
             // (no pagination) — capped at MAX_EXPORT_CHAIN_ENTRIES.
             // Realistic chain depth is dozens to low-hundreds of
             // approved deltas; the cap exists to prevent a runaway
@@ -4760,7 +4760,7 @@ async fn handle_query(
                     code: "persona_chain_too_large".into(),
                     message: format!(
                         "persona chain has {} entries; export caps at {} per response. \
-                         Contact aivyx maintainers if you legitimately hit this limit.",
+                         Contact aivyx-pa maintainers if you legitimately hit this limit.",
                         entries.len(),
                         MAX_EXPORT_CHAIN_ENTRIES,
                     ),
@@ -4902,7 +4902,7 @@ async fn handle_query(
             match mem.list_topics().await {
                 // #11 — hide internal/machine topics (the per-session
                 // `context:pruned:*` archives) from operator-facing listings:
-                // this one IPC backs both `aivyx memory list` and the Studio
+                // this one IPC backs both `aivyx-pa memory list` and the Studio
                 // Memory browser. The entries stay reachable by exact
                 // `memory show <topic>`; only the cluttered listing is filtered.
                 Ok(topics) => QueryResponsePayload::ListMemoryTopics {
@@ -6282,19 +6282,19 @@ fn gallery_caption(entry: &serde_json::Value) -> Option<String> {
 }
 
 /// Chapter U — `QueryError` for a Settings write/read when the daemon was
-/// launched without an `aivyx.toml` (env-only). The handler refuses rather
+/// launched without an `aivyx-pa.toml` (env-only). The handler refuses rather
 /// than fabricate a config path.
 fn no_config_file_error() -> QueryResponsePayload {
     QueryResponsePayload::QueryError {
         code: "no_config_file".into(),
-        message: "the daemon was launched without an aivyx.toml; settings are \
+        message: "the daemon was launched without an aivyx-pa.toml; settings are \
                   not editable from here"
             .into(),
     }
 }
 
 /// Chapter U — load the on-disk config for the Settings snapshot. Inspection
-/// posture (no required secrets), same as `aivyx access show`.
+/// posture (no required secrets), same as `aivyx-pa access show`.
 fn load_settings_config(
     toml_path: &Path,
     role_override: Option<&str>,
@@ -6364,7 +6364,7 @@ fn team_roster_summary(roster: &aivyx_team::TeamConfig) -> String {
 
 /// Chapter V — re-read the config from disk and return a `ProfileApplied`
 /// response. `restart_required` is always `true`: Profile shapes the system
-/// prompt at load time, so a write updates `aivyx.toml` but not the running
+/// prompt at load time, so a write updates `aivyx-pa.toml` but not the running
 /// daemon.
 fn profile_applied(toml_path: &Path, role_override: Option<&str>) -> QueryResponsePayload {
     match load_settings_config(toml_path, role_override) {
@@ -6542,7 +6542,7 @@ fn audit_config_change(audit_log: Option<&PersistentAuditLog>, section: &str, su
             section: section.to_string(),
             summary: summary.to_string(),
         }) {
-            eprintln!("aivyx daemon: failed to audit config change: {e}");
+            eprintln!("aivyx-pa daemon: failed to audit config change: {e}");
         }
     }
 }
@@ -6580,7 +6580,7 @@ fn map_config_write_error(e: aivyx_config::ConfigWriteError) -> QueryResponsePay
 /// daemon's real environment, so a `GetX` response built from it would hand
 /// the browser a resolved secret value — and `McpServerForm` seeds its edit
 /// form straight from that response, so a save-without-editing would then
-/// bake the resolved secret into `aivyx.toml` as a literal, permanently
+/// bake the resolved secret into `aivyx-pa.toml` as a literal, permanently
 /// destroying the `${VAR}` placeholder it replaced (final-review fix #1).
 /// `aivyx_config::config_write::read_mcp_server_entries` reads the TOML
 /// literally instead — no interpolation, and (as a side effect) it also
@@ -7197,7 +7197,7 @@ async fn seed_persona_live(
 
 /// Chapter Tutor — operator-initiated skill authoring on a **grown** chain.
 ///
-/// The operator (via `aivyx skills …` or the Studio) is the authority here, so
+/// The operator (via `aivyx-pa skills …` or the Studio) is the authority here, so
 /// unlike the agent's scope-gated `skills.teach`/`update`/`forget` tools this
 /// runs straight from the `AuthorSkill` IPC with no agent scope. It reuses the
 /// exact same op-builders ([`crate::skill_edit`]) + chain-append
@@ -7766,8 +7766,8 @@ async fn persona_approve_coherence_block(
     };
     Some(format!(
         "coherence: approving \"{value}\" would contradict existing {} \"{}\" — {}. \
-         Reject it, resolve the existing facet (`aivyx persona resolve {id}`), or \
-         accept the tension with `aivyx persona dismiss {id}` then re-approve.",
+         Reject it, resolve the existing facet (`aivyx-pa persona resolve {id}`), or \
+         accept the tension with `aivyx-pa persona dismiss {id}` then re-approve.",
         existing.category,
         existing.value.trim(),
         conflict.reason.trim(),
@@ -7929,7 +7929,7 @@ fn audit_document_mutation(
             root: root.to_string(),
             path: path.to_string(),
         }) {
-            eprintln!("aivyx daemon: failed to audit document mutation: {e}");
+            eprintln!("aivyx-pa daemon: failed to audit document mutation: {e}");
         }
     }
 }
@@ -7967,7 +7967,7 @@ fn audit_schedule_mutation(
             schedule_id: schedule_id.to_string(),
             actor: actor.to_string(),
         }) {
-            eprintln!("aivyx daemon: failed to audit schedule mutation: {e}");
+            eprintln!("aivyx-pa daemon: failed to audit schedule mutation: {e}");
         }
     }
 }
@@ -8448,7 +8448,7 @@ mod tests {
     #[test]
     fn load_settings_config_resolves_a_non_default_role_when_overridden() {
         let dir = test_dir("role-override-threading");
-        let toml_path = dir.join("aivyx.toml");
+        let toml_path = dir.join("aivyx-pa.toml");
         std::fs::write(
             &toml_path,
             r#"
@@ -8631,7 +8631,7 @@ system_prompt = "You are a custom role."
     #[test]
     fn profile_summary_renders_default_profile_with_injection_disabled() {
         let summary = profile_summary_from_profile(&aivyx_config::Profile::default());
-        assert_eq!(summary.assistant_name, "Aivyx");
+        assert_eq!(summary.assistant_name, "Aivyx PA");
         assert_eq!(summary.assistant_name_source, "default");
         assert!(summary.operator_profile.is_none());
         assert!(summary.communication_style.is_none());
@@ -9339,7 +9339,7 @@ system_prompt = "You are a custom role."
 
     fn settings_toml(name: &str, body: &str) -> PathBuf {
         let dir = test_dir(name);
-        let path = dir.join("aivyx.toml");
+        let path = dir.join("aivyx-pa.toml");
         std::fs::write(&path, body).unwrap();
         path
     }

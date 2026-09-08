@@ -102,7 +102,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Channels", bold(FG)),
         ])),
         area,
@@ -131,7 +131,7 @@ fn actions(f: &mut Frame, area: Rect) {
         area,
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("[[channels]] in aivyx.toml ", dim())]).right_aligned()),
+        Paragraph::new(Line::from(vec![Span::styled("[[channels]] in aivyx-pa.toml ", dim())]).right_aligned()),
         area,
     );
 }
@@ -197,7 +197,7 @@ fn detail(f: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("09:14  ", Style::default().fg(DIMMER)),
-            Span::styled("aivyx ", Style::default().fg(AMBER)),
+            Span::styled("aivyx-pa ", Style::default().fg(AMBER)),
             Span::styled("3 reminders due today", Style::default().fg(DIM)),
         ]),
         Line::from(vec![

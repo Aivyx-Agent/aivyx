@@ -30,7 +30,7 @@
 //! - Builds the `ConcreteAgent` from [`TelegramSessionConfig`] —
 //!   the Telegram-flavored analogue of `aivyx_channel::SessionConfig`.
 //!   Why a separate type: `aivyx-telegram` cannot depend on
-//!   `aivyx-channel` without creating a package cycle (the `aivyx`
+//!   `aivyx-channel` without creating a package cycle (the `aivyx-pa`
 //!   binary lives in `aivyx-channel` and will import the Telegram
 //!   entry point). See [`TelegramSessionConfig`] for the exact
 //!   shape; the binary converts its `SessionConfig` fields over
@@ -309,7 +309,7 @@ pub struct TelegramSessionReport {
     pub turns_run: usize,
 }
 
-/// Phase 9 Task 2 multi-chat report. One aivyx process can now drive N
+/// Phase 9 Task 2 multi-chat report. One aivyx-pa process can now drive N
 /// chats concurrently through a single outer multiplexer; this report
 /// collapses each inner task's [`TelegramSessionReport`] into a per-
 /// chat map plus a total.
@@ -335,7 +335,7 @@ impl TelegramMultiSessionReport {
 
 /// Drive a Telegram session to completion against a real bot token.
 ///
-/// This is the production entry point for the `aivyx --channel
+/// This is the production entry point for the `aivyx-pa --channel
 /// telegram` binary path. It builds a [`TelegramChannel`] over the
 /// production `ReqwestTransport`, then delegates to the generic
 /// [`run_telegram_session_with_transport`] that unit tests also call.
@@ -348,7 +348,7 @@ impl TelegramMultiSessionReport {
 /// - `token` — the Bot API token. Passed straight through to
 ///   `frankenstein::client_reqwest::Bot::new`; nothing in this crate
 ///   logs or echoes it. The caller is responsible for sourcing it
-///   safely (the binary reads `AIVYX_TELEGRAM_TOKEN` from the
+///   safely (the binary reads `AIVYX_PA_TELEGRAM_TOKEN` from the
 ///   environment — see PHASE_8.md Q1 resolution).
 /// - `chat_id` — the Telegram chat this session is bound to. One
 ///   channel per chat_id is Phase 8's simplification.
@@ -958,7 +958,7 @@ where
 
 /// Drive a multi-chat Telegram session to completion against a real
 /// bot token. This is the Phase 9 Task 2 production entry point for
-/// `aivyx --channel telegram` — one aivyx process, N chats, N
+/// `aivyx-pa --channel telegram` — one aivyx-pa process, N chats, N
 /// [`TelegramChannel`] instances, one shared audit chain and memory
 /// store.
 ///

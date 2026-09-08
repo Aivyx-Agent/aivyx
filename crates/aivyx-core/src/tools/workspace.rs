@@ -1,7 +1,7 @@
 //! Chapter O — the agent's personal workspace.
 //!
 //! A dedicated, always-available directory the agent OWNS (default
-//! `~/.aivyx/workspace/`), for its own thoughts, ideas, plans, and multi-file
+//! `~/.aivyx-pa/workspace/`), for its own thoughts, ideas, plans, and multi-file
 //! projects — the third leg alongside `memory.*` (recall facts) and the
 //! operator's `fs.*` / `fs_root` (shared work, Chapter N access levels). It is
 //! independent of the access level: even a fully-sandboxed agent has its own

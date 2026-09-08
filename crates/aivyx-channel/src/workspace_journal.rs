@@ -37,7 +37,7 @@ pub async fn run_workspace_journal_driver(
     shutdown: CancellationToken,
 ) {
     eprintln!(
-        "aivyx workspace-journal: proactive journaling every {}s",
+        "aivyx-pa workspace-journal: proactive journaling every {}s",
         interval.as_secs(),
     );
     let mut cache = OutcomeSummaryCache::new(2);
@@ -63,7 +63,7 @@ pub async fn run_workspace_journal_driver(
         {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("aivyx workspace-journal: summarize failed: {e}");
+                eprintln!("aivyx-pa workspace-journal: summarize failed: {e}");
                 continue;
             }
         };
@@ -74,7 +74,7 @@ pub async fn run_workspace_journal_driver(
         }
 
         eprintln!(
-            "aivyx workspace-journal: firing — {} recent outcome(s) to reflect on",
+            "aivyx-pa workspace-journal: firing — {} recent outcome(s) to reflect on",
             summaries.len(),
         );
         let _ = dispatch

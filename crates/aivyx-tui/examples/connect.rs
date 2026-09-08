@@ -1,10 +1,10 @@
 //! `connect` — guided OAuth onboarding for the productivity tools, in
-//! the Aivyx palette. This is the `aivyx connect` surface (Phase 182).
+//! the Aivyx palette. This is the `aivyx-pa connect` surface (Phase 182).
 //!
 //! Each productivity integration (Gmail, Calendar, Drive, Notion,
 //! Obsidian, n8n) runs as its own sandboxed tool process with an
 //! **operator-provided** OAuth app and a per-tool-process token file
-//! (`~/.aivyx/tool-processes/<svc>/token`, mode 0600). Aivyx never
+//! (`~/.aivyx-pa/tool-processes/<svc>/token`, mode 0600). Aivyx never
 //! holds a shared secret — you bring your own OAuth client. Left: the
 //! services + connection state; right: the selected service's account,
 //! scopes, token, and the guided flow.
@@ -93,7 +93,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Connect", bold(FG)),
         ])),
         area,
@@ -120,7 +120,7 @@ fn sub(f: &mut Frame, area: Rect) {
         area,
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("aivyx connect ", dim())]).right_aligned()),
+        Paragraph::new(Line::from(vec![Span::styled("aivyx-pa connect ", dim())]).right_aligned()),
         area,
     );
 }
@@ -182,7 +182,7 @@ fn detail(f: &mut Frame, area: Rect) {
         step(true, "token stored per tool process"),
         Line::from(""),
         Line::from(Span::styled(
-            "Aivyx never sees a shared secret — you own the app.",
+            "Aivyx PA never sees a shared secret — you own the app.",
             Style::default().fg(DIMMER),
         )),
     ];

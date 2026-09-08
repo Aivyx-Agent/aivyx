@@ -3,7 +3,7 @@
 //! A durable `AuditHook` whose HMAC chain survives process restarts. Sits
 //! as a sibling to `AuditBridge`, not a replacement: callers that want
 //! in-memory audit (tests, short-lived tools) keep using `AuditBridge`;
-//! callers that want durability (the `aivyx` binary) wrap their
+//! callers that want durability (the `aivyx-pa` binary) wrap their
 //! `Arc<dyn Storage>` in `PersistentAuditLog::open` instead.
 //!
 //! ## Why this file, and not an amendment to `AuditHook`

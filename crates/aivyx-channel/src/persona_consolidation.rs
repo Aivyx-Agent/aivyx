@@ -509,7 +509,7 @@ pub async fn consolidate(
             }
             Err(e) => {
                 eprintln!(
-                    "aivyx persona-consolidation: \
+                    "aivyx-pa persona-consolidation: \
                      append_pending failed for {pid}: {e}",
                 );
             }

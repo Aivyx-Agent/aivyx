@@ -400,7 +400,7 @@ impl SharedMissionState {
     /// legitimate pause (an operator gate) and is left untouched. A `Paused`
     /// mission (Chapter Mission Control), by contrast, IS a deliberate,
     /// durable pause point that correctly survives a restart and stays
-    /// resumable via `aivyx team resume` — also left untouched here.
+    /// resumable via `aivyx-pa team resume` — also left untouched here.
     pub async fn reload(&self) -> Result<usize, StorageError> {
         let records = list_team_missions(&self.store).await?;
         let mut reconciled: Vec<TeamMissionRecord> = Vec::new();
@@ -734,7 +734,7 @@ pub async fn drive_registered(
         // Rejected + a retry remains — persist the count and clear the
         // checkpoint for a fresh run.
         eprintln!(
-            "aivyx team: mission {id} produced no deliverable — retrying (attempt {}/{MAX_MISSION_ATTEMPTS})",
+            "aivyx-pa team: mission {id} produced no deliverable — retrying (attempt {}/{MAX_MISSION_ATTEMPTS})",
             attempts + 1,
         );
         reset_mission_for_retry(shared, id, attempts).await?;
@@ -798,7 +798,7 @@ async fn verify_mission_artifact(
         .join("\n\n");
     let verdict = judge.verify(&record.goal, &record.goal, &result).await;
     eprintln!(
-        "aivyx team: mission {id} artifact verdict — {}: {}",
+        "aivyx-pa team: mission {id} artifact verdict — {}: {}",
         if verdict.passed { "ACCEPTED" } else { "REJECTED" },
         verdict.reason,
     );
@@ -1293,7 +1293,7 @@ impl TeamMissionService {
 
     /// Chapter Muster — like [`start_from_goal`], but the resulting
     /// mission is tagged with the schedule that started it (`triggered_by`)
-    /// so Mission Control / `aivyx team status` can show "started by
+    /// so Mission Control / `aivyx-pa team status` can show "started by
     /// schedule: <id>", and so the notify-on-gate/terminal-phase hook
     /// (Task 5) can look up that schedule's own `notify_targets`.
     pub async fn start_from_goal_for_schedule(
@@ -1398,13 +1398,13 @@ impl TeamMissionService {
         {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("aivyx loop: delegated mission {id} drive ERRORED: {e}");
+                eprintln!("aivyx-pa loop: delegated mission {id} drive ERRORED: {e}");
                 return Err(e);
             }
         };
         // Operator-visible: the terminal phase of a loop-delegated mission (so a
         // watcher sees whether auto-delegation completed or was halted/rejected).
-        eprintln!("aivyx loop: delegated mission {id} → phase {phase:?}");
+        eprintln!("aivyx-pa loop: delegated mission {id} → phase {phase:?}");
         Ok((id, phase))
     }
 
@@ -1461,7 +1461,7 @@ impl TeamMissionService {
             )
             .await
             {
-                eprintln!("aivyx team: mission {id} drive failed — {e}");
+                eprintln!("aivyx-pa team: mission {id} drive failed — {e}");
             }
         });
     }
@@ -1498,7 +1498,7 @@ fn scope_base(s: &str) -> &str {
 /// they're authorized against the daemon's real floor — so an operator
 /// installing an unaudited third-party vertical pack could otherwise have
 /// its own declared lead scopes silently escalate beyond what the
-/// operator's own `aivyx.toml`/trust-tier config actually grants.
+/// operator's own `aivyx-pa.toml`/trust-tier config actually grants.
 fn filter_orchestration_markers(pack_declared: &[String]) -> (Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
@@ -1580,7 +1580,7 @@ pub fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
         let really_exceeds_floor = scopes_exceeding_floor(&dropped, lead_scopes);
         if !really_exceeds_floor.is_empty() {
             eprintln!(
-                "aivyx team: {}'s own declared scopes exceed the daemon floor, \
+                "aivyx-pa team: {}'s own declared scopes exceed the daemon floor, \
                  clamped: {}",
                 m.name,
                 really_exceeds_floor.join(", ")
@@ -1803,11 +1803,11 @@ async fn drive(
                         // to continue from. Still logged (distinctly) for operator
                         // visibility, but NOT sent to the audit chain -- HeadlessRefusal
                         // means "declined," which an operator-requested pause isn't.
-                        eprintln!("aivyx team: mission {id} paused");
+                        eprintln!("aivyx-pa team: mission {id} paused");
                         TeamMissionPhase::Paused
                     } else {
                         eprintln!(
-                            "aivyx team: mission {id} halted — {reason}"
+                            "aivyx-pa team: mission {id} halted — {reason}"
                         );
                         audit.on_event(AuditTag::HeadlessRefusal {
                             run_id: id.to_string(),
@@ -1837,7 +1837,7 @@ async fn drive(
                 let reason = format!(
                     "team mission human-approval gate at step '{step}' refused (headless run, no operator)"
                 );
-                eprintln!("aivyx team: {reason} — mission {id} rejected");
+                eprintln!("aivyx-pa team: {reason} — mission {id} rejected");
                 audit.on_event(AuditTag::HeadlessRefusal {
                     run_id: id.to_string(),
                     step: step.clone(),
@@ -2021,7 +2021,7 @@ impl ChannelContext for MissionLeadChannel {
 /// The daemon decomposes the goal, runs it through the checkpoint/resume engine
 /// (gate-pausable, restart-durable, shown in the TUI Missions panel), and the
 /// tool returns immediately with the new mission id (fire-and-forget; the
-/// caller tracks progress via `aivyx team status <id>`).
+/// caller tracks progress via `aivyx-pa team status <id>`).
 ///
 /// Wired like the loop tools: built into the tool list before the
 /// [`TeamMissionService`] exists, then [`set_service`](Self::set_service) is
@@ -2087,7 +2087,7 @@ impl Tool for TeamRunTool {
         "Delegate a goal to a durable, daemon-run agent team (the Nonagon). Use this for a \
          large or multi-part task better handled by several specialists than by you alone: \
          the daemon decomposes the goal into a plan and runs it in the background \
-         (gate-pausable, restart-durable, visible in `aivyx team status`). Input: \
+         (gate-pausable, restart-durable, visible in `aivyx-pa team status`). Input: \
          `{ \"goal\": string }`. Returns the new mission id immediately — it does NOT wait \
          for the mission to finish."
     }
@@ -2102,7 +2102,7 @@ impl Tool for TeamRunTool {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "team.run invoked without a team-mission service; it is available \
-                         only on the daemon (start one with `aivyx daemon run`)"
+                         only on the daemon (start one with `aivyx-pa daemon run`)"
                     .to_string(),
             });
         };
@@ -2137,7 +2137,7 @@ impl Tool for TeamRunTool {
                     "mission_id": mission_id,
                     "status": "started",
                     "note": "the team mission runs in the background; track it with \
-                             `aivyx team status` or the TUI Missions panel",
+                             `aivyx-pa team status` or the TUI Missions panel",
                 }),
                 verified: Verification::NotApplicable,
             },

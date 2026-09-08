@@ -1,14 +1,14 @@
-//! `aivyx autonomy` — the operator-facing autonomy-dial Settings command
+//! `aivyx-pa autonomy` — the operator-facing autonomy-dial Settings command
 //! (Chapter Reins RN.6). `show` prints the resolved autonomy level, the posture
 //! it expands to, and any per-domain overrides + auto-approve allowlist;
-//! `set <level>` rewrites the `[autonomy] level` key of `aivyx.toml`
+//! `set <level>` rewrites the `[autonomy] level` key of `aivyx-pa.toml`
 //! (re-confirming the autonomy-granting levels).
 //!
-//! Like `aivyx access`, these are synchronous file operations — no daemon, no
+//! Like `aivyx-pa access`, these are synchronous file operations — no daemon, no
 //! passphrase, no API key. The change takes effect on the next daemon start.
 //!
 //! Scope note (RN.6a): `set` rewrites only the `level`. Per-domain overrides and
-//! the auto-approve allowlist are hand-edited in `aivyx.toml` for now (and
+//! the auto-approve allowlist are hand-edited in `aivyx-pa.toml` for now (and
 //! *displayed* by `show`); a richer editor + the Studio "Autonomy" section are
 //! RN.6b.
 
@@ -22,16 +22,16 @@ use aivyx_config::{
 
 /// Module-local copy of the default config path (mirrors the other subcommand
 /// modules — no coupling to `crate::DEFAULT_TOML_PATH`).
-const AUTONOMY_TOML_PATH: &str = "aivyx.toml";
+const AUTONOMY_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// `aivyx autonomy show` — print the current level + the posture it resolves to.
+/// `aivyx-pa autonomy show` — print the current level + the posture it resolves to.
 pub fn run_autonomy_show() -> Result<(), String> {
     let cfg = load_config_for_inspection(Path::new(AUTONOMY_TOML_PATH))?;
     print!("{}", render_autonomy_for_show(&cfg));
     Ok(())
 }
 
-/// `aivyx autonomy set <level> [--yes]` — rewrite `[autonomy] level`. The
+/// `aivyx-pa autonomy set <level> [--yes]` — rewrite `[autonomy] level`. The
 /// autonomy-granting levels (`autonomous` / `unleashed`) require a confirmation
 /// unless `--yes`.
 pub fn run_autonomy_set(level: AutonomyLevel, yes: bool) -> Result<(), String> {
@@ -62,7 +62,7 @@ fn run_autonomy_set_at(path: &Path, level: AutonomyLevel, yes: bool) -> Result<(
     write_autonomy_section(path, level).map_err(|e| e.to_string())?;
 
     eprintln!("Autonomy level set to `{level}` in {}.", path.display());
-    eprintln!("  Run `aivyx autonomy show` to see the posture it resolves to.");
+    eprintln!("  Run `aivyx-pa autonomy show` to see the posture it resolves to.");
     eprintln!(
         "  Note: the dial's runtime effects are being wired incrementally \
          (see docs/AUTONOMY.md); each dimension takes effect on the next daemon \
@@ -71,7 +71,7 @@ fn run_autonomy_set_at(path: &Path, level: AutonomyLevel, yes: bool) -> Result<(
     Ok(())
 }
 
-/// Parse the `<level>` token of `aivyx autonomy set`.
+/// Parse the `<level>` token of `aivyx-pa autonomy set`.
 pub fn parse_level(s: &str) -> Result<AutonomyLevel, String> {
     // The string⇄level mapping lives once in `aivyx_config::AutonomyLevel`; this
     // wraps it with the CLI's operator-facing error text.
@@ -91,12 +91,12 @@ fn grants_unattended_autonomy(level: AutonomyLevel) -> bool {
 fn render_autonomy_for_show(cfg: &AivyxConfig) -> String {
     let src = |s: FieldSource| match s {
         FieldSource::Default => "default",
-        FieldSource::Toml => "aivyx.toml",
+        FieldSource::Toml => "aivyx-pa.toml",
         FieldSource::Env => "env",
         FieldSource::EncryptedStore => "encrypted-store",
     };
     let mut out = String::new();
-    out.push_str("aivyx autonomy:\n");
+    out.push_str("aivyx-pa autonomy:\n");
     out.push_str(&format!(
         "  level     = {} ({})\n",
         cfg.autonomy_level.value,
@@ -210,7 +210,7 @@ mod tests {
     fn set_writes_the_level_and_preserves_other_sections() {
         let dir = std::env::temp_dir().join(format!("aivyx-autonomy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let toml = dir.join("aivyx.toml");
+        let toml = dir.join("aivyx-pa.toml");
         // A pre-existing [access] section + an [[autonomy.override]] must survive.
         std::fs::write(
             &toml,
@@ -235,7 +235,7 @@ mod tests {
     fn show_renders_level_posture_and_overrides() {
         let dir = std::env::temp_dir().join(format!("aivyx-autonomy-show-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let toml = dir.join("aivyx.toml");
+        let toml = dir.join("aivyx-pa.toml");
         std::fs::write(
             &toml,
             "[autonomy]\nlevel = \"supervised\"\n\

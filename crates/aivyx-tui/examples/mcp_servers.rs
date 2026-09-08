@@ -2,10 +2,10 @@
 //! mockup, re-grounded in Aivyx's real MCP support.
 //!
 //! Aivyx connects to Model Context Protocol servers configured in
-//! `aivyx.toml` (`[[mcp_servers]]`) — each a local stdio command or an
+//! `aivyx-pa.toml` (`[[mcp_servers]]`) — each a local stdio command or an
 //! SSE URL that advertises tools, surfaced to the agent subject to the
 //! active role's trust ceiling + gates. There's a curated catalog
-//! behind `aivyx mcp recipes` (Phase 106). So this is an MCP-servers
+//! behind `aivyx-pa mcp recipes` (Phase 106). So this is an MCP-servers
 //! registry — a master/detail list + the selected server's transport,
 //! status, and advertised tools — not a generic "plugin store". No
 //! agent roster, no "4.2k API calls / 12ms latency" vanity metrics; the
@@ -97,7 +97,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  MCP Servers", bold(FG)),
         ])),
         area,
@@ -120,13 +120,13 @@ fn actions(f: &mut Frame, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled(" [ + add server ]", bold(AMBER)),
             Span::styled("   ·   browse the catalog: ", dim()),
-            Span::styled("aivyx mcp recipes", Style::default().fg(LAV)),
+            Span::styled("aivyx-pa mcp recipes", Style::default().fg(LAV)),
         ])),
         area,
     );
     f.render_widget(
         Paragraph::new(
-            Line::from(vec![Span::styled("[[mcp_servers]] in aivyx.toml ", dim())]).right_aligned(),
+            Line::from(vec![Span::styled("[[mcp_servers]] in aivyx-pa.toml ", dim())]).right_aligned(),
         ),
         area,
     );
@@ -230,7 +230,7 @@ fn detail(f: &mut Frame, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled("[ configure ]", bold(AMBER)),
             Span::styled("   [ disable ]   ", Style::default().fg(FG)),
-            Span::styled("edit aivyx.toml", dim()),
+            Span::styled("edit aivyx-pa.toml", dim()),
         ]))
         .block(action_block),
         parts[1],

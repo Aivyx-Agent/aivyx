@@ -17,7 +17,7 @@
 //!   errors (empty token, non-absolute path, etc.)
 //!   stay on the consumer side as a separate enum.
 //! - [`default_config_path`] — computes
-//!   `$HOME/.aivyx/tool-processes/<service>/config.toml`.
+//!   `$HOME/.aivyx-pa/tool-processes/<service>/config.toml`.
 //! - [`load_toml`] — generic TOML file load.
 //! - [`StatusReport`] / [`CheckReport`] — Display-aware
 //!   report types every consumer's `auth status` and

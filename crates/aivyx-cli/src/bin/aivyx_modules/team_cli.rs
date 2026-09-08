@@ -1,17 +1,17 @@
-//! `aivyx team` daemon control surface — Chapter L (L.5b).
+//! `aivyx-pa team` daemon control surface — Chapter L (L.5b).
 //!
 //! IPC-backed verbs for daemon-run Nonagon missions, siblings of the offline
 //! `roster` / in-process `run` (Chapter J, in `team.rs`):
 //!
-//! - `aivyx team start --plan <file.json>` — submit an explicit mission plan
+//! - `aivyx-pa team start --plan <file.json>` — submit an explicit mission plan
 //!   (the same friendly `{goal, steps}` spec `decompose_task` accepts; goal→
 //!   plan LLM decomposition is a later increment per the L.4 decision).
-//! - `aivyx team list` / `aivyx team status [<id>]` — poll the mission feed.
-//! - `aivyx team approve|reject <id> <step>` — resolve a human-approval gate.
-//! - `aivyx team abort <id>` (Chapter Belay) — stop a running mission; it
+//! - `aivyx-pa team list` / `aivyx-pa team status [<id>]` — poll the mission feed.
+//! - `aivyx-pa team approve|reject <id> <step>` — resolve a human-approval gate.
+//! - `aivyx-pa team abort <id>` (Chapter Belay) — stop a running mission; it
 //!   halts gracefully at its next wave boundary, landing terminally in
 //!   `Halted`.
-//! - `aivyx team pause <id>` / `aivyx team resume <id>` (Chapter Mission
+//! - `aivyx-pa team pause <id>` / `aivyx-pa team resume <id>` (Chapter Mission
 //!   Control) — pause a running mission at its next wave boundary (landing
 //!   non-terminally in `Paused`) and later resume it from the preserved
 //!   checkpoint.
@@ -32,7 +32,7 @@ use aivyx_team::{StepKind, TeamConfig, parse_plan_spec};
 
 use crate::TeamSubcommand;
 
-/// `aivyx team <daemon-subcommand>` — dispatch the IPC-backed verbs.
+/// `aivyx-pa team <daemon-subcommand>` — dispatch the IPC-backed verbs.
 pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -45,7 +45,7 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("team start failed: {e}"))?;
             println!("started mission {id}");
-            println!("track it with `aivyx team status {id}`");
+            println!("track it with `aivyx-pa team status {id}`");
             Ok(())
         }
         TeamSubcommand::StartGoal { goal, config } => {
@@ -55,7 +55,7 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("team start failed: {e}"))?;
             println!("started mission {id}");
-            println!("track it with `aivyx team status {id}`");
+            println!("track it with `aivyx-pa team status {id}`");
             Ok(())
         }
         TeamSubcommand::List => {
@@ -113,7 +113,7 @@ pub async fn run_team_daemon(sub: TeamSubcommand) -> Result<(), String> {
                     .await
                     .map_err(|e| format!("team resume failed: {e}"))?;
             println!("mission {mission_id} resumed (now {phase:?})");
-            println!("track it with `aivyx team status {mission_id}`");
+            println!("track it with `aivyx-pa team status {mission_id}`");
             Ok(())
         }
         // The offline / in-process verbs are dispatched elsewhere (`team.rs`).
@@ -168,8 +168,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx team: no daemon running on socket {} — start the daemon \
-         first with `aivyx daemon run`",
+        "aivyx-pa team: no daemon running on socket {} — start the daemon \
+         first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }
@@ -190,7 +190,7 @@ fn phase_label(phase: TeamMissionPhase) -> &'static str {
 /// updated first so live work is at the top.
 fn render_mission_list(missions: &[TeamMissionRecord]) -> String {
     if missions.is_empty() {
-        return "No team missions. Start one with `aivyx team start --plan \
+        return "No team missions. Start one with `aivyx-pa team start --plan \
                 <file.json>`.\n"
             .to_string();
     }
@@ -211,7 +211,7 @@ fn render_mission_list(missions: &[TeamMissionRecord]) -> String {
         ));
         if let Some(gate) = &m.pending_gate {
             out.push_str(&format!(
-                "      ↳ awaiting `aivyx team approve|reject {} {gate}`\n",
+                "      ↳ awaiting `aivyx-pa team approve|reject {} {gate}`\n",
                 m.id
             ));
         }
@@ -219,7 +219,7 @@ fn render_mission_list(missions: &[TeamMissionRecord]) -> String {
         // mirroring the pending-gate hint above.
         if m.phase == TeamMissionPhase::Paused {
             out.push_str(&format!(
-                "      ↳ resume with `aivyx team resume {}`\n",
+                "      ↳ resume with `aivyx-pa team resume {}`\n",
                 m.id
             ));
         }
@@ -238,7 +238,7 @@ fn render_mission_status(record: &TeamMissionRecord) -> String {
     if let Some(gate) = &record.pending_gate {
         out.push_str(&format!(
             "  gate:  `{gate}` awaiting your decision \
-             (`aivyx team approve|reject {} {gate}`)\n",
+             (`aivyx-pa team approve|reject {} {gate}`)\n",
             record.id
         ));
     }
@@ -252,7 +252,7 @@ fn render_mission_status(record: &TeamMissionRecord) -> String {
     // mirroring the `gate:` hint above.
     if record.phase == TeamMissionPhase::Paused {
         out.push_str(&format!(
-            "  ↳ resume with `aivyx team resume {}`\n",
+            "  ↳ resume with `aivyx-pa team resume {}`\n",
             record.id
         ));
     }
@@ -358,10 +358,10 @@ mod tests {
         let rec = sample(TeamMissionPhase::Paused, None);
         let status = render_mission_status(&rec);
         assert!(status.contains("phase: paused"));
-        assert!(status.contains("resume with `aivyx team resume m-1`"));
+        assert!(status.contains("resume with `aivyx-pa team resume m-1`"));
 
         let list = render_mission_list(&[rec]);
-        assert!(list.contains("↳ resume with `aivyx team resume m-1`"));
+        assert!(list.contains("↳ resume with `aivyx-pa team resume m-1`"));
     }
 
     #[test]

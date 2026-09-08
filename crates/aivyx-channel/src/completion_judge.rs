@@ -325,7 +325,7 @@ fn extract_goal_identifiers(text: &str) -> Vec<String> {
 }
 
 fn fail_open(reason: &str) -> Verdict {
-    eprintln!("aivyx loop: completion judge unavailable — allowing ({reason})");
+    eprintln!("aivyx-pa loop: completion judge unavailable — allowing ({reason})");
     Verdict { passed: true, reason: format!("not verified ({reason})") }
 }
 

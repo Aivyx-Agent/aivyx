@@ -9,7 +9,7 @@
 //! `docs/VERTICAL_PACKS.md` + `docs/NONAGON.md` §9.
 //!
 //! The same roster ships as a TOML asset ([`KITCHEN_BOH_TOML`]) so the pack is
-//! literally config — `aivyx team run --config <path>` loads it, and the
+//! literally config — `aivyx-pa team run --config <path>` loads it, and the
 //! [`kitchen_boh_team`] constructor exists for tests + programmatic use.
 //!
 //! Safety (NT-02): every specialist is attenuated to a subset of Aria's

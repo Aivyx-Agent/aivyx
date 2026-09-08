@@ -2,7 +2,7 @@
 //!
 //! Google Drive third-party tool process for Aivyx.
 //! Chapter F #3 — Phase 129. Ships as a separate binary
-//! the operator installs and wires into `aivyx.toml` via
+//! the operator installs and wires into `aivyx-pa.toml` via
 //! `[[tool_process]]`. Per PRODUCT.md P10 (substrate is
 //! closed at thirteen tools forever; drive is third-party
 //! territory).
@@ -97,13 +97,13 @@ pub const DEFAULT_DRIVE_SCOPES: &[&str] = &[
 ];
 
 /// Service-specific token storage path
-/// (`$HOME/.aivyx/tool-processes/drive/tokens.json`).
+/// (`$HOME/.aivyx-pa/tool-processes/drive/tokens.json`).
 /// Returns `None` when `$HOME` is unset.
 pub fn default_token_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         std::path::PathBuf::from(home)
-            .join(".aivyx")
+            .join(".aivyx-pa")
             .join("tool-processes")
             .join("drive")
             .join("tokens.json"),

@@ -108,7 +108,7 @@ impl ScheduleCreateTool {
                     },
                     "goal": {
                         "type": "string",
-                        "description": "Instead of `prompt`, delegate this goal to a durable team mission (the Nonagon, the daemon's default team) when the schedule fires, rather than a single-agent turn. Mutually exclusive with `prompt` -- set exactly one. Always runs on the daemon's default team -- picking a specific vertical pack is an operator-only setting (`aivyx.toml`'s own `[schedule.team_mission] pack_config`), not available here, since a pack file can grant its own lead capability scopes and that authority decision belongs to the operator, not the model."
+                        "description": "Instead of `prompt`, delegate this goal to a durable team mission (the Nonagon, the daemon's default team) when the schedule fires, rather than a single-agent turn. Mutually exclusive with `prompt` -- set exactly one. Always runs on the daemon's default team -- picking a specific vertical pack is an operator-only setting (`aivyx-pa.toml`'s own `[schedule.team_mission] pack_config`), not available here, since a pack file can grant its own lead capability scopes and that authority decision belongs to the operator, not the model."
                     }
                 },
                 "required": ["cron"]

@@ -1,13 +1,13 @@
-//! Operator-facing `aivyx identity` CLI surface — Phase 64.
+//! Operator-facing `aivyx-pa identity` CLI surface — Phase 64.
 //!
 //! Phase 64 ships **export only** per the implementation-time
 //! scope adjustment (Q-block was full export+import; import was
 //! deferred to Phase 65 for focused destructive-write design
 //! attention). The export path:
 //!
-//! 1. Reads `aivyx.toml` directly for the Profile half (no
+//! 1. Reads `aivyx-pa.toml` directly for the Profile half (no
 //!    encrypted storage needed — same access pattern as
-//!    `aivyx profile show`).
+//!    `aivyx-pa profile show`).
 //! 2. Talks to a running daemon over IPC for the Persona half
 //!    (the daemon owns the encrypted store; routing through it
 //!    avoids duplicating the master-key unlock path).
@@ -26,21 +26,21 @@ use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::identity_export::{build, parse_and_validate};
 use aivyx_config::{AivyxConfig, LoadOptions};
 
-const PROFILE_TOML_PATH: &str = "aivyx.toml";
+const PROFILE_TOML_PATH: &str = "aivyx-pa.toml";
 
-/// Entry point for `aivyx identity export <path>`.
+/// Entry point for `aivyx-pa identity export <path>`.
 pub async fn run_identity_export(path: &Path) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     if !daemon_is_running(&socket_path).await {
         return Err(format!(
-            "aivyx identity export: no daemon running on socket {} — \
-             start the daemon first with `aivyx daemon run` (or just `aivyx`)",
+            "aivyx-pa identity export: no daemon running on socket {} — \
+             start the daemon first with `aivyx-pa daemon run` (or just `aivyx-pa`)",
             socket_path.display(),
         ));
     }
 
-    // --- Profile half: read aivyx.toml via the existing
-    //     inspection path (same shape as `aivyx profile show`). ---
+    // --- Profile half: read aivyx-pa.toml via the existing
+    //     inspection path (same shape as `aivyx-pa profile show`). ---
     let profile = load_profile_for_export()?;
 
     // --- Persona half: fetch the full chain + effective state
@@ -77,7 +77,7 @@ pub async fn run_identity_export(path: &Path) -> Result<(), String> {
     write_export_file(path, &json)?;
 
     eprintln!(
-        "aivyx identity export: wrote {} deltas + Profile to {}",
+        "aivyx-pa identity export: wrote {} deltas + Profile to {}",
         export.persona.deltas.len(),
         path.display(),
     );
@@ -85,13 +85,13 @@ pub async fn run_identity_export(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Entry point for `aivyx identity import <path> [--force]`.
+/// Entry point for `aivyx-pa identity import <path> [--force]`.
 /// Phase 65. Reads + validates the file locally, then forwards
 /// to the running daemon for the destructive write. The daemon
 /// refuses on a non-empty existing chain unless `force` is set.
 ///
 /// Profile half remains a hand-edit per Q2(a) sign-off — the
-/// CLI does not touch `aivyx.toml`. The exported `[profile]`
+/// CLI does not touch `aivyx-pa.toml`. The exported `[profile]`
 /// is included in the bundle for the operator to reference.
 pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String> {
     // Local parse + validate first. Fail fast on local issues
@@ -104,8 +104,8 @@ pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String>
     let socket_path = default_socket_path()?;
     if !daemon_is_running(&socket_path).await {
         return Err(format!(
-            "aivyx identity import: no daemon running on socket {} — \
-             start the daemon first with `aivyx daemon run` (or just `aivyx`)",
+            "aivyx-pa identity import: no daemon running on socket {} — \
+             start the daemon first with `aivyx-pa daemon run` (or just `aivyx-pa`)",
             socket_path.display(),
         ));
     }
@@ -123,7 +123,7 @@ pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String>
     .map_err(|e| format!("persona import failed: {e}"))?;
 
     eprintln!(
-        "aivyx identity import: imported {} deltas. \
+        "aivyx-pa identity import: imported {} deltas. \
          Chain is now at seq {}.",
         success.deltas_imported, success.final_chain_seq,
     );
@@ -131,7 +131,7 @@ pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String>
         "Daemon's runtime persona state refreshed — the next \
          agent turn sees the imported persona without restart."
     );
-    if bundle.profile.assistant_name != "Aivyx"
+    if bundle.profile.assistant_name != "Aivyx PA"
         || bundle.profile.operator_profile.is_some()
         || bundle.profile.communication_style.is_some()
         || !bundle.profile.primary_use_cases.is_empty()
@@ -144,15 +144,15 @@ pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String>
              Phase 65 does not auto-import Profile (Q2(a) at sign-off)."
         );
         eprintln!(
-            "To apply the imported Profile, hand-edit `aivyx.toml`'s \
+            "To apply the imported Profile, hand-edit `aivyx-pa.toml`'s \
              `[profile]` section to match the bundle's `profile` block, \
-             then restart the daemon (`aivyx daemon stop && aivyx`)."
+             then restart the daemon (`aivyx-pa daemon stop && aivyx-pa`)."
         );
     }
     Ok(())
 }
 
-/// Read the Profile from `aivyx.toml`. Mirrors
+/// Read the Profile from `aivyx-pa.toml`. Mirrors
 /// `aivyx_modules::profile::load_config_for_inspection` but
 /// inlined here so the identity module doesn't depend on the
 /// profile module's private helper.
@@ -167,7 +167,7 @@ fn load_profile_for_export() -> Result<aivyx_config::Profile, String> {
         role_override: None,
     };
     let config = AivyxConfig::load_from_env_and_toml(&opts)
-        .map_err(|e| format!("failed to load aivyx.toml for identity export: {e}"))?;
+        .map_err(|e| format!("failed to load aivyx-pa.toml for identity export: {e}"))?;
     Ok(config.profile)
 }
 

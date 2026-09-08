@@ -462,7 +462,7 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
     let storage = open_store(&dir).await;
 
     // Also run `verify_from_disk` as an independent cold-path check,
-    // exactly the same way `aivyx --verify-only` does it. This is
+    // exactly the same way `aivyx-pa --verify-only` does it. This is
     // the strongest statement we can make about the on-disk chain
     // without spawning a drain task.
     let report = PersistentAuditLog::verify_from_disk(Arc::clone(&storage), TEST_AUDIT_KEY)

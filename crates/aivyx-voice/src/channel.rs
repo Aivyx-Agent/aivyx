@@ -23,7 +23,7 @@ use crate::tts::TtsConfig;
 type TextSinkFn = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Operator-supplied config for the voice channel.
-/// Threaded through `[voice]` in `aivyx.toml`.
+/// Threaded through `[voice]` in `aivyx-pa.toml`.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VoiceChannelConfig {
     /// ASR engine selection. Aivyx supports

@@ -17,7 +17,7 @@
 //! [`release`](BudgetEnforcer::release)s it — the *actual* cost is by then on
 //! the chain (an `LlmCost` event), so the next `committed` figure already
 //! reflects it. Reserve is the pre-call **deny** gate; [`check`] is the
-//! committed-spend **status** (used for alerts + `aivyx cost`).
+//! committed-spend **status** (used for alerts + `aivyx-pa cost`).
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -208,7 +208,7 @@ impl BudgetEnforcer {
     }
 
     /// Evaluate **committed** spend against the caps — the status verdict
-    /// (alerts, `aivyx cost`). Does not consider reservations.
+    /// (alerts, `aivyx-pa cost`). Does not consider reservations.
     pub fn check(&self, day_usd: f64, run_usd: f64) -> BudgetVerdict {
         let run = self.eval("run", run_usd, self.config.per_run_usd);
         let day = self.eval("day", day_usd, self.config.per_day_usd);

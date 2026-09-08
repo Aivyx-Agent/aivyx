@@ -1,4 +1,4 @@
-//! `aivyx cost` — the priced spend report (Chapter K.4).
+//! `aivyx-pa cost` — the priced spend report (Chapter K.4).
 //!
 //! Read-only, offline (the same cold-start storage open as `audit export` /
 //! `--verify-only`: passphrase required, no session, no daemon). It scans the
@@ -33,7 +33,7 @@ fn to_counts(u: &TokenUsage) -> TokenCounts {
     }
 }
 
-/// `aivyx cost [--today]` — scan the chain's `LlmCost` events and print the
+/// `aivyx-pa cost [--today]` — scan the chain's `LlmCost` events and print the
 /// priced report. Offline; mirrors `run_audit_export`'s cold-start posture.
 pub async fn run_cost(
     storage: Arc<dyn Storage>,
@@ -88,7 +88,7 @@ fn llm_cost_in_window(
 }
 
 /// Render a [`CostReport`] as an operator-readable block. Pure — the unit of
-/// `aivyx cost`.
+/// `aivyx-pa cost`.
 pub fn render_cost(report: &CostReport, today: bool) -> String {
     let window = if today { "last 24h" } else { "all time" };
     if report.is_empty() {

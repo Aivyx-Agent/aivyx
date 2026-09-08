@@ -1,7 +1,7 @@
 //! Operator-supplied toolkit configuration.
 //!
 //! Phase 125 Task 2. Loaded once at tool-process startup from
-//! `~/.aivyx/tool-processes/toolkit/config.toml`. Different
+//! `~/.aivyx-pa/tool-processes/toolkit/config.toml`. Different
 //! shape than `aivyx-gmail`'s config (no OAuth client; the
 //! services this bundle integrates use API keys or no auth
 //! at all).
@@ -9,7 +9,7 @@
 //! ## File format
 //!
 //! ```toml
-//! # ~/.aivyx/tool-processes/toolkit/config.toml
+//! # ~/.aivyx-pa/tool-processes/toolkit/config.toml
 //!
 //! # Top-level scalar keys (like this one) MUST come before any
 //! # [table] header below — TOML attributes a bare key to whichever
@@ -76,24 +76,24 @@ pub struct BraveSearchConfig {
 }
 
 /// Default config path:
-/// `$HOME/.aivyx/tool-processes/toolkit/config.toml`.
+/// `$HOME/.aivyx-pa/tool-processes/toolkit/config.toml`.
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
     let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
     Ok(PathBuf::from(home)
-        .join(".aivyx")
+        .join(".aivyx-pa")
         .join("tool-processes")
         .join("toolkit")
         .join("config.toml"))
 }
 
 /// Default state-directory path:
-/// `$HOME/.aivyx/tool-processes/toolkit/`. Returned without
+/// `$HOME/.aivyx-pa/tool-processes/toolkit/`. Returned without
 /// `config.toml` appended so callers (task storage,
 /// health-state storage) can join their own file names.
 pub fn default_state_dir() -> Result<PathBuf, ConfigFileError> {
     let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
     Ok(PathBuf::from(home)
-        .join(".aivyx")
+        .join(".aivyx-pa")
         .join("tool-processes")
         .join("toolkit"))
 }

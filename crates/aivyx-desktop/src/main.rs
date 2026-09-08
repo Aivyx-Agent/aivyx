@@ -34,13 +34,13 @@ mod gate_watch;
 const STUDIO_URL: &str = "http://127.0.0.1:7843/";
 const STUDIO_ADDR: &str = "127.0.0.1:7843";
 
-/// The Studio URL the shell wraps: `AIVYX_STUDIO_URL` when set (a remote
+/// The Studio URL the shell wraps: `AIVYX_PA_STUDIO_URL` when set (a remote
 /// Aivyx — the Harbor/server-appliance topology, e.g.
 /// `http://10.80.80.148:7843/`), else the local default. Vitrine §12 —
 /// the shell was hardcoded to localhost, which made it unusable against
 /// a rig-hosted Studio.
 fn studio_url() -> String {
-    std::env::var("AIVYX_STUDIO_URL").unwrap_or_else(|_| STUDIO_URL.to_string())
+    std::env::var("AIVYX_PA_STUDIO_URL").unwrap_or_else(|_| STUDIO_URL.to_string())
 }
 
 /// Host:port derived from [`studio_url`], for the reachability probe.
@@ -79,16 +79,16 @@ pub(crate) enum UserEvent {
 fn auto_launch() -> Option<auto_launch::AutoLaunch> {
     let exe = std::env::current_exe().ok()?;
     AutoLaunchBuilder::new()
-        .set_app_name("Aivyx")
+        .set_app_name("Aivyx PA")
         .set_app_path(&exe.to_string_lossy())
         .build()
         .ok()
 }
 
-/// The `aivyx` binary to drive the daemon: `AIVYX_BIN` if set, else `aivyx` on
+/// The `aivyx-pa` binary to drive the daemon: `AIVYX_PA_BIN` if set, else `aivyx-pa` on
 /// `PATH`.
 fn aivyx_bin() -> String {
-    std::env::var("AIVYX_BIN").unwrap_or_else(|_| "aivyx".to_string())
+    std::env::var("AIVYX_PA_BIN").unwrap_or_else(|_| "aivyx-pa".to_string())
 }
 
 /// Is the daemon's Studio reachable right now?
@@ -109,7 +109,7 @@ fn wait_until_reachable() {
 }
 
 /// Ensure a daemon is serving the Studio: attach if one is up (returns `None`),
-/// else spawn `aivyx daemon run --web-ui` (env inherited) and return the child
+/// else spawn `aivyx-pa daemon run --web-ui` (env inherited) and return the child
 /// so we can stop it on quit. A spawn failure is non-fatal.
 fn ensure_daemon() -> Option<Child> {
     if daemon_reachable() {
@@ -138,7 +138,7 @@ fn ensure_daemon() -> Option<Child> {
     }
 }
 
-/// Stop a daemon we own (graceful `aivyx daemon stop`, then reap the child).
+/// Stop a daemon we own (graceful `aivyx-pa daemon stop`, then reap the child).
 fn stop_owned_daemon(child: &mut Option<Child>) {
     if child.is_none() {
         return;
@@ -220,7 +220,7 @@ fn main() -> wry::Result<()> {
     }
 
     let window = WindowBuilder::new()
-        .with_title("Aivyx Studio")
+        .with_title("Aivyx PA Studio")
         .with_inner_size(LogicalSize::new(1280.0, 820.0))
         .with_min_inner_size(LogicalSize::new(720.0, 480.0))
         .build(&event_loop)
@@ -240,7 +240,7 @@ fn main() -> wry::Result<()> {
         .unwrap_or(false);
     let autostart_item =
         CheckMenuItem::new("Start at login", autostart.is_some(), autostart_checked, None);
-    let quit_item = MenuItem::new("Quit Aivyx", true, None);
+    let quit_item = MenuItem::new("Quit Aivyx PA", true, None);
     menu.append_items(&[
         &open_item,
         &PredefinedMenuItem::separator(),
@@ -251,7 +251,7 @@ fn main() -> wry::Result<()> {
     ])
     .expect("build tray menu");
     let _tray = TrayIconBuilder::new()
-        .with_tooltip("Aivyx")
+        .with_tooltip("Aivyx PA")
         .with_icon(tray_icon_image())
         .with_menu(Box::new(menu))
         .build()
@@ -275,7 +275,7 @@ fn main() -> wry::Result<()> {
         *control_flow = ControlFlow::Wait;
         match event {
             // Closing the window hides to the tray and keeps the daemon running
-            // (the always-on-assistant model) — "Quit Aivyx" is the real exit.
+            // (the always-on-assistant model) — "Quit Aivyx PA" is the real exit.
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..

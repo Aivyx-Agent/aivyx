@@ -12,7 +12,7 @@
 //! instructed to set only after it has shown the drafted skill to
 //! the operator and they approved. Combined with Trusted-tier-only
 //! (the `skills.write` base), the HMAC persona-chain audit, and
-//! `aivyx persona revert`, a save is a visible, reversible event.
+//! `aivyx-pa persona revert`, a save is a visible, reversible event.
 
 use std::sync::{Arc, OnceLock};
 
@@ -391,7 +391,7 @@ impl Tool for SkillForgetTool {
     fn description(&self) -> &str {
         "Forget (remove) a skill. Confirm with the operator first; \
          call with `confirmed: true` only after they approve. Input: \
-         `{ name, confirmed }`. Recoverable via `aivyx persona`."
+         `{ name, confirmed }`. Recoverable via `aivyx-pa persona`."
     }
     fn input_schema(&self) -> &Value {
         &self.schema

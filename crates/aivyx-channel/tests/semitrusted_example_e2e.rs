@@ -3,7 +3,7 @@
 //!
 //! ## Why this file exists
 //!
-//! `examples/aivyx.toml` teaches the **Trusted-tier** attenuation
+//! `examples/aivyx-pa.toml` teaches the **Trusted-tier** attenuation
 //! story (D4 Rule 2: an unqualified-held parent scope grants a
 //! qualified-needed child scope). That example deliberately keeps
 //! every descendant at `Trusted` so `CEILING_TRUSTED`'s permissive
@@ -33,7 +33,7 @@
 //! set at all), the test fails loud — and the operator who reads
 //! the example learns the real rule, not the one they expected.
 //!
-//! ## Relationship to `examples/aivyx.toml`'s tests
+//! ## Relationship to `examples/aivyx-pa.toml`'s tests
 //!
 //! `role_envelope_e2e.rs` and `role_render_e2e.rs` pin the
 //! Trusted-tier story's envelopes. This file pins the

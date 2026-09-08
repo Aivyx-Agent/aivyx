@@ -106,10 +106,10 @@ pub use kvcache_probe::fetch_llama_slots_info;
 ))]
 pub mod embedding;
 
-/// Phase 104 — `aivyx init` provider credential verification.
+/// Phase 104 — `aivyx-pa init` provider credential verification.
 /// Issues `GET /v1/models` against Anthropic / OpenAI to confirm
 /// `(api_key, model)` is valid before the wizard writes
-/// `aivyx.toml`. See [`verify::verify_provider_credentials`].
+/// `aivyx-pa.toml`. See [`verify::verify_provider_credentials`].
 #[cfg(any(
     feature = "provider-anthropic",
     feature = "provider-openai",
@@ -409,11 +409,11 @@ pub struct SlotHint {
     /// that share a prefix onto the same physical `llama-server` slot.
     pub prefix_hash: String,
     /// Optional slot the caller would prefer, if it has one in mind.
-    /// `None` lets the broker pick freely. `aivyx`'s own broker-mode
+    /// `None` lets the broker pick freely. `aivyx-pa`'s own broker-mode
     /// planner never has a preference (it never checks out a local
     /// slot), so this is always `None` from that call site today —
     /// typed as `Option` because the broker's own wire contract accepts
-    /// one, not because `aivyx` currently sends one.
+    /// one, not because `aivyx-pa` currently sends one.
     pub preferred_slot: Option<u32>,
 }
 

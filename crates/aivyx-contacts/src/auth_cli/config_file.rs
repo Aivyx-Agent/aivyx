@@ -1,5 +1,5 @@
 //! Load the operator-supplied OAuth client config from
-//! `~/.aivyx/tool-processes/contacts/config.toml`.
+//! `~/.aivyx-pa/tool-processes/contacts/config.toml`.
 //!
 //! Q1a (Recommended) at Phase 123 sign-off: operator creates
 //! their own Google Cloud OAuth client and pastes the
@@ -9,7 +9,7 @@
 //! ## File format
 //!
 //! ```toml
-//! # ~/.aivyx/tool-processes/contacts/config.toml
+//! # ~/.aivyx-pa/tool-processes/contacts/config.toml
 //! client_id = "XXXXX.apps.googleusercontent.com"
 //! client_secret = "GOCSPX-..."
 //! redirect_uri = "http://127.0.0.1:8088/oauth/callback"
@@ -44,11 +44,11 @@ pub enum ConfigFileError {
     NoHome,
 }
 
-/// Default path: `$HOME/.aivyx/tool-processes/contacts/config.toml`.
+/// Default path: `$HOME/.aivyx-pa/tool-processes/contacts/config.toml`.
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
     let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
     Ok(PathBuf::from(home)
-        .join(".aivyx")
+        .join(".aivyx-pa")
         .join("tool-processes")
         .join("contacts")
         .join("config.toml"))

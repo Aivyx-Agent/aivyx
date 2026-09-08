@@ -42,10 +42,10 @@ fn load_example_config() -> AivyxConfig {
         .join("..")
         .join("..")
         .join("examples")
-        .join("aivyx.toml");
+        .join("aivyx-pa.toml");
     assert!(
         example_path.exists(),
-        "examples/aivyx.toml must exist at {example_path:?}"
+        "examples/aivyx-pa.toml must exist at {example_path:?}"
     );
     let opts = LoadOptions {
         toml_path: Some(example_path),
@@ -56,7 +56,7 @@ fn load_example_config() -> AivyxConfig {
         role_override: Some("default".to_string()),
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .expect("examples/aivyx.toml must load cleanly via aivyx-config")
+        .expect("examples/aivyx-pa.toml must load cleanly via aivyx-config")
 }
 
 fn local_channel_floor_with_sandbox(sandbox: &str) -> Vec<Scope> {

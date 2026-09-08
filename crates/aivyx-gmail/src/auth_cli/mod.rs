@@ -23,7 +23,7 @@
 //!
 //! - [`cli`] — argument parsing (subcommand dispatch).
 //! - [`config_file`] — load the operator-supplied OAuth client
-//!   config from `~/.aivyx/tool-processes/gmail/config.toml`.
+//!   config from `~/.aivyx-pa/tool-processes/gmail/config.toml`.
 //! - [`init`] — `auth init` implementation (loopback +
 //!   consent URL + token exchange).
 //! - [`status`] — `auth status` implementation.

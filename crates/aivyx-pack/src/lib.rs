@@ -35,11 +35,11 @@ use thiserror::Error;
 /// empty set means only operator-configured `[pack] trusted_publishers`
 /// verify. Deliberately NOT a placeholder key: a placeholder anyone can
 /// read is worse than none.
-pub const AIVYX_PUBLISHER_KEYS: &[&str] = &[];
+pub const AIVYX_PA_PUBLISHER_KEYS: &[&str] = &[];
 
 /// The target triple this binary was built for (relayed by build.rs) —
 /// `pack install` refuses bundles built for a foreign platform.
-pub const HOST_TARGET: &str = env!("AIVYX_BUILD_TARGET");
+pub const HOST_TARGET: &str = env!("AIVYX_PA_BUILD_TARGET");
 
 const PAYLOAD_NAME: &str = "payload.tar.gz";
 const SIGNATURE_NAME: &str = "signature.bin";
@@ -371,7 +371,7 @@ pub fn read_bundle(path: &Path) -> Result<ReadBundle, PackError> {
 }
 
 /// Verify a bundle against the trusted publisher set (operator config
-/// unioned with [`AIVYX_PUBLISHER_KEYS`]). The `publisher.txt` hint
+/// unioned with [`AIVYX_PA_PUBLISHER_KEYS`]). The `publisher.txt` hint
 /// selects which trusted key to check — it must decode to a key that is
 /// BYTE-IDENTICAL to a trusted entry; an unknown key is refused before
 /// any signature math.
@@ -385,7 +385,7 @@ pub fn verify_bundle(
     let trusted = trusted_publishers
         .iter()
         .map(String::as_str)
-        .chain(AIVYX_PUBLISHER_KEYS.iter().copied())
+        .chain(AIVYX_PA_PUBLISHER_KEYS.iter().copied())
         .filter_map(decode_verifying_key)
         .any(|k| k == hint);
     if !trusted {

@@ -1,6 +1,6 @@
-//! `aivyx mcp-server <name>` — bundled MCP server runner (Phase 46).
+//! `aivyx-pa mcp-server <name>` — bundled MCP server runner (Phase 46).
 //!
-//! Runs an MCP-compliant stdio server inside the `aivyx` binary.
+//! Runs an MCP-compliant stdio server inside the `aivyx-pa` binary.
 //! Reads newline-delimited JSON-RPC 2.0 from stdin, writes responses
 //! to stdout. Currently supports one server name: `"web-search"`.
 
@@ -400,7 +400,7 @@ async fn handle_web_search(args: Value, backend: &SearchBackend) -> Result<Strin
         .unwrap_or(DEFAULT_MAX_RESULTS);
 
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; aivyx/1.0)")
+        .user_agent("Mozilla/5.0 (compatible; aivyx-pa/1.0)")
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("build HTTP client: {e}"))?;
@@ -517,7 +517,7 @@ async fn handle_web_read(args: Value) -> Result<String, String> {
         .ok_or_else(|| "missing required parameter: url".to_string())?;
 
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; aivyx/1.0)")
+        .user_agent("Mozilla/5.0 (compatible; aivyx-pa/1.0)")
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("build HTTP client: {e}"))?;
@@ -749,7 +749,7 @@ pub async fn run_mcp_server(name: &str) -> Result<(), String> {
         SearchBackend::SerpApi(_) => "SerpAPI",
         SearchBackend::DuckDuckGo => "DuckDuckGo (zero-config)",
     };
-    eprintln!("aivyx mcp-server: starting {name} server on stdio (backend: {backend_name})");
+    eprintln!("aivyx-pa mcp-server: starting {name} server on stdio (backend: {backend_name})");
     run_stdio_loop(&schemas, &backend).await
 }
 

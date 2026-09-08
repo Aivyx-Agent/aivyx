@@ -20,24 +20,24 @@ pub struct LoopRunState {
     pub max_iterations: u32,
     /// Wall-clock (unix ms) the current run started, or `0`.
     pub started_at_unix_ms: u64,
-    /// Why the last run ended (for `aivyx loop status`). `None`
+    /// Why the last run ended (for `aivyx-pa loop status`). `None`
     /// until a run has finished at least once.
     pub last_stop_reason: Option<String>,
     /// Phase 177 — the run-window token total at the last
     /// iteration boundary (the same window-sum the Phase 176
-    /// budget uses). Surfaced by `aivyx loop status` so an
+    /// budget uses). Surfaced by `aivyx-pa loop status` so an
     /// operator can watch spend approach the cap. `0` until the
     /// first iteration of a run; reset on each `request_start`.
     pub tokens_used: u64,
     /// Chapter K — the run-window priced spend in **cents** (USD×100;
     /// `f64` is avoided so this state stays `Eq` + serde-clean). The same
-    /// window the dollar cap uses; surfaced for `aivyx loop status`. `0`
+    /// window the dollar cap uses; surfaced for `aivyx-pa loop status`. `0`
     /// until the first iteration; reset on each `request_start`.
     #[serde(default)]
     pub spent_cents: u64,
     /// Chapter Circuit (CI.5) — how many *consecutive* iterations have
     /// made no progress (the live count behind the CI.1 stall breaker).
-    /// Surfaced by `aivyx loop status` so a stalling run is legible
+    /// Surfaced by `aivyx-pa loop status` so a stalling run is legible
     /// before it trips. `0` when progressing; reset on each
     /// `request_start`.
     #[serde(default)]

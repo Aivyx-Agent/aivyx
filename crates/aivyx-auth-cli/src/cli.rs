@@ -31,7 +31,7 @@ pub enum AuthMode {
 /// - `[]` (no args after the binary name) →
 ///   `BinaryMode::IpcLoop`. The Aivyx daemon spawns
 ///   third-party tool processes in this mode via
-///   `[[tool_process]]` in `aivyx.toml`.
+///   `[[tool_process]]` in `aivyx-pa.toml`.
 /// - `["help"]` / `["--help"]` / `["-h"]` →
 ///   `BinaryMode::Help`.
 /// - `["auth"]` → error (subcommand required).

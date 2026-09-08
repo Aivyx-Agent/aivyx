@@ -93,7 +93,7 @@ fn draw(f: &mut Frame) {
 fn header(f: &mut Frame, area: Rect) {
     let left = Line::from(vec![
         Span::styled("▌", bold(AMBER)),
-        Span::styled(" AIVYX", bold(AMBER)),
+        Span::styled(" AIVYX PA", bold(AMBER)),
         Span::styled("  Command Center", bold(FG)),
     ]);
     let right = Line::from(vec![

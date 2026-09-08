@@ -38,8 +38,8 @@
 //!
 //! Phase 7 task 4 lit up `PassphraseSource::InteractivePrompt` with a
 //! real `rpassword::prompt_password` call, but the *policy* for
-//! which source to pick lives in the `aivyx` binary, not in this
-//! module. The binary checks `AIVYX_PASSPHRASE` first (non-empty →
+//! which source to pick lives in the `aivyx-pa` binary, not in this
+//! module. The binary checks `AIVYX_PA_PASSPHRASE` first (non-empty →
 //! `Env`), then `stdin().is_terminal()` as a hint (true →
 //! `InteractivePrompt`), then bails. Keeping the decision outside
 //! the library means `fetch_passphrase_bytes` is still a pure
@@ -64,7 +64,7 @@ pub const SALT_LEN: usize = 16;
 /// Default env var name for the env-sourced passphrase. The binary
 /// and tests refer to this constant rather than hardcoding the
 /// string, so a rename stays a one-line edit.
-pub const DEFAULT_ENV_VAR: &str = "AIVYX_PASSPHRASE";
+pub const DEFAULT_ENV_VAR: &str = "AIVYX_PA_PASSPHRASE";
 
 // --------------------------------------------------------------------
 // Errors
@@ -75,12 +75,12 @@ pub const DEFAULT_ENV_VAR: &str = "AIVYX_PASSPHRASE";
 /// `aivyx-core` boundary — no new top-level variant needed.
 #[derive(Debug, thiserror::Error)]
 pub enum PassphraseError {
-    /// `AIVYX_PASSPHRASE` (or the caller's chosen env var) was not
+    /// `AIVYX_PA_PASSPHRASE` (or the caller's chosen env var) was not
     /// set when a `PassphraseSource::Env` was requested.
     #[error("passphrase env var `{0}` is not set")]
     EnvNotSet(String),
 
-    /// `AIVYX_PASSPHRASE` was set but empty. Rejected explicitly
+    /// `AIVYX_PA_PASSPHRASE` was set but empty. Rejected explicitly
     /// because Argon2id happily hashes an empty input and the
     /// resulting key would be trivially brute-forceable.
     #[error("passphrase env var `{0}` is empty")]
@@ -128,7 +128,7 @@ pub enum PassphraseError {
 ///
 /// The production binary picks between [`PassphraseSource::Env`]
 /// and [`PassphraseSource::InteractivePrompt`] based on whether
-/// `AIVYX_PASSPHRASE` is set and whether stdin is a terminal; tests
+/// `AIVYX_PA_PASSPHRASE` is set and whether stdin is a terminal; tests
 /// use [`PassphraseSource::Fixture`] to inject known bytes without
 /// touching the environment or a tty, or drive `InteractivePrompt`
 /// via the `rpassword::prompt_password_from_bufread` seam under the
@@ -137,7 +137,7 @@ pub enum PassphraseSource {
     /// Read from a named environment variable. Fails with
     /// [`PassphraseError::EnvNotSet`] if unset or
     /// [`PassphraseError::EnvEmpty`] if set to "". Pass
-    /// [`DEFAULT_ENV_VAR`] for the standard `AIVYX_PASSPHRASE` name.
+    /// [`DEFAULT_ENV_VAR`] for the standard `AIVYX_PA_PASSPHRASE` name.
     Env { var_name: String },
 
     /// Phase 51 Task 4 — passphrase supplied by the config loader.
@@ -173,7 +173,7 @@ pub enum PassphraseSource {
     ///
     /// `confirm` — when `true` (creating a brand-new store), prompts
     /// twice and requires a match before returning, re-prompting the
-    /// whole pair on mismatch; mirrors `aivyx keyring set`'s existing
+    /// whole pair on mismatch; mirrors `aivyx-pa keyring set`'s existing
     /// prompt+confirm+match-check shape. When `false` (unlocking an
     /// existing store), behavior is unchanged from before this field
     /// existed: one prompt, no confirmation — a wrong guess there
@@ -223,7 +223,7 @@ impl std::fmt::Debug for PassphraseSource {
 /// arm), the freshly-created salt file is `chmod 0600`'d before the
 /// function returns. The earlier doc claim "salts are not secret" is
 /// still true in the cryptographic sense — knowledge of the salt
-/// does not shortcut Argon2id — but the uniform "every file aivyx
+/// does not shortcut Argon2id — but the uniform "every file aivyx-pa
 /// writes looks the same to an auditor" discipline from Task 6
 /// applies anyway. The chmod only runs on the create path: if a
 /// caller has deliberately re-permed an existing salt file, a warm
@@ -343,7 +343,7 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
             if bytes.is_empty() {
                 // Same posture as EnvEmpty: empty passphrase is
                 // refused outright. Argon2id would happily hash it.
-                Err(PassphraseError::EnvEmpty("config:[aivyx]passphrase".into()))
+                Err(PassphraseError::EnvEmpty("config:[aivyx_pa]passphrase".into()))
             } else {
                 Ok(bytes)
             }
@@ -358,12 +358,12 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
             // `Write` seam instead (see
             // `interactive_source_reads_password_from_bufread`).
             read_interactive_password_inner(|| {
-                rpassword::prompt_password("aivyx passphrase: ")
+                rpassword::prompt_password("aivyx-pa passphrase: ")
             })
         }
         PassphraseSource::InteractivePrompt { confirm: true } => {
             // Creating a brand-new store — prompt twice and require a
-            // match, the same shape `aivyx keyring set` already uses.
+            // match, the same shape `aivyx-pa keyring set` already uses.
             // See `read_interactive_password_with_confirm`.
             read_interactive_password_with_confirm(|prompt| {
                 rpassword::prompt_password(prompt)
@@ -429,10 +429,10 @@ fn read_interactive_password_with_confirm<F>(mut read: F) -> Result<Vec<u8>, Pas
 where
     F: FnMut(&str) -> std::io::Result<String>,
 {
-    const FIRST_PROMPT: &str = "aivyx passphrase (new store — you'll need this every time): ";
+    const FIRST_PROMPT: &str = "aivyx-pa passphrase (new store — you'll need this every time): ";
     const RETRY_PROMPT: &str = concat!(
         "Passphrases didn't match. Try again.\n",
-        "aivyx passphrase (new store — you'll need this every time): "
+        "aivyx-pa passphrase (new store — you'll need this every time): "
     );
     let mut prompt = FIRST_PROMPT;
     loop {
@@ -588,11 +588,11 @@ mod tests {
         let dir = TestDir::new();
         // SAFETY: `set_var` is safe under our env_lock serialization.
         unsafe {
-            std::env::set_var("AIVYX_PASSPHRASE_TEST_OK", "correct horse battery staple");
+            std::env::set_var("AIVYX_PA_PASSPHRASE_TEST_OK", "correct horse battery staple");
         }
         let master = derive_master_key(
             PassphraseSource::Env {
-                var_name: "AIVYX_PASSPHRASE_TEST_OK".to_string(),
+                var_name: "AIVYX_PA_PASSPHRASE_TEST_OK".to_string(),
             },
             &dir.salt(),
             Argon2Params::weak_for_tests(),
@@ -604,7 +604,7 @@ mod tests {
         // catches that, so here we just confirm no error.
         let _sub = master.derive_subkey(b"sessions").unwrap();
         unsafe {
-            std::env::remove_var("AIVYX_PASSPHRASE_TEST_OK");
+            std::env::remove_var("AIVYX_PA_PASSPHRASE_TEST_OK");
         }
     }
 
@@ -614,17 +614,17 @@ mod tests {
         let dir = TestDir::new();
         // SAFETY: `remove_var` is safe under the env_lock.
         unsafe {
-            std::env::remove_var("AIVYX_PASSPHRASE_TEST_MISSING");
+            std::env::remove_var("AIVYX_PA_PASSPHRASE_TEST_MISSING");
         }
         let err = derive_master_key(
             PassphraseSource::Env {
-                var_name: "AIVYX_PASSPHRASE_TEST_MISSING".to_string(),
+                var_name: "AIVYX_PA_PASSPHRASE_TEST_MISSING".to_string(),
             },
             &dir.salt(),
             Argon2Params::weak_for_tests(),
         )
         .unwrap_err();
-        assert!(matches!(err, PassphraseError::EnvNotSet(ref v) if v == "AIVYX_PASSPHRASE_TEST_MISSING"));
+        assert!(matches!(err, PassphraseError::EnvNotSet(ref v) if v == "AIVYX_PA_PASSPHRASE_TEST_MISSING"));
     }
 
     #[test]
@@ -632,28 +632,28 @@ mod tests {
         let _lock = env_lock();
         let dir = TestDir::new();
         unsafe {
-            std::env::set_var("AIVYX_PASSPHRASE_TEST_EMPTY", "");
+            std::env::set_var("AIVYX_PA_PASSPHRASE_TEST_EMPTY", "");
         }
         let err = derive_master_key(
             PassphraseSource::Env {
-                var_name: "AIVYX_PASSPHRASE_TEST_EMPTY".to_string(),
+                var_name: "AIVYX_PA_PASSPHRASE_TEST_EMPTY".to_string(),
             },
             &dir.salt(),
             Argon2Params::weak_for_tests(),
         )
         .unwrap_err();
-        assert!(matches!(err, PassphraseError::EnvEmpty(ref v) if v == "AIVYX_PASSPHRASE_TEST_EMPTY"));
+        assert!(matches!(err, PassphraseError::EnvEmpty(ref v) if v == "AIVYX_PA_PASSPHRASE_TEST_EMPTY"));
         unsafe {
-            std::env::remove_var("AIVYX_PASSPHRASE_TEST_EMPTY");
+            std::env::remove_var("AIVYX_PA_PASSPHRASE_TEST_EMPTY");
         }
     }
 
     // ---- FromConfig source (Phase 51 Task 4) ------------------------
     //
     // The PassphraseSource::FromConfig variant is what makes the
-    // [aivyx] passphrase TOML field actually drive derivation. Phase
+    // [aivyx_pa] passphrase TOML field actually drive derivation. Phase
     // 47 visual-pass discovered a footgun: TOML was parsed but the
-    // binary required AIVYX_PASSPHRASE in env anyway. Phase 51
+    // binary required AIVYX_PA_PASSPHRASE in env anyway. Phase 51
     // fixes it; these tests pin the fix.
 
     #[test]
@@ -688,18 +688,18 @@ mod tests {
 
         // Derive via Env over the same salt sidecar.
         unsafe {
-            std::env::set_var("AIVYX_PASSPHRASE_FROM_CONFIG_EQUIV", phrase);
+            std::env::set_var("AIVYX_PA_PASSPHRASE_FROM_CONFIG_EQUIV", phrase);
         }
         let master_from_env = derive_master_key(
             PassphraseSource::Env {
-                var_name: "AIVYX_PASSPHRASE_FROM_CONFIG_EQUIV".to_string(),
+                var_name: "AIVYX_PA_PASSPHRASE_FROM_CONFIG_EQUIV".to_string(),
             },
             &dir.salt(),
             Argon2Params::weak_for_tests(),
         )
         .expect("Env");
         unsafe {
-            std::env::remove_var("AIVYX_PASSPHRASE_FROM_CONFIG_EQUIV");
+            std::env::remove_var("AIVYX_PA_PASSPHRASE_FROM_CONFIG_EQUIV");
         }
 
         // Two MasterKeys derived from the same bytes + same salt
@@ -754,18 +754,18 @@ mod tests {
         // shared across both calls (load_or_create_salt will generate
         // it on the first call and read it on the second).
         unsafe {
-            std::env::set_var("AIVYX_PASSPHRASE_TEST_PARITY", "same-bytes");
+            std::env::set_var("AIVYX_PA_PASSPHRASE_TEST_PARITY", "same-bytes");
         }
         let m_env = derive_master_key(
             PassphraseSource::Env {
-                var_name: "AIVYX_PASSPHRASE_TEST_PARITY".to_string(),
+                var_name: "AIVYX_PA_PASSPHRASE_TEST_PARITY".to_string(),
             },
             &salt_path,
             Argon2Params::weak_for_tests(),
         )
         .unwrap();
         unsafe {
-            std::env::remove_var("AIVYX_PASSPHRASE_TEST_PARITY");
+            std::env::remove_var("AIVYX_PA_PASSPHRASE_TEST_PARITY");
         }
 
         let m_fix = derive_master_key(
@@ -820,7 +820,7 @@ mod tests {
             rpassword::prompt_password_from_bufread(
                 &mut reader,
                 &mut sink,
-                "aivyx passphrase: ",
+                "aivyx-pa passphrase: ",
             )
         })
         .expect("bufread-backed interactive prompt must succeed");
@@ -837,7 +837,7 @@ mod tests {
 
     /// An empty line (user pressed enter without typing anything)
     /// must surface as `InteractiveEmpty`, mirroring how the env-var
-    /// path rejects an empty `AIVYX_PASSPHRASE`. An empty passphrase
+    /// path rejects an empty `AIVYX_PA_PASSPHRASE`. An empty passphrase
     /// would derive a deterministic master key and defeat the whole
     /// Argon2id layer.
     #[test]
@@ -937,14 +937,14 @@ mod tests {
     fn debug_env_renders_var_name_but_not_value() {
         let _lock = env_lock();
         unsafe {
-            std::env::set_var("AIVYX_PASSPHRASE_TRIPWIRE", "should-not-appear");
+            std::env::set_var("AIVYX_PA_PASSPHRASE_TRIPWIRE", "should-not-appear");
         }
         let source = PassphraseSource::Env {
-            var_name: "AIVYX_PASSPHRASE_TRIPWIRE".to_string(),
+            var_name: "AIVYX_PA_PASSPHRASE_TRIPWIRE".to_string(),
         };
         let rendered = format!("{source:?}");
         assert!(
-            rendered.contains("AIVYX_PASSPHRASE_TRIPWIRE"),
+            rendered.contains("AIVYX_PA_PASSPHRASE_TRIPWIRE"),
             "Debug should include the var name, got {rendered:?}"
         );
         assert!(
@@ -952,7 +952,7 @@ mod tests {
             "Debug must not read the env var or leak its value, got {rendered:?}"
         );
         unsafe {
-            std::env::remove_var("AIVYX_PASSPHRASE_TRIPWIRE");
+            std::env::remove_var("AIVYX_PA_PASSPHRASE_TRIPWIRE");
         }
     }
 

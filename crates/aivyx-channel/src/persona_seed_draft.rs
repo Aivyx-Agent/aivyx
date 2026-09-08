@@ -4,7 +4,7 @@
 //! to be like; the configured model drafts a starting **Persona** seed (the
 //! *learned* categories + one optional starter skill), which the operator then
 //! edits and confirms before anything is planted. Shared by the daemon's
-//! `DraftPersonaSeed` IPC handler (the Studio) and the `aivyx init` wizard (the
+//! `DraftPersonaSeed` IPC handler (the Studio) and the `aivyx-pa init` wizard (the
 //! CLI), so there is one drafting implementation.
 //!
 //! **Local-first / operator-authored:** the draft is enrichment, never

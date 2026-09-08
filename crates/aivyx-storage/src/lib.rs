@@ -496,7 +496,7 @@ impl From<redb::CommitError> for StorageError {
 pub struct StorageConfig {
     /// Absolute path to the redb file. The parent directory must
     /// exist; `open` will not create parents. Pick a path under
-    /// `$XDG_DATA_HOME/aivyx/` or similar.
+    /// `$XDG_DATA_HOME/aivyx-pa/` or similar.
     pub path: PathBuf,
 }
 

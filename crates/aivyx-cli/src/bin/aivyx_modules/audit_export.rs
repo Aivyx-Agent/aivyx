@@ -1,4 +1,4 @@
-//! Phase 105 — `aivyx audit export` JSONL emitter.
+//! Phase 105 — `aivyx-pa audit export` JSONL emitter.
 //!
 //! Read-only offline export of the encrypted audit chain. The
 //! HMAC-chained log carries everything a research-grade
@@ -18,7 +18,7 @@
 //!   and `--limit <N>` map directly to
 //!   `PersistentAuditLog::entries_range`.
 //! - **Q3(a)** — offline-only via the same cold-start storage
-//!   open path `aivyx --verify-only` uses; no new IPC variant,
+//!   open path `aivyx-pa --verify-only` uses; no new IPC variant,
 //!   no daemon dependency, passphrase required.
 //!
 //! ## Re-verifying the chain downstream

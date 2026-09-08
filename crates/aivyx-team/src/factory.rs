@@ -74,7 +74,7 @@ pub struct SpecialistFactory {
     /// provider = "llama_cpp"` -- attached to every built specialist so
     /// its own per-turn `LlmPlanner` shares the exact same `KvSlotPool`
     /// the hosting process's main agent uses (the daemon's own agent, or
-    /// the `aivyx team run` CLI invocation's own lead agent, depending on
+    /// the `aivyx-pa team run` CLI invocation's own lead agent, depending on
     /// which process this factory was built in), not one each. `None`
     /// (the default) disables kvcache for every specialist this factory
     /// builds.

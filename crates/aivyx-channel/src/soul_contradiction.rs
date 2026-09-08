@@ -10,7 +10,7 @@
 //! Profile constraints* ("be candid, never flatter me" vs a learned "warm and
 //! encouraging").
 //!
-//! One batched LLM call, on demand (`aivyx persona conflicts` / the Studio),
+//! One batched LLM call, on demand (`aivyx-pa persona conflicts` / the Studio),
 //! zero background cost, no config. Best-effort: a parse/LLM failure yields no
 //! conflicts, never an error. This module only *finds*; resolution removes the
 //! losing facet via a normal `RemoveList` persona delta (operator-authored,

@@ -1,18 +1,18 @@
-//! Operator-facing `aivyx tool-relevance` CLI surface — Phase 119
+//! Operator-facing `aivyx-pa tool-relevance` CLI surface — Phase 119
 //! Task 6.
 //!
 //! Closes the Phase 116 deferred inspection surface: the
 //! `KeyDomain::ToolRelevanceLedger` is encrypted at rest, so
 //! operators had no read path into it before this CLI landed. With
-//! `aivyx tool-relevance dump [--keyword-key <key>]`, the operator
+//! `aivyx-pa tool-relevance dump [--keyword-key <key>]`, the operator
 //! can see what the Phase 116 relevance ledger has accumulated
 //! across turns and decide whether the per-keyword-key outcome rows
 //! match what the self-learning loop is reinforcing.
 //!
-//! Future `aivyx tool-relevance` subcommands (e.g. `clear`,
+//! Future `aivyx-pa tool-relevance` subcommands (e.g. `clear`,
 //! `forget <key>`) land additively under the same parser.
 
-/// Entry point for `aivyx tool-relevance dump [--keyword-key <key>]`.
+/// Entry point for `aivyx-pa tool-relevance dump [--keyword-key <key>]`.
 /// Talks to the daemon over IPC; renders the returned per-row table
 /// in a stable column layout the operator can scan.
 pub async fn run_tool_relevance_dump(keyword_key_filter: Option<&str>) -> Result<(), String> {
@@ -22,8 +22,8 @@ pub async fn run_tool_relevance_dump(keyword_key_filter: Option<&str>) -> Result
     let socket_path = default_socket_path()?;
     if !daemon_is_running(&socket_path).await {
         return Err(format!(
-            "aivyx tool-relevance dump: daemon must be running \
-             (socket {}). Start it with `aivyx`.",
+            "aivyx-pa tool-relevance dump: daemon must be running \
+             (socket {}). Start it with `aivyx-pa`.",
             socket_path.display(),
         ));
     }

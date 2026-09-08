@@ -65,7 +65,7 @@ impl AutonomyLevel {
     /// Parse the lowercase wire/display name back into a level — the inverse of
     /// [`as_str`](Self::as_str). `None` for an unknown token. The single source
     /// of truth for the string⇄level mapping, shared by the future
-    /// `aivyx autonomy set` parser and the `SetAutonomyLevel` IPC handler.
+    /// `aivyx-pa autonomy set` parser and the `SetAutonomyLevel` IPC handler.
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
             "manual" => Some(AutonomyLevel::Manual),
@@ -223,7 +223,7 @@ impl AutonomyPosture {
     /// explicitly-enabled loop. At `assisted` (the default), `loop_enabled` is
     /// false, so this returns `explicit_loop_enabled` unchanged — today's
     /// behavior, byte-for-byte. (Arming only *makes the loop available*; a run
-    /// still requires an explicit `aivyx loop start`. And it only takes effect
+    /// still requires an explicit `aivyx-pa loop start`. And it only takes effect
     /// when a `[loop]` section exists, since that is where the caps live.)
     pub fn arms_loop(&self, explicit_loop_enabled: bool) -> bool {
         explicit_loop_enabled || self.loop_enabled

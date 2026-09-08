@@ -253,7 +253,7 @@ async fn server_name_accessible() {
 ///
 /// Equivalent to running:
 ///
-///     env AIVYX_MCP_SANDBOX_PROBE=1 python3 mock_mcp_server.py
+///     env AIVYX_PA_MCP_SANDBOX_PROBE=1 python3 mock_mcp_server.py
 ///
 /// — i.e., set a probe env var, then exec the real MCP server.
 /// The bridge handshake (initialize) + tool discovery must work
@@ -264,7 +264,7 @@ async fn bridge_handshakes_through_env_sandbox_wrapper() {
 
     let sandbox = SandboxConfig {
         wrapper: "env".into(),
-        args: vec!["AIVYX_MCP_SANDBOX_PROBE=1".into()],
+        args: vec!["AIVYX_PA_MCP_SANDBOX_PROBE=1".into()],
     };
     let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(
         "python3",
@@ -323,13 +323,13 @@ async fn sandboxed_bridge_preserves_server_name() {
 /// The end-to-end proof of the secret path: an `env` entry handed to
 /// `start_with_sandbox` lands in the spawned MCP server's environment.
 /// The mock server only advertises its `env_probe` tool when
-/// `AIVYX_MCP_ENV_PROBE` is set, so the tool's presence *is* evidence of
+/// `AIVYX_PA_MCP_ENV_PROBE` is set, so the tool's presence *is* evidence of
 /// delivery; calling it confirms the exact value round-trips. Credential-
 /// free + deterministic (OQ-5).
 #[tokio::test]
 async fn env_reaches_child_process() {
     let env = vec![(
-        "AIVYX_MCP_ENV_PROBE".to_string(),
+        "AIVYX_PA_MCP_ENV_PROBE".to_string(),
         "s3cr3t-conduit".to_string(),
     )];
     let bridge = aivyx_mcp::McpServerBridge::start_with_sandbox(

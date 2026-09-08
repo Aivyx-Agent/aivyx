@@ -6,7 +6,7 @@
 //! deltas on the same HMAC log as the audit chain, every one
 //! revertable. This screen shows the growth timeline on the left and
 //! the **effective** merged persona on the right, with its Profile
-//! provenance. It's the `aivyx persona` / `aivyx profile` surface and
+//! provenance. It's the `aivyx-pa persona` / `aivyx-pa profile` surface and
 //! the headline self-learning differentiator.
 //!
 //! Run it live (truecolor, any key to exit):
@@ -103,7 +103,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Persona", bold(FG)),
         ])),
         area,

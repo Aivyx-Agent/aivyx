@@ -1,7 +1,7 @@
 //! `tools` — the agent's tool registry + observability, in the Aivyx
 //! palette. The built-in counterpart to `mcp_servers`: where that lists
 //! external MCP servers, this lists the **whole tool surface** the
-//! single agent can call, the way `aivyx tools` does (Phase 102) —
+//! single agent can call, the way `aivyx-pa tools` does (Phase 102) —
 //! each tool annotated with its provenance, capability scope, gate
 //! state, and audit-derived call/outcome stats.
 //!
@@ -119,7 +119,7 @@ fn header(f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▌", bold(AMBER)),
-            Span::styled(" AIVYX", bold(AMBER)),
+            Span::styled(" AIVYX PA", bold(AMBER)),
             Span::styled("  Tools", bold(FG)),
         ])),
         area,
@@ -151,7 +151,7 @@ fn role_line(f: &mut Frame, area: Rect) {
         area,
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("aivyx tools ", dim())]).right_aligned()),
+        Paragraph::new(Line::from(vec![Span::styled("aivyx-pa tools ", dim())]).right_aligned()),
         area,
     );
 }

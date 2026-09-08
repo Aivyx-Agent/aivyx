@@ -82,8 +82,8 @@ USAGE:
 
 SUBCOMMANDS:
     auth init      Run the Google OAuth consent flow and save
-                   tokens to `~/.aivyx/tool-processes/contacts/tokens.json`.
-                   Requires `~/.aivyx/tool-processes/contacts/config.toml`
+                   tokens to `~/.aivyx-pa/tool-processes/contacts/tokens.json`.
+                   Requires `~/.aivyx-pa/tool-processes/contacts/config.toml`
                    with the operator's OAuth client_id +
                    client_secret + redirect_uri.
 
@@ -99,7 +99,7 @@ SUBCOMMANDS:
 When invoked with NO subcommand, the binary enters the Aivyx
 tool-process IPC loop and expects to be spawned by the Aivyx
 daemon via a
-[[tool_process]] entry in aivyx.toml. Operators should not
+[[tool_process]] entry in aivyx-pa.toml. Operators should not
 invoke this mode directly.
 "
 }

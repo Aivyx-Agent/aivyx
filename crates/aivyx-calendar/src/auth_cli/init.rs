@@ -6,7 +6,7 @@
 //! ## Flow
 //!
 //! 1. Load OAuth config from
-//!    `~/.aivyx/tool-processes/calendar/config.toml`.
+//!    `~/.aivyx-pa/tool-processes/calendar/config.toml`.
 //! 2. Parse the redirect_uri to extract the loopback port +
 //!    callback path.
 //! 3. Bind a `TcpListener` on `127.0.0.1:<port>`. If the port

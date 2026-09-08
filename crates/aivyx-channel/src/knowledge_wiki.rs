@@ -455,7 +455,7 @@ pub async fn run_wiki_sweep_loop(
                 let r = synthesizer.sweep(now, max_pages).await;
                 if r.wrote > 0 {
                     eprintln!(
-                        "aivyx wiki-sweep: wrote {} page(s) ({} scanned, {} skipped)",
+                        "aivyx-pa wiki-sweep: wrote {} page(s) ({} scanned, {} skipped)",
                         r.wrote, r.scanned, r.skipped
                     );
                 }

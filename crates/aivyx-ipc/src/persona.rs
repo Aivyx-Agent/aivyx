@@ -55,7 +55,7 @@ pub enum PersonaDeltaCategory {
 
     /// Phase 118 — Outcome-driven Profile-config refinement
     /// HINT. List of operator-staged suggestions to refine the
-    /// declared `[profile]` block in `aivyx.toml`. Each list
+    /// declared `[profile]` block in `aivyx-pa.toml`. Each list
     /// entry's `value` is a JSON-serialized
     /// `aivyx_core::skill_proposer::ProfileFieldHint` payload
     /// ({field, suggested_value, rationale}).
@@ -66,8 +66,8 @@ pub enum PersonaDeltaCategory {
     /// declared Profile (P13 — Persona grows from Profile). A
     /// `ProfileHint` is a NOTED suggestion that the operator-
     /// declared Profile itself could be refined — the operator
-    /// reviews the hint and decides whether to edit `aivyx.toml`.
-    /// Phase 118 does **not** auto-mutate `aivyx.toml`; the
+    /// reviews the hint and decides whether to edit `aivyx-pa.toml`.
+    /// Phase 118 does **not** auto-mutate `aivyx-pa.toml`; the
     /// hint stays in the Persona chain as a record-of-suggestion.
     ///
     /// Q2(a) at Phase 118 sign-off — **always-staged for
@@ -90,7 +90,7 @@ pub enum PersonaDeltaCategory {
     /// Roles in `aivyx-config` carry `system_prompt`,
     /// `tool_allowlist`, parent-chain inheritance, etc. (P9 —
     /// Per-Role Full Capability Declaration, Phase 13). Phase
-    /// 118 does **not** auto-mutate `aivyx.toml`; the draft
+    /// 118 does **not** auto-mutate `aivyx-pa.toml`; the draft
     /// stays in the Persona chain for operator review +
     /// optional copy into the role config.
     ///
@@ -238,7 +238,7 @@ pub struct EffectivePersona {
     /// `aivyx_core::skill_proposer::ProfileFieldHint` objects
     /// (one per list entry). These are operator-approved
     /// observations that the declared `[profile]` block could
-    /// be refined; they do NOT auto-mutate `aivyx.toml`. The
+    /// be refined; they do NOT auto-mutate `aivyx-pa.toml`. The
     /// operator reviews + optionally copies into the config.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub profile_hints: Vec<String>,
@@ -247,7 +247,7 @@ pub struct EffectivePersona {
     /// objects (one per list entry). Operator-approved Role
     /// definition drafts the agent has observed would fit
     /// recurring task patterns. Do NOT auto-mutate
-    /// `aivyx.toml`; operator reviews + optionally copies
+    /// `aivyx-pa.toml`; operator reviews + optionally copies
     /// the rendered shape into the role config.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role_drafts: Vec<String>,

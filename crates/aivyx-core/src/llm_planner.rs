@@ -321,7 +321,7 @@ pub struct LlmPlannerConfig {
     /// fuzzy-match default).
     ///
     /// Operators set this via `[providers]
-    /// tool_name_auto_correct_threshold = ...` in `aivyx.toml`;
+    /// tool_name_auto_correct_threshold = ...` in `aivyx-pa.toml`;
     /// the binary plumbs it through to this field at planner-
     /// construction time.
     ///
@@ -569,28 +569,28 @@ const TOOL_FAILURE_NUDGE_MARKER: &str = "\n\n[SYSTEM NOTE:";
 fn warn_pool_full() {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
-        eprintln!("aivyx: kvcache: no free slot in the pool; this turn runs unpinned");
+        eprintln!("aivyx-pa: kvcache: no free slot in the pool; this turn runs unpinned");
     });
 }
 
 fn warn_restore_failed(err: &dyn std::fmt::Display) {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
-        eprintln!("aivyx: kvcache: restore_into_slot failed: {err}");
+        eprintln!("aivyx-pa: kvcache: restore_into_slot failed: {err}");
     });
 }
 
 fn warn_restore_timed_out() {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
-        eprintln!("aivyx: kvcache: restore_into_slot timed out; treating as a miss");
+        eprintln!("aivyx-pa: kvcache: restore_into_slot timed out; treating as a miss");
     });
 }
 
 fn warn_warm_up_request_failed(err: &dyn std::fmt::Display) {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
-        eprintln!("aivyx: kvcache: warm-up request failed: {err}");
+        eprintln!("aivyx-pa: kvcache: warm-up request failed: {err}");
     });
 }
 
@@ -598,7 +598,7 @@ fn warn_warm_up_timed_out() {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
         eprintln!(
-            "aivyx: kvcache: warm-up timed out after {KVCACHE_WARM_UP_TIMEOUT:?}; \
+            "aivyx-pa: kvcache: warm-up timed out after {KVCACHE_WARM_UP_TIMEOUT:?}; \
              skipping save so a partial/corrupt slot is never recorded as a \
              valid cache entry"
         );
@@ -609,7 +609,7 @@ fn warn_warm_up_stream_errored() {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
         eprintln!(
-            "aivyx: kvcache: warm-up stream errored mid-response; \
+            "aivyx-pa: kvcache: warm-up stream errored mid-response; \
              skipping save so a partial/corrupt slot is never \
              recorded as a valid cache entry"
         );
@@ -619,14 +619,14 @@ fn warn_warm_up_stream_errored() {
 fn warn_save_failed(err: &dyn std::fmt::Display) {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
-        eprintln!("aivyx: kvcache: save_from_slot failed: {err}");
+        eprintln!("aivyx-pa: kvcache: save_from_slot failed: {err}");
     });
 }
 
 fn warn_save_timed_out() {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {
-        eprintln!("aivyx: kvcache: save_from_slot timed out");
+        eprintln!("aivyx-pa: kvcache: save_from_slot timed out");
     });
 }
 
@@ -771,7 +771,7 @@ impl LlmPlanner {
         let Some(slot_id) = kv.pool.checkout() else {
             // No `tracing` dependency in this crate (see `tools/git.rs`'s
             // `confiner_for` doc comment) -- `eprintln!` matches the rest
-            // of `aivyx`'s operator-facing warning convention. Rate-limited
+            // of `aivyx-pa`'s operator-facing warning convention. Rate-limited
             // (see the one-shot warning latches above `impl LlmPlanner`)
             // so a persistently-full pool doesn't spam this line every
             // single turn forever.
@@ -788,7 +788,7 @@ impl LlmPlanner {
         };
 
         // This same process may have already loaded exactly this prefix
-        // into this exact slot -- e.g. `aivyx`'s daemon builds a fresh
+        // into this exact slot -- e.g. `aivyx-pa`'s daemon builds a fresh
         // `LlmPlanner` every turn, but `KvSlotPool` itself is long-lived
         // for the process, so a later turn pinned back onto the same
         // slot id can find its own earlier work still physically live in
@@ -5065,7 +5065,7 @@ mod tests {
     #[tokio::test]
     async fn ensure_kv_slot_checked_out_skips_restore_when_the_pool_already_has_this_prefix() {
         // Final-review Fix 1 regression test: a second `begin_turn` (a
-        // fresh `LlmPlanner`, matching how `aivyx` builds one per turn)
+        // fresh `LlmPlanner`, matching how `aivyx-pa` builds one per turn)
         // that checks out a slot the pool already recorded as holding
         // this exact prefix must NOT re-run `restore_into_slot` -- doing
         // so would overwrite this same process's own live conversation

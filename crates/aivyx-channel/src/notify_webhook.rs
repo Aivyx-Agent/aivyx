@@ -10,7 +10,7 @@
 //!
 //! ```json
 //! {
-//!   "source":    "aivyx",
+//!   "source":    "aivyx-pa",
 //!   "target":    "<target_name>",
 //!   "subject":   "<subject>" | null,
 //!   "message":   "<message>",
@@ -86,7 +86,7 @@ impl NotifyWebhookBackend {
         subject: Option<&str>,
     ) -> WebhookPayload {
         WebhookPayload {
-            source: "aivyx",
+            source: "aivyx-pa",
             target: target_name.to_string(),
             subject: subject.map(|s| s.to_string()),
             message: message.to_string(),
@@ -251,7 +251,7 @@ mod tests {
             "build failed",
             Some("CI"),
         );
-        assert_eq!(p.source, "aivyx");
+        assert_eq!(p.source, "aivyx-pa");
         assert_eq!(p.target, "ops-alerts");
         assert_eq!(p.subject.as_deref(), Some("CI"));
         assert_eq!(p.message, "build failed");
@@ -275,7 +275,7 @@ mod tests {
         );
         let v: serde_json::Value =
             serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
-        assert_eq!(v["source"], "aivyx");
+        assert_eq!(v["source"], "aivyx-pa");
         assert_eq!(v["target"], "phone");
         assert_eq!(v["subject"], "title");
         assert_eq!(v["message"], "hello");

@@ -1,10 +1,10 @@
-//! `aivyx tools` CLI — Phase 102.
+//! `aivyx-pa tools` CLI — Phase 102.
 //!
 //! Read-only tool-observability view: every registered tool
 //! annotated with audit-derived call statistics (counts, the
 //! outcome breakdown, average duration), with an optional
 //! `--window` filter. IPC-backed — the same daemon-query shape
-//! as `aivyx learning`. The render helper is a pure function so
+//! as `aivyx-pa learning`. The render helper is a pure function so
 //! unit tests drive it against fixtures without IPC.
 
 use std::path::Path;
@@ -12,7 +12,7 @@ use std::path::Path;
 use aivyx_channel::daemon_client::{daemon_is_running, get_tool_stats};
 use aivyx_channel::daemon_ipc::{ToolStat, default_socket_path};
 
-/// `aivyx tools [--window <secs>]`
+/// `aivyx-pa tools [--window <secs>]`
 pub async fn run_tools(window_secs: Option<u64>) -> Result<(), String> {
     let socket_path = default_socket_path()?;
     require_daemon_running(&socket_path).await?;
@@ -28,8 +28,8 @@ async fn require_daemon_running(socket_path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "aivyx tools: no daemon running on socket {} — \
-         start the daemon first with `aivyx daemon run`",
+        "aivyx-pa tools: no daemon running on socket {} — \
+         start the daemon first with `aivyx-pa daemon run`",
         socket_path.display(),
     ))
 }

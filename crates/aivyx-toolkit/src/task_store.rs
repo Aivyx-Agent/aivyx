@@ -1,7 +1,7 @@
 //! Lightweight TODO storage for the `task.*` tools.
 //!
 //! Phase 125 Task 4. JSON file at
-//! `~/.aivyx/tool-processes/toolkit/tasks.json` (0600 perms,
+//! `~/.aivyx-pa/tool-processes/toolkit/tasks.json` (0600 perms,
 //! atomic write-then-rename — same pattern as Gmail's token
 //! file).
 //!

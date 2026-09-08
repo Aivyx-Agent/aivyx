@@ -31,7 +31,7 @@
 //! - [`save_tokens`] / [`load_tokens`] — token file
 //!   storage with `0600` perms + atomic
 //!   write-then-rename. Path is a parameter so each
-//!   consumer's `~/.aivyx/tool-processes/{service}/tokens.json`
+//!   consumer's `~/.aivyx-pa/tool-processes/{service}/tokens.json`
 //!   works without service-specific code here.
 //! - [`GOOGLE_AUTH_ENDPOINT`] / [`GOOGLE_TOKEN_ENDPOINT`] —
 //!   the standard Google OAuth 2.0 endpoints.
