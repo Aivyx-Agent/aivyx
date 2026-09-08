@@ -1410,6 +1410,101 @@ system_prompt = "brand new role, no legacy baggage"
     drop(env);
 }
 
+/// Rename clean-break — a config carrying the pre-rename `[aivyx]`
+/// section (with no `[aivyx_pa]` present) still loads successfully
+/// (TOML happily parses an unrecognized table), but must accumulate a
+/// loud, specific warning naming the exact problem: the old section's
+/// passphrase was NOT read. Silent loss of a security-relevant field
+/// is exactly what Finding 2 exists to prevent.
+#[test]
+fn legacy_aivyx_section_warns_that_passphrase_was_not_read() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("legacy-aivyx-section");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[aivyx]
+passphrase = "old-section-passphrase-never-read"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts)
+        .expect("legacy [aivyx] section is structurally legal TOML, load must succeed");
+
+    // The old section's passphrase must NOT have been read.
+    assert!(
+        cfg.passphrase.is_none(),
+        "the legacy [aivyx] section's passphrase must not be read into \
+         the runtime config"
+    );
+
+    // Exactly one warning fires, and it names both the old and new
+    // section names plus the fact that the passphrase was dropped.
+    assert_eq!(
+        cfg.warnings.len(),
+        1,
+        "expected exactly one warning about the legacy [aivyx] section: got {:?}",
+        cfg.warnings
+    );
+    assert!(cfg.warnings[0].contains("[aivyx]"), "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("[aivyx_pa]"), "{:?}", cfg.warnings);
+    assert!(
+        cfg.warnings[0].contains("NOT read"),
+        "{:?}",
+        cfg.warnings
+    );
+
+    drop(env);
+}
+
+/// The `[aivyx_pa]` section (the current, correct name) must never
+/// trip the legacy-section warning on its own.
+#[test]
+fn current_aivyx_pa_section_emits_no_legacy_warning() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("current-aivyx-pa-section");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[aivyx_pa]
+passphrase = "correctly-named-section"
+"#,
+    )
+    .unwrap();
+
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(
+        cfg.passphrase.is_some(),
+        "the [aivyx_pa] section's passphrase must be read"
+    );
+    assert!(
+        cfg.warnings.is_empty(),
+        "no legacy-section warning expected: {:?}",
+        cfg.warnings
+    );
+
+    drop(env);
+}
+
 /// A `Role` parsed from TOML that omits both `system_prompt` and
 /// `memory_topic_prefix` still loads. The omitted fields fall
 /// through to `Default`-sourced values on the runtime `Role`.

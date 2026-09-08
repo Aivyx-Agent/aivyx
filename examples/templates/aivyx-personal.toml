@@ -37,7 +37,7 @@ path = "~/.local/share/aivyx/store.redb"
 # Sandbox root — point at a notes/journal directory.
 root = "~/journal"
 
-[aivyx]
+[aivyx_pa]
 # passphrase = "set-a-real-passphrase"
 
 [daemon]

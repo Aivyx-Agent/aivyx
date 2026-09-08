@@ -37,8 +37,8 @@ path = "~/.local/share/aivyx/store.redb"
 # directory. Adjust to match your projects layout.
 root = "~/projects"
 
-[aivyx]
-# Master-key passphrase. Either set here, in the AIVYX_PASSPHRASE
+[aivyx_pa]
+# Master-key passphrase. Either set here, in the AIVYX_PA_PASSPHRASE
 # env var, or the daemon will prompt on first launch.
 # passphrase = "set-a-real-passphrase"
 

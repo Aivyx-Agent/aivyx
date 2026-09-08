@@ -7,7 +7,7 @@
 #
 #   1. Build the kitchen tool process:  cargo build --release -p aivyx-kitchen
 #      and point `[[tool_process]].command` at the binary.
-#   2. Create ~/.aivyx/tool-processes/kitchen/config.toml with your
+#   2. Create ~/.aivyx-pa/tool-processes/kitchen/config.toml with your
 #      KitchenDB connection (postgrest_url, api_key, organization_id).
 #   3. Install the starter skills bundle (the kitchen routines) — see
 #      crates/verticals/aivyx-kitchen/src/pack.rs / `aivyx_kitchen::pack::skills_json()`.
@@ -38,8 +38,8 @@ path = "~/.local/share/aivyx/store.redb"
 # is the system of record; the filesystem is just for documents.
 root = "~/kitchen"
 
-[aivyx]
-# passphrase = "set-a-real-passphrase"   # or AIVYX_PASSPHRASE env var
+[aivyx_pa]
+# passphrase = "set-a-real-passphrase"   # or AIVYX_PA_PASSPHRASE env var
 
 [daemon]
 web_ui = true

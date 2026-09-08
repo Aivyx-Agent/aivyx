@@ -3956,6 +3956,16 @@ struct RawToml {
     voice: VoiceOptions,
     #[serde(default)]
     aivyx_pa: RawAivyxPa,
+    /// Legacy pre-rename `[aivyx]` section name. Never read for its
+    /// contents — captured only so the loader can detect its presence
+    /// and warn loudly that it's silently ignored (see the
+    /// `legacy_aivyx_section` check near the `warnings` accumulator).
+    /// The rename to `[aivyx_pa]` is a deliberate clean break with no
+    /// auto-migration; this field exists purely to make that break
+    /// loud instead of silent for a security-relevant field
+    /// (the storage passphrase).
+    #[serde(default, rename = "aivyx")]
+    legacy_aivyx_section: Option<toml::Value>,
     /// `[[role]]` table-array. One entry per role. Unset in the TOML
     /// → `None`, which triggers the implicit-`default`-role synthesis
     /// in the loader. `Some(vec)` (including `Some(vec![])` for a
@@ -6538,6 +6548,25 @@ impl AivyxConfig {
         // legacy `system_prompt` and explicit roles accumulates a
         // warning below and the explicit roles win.
         let mut warnings: Vec<String> = Vec::new();
+
+        // Rename clean-break — a `[aivyx]` section is the pre-rename
+        // section name; this version reads `[aivyx_pa]` instead. TOML
+        // happily parses an unrecognized top-level table and silently
+        // drops it (`RawToml` has no `deny_unknown_fields`), which
+        // would otherwise leave an operator's passphrase silently
+        // unread with zero signal that anything was wrong. This is
+        // deliberately narrow: it names the exact old section, not a
+        // general "warn on any unknown TOML key" feature.
+        if toml.legacy_aivyx_section.is_some() {
+            warnings.push(
+                "found a `[aivyx]` section in your config, but this \
+                 version expects `[aivyx_pa]` — your passphrase (if \
+                 any) in the old section was NOT read; rename the \
+                 section to `[aivyx_pa]`."
+                    .to_string(),
+            );
+        }
+
         let mut roles: BTreeMap<String, Role> = BTreeMap::new();
 
         if let Some(raw_roles) = toml.roles.as_ref() {

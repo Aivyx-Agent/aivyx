@@ -39,7 +39,7 @@ path = "~/.local/share/aivyx/store.redb"
 # researcher role reads from this and writes summaries here.
 root = "~/research"
 
-[aivyx]
+[aivyx_pa]
 # passphrase = "set-a-real-passphrase"
 
 [daemon]

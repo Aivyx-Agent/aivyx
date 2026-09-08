@@ -3952,6 +3952,36 @@ mod tests {
         assert!(!out.contains("name = \"web-search\""));
     }
 
+    /// Regression guard for the rename Finding-1 fix: every bundled
+    /// template (the real `examples/templates/*.toml` files, loaded
+    /// through the exact same `include_str!` + `bundled_templates()`
+    /// path `aivyx-pa init --template <name>` uses) must produce a
+    /// generated config whose `[aivyx_pa]` section (if any) round-trips
+    /// through the wizard's template-splicing path — and none may
+    /// still carry the old, silently-ignored `[aivyx]` section name.
+    /// `render_with_template` only overwrites wizard-controlled keys
+    /// (provider/model/paths/profile/api key), so any `[aivyx]` /
+    /// `[aivyx_pa]` section in the source template passes through to
+    /// the generated file verbatim — this test exercises that same
+    /// pass-through path against the real bundled templates.
+    #[test]
+    fn bundled_templates_never_generate_a_legacy_aivyx_section() {
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s.redb", ".", false);
+        for template in crate::init_templates::bundled_templates() {
+            let doc: toml_edit::DocumentMut = template
+                .toml_content
+                .parse()
+                .unwrap_or_else(|e| panic!("template `{}` is not valid TOML: {e}", template.name));
+            let out = render_with_template(&cfg, &template.name, doc);
+            assert!(
+                !out.contains("[aivyx]"),
+                "template `{}` generated a config with the legacy \
+                 [aivyx] section (should be [aivyx_pa]): {out}",
+                template.name
+            );
+        }
+    }
+
     #[test]
     fn render_toml_emits_profile_section_when_assistant_name_set() {
         // Operator customized only the assistant name. The
