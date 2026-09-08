@@ -39,12 +39,31 @@ serde_json = { workspace = true }
 
 # Task 7 (Chapter Passport, hardware-backed identity): hardware-backed Ed25519
 # signing via a YubiKey's OpenPGP card applet. `aivyx-yubi` is a local-only
-# sibling repo (same parent directory as this workspace) with no GitHub
-# remote yet, so a `path` dependency is used instead of the `git` dependency
-# style this workspace otherwise uses for sibling Aivyx repos (see
-# `aivyx-confine`/`aivyx-checkpoint`/`aivyx-kvcache` in the root Cargo.toml) —
-# switch to `git` once `aivyx-yubi` gets a remote.
-aivyx-yubi = { path = "../../../../../aivyx-yubi" }
+# sibling repo (same parent directory as this workspace, i.e.
+# `../../../aivyx-yubi` from this crate: aivyx-federation -> crates -> aivyx
+# -> Rust -> aivyx-yubi) with no GitHub remote yet, so a `path` dependency is
+# used instead of the `git` dependency style this workspace otherwise uses
+# for sibling Aivyx repos (see `aivyx-confine`/`aivyx-checkpoint`/
+# `aivyx-kvcache` in the root Cargo.toml) — switch to `git` once `aivyx-yubi`
+# gets a remote. `optional`: gated behind the `yubikey` feature (default
+# off) below — `aivyx-yubi` transitively needs `libpcsclite` at build time
+# (via `pcsc-sys`), which isn't installed on every contributor's machine or
+# in the default CI job, so it must never be pulled in by a plain
+# `cargo build --workspace`.
+aivyx-yubi = { path = "../../../aivyx-yubi", optional = true }
+# Only needed for the hardware-signing arm of `sign_request`, which
+# `spawn_blocking`s the actual (multi-second, touch-gated) signing call off
+# the calling executor thread. Optional + tied to the same `yubikey` feature
+# so a default build never pulls in a tokio runtime as a hard dependency of
+# this crate (it's otherwise only a dev-dependency, for `#[tokio::test]`).
+tokio = { workspace = true, optional = true }
+
+[features]
+# Off by default: see the `aivyx-yubi` dependency comment above for why.
+# Enable with `cargo build -p aivyx-federation --features yubikey` (needs
+# `libpcsclite`/pkg-config available, and the `aivyx-yubi` sibling repo
+# checked out at `../../../aivyx-yubi`).
+yubikey = ["dep:aivyx-yubi", "dep:tokio"]
 
 [dev-dependencies]
 uuid = { workspace = true }

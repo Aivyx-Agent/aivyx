@@ -72,7 +72,10 @@ jobs:
         # pkg-config. aivyx-desktop (tao / wry / tray-icon) needs the GTK3 +
         # WebKitGTK + appindicator + libxdo dev libs so the `--workspace`
         # clippy/test below can build it. (aivyx-web is wasm-only and handled
-        # by the dedicated wasm step.)
+        # by the dedicated wasm step.) libpcsclite-dev + pkgconf are installed
+        # ahead of time for aivyx-federation's OPTIONAL, default-off
+        # `yubikey` feature's `pcsc-sys` build script — see the NOTE below
+        # for why that feature is deliberately NOT built in this job yet.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -80,11 +83,32 @@ jobs:
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
-            libxdo-dev
+            libxdo-dev \
+            libpcsclite-dev \
+            pkgconf
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test --workspace
         run: cargo test --workspace
+      # NOTE (Chapter Passport Task 7): aivyx-federation's hardware-backed
+      # (YubiKey) `yubikey` feature is deliberately NOT exercised by a
+      # `--features yubikey` step in this job, even though `libpcsclite-dev`
+      # is installed above in anticipation of it. That feature's
+      # `aivyx-yubi` dependency is a `path` dependency to a sibling repo
+      # (`../../../aivyx-yubi`) that has **no git remote at all** (confirmed)
+      # — `actions/checkout@v4` above only fetches this repo, so that path
+      # never exists on this runner, and a `cargo build -p aivyx-federation
+      # --features yubikey` step here would fail on every single run at
+      # manifest-resolution time, permanently redding out this required
+      # check (ci.yml gates every PR; release.yml gates every tag — see the
+      # file header) until `aivyx-yubi` gets a real remote. The default
+      # `--workspace` build/clippy/test above never needs this feature (it's
+      # `optional`, off by default — confirmed via `cargo tree -p
+      # aivyx-federation` showing no `aivyx-yubi`/`pcsc` edge). Add a
+      # `--features yubikey` step here once `aivyx-yubi` is fetchable in CI
+      # (a `git` dependency once it has a remote, per that crate's own
+      # Cargo.toml comment) — until then it's exercised locally only
+      # (`cargo test -p aivyx-federation --features yubikey`).
       # Chapter M — the aivyx-web Dioxus client must compile to wasm32 (it
       # speaks the daemon protocol through the shared aivyx-ipc types). The
       # steps above build it on the native target; this guards the real one.

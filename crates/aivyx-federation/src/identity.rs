@@ -113,12 +113,14 @@ impl Default for ReplayGuard {
 /// load_hardware`'s public signature still takes a concrete
 /// `aivyx_yubi::YubiKeySigner` directly (matching what Task 8's CLI
 /// constructs); this trait never appears in this crate's public API.
+#[cfg(feature = "yubikey")]
 trait HardwareSigner: Send + Sync {
     fn sign(&self, message: &[u8]) -> Result<[u8; 64], String>;
     fn public_key(&self) -> [u8; 32];
     fn card_serial(&self) -> &str;
 }
 
+#[cfg(feature = "yubikey")]
 impl HardwareSigner for aivyx_yubi::YubiKeySigner {
     fn sign(&self, message: &[u8]) -> Result<[u8; 64], String> {
         aivyx_yubi::YubiKeySigner::sign(self, message).map_err(|e| e.to_string())
@@ -143,8 +145,42 @@ enum IdentitySigner {
     Software(Box<SigningKey>),
     /// A hardware-backed signer (a YubiKey's OpenPGP card applet, or, in
     /// this crate's own tests, a fake — see [`HardwareSigner`]'s doc
-    /// comment).
-    Hardware(Box<dyn HardwareSigner>),
+    /// comment). `Arc`, not `Box`: [`Identity::sign_request`]'s hardware arm
+    /// moves a clone of this into a [`tokio::task::spawn_blocking`] closure
+    /// (the touch-confirmation wait is a genuinely blocking call and must
+    /// not run on the calling async executor thread), which needs an owned,
+    /// `'static` handle rather than a borrow of `&self`.
+    #[cfg(feature = "yubikey")]
+    Hardware(std::sync::Arc<dyn HardwareSigner>),
+}
+
+impl IdentitySigner {
+    /// The software-backed key, or an error if this is a hardware-backed
+    /// signer (which has no software key to hand back). Split into two
+    /// `#[cfg]`'d bodies rather than one `match` with a `#[cfg]`'d arm:
+    /// with the `yubikey` feature off, `IdentitySigner` has only the
+    /// `Software` variant, so a `match` here would be clippy's
+    /// `infallible_destructuring_match` (a `match` used to destructure a
+    /// pattern that can't fail) under `-D warnings` — a plain, genuinely
+    /// irrefutable `let` is the correct shape for that configuration, and a
+    /// real two-armed `match` is the correct shape once the feature adds a
+    /// second variant.
+    #[cfg(feature = "yubikey")]
+    fn as_software(&self) -> Result<&SigningKey, FederationError> {
+        match self {
+            IdentitySigner::Software(k) => Ok(k.as_ref()),
+            IdentitySigner::Hardware(_) => Err(FederationError::Identity(
+                "cannot seal a hardware-backed identity's key to disk (no software key exists)"
+                    .into(),
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "yubikey"))]
+    fn as_software(&self) -> Result<&SigningKey, FederationError> {
+        let IdentitySigner::Software(k) = self;
+        Ok(k.as_ref())
+    }
 }
 
 /// An operator-owned Ed25519 federation identity: `instance_id` + keypair,
@@ -200,21 +236,23 @@ impl Identity {
     /// was originally provisioned against (persisted by that same caller) —
     /// if the currently connected card's serial doesn't match, this fails
     /// loudly rather than silently trusting a different physical device.
+    #[cfg(feature = "yubikey")]
     pub fn load_hardware(
         instance_id: String,
         signer: aivyx_yubi::YubiKeySigner,
         expected_serial: &str,
     ) -> Result<Self, FederationError> {
-        Self::from_hardware_signer(instance_id, Box::new(signer), expected_serial)
+        Self::from_hardware_signer(instance_id, std::sync::Arc::new(signer), expected_serial)
     }
 
     /// The shared core of [`Self::load_hardware`], generic over
     /// [`HardwareSigner`] so this crate's own tests can exercise it against
     /// a fake (see [`HardwareSigner`]'s doc comment for why a real
     /// `aivyx_yubi::YubiKeySigner` can't be fabricated in a test).
+    #[cfg(feature = "yubikey")]
     fn from_hardware_signer(
         instance_id: String,
-        signer: Box<dyn HardwareSigner>,
+        signer: std::sync::Arc<dyn HardwareSigner>,
         expected_serial: &str,
     ) -> Result<Self, FederationError> {
         validate_instance_id(&instance_id)?;
@@ -239,13 +277,13 @@ impl Identity {
     /// [`HardwareSigner`] (a fake, in practice) instead of a concrete
     /// `aivyx_yubi::YubiKeySigner` — see [`HardwareSigner`]'s doc comment
     /// for why the real type can't be constructed in a test.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "yubikey"))]
     fn load_hardware_for_test(
         instance_id: String,
         signer: impl HardwareSigner + 'static,
         expected_serial: &str,
     ) -> Result<Self, FederationError> {
-        Self::from_hardware_signer(instance_id, Box::new(signer), expected_serial)
+        Self::from_hardware_signer(instance_id, std::sync::Arc::new(signer), expected_serial)
     }
 
     /// This instance's public key as base64 — what a peer records to verify us.
@@ -273,8 +311,26 @@ impl Identity {
         let message = format!("{}:{}:{}", self.instance_id, timestamp, body_hash);
         let signature_bytes = match &self.signer {
             IdentitySigner::Software(k) => k.sign(message.as_bytes()).to_bytes(),
+            #[cfg(feature = "yubikey")]
             IdentitySigner::Hardware(h) => {
-                h.sign(message.as_bytes()).map_err(FederationError::Hardware)?
+                // The real signing call blocks the calling thread for the
+                // whole touch-confirmation window (can be several seconds)
+                // — `spawn_blocking` moves it off whatever executor thread
+                // called `sign_request`, so a `current_thread` runtime
+                // (several of this project's own CLI subcommands use one)
+                // isn't frozen for the duration. `Arc::clone` gives the
+                // closure an owned, `'static` handle without needing `&mut
+                // self` or disturbing `&self`'s borrow across the `.await`.
+                let signer = std::sync::Arc::clone(h);
+                let message = message.clone();
+                tokio::task::spawn_blocking(move || signer.sign(message.as_bytes()))
+                    .await
+                    .map_err(|e| {
+                        FederationError::Hardware(format!(
+                            "hardware signing task panicked or was cancelled: {e}"
+                        ))
+                    })?
+                    .map_err(FederationError::Hardware)?
             }
         };
         Ok(SignedHeader {
@@ -364,12 +420,7 @@ impl Identity {
         key_path: &Path,
         subkey: &aivyx_crypto::SubKey,
     ) -> Result<(), FederationError> {
-        let IdentitySigner::Software(signing_key) = &self.signer else {
-            return Err(FederationError::Identity(
-                "cannot seal a hardware-backed identity's key to disk (no software key exists)"
-                    .into(),
-            ));
-        };
+        let signing_key = self.signer.as_software()?;
         if let Some(parent) = key_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| FederationError::Identity(format!("create key dir: {e}")))?;
@@ -446,6 +497,7 @@ mod tests {
     /// A fake [`HardwareSigner`] standing in for a real `aivyx_yubi::
     /// YubiKeySigner` — see that trait's doc comment for why the real type
     /// can't be fabricated from outside `aivyx-yubi`.
+    #[cfg(feature = "yubikey")]
     struct FakeHardwareSigner {
         card_serial: String,
         public_key: [u8; 32],
@@ -453,6 +505,7 @@ mod tests {
         fail_with: Option<String>,
     }
 
+    #[cfg(feature = "yubikey")]
     impl FakeHardwareSigner {
         fn new(card_serial: &str) -> Self {
             let mut rng = rand::thread_rng();
@@ -475,6 +528,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "yubikey")]
     impl HardwareSigner for FakeHardwareSigner {
         fn sign(&self, message: &[u8]) -> Result<[u8; 64], String> {
             if let Some(err) = &self.fail_with {
@@ -548,14 +602,19 @@ mod tests {
         let dbg = format!("{id:?}");
         assert!(dbg.contains("[redacted]"));
         assert!(dbg.contains("redact-test"));
-        // the raw signing-key bytes must never appear
-        let IdentitySigner::Software(signing_key) = &id.signer else {
-            panic!("Identity::generate should always produce a software-backed signer");
-        };
+        // the raw signing-key bytes must never appear. Reuses
+        // `IdentitySigner::as_software` (see its doc comment) rather than
+        // destructuring here directly, for the same infallible-match
+        // reason.
+        let signing_key = id
+            .signer
+            .as_software()
+            .expect("Identity::generate should always produce a software-backed signer");
         let raw = format!("{:?}", signing_key.to_bytes());
         assert!(!dbg.contains(&raw));
     }
 
+    #[cfg(feature = "yubikey")]
     #[test]
     fn debug_redacts_the_hardware_signer() {
         let fake = FakeHardwareSigner::new("0006:00112233");
@@ -570,6 +629,7 @@ mod tests {
         assert!(!dbg.contains("0006:00112233"));
     }
 
+    #[cfg(feature = "yubikey")]
     #[tokio::test]
     async fn hardware_backed_sign_request_verifies_like_the_software_path() {
         let fake = FakeHardwareSigner::new("0006:00112233");
@@ -580,6 +640,7 @@ mod tests {
             .expect("a hardware-backed signature must verify identically to a software one");
     }
 
+    #[cfg(feature = "yubikey")]
     #[test]
     fn load_hardware_rejects_a_mismatched_card_serial() {
         let fake = FakeHardwareSigner::new("0006:00112233");
@@ -595,6 +656,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "yubikey")]
     #[tokio::test]
     async fn hardware_signing_failure_maps_to_federation_error_hardware() {
         let fake = FakeHardwareSigner::new("0006:00112233").failing("touch timeout");
