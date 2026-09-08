@@ -38,17 +38,24 @@ need to plan for:
    prompt ("You are Aivyx, a capable assistant…"), the desktop app's
    window title/tray tooltip/autostart name, the web Studio's page title
    and wordmark, an HTTP Basic-auth realm string, generated TOML content,
-   and more (Table F). See "Open question" at the end — this table
-   documents the literals precisely but does **not** resolve whether they
-   rename to `"Aivyx PA"`, since that's a product-shape call outside this
-   grounding task's authority.
+   and more (Table F). This grounding task's own authority stopped at
+   *cataloging* these literals — deciding whether the assistant's own
+   spoken/display name renames alongside the product was a real
+   product-shape call outside this task's scope. **Resolved by the
+   operator after this report was written: yes, it renames too** — the
+   assistant's default persona name becomes `"Aivyx PA"`, matching the
+   product name exactly as the original doc comment already argued,
+   still fully overridable by an operator's own `[profile]
+   assistant_name`. Table F below reflects that resolution.
 
 Table columns: `file:line | current literal | what it's for | new literal`.
-"New literal" is filled in only where the design spec
+"New literal" is filled in for every row — either because the design spec
 (`docs/superpowers/specs/2026-09-08-aivyx-pa-rename-design.md`) already
-locks the answer unambiguously (binary/config-path identifiers →
-`aivyx-pa` family); left as **`(decide in Task 2)`** where it's a real
-call the implementing task must make.
+locked the answer unambiguously (binary/config-path identifiers →
+`aivyx-pa` family), or because the operator resolved Table F's assistant-
+name question directly (→ `"Aivyx PA"`, except the two sandbox-dir sites,
+which follow the technical kebab-case identifier instead — see their own
+rows above).
 
 ---
 
@@ -73,8 +80,8 @@ presumably move to `aivyx-pa`/`.aivyx-pa` together.
 | `crates/aivyx-config/src/lib.rs:5967` | `home.join(".aivyx").join("workspace")` | default agent workspace dir (`[workspace] path` fallback) | `.aivyx-pa/workspace` |
 | `crates/aivyx-config/src/lib.rs:5994` | `xdg.join("aivyx").join("store.redb")` | default encrypted store path via `$XDG_DATA_HOME` | `aivyx-pa/store.redb` |
 | `crates/aivyx-config/src/lib.rs:6000-6001` | `.join("aivyx").join("store.redb")` | default encrypted store path via `$HOME/.local/share` fallback | `aivyx-pa/store.redb` |
-| `crates/aivyx-config/src/lib.rs:5834` | `home.join("aivyx-sandbox")` | default `fs_root` sandbox dir (`$HOME/aivyx-sandbox`) | `(decide in Task 2)` — note: already hyphenated, not the `.aivyx` dotdir family; could become `aivyx-pa-sandbox` |
-| `crates/aivyx-cli/src/bin/aivyx_modules/init.rs:1569` | `format!("{home}/aivyx-sandbox")` | init wizard's mirrored copy of the same default (comment admits it must be kept in sync by hand) | same as above |
+| `crates/aivyx-config/src/lib.rs:5834` | `home.join("aivyx-sandbox")` | default `fs_root` sandbox dir (`$HOME/aivyx-sandbox`) | `aivyx-pa-sandbox` — resolved: already hyphenated, not the `.aivyx` dotdir family, so it follows the technical kebab-case identifier, not the prose product name |
+| `crates/aivyx-cli/src/bin/aivyx_modules/init.rs:1569` | `format!("{home}/aivyx-sandbox")` | init wizard's mirrored copy of the same default (comment admits it must be kept in sync by hand) | `aivyx-pa-sandbox` — same as above |
 | `crates/aivyx-ipc/src/protocol.rs:36` | `PathBuf::from(xdg).join("aivyx").join("daemon.sock")` | daemon Unix socket path via `$XDG_RUNTIME_DIR` (preferred) | `aivyx-pa/daemon.sock` |
 | `crates/aivyx-ipc/src/protocol.rs:42-43` | `.join("aivyx").join("daemon.sock")` | daemon Unix socket path via `$HOME/.local/share` fallback | `aivyx-pa/daemon.sock` |
 | `crates/aivyx-channel/src/mcp_status.rs:49` | `base.join("aivyx").join("mcp-status.json")` | shared MCP-server status snapshot, beside the store | `aivyx-pa/mcp-status.json` |
@@ -212,7 +219,7 @@ list below and needing the same prefix swap.
 
 ---
 
-## Table F — Assistant persona identity (the open-question cluster)
+## Table F — Assistant persona identity (resolved: renames to "Aivyx PA")
 
 Root: `crates/aivyx-config/src/lib.rs:365-368`:
 ```rust
@@ -232,56 +239,53 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Aivyx, a capable assistant runn
 
 | file:line | current literal | what it's for | new literal |
 |---|---|---|---|
-| `aivyx-config/src/lib.rs:368` | `DEFAULT_ASSISTANT_NAME = "Aivyx"` | default persona name (`[profile] assistant_name` fallback) — doc comment explicitly says it "matches the product name" | `(decide in Task 2)` |
-| `aivyx-config/src/lib.rs:217` | `"You are Aivyx, a capable assistant…"` (`DEFAULT_SYSTEM_PROMPT`) | the actual text sent to the LLM every turn | `(decide in Task 2)` |
-| `aivyx-cli/src/bin/aivyx_modules/identity.rs:134` | `if bundle.profile.assistant_name != "Aivyx"` | identity-import diff check — **hardcoded duplicate of `DEFAULT_ASSISTANT_NAME` instead of referencing the constant**, worth fixing while touching this line anyway | `(decide in Task 2)` |
-| `aivyx-cli/.../init.rs:1377,1459` | `unwrap_or("Aivyx")` | init wizard's assistant-name default | `(decide in Task 2)` |
-| `aivyx-cli/.../profile.rs:326,544,622,844,850,889,933` | `"Aivyx"` (7 sites) | `aivyx profile` command: display default, generated TOML, skill-proposer hint value | `(decide in Task 2)` |
-| `aivyx-cli/.../role.rs:323,360` | `"Aivyx"` | role-scoped profile generation | `(decide in Task 2)` |
-| `aivyx-cli/.../toml_edit_apply.rs:414,547,562,606,626` | `"Aivyx"` | applying a profile-hint proposal to TOML | `(decide in Task 2)` |
-| `aivyx-config/src/config_write.rs:252,1877,1883,2053,2061` | `"Aivyx"` | config-section rewriter, doc example + tests | `(decide in Task 2)` |
+| `aivyx-config/src/lib.rs:368` | `DEFAULT_ASSISTANT_NAME = "Aivyx"` | default persona name (`[profile] assistant_name` fallback) — doc comment explicitly says it "matches the product name" | `Aivyx PA` |
+| `aivyx-config/src/lib.rs:217` | `"You are Aivyx, a capable assistant…"` (`DEFAULT_SYSTEM_PROMPT`) | the actual text sent to the LLM every turn | `Aivyx PA` |
+| `aivyx-cli/src/bin/aivyx_modules/identity.rs:134` | `if bundle.profile.assistant_name != "Aivyx"` | identity-import diff check — **hardcoded duplicate of `DEFAULT_ASSISTANT_NAME` instead of referencing the constant**, worth fixing while touching this line anyway | `Aivyx PA` |
+| `aivyx-cli/.../init.rs:1377,1459` | `unwrap_or("Aivyx")` | init wizard's assistant-name default | `Aivyx PA` |
+| `aivyx-cli/.../profile.rs:326,544,622,844,850,889,933` | `"Aivyx"` (7 sites) | `aivyx profile` command: display default, generated TOML, skill-proposer hint value | `Aivyx PA` |
+| `aivyx-cli/.../role.rs:323,360` | `"Aivyx"` | role-scoped profile generation | `Aivyx PA` |
+| `aivyx-cli/.../toml_edit_apply.rs:414,547,562,606,626` | `"Aivyx"` | applying a profile-hint proposal to TOML | `Aivyx PA` |
+| `aivyx-config/src/config_write.rs:252,1877,1883,2053,2061` | `"Aivyx"` | config-section rewriter, doc example + tests | `Aivyx PA` |
 | `aivyx-channel/src/profile_prompt.rs:40` (doc comment) | `assistant_name = "Aivyx"` | describes the synthesized default | mirrors const |
 | `aivyx-channel/src/daemon_server.rs:8634` (test) | `assert_eq!(summary.assistant_name, "Aivyx")` | daemon status summary default | mirrors const |
-| `aivyx-channel/src/identity_export.rs:318` | `"assistant_name": "Aivyx"` | exported identity-bundle JSON default | `(decide in Task 2)` |
+| `aivyx-channel/src/identity_export.rs:318` | `"assistant_name": "Aivyx"` | exported identity-bundle JSON default | `Aivyx PA` |
 | `aivyx-channel/src/notify_dispatcher.rs:672,680` (test) | `"Aivyx"` | notification title default | mirrors const |
-| `aivyx-channel/src/notify_email.rs:241-247,334,342,376` | `"Aivyx notification"` | fallback email subject when none given | `(decide in Task 2)` |
-| `aivyx-channel/src/notify_webui.rs:162-164,188,231,251` | `"Aivyx"` | fallback web-UI notification title | `(decide in Task 2)` |
-| `aivyx-channel/src/reflection_scheduler.rs:1521` | `format!("Aivyx — proactive ({:?})", …)` | proactive-surfacing notification subject | `(decide in Task 2)` |
-| `aivyx-channel/src/skill_auto_proposer.rs:2256,2567,2576` | `"Aivyx"` | skill-proposer's own assistant-name-change proposal machinery | `(decide in Task 2)` |
-| `aivyx-channel/src/web_ui.rs:472` | `"WWW-Authenticate: Basic realm=\"Aivyx Studio\"\r\n"` | HTTP Basic-auth realm string shown by browsers on the web UI's login prompt | `(decide in Task 2)` |
-| `aivyx-ipc/src/protocol.rs:558,3660` | `"Aivyx"` | wire-protocol default + doc comment | `(decide in Task 2)` |
+| `aivyx-channel/src/notify_email.rs:241-247,334,342,376` | `"Aivyx notification"` | fallback email subject when none given | `Aivyx PA` |
+| `aivyx-channel/src/notify_webui.rs:162-164,188,231,251` | `"Aivyx"` | fallback web-UI notification title | `Aivyx PA` |
+| `aivyx-channel/src/reflection_scheduler.rs:1521` | `format!("Aivyx — proactive ({:?})", …)` | proactive-surfacing notification subject | `Aivyx PA` |
+| `aivyx-channel/src/skill_auto_proposer.rs:2256,2567,2576` | `"Aivyx"` | skill-proposer's own assistant-name-change proposal machinery | `Aivyx PA` |
+| `aivyx-channel/src/web_ui.rs:472` | `"WWW-Authenticate: Basic realm=\"Aivyx Studio\"\r\n"` | HTTP Basic-auth realm string shown by browsers on the web UI's login prompt | `Aivyx PA` |
+| `aivyx-ipc/src/protocol.rs:558,3660` | `"Aivyx"` | wire-protocol default + doc comment | `Aivyx PA` |
 | `aivyx-audit/src/lib.rs:2142,2150` | `"Aivyx"` | audit-record test fixture for an assistant-name mutation | mirrors const |
 | `aivyx-core/src/skill_proposer/judge.rs:1004,1025,1174,1181,1435,1460` | `"Aivyx"` | skill-proposal judge test fixtures | mirrors const |
-| `aivyx-desktop/src/main.rs:82` | `.set_app_name("Aivyx")` | OS autostart entry's registered app name | `(decide in Task 2)` |
-| `aivyx-desktop/src/main.rs:223` | `.with_title("Aivyx Studio")` | native window title | `(decide in Task 2)` |
-| `aivyx-desktop/src/main.rs:254` | `.with_tooltip("Aivyx")` | system-tray icon tooltip | `(decide in Task 2)` |
-| `aivyx-desktop/src/main.rs:~250` | `MenuItem::new("Quit Aivyx", …)` | tray menu item text | `(decide in Task 2)` |
-| `aivyx-desktop/src/gate_watch.rs:149` | `.summary("Aivyx — approval needed")` | desktop OS notification summary | `(decide in Task 2)` |
-| `aivyx-web/src/main.rs:1163` | `document::Title { "Aivyx Studio" }` | web Studio browser tab title | `(decide in Task 2)` |
-| `aivyx-web/src/main.rs:1414` | `img { alt: "Aivyx" }` | logo image alt text | `(decide in Task 2)` |
-| `aivyx-web/src/main.rs:1415` | `span { "AIVYX" }` (wordmark) | sidebar brand wordmark text | `(decide in Task 2)` |
-| `aivyx-web/src/main.rs:7074` | `placeholder: "Aivyx (default)"` | assistant-name input placeholder | `(decide in Task 2)` |
-| `aivyx-tui/examples/connect.rs:185` | `"Aivyx never sees a shared secret — you own the app."` | example-file prose describing the OAuth model | `(decide in Task 2)` — arguably closer to docs prose than a runtime constant, but lives in `crates/` |
+| `aivyx-desktop/src/main.rs:82` | `.set_app_name("Aivyx")` | OS autostart entry's registered app name | `Aivyx PA` |
+| `aivyx-desktop/src/main.rs:223` | `.with_title("Aivyx Studio")` | native window title | `Aivyx PA` |
+| `aivyx-desktop/src/main.rs:254` | `.with_tooltip("Aivyx")` | system-tray icon tooltip | `Aivyx PA` |
+| `aivyx-desktop/src/main.rs:~250` | `MenuItem::new("Quit Aivyx", …)` | tray menu item text | `Aivyx PA` |
+| `aivyx-desktop/src/gate_watch.rs:149` | `.summary("Aivyx — approval needed")` | desktop OS notification summary | `Aivyx PA` |
+| `aivyx-web/src/main.rs:1163` | `document::Title { "Aivyx Studio" }` | web Studio browser tab title | `Aivyx PA` |
+| `aivyx-web/src/main.rs:1414` | `img { alt: "Aivyx" }` | logo image alt text | `Aivyx PA` |
+| `aivyx-web/src/main.rs:1415` | `span { "AIVYX" }` (wordmark) | sidebar brand wordmark text | `Aivyx PA` |
+| `aivyx-web/src/main.rs:7074` | `placeholder: "Aivyx (default)"` | assistant-name input placeholder | `Aivyx PA` |
+| `aivyx-tui/examples/connect.rs:185` | `"Aivyx never sees a shared secret — you own the app."` | example-file prose describing the OAuth model | `Aivyx PA` — arguably closer to docs prose than a runtime constant, but lives in `crates/` |
 
-### Open question for Task 2 (flagging, not deciding)
+### Resolved by the operator (was an open question for Task 2)
 
 The design spec (`docs/superpowers/specs/2026-09-08-aivyx-pa-rename-design.md`)
 locks: *"'Aivyx PA' becomes the flagship product's own name everywhere it
-is currently used as the product."* It does not explicitly say whether
+is currently used as the product."* It did not explicitly say whether
 the **assistant's own spoken/display persona name** — what it calls
-itself in a notification, a window title, or its own system prompt — is
+itself in a notification, a window title, or its own system prompt — was
 "the product" for this purpose, or a distinct, renameable-independently
 identity axis (the way "Siri" is a persona name distinct from "iOS" the
-product). `DEFAULT_ASSISTANT_NAME`'s own doc comment argues it should
-follow the product rename ("matches the product name"), which is the
-strongest signal available, but this is a **product-shape decision**, not
-a grounding fact — Task 1 is deliberately not making it. Concretely, Task
-2 needs to decide once, up front: does `DEFAULT_ASSISTANT_NAME` become
-`"Aivyx PA"`, stay `"Aivyx"` (persona name unchanged, only the
-binary/product technical identity moves), or become something else
-entirely — and then apply that single decision consistently across all
-~35 sites in this table, since they're all downstream of the same
-determination.
+product). Task 1 deliberately left this a product-shape decision rather
+than guessing. **The operator resolved it directly: yes, `DEFAULT_ASSISTANT_NAME`
+becomes `"Aivyx PA"`**, matching the doc comment's own original argument
+("matches the product name") — still fully overridable per-operator via
+`[profile] assistant_name` at Profile-seed time, same as today. Task 2
+applies this single decision consistently across all ~35 sites in this
+table.
 
 ---
 
@@ -330,7 +334,7 @@ as folded into Table E's environment-variable work.
 
 | file:line | current literal | what it's for | new literal |
 |---|---|---|---|
-| `crates/aivyx-config/src/lib.rs:3958` | `aivyx: RawAivyx` field on the outer raw-TOML struct | makes `[aivyx]` a real TOML table name (serde derives the section name from the field name) | `(decide in Task 2)` — renaming the Rust field renames the TOML section name that operators write; this is a breaking config-format change, not just an internal rename, so treat with the same care as the CLI/env-var rename |
+| `crates/aivyx-config/src/lib.rs:3958` | `aivyx: RawAivyx` field on the outer raw-TOML struct | makes `[aivyx]` a real TOML table name (serde derives the section name from the field name) | `Aivyx PA` — renaming the Rust field renames the TOML section name that operators write; this is a breaking config-format change, not just an internal rename, so treat with the same care as the CLI/env-var rename |
 | `crates/aivyx-config/src/lib.rs:5599-5602` | `struct RawAivyx { passphrase: Option<String> }` | backing struct | same as above |
 | `crates/aivyx-channel/src/keyring_store.rs:6-7` (doc comment) | `` `[aivyx] passphrase]` in the TOML `` | describes the same section | mirrors decision above |
 

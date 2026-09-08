@@ -17,8 +17,12 @@ spec: `docs/superpowers/specs/2026-09-08-aivyx-pa-rename-design.md` —
 read it in full before starting; this plan assumes it, plus one correction
 made during this plan's own grounding pass (see Global Constraints).
 
-**Tech Stack:** Rust (one `[[bin]]` rename + a handful of embedded string
-constants), Markdown docs (192 live files, tiered by priority).
+**Tech Stack:** Rust (one `[[bin]]` rename + a real audited set of
+embedded string constants, ~110 locations plus a ~35-site assistant-
+persona-name cluster — see Task 1), Markdown docs (9 Tier-1 files plus 96
+Tier-2 files — corrected down from an original ~192 estimate once
+`docs/superpowers/`'s 99 historical planning files were excluded; see
+Global Constraints).
 
 ## Global Constraints
 
@@ -48,6 +52,32 @@ constants), Markdown docs (192 live files, tiered by priority).
   product was called at the time they shipped, and rewriting them would
   be revising history. Only a **new entry documenting this rename itself**
   is added; no existing entry is edited.
+- **Second correction, surfaced by Task 1's own real grounding, not
+  anticipated by the original spec**: `docs/superpowers/` (plans, specs,
+  and artifacts — this repo's own design/implementation-planning
+  process, including specs for other already-shipped work written under
+  the product's old name, and even this rename's own spec/plan) gets the
+  *same* frozen-history treatment as `docs/archive/phases/` and
+  `CHANGELOG.md` — never rewritten. These are historical planning
+  records, not living product documentation; rewriting them would
+  misrepresent when the rename actually happened. This shrank the
+  originally-estimated ~192-file Tier-2 docs set down to the **96 files
+  that are genuinely live product documentation** — see Task 1's own
+  audit output for the exact accounting.
+- **Third resolution, also surfaced by Task 1's grounding**: the
+  assistant's own default spoken/display persona name
+  (`DEFAULT_ASSISTANT_NAME` and ~35 downstream sites — notification
+  titles, the desktop app's window title/tray tooltip, the web Studio's
+  wordmark, generated TOML, etc.) is a distinct identity axis from the
+  product's technical name, and the design spec never addressed whether
+  it renames too. Resolved directly by the operator: **yes** — it becomes
+  `"Aivyx PA"` by default, still fully overridable per-operator via
+  `[profile] assistant_name` exactly as today. Two path-segment
+  exceptions in the same audit cluster (`aivyx-sandbox` →
+  `aivyx-pa-sandbox`) follow the technical kebab-case identifier instead,
+  since they're filesystem paths, not prose — see
+  `docs/superpowers/plans/rename-audit/embedded-constants.md`'s own
+  per-row notes for the exact reasoning on each.
 - The config filename itself (`aivyx.toml`, referenced throughout docs as
   `~/.config/aivyx/aivyx.toml` or a CWD-relative `./aivyx.toml`) is also
   in scope — it becomes `aivyx-pa.toml`, consistent with the directory
@@ -471,18 +501,22 @@ git commit -m "docs: rename Aivyx to Aivyx PA in INSTALL.md, part 2"
 
 ---
 
-### Tasks 10–13: Tier-2 docs batches 1–4
+### Task 10: Tier-2 docs batch 1
 
-Four structurally identical tasks, one per batch file Task 1 generated.
-Each is independent of the other three — they touch disjoint file sets.
+**Correction note**: this plan originally specified four Tier-2 batch
+tasks (10–13). Task 1's own real grounding found that two of the four
+generated batches were **entirely** `docs/superpowers/` files (99 of the
+original 195), which the operator then excluded from this rename per the
+Global Constraints correction above. The two remaining batches — the
+genuinely live Tier-2 docs — were renumbered `tier2-batch-1.md` and
+`tier2-batch-2.md`. This plan now has two Tier-2 batch tasks, not four.
 
-**Files (per task):**
+**Files:**
 - Modify: every file listed in
-  `docs/superpowers/plans/rename-audit/tier2-batch-N.md` (N = 1, 2, 3, or 4
-  — one task per batch)
+  `docs/superpowers/plans/rename-audit/tier2-batch-1.md` (49 files)
 
 **Interfaces:**
-- Consumes: the corresponding `tier2-batch-N.md` (Task 1).
+- Consumes: `tier2-batch-1.md` (Task 1, as corrected above).
 - Produces: nothing consumed elsewhere.
 
 - [ ] **Step 1: Read the batch's file list**
@@ -492,7 +526,8 @@ Each is independent of the other three — they touch disjoint file sets.
 
 These are the repo's other living reference docs (e.g. `FEDERATION.md`,
 `NONAGON.md`, `TOOLS.md`, and the rest of `docs/*.md` not already covered
-by Tasks 3–9). Lower first-impression stakes than Tier 1, but still real
+by Tasks 3–9, and not excluded per the `docs/superpowers/` correction
+above). Lower first-impression stakes than Tier 1, but still real
 reference material an operator or contributor might read — apply the
 same care, just without the same file-by-file individual task treatment.
 Update every `aivyx.toml` mention to `aivyx-pa.toml` in the same pass.
@@ -509,7 +544,35 @@ in your task report rather than silently picking one interpretation.
 
 ```bash
 git add <files from this batch>
-git commit -m "docs: rename Aivyx to Aivyx PA in Tier-2 docs batch N"
+git commit -m "docs: rename Aivyx to Aivyx PA in Tier-2 docs batch 1"
+```
+
+---
+
+### Task 11: Tier-2 docs batch 2
+
+**Files:**
+- Modify: every file listed in
+  `docs/superpowers/plans/rename-audit/tier2-batch-2.md` (47 files)
+
+**Interfaces:**
+- Consumes: `tier2-batch-2.md` (Task 1, as corrected above).
+- Produces: nothing consumed elsewhere.
+
+- [ ] **Step 1: Read the batch's file list**
+
+- [ ] **Step 2: For each file in the list, read it in full and apply the
+  per-occurrence rule** (same discipline as Task 10 — see its own Step 2
+  for the full description; this task is structurally identical, just a
+  disjoint file set)
+
+- [ ] **Step 3: Self-verification pass** (same as Task 10's own Step 3)
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add <files from this batch>
+git commit -m "docs: rename Aivyx to Aivyx PA in Tier-2 docs batch 2"
 ```
 
 ---

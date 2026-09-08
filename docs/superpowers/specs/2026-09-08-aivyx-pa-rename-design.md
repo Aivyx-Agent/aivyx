@@ -53,12 +53,30 @@ sibling repo.
    spec commits to the audit happening, not to a pre-enumerated exhaustive
    list, since the real list can only be confirmed by grepping the real
    code at implementation time.
-6. Product-name prose rewrite across all **192 live docs files** (every
-   `.md` file in the repo outside `docs/archive/`), per the per-occurrence
-   rule below, tiered by priority (see "Docs-rewrite approach").
+6. Product-name prose rewrite across all live docs files (every `.md`
+   file in the repo outside `docs/archive/` and, per the correction
+   below, outside `docs/superpowers/`), per the per-occurrence rule
+   below, tiered by priority (see "Docs-rewrite approach"). Originally
+   estimated at ~192 files; **corrected during implementation planning**
+   to 9 Tier-1 files + 96 Tier-2 files once `docs/superpowers/`'s 99
+   files were excluded (see the two corrections below).
 7. `TRADEMARK.md` extended to protect both "Aivyx" and "Aivyx PA" as
    names (the safer, more protective reading — the mark should cover the
    name someone would actually try to copy, not just the org-level name).
+8. **Two corrections found during implementation planning, not present
+   in this spec's original text**, both resolved by the operator directly:
+   - `docs/superpowers/` (plans, specs, artifacts — this repo's own
+     design/planning process, including specs for other already-shipped
+     work written under the product's old name, and even this rename's
+     own spec/plan) gets the **same frozen-history treatment as
+     `docs/archive/phases/` and `CHANGELOG.md`** — never rewritten. These
+     are historical planning records, not living product documentation.
+   - The assistant's own default spoken/display persona name
+     (`DEFAULT_ASSISTANT_NAME` and ~35 downstream call sites — this
+     spec's original text did not address this distinct identity axis
+     at all) **also renames to "Aivyx PA"**, matching the product name
+     exactly as the constant's own doc comment already argued — still
+     fully overridable per-operator via `[profile] assistant_name`.
 
 **Explicitly out of scope:**
 - The 34 internal Cargo crate names (`aivyx-core`, `aivyx-capability`,
