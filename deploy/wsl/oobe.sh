@@ -25,8 +25,8 @@ cat <<'BANNER'
   Aivyx is installed in this WSL distribution.
 
   Get started:
-      aivyx init      # one-time guided setup (model, access level, agent)
-      aivyx           # start chatting — auto-starts the local daemon
+      aivyx-pa init   # one-time guided setup (model, access level, agent)
+      aivyx-pa        # start chatting — auto-starts the local daemon
 
   Once the daemon is running, the Web Studio is at
       http://127.0.0.1:7843      (open it from your Windows browser)
