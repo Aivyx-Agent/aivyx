@@ -48,6 +48,18 @@ channel-voice-full = [
     # whisper-rs STT + the permissive Kokoro TTS (Chapter Timbre).
     "aivyx-voice/recommended-voice",
 ]
+# Task 8 (Chapter Passport): `aivyx federation yubikey-init` — hardware-backed
+# federation identity provisioning via a YubiKey's OpenPGP card applet. Off by
+# default: see the `aivyx-yubi`/`aivyx-federation` dependency comments below —
+# `aivyx-yubi` transitively needs `libpcsclite` (via `pcsc-sys`) at build time,
+# which isn't installed in the default CI job or on every contributor's
+# machine, so it must never be pulled in by a plain `cargo build -p aivyx-cli`.
+# Enable with `cargo build -p aivyx-cli --features yubikey`. `aivyx.rs`'s
+# arg parser always recognizes `federation yubikey-init` regardless of this
+# feature (so a contributor who forgot it gets an actionable message); only
+# the actual dispatch (`aivyx_modules/federation.rs`, gated by `mod
+# federation` itself being `#[cfg(feature = "yubikey")]`) requires it.
+yubikey = ["dep:aivyx-yubi", "dep:aivyx-federation", "dep:base64", "aivyx-federation/yubikey"]
 
 [dependencies]
 # The crate this binary was extracted from — the library that owns
@@ -99,6 +111,15 @@ aivyx-telegram = { path = "../aivyx-telegram" }
 aivyx-discord = { path = "../aivyx-discord" }
 aivyx-slack = { path = "../aivyx-slack" }
 aivyx-voice = { path = "../aivyx-voice", optional = true }
+# Task 8 (Chapter Passport): `aivyx federation yubikey-init` drives
+# `aivyx-yubi`'s discovery/pin/provision flow directly (not re-exported by
+# `aivyx-federation`), then hands the resulting `YubiKeySigner` to
+# `aivyx-federation::Identity::load_hardware` as a closing verification pass
+# — same production load path a daemon would use later. Both optional and
+# gated behind the `yubikey` feature above; see that feature's own comment
+# for why (`libpcsclite`/`pcsc-sys`).
+aivyx-yubi = { workspace = true, optional = true }
+aivyx-federation = { path = "../aivyx-federation", optional = true }
 
 # External crates the binary uses directly. Same set the binary
 # relied on inside aivyx-channel.
@@ -125,6 +146,11 @@ thiserror = { workspace = true }
 rpassword = "7"
 toml_edit = "0.22"
 directories = "6.0.0"
+# Task 8 (Chapter Passport): base64-encodes the provisioned Ed25519 public
+# key for the `yubikey-init` binding record. Optional + gated behind the
+# `yubikey` feature (see above) purely to keep it out of a default build's
+# dependency set, even though it's a tiny, already-workspace-pinned crate.
+base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }

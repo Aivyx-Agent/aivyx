@@ -112,6 +112,15 @@ mod cost;
 mod daemon_service;
 #[path = "aivyx_modules/doctor.rs"]
 mod doctor;
+// Task 8 (Chapter Passport): `aivyx federation yubikey-init`. Compiled only
+// under the `yubikey` Cargo feature — this module names `aivyx-yubi` and
+// `aivyx-federation` (built with its own `yubikey` feature) directly, both
+// optional dependencies gated the same way (see `Cargo.toml`). `CliMode::
+// Federation`/`FederationSubcommand` themselves are NOT feature-gated (see
+// their own doc comments) so arg parsing always recognizes the subcommand.
+#[cfg(feature = "yubikey")]
+#[path = "aivyx_modules/federation.rs"]
+mod federation;
 #[path = "aivyx_modules/headless.rs"]
 mod headless;
 #[path = "aivyx_modules/identity.rs"]
@@ -943,6 +952,37 @@ fn run() -> Result<(), String> {
                 }
             }
         });
+    }
+
+    // ---- Chapter Passport Task 8: hardware-backed federation identity --
+    // Synchronous, local hardware I/O — no daemon, no tokio runtime, same
+    // shape as the Access/Autonomy Settings commands above. Gated behind
+    // the `yubikey` Cargo feature (off by default — see `aivyx-cli`'s
+    // `Cargo.toml`); parsing above always recognizes the subcommand so a
+    // contributor who forgot the feature gets an actionable message
+    // instead of a bare "unrecognized command".
+    if let CliMode::Federation(sub) = mode {
+        #[cfg(feature = "yubikey")]
+        {
+            return match sub {
+                FederationSubcommand::YubikeyInit {
+                    instance_id,
+                    key_binding_path,
+                } => federation::run_yubikey_init(&instance_id, &key_binding_path),
+            };
+        }
+        #[cfg(not(feature = "yubikey"))]
+        {
+            let _ = sub;
+            return Err(
+                "aivyx federation: this binary was built without the `yubikey` feature \
+                 (hardware-backed federation identity via a YubiKey's OpenPGP card applet). \
+                 Rebuild with `cargo build -p aivyx-cli --features yubikey` (requires \
+                 `pcscd`/libpcsclite available locally to build `pcsc-sys`). See \
+                 docs/INSTALL.md's YubiKey section for the full requirements."
+                    .to_string(),
+            );
+        }
     }
 
     let verify_only = mode == CliMode::VerifyOnly;
@@ -1907,6 +1947,16 @@ enum CliMode {
     /// Phase 64 ships export only; import lands in Phase 65
     /// per the implementation-time scope adjustment.
     Identity(IdentitySubcommand),
+    /// `aivyx federation <subcommand>`: Chapter Passport Task 8 —
+    /// hardware-backed federation identity provisioning. Currently only
+    /// `yubikey-init <instance-id> <key-binding-path>`. Distinct from
+    /// `CliMode::Identity` above (Profile/Persona export/import) — this is
+    /// a different, unrelated concept (`aivyx-federation`'s `Identity`,
+    /// Chapter Passport). This variant and [`FederationSubcommand`] are
+    /// never feature-gated (so parsing always recognizes the subcommand,
+    /// even in a default build); only the actual dispatch requires the
+    /// `yubikey` Cargo feature — see `run`'s `CliMode::Federation` arm.
+    Federation(FederationSubcommand),
     /// `aivyx notify <subcommand>`: Reach Milestone history /
     /// inspection (Phase 73 — Tier-2 polish). Talks to the
     /// running daemon over IPC; renders the notification
@@ -2229,6 +2279,23 @@ enum IdentitySubcommand {
     /// `force` is set. Profile half remains a hand-edit per
     /// Q2(a) at Phase 65 sign-off.
     Import { path: PathBuf, force: bool },
+}
+
+/// Subcommand discriminator under [`CliMode::Federation`]. Chapter Passport
+/// Task 8. Deliberately not feature-gated itself (plain `String`/`PathBuf`
+/// fields only) — see [`CliMode::Federation`]'s doc comment for why.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum FederationSubcommand {
+    /// `aivyx federation yubikey-init <instance-id> <key-binding-path>` —
+    /// provision a YubiKey's OpenPGP card Signature slot as `instance-id`'s
+    /// hardware-backed federation identity, then write the resulting
+    /// `{instance_id, card_serial, public_key_base64}` binding record to
+    /// `key-binding-path`. Requires the binary built with `--features
+    /// yubikey` and `pcscd` running; see `docs/INSTALL.md`.
+    YubikeyInit {
+        instance_id: String,
+        key_binding_path: PathBuf,
+    },
 }
 
 /// Phase 113 — `aivyx persona list` filter discriminator.
@@ -2762,6 +2829,59 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Identity(subcommand),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Check for `federation <subcommand>` — Chapter Passport Task 8
+    // (hardware-backed federation identity). Parsing always recognizes
+    // this regardless of the `yubikey` Cargo feature (see `CliMode::
+    // Federation`'s doc comment); only `run`'s dispatch arm requires it.
+    if !args.is_empty() && args[0] == "federation" {
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx federation` requires a subcommand. Supported: yubikey-init <instance-id> \
+             <key-binding-path>"
+                .to_string()
+        })?;
+        let subcommand = match sub.as_str() {
+            "yubikey-init" => {
+                let instance_id = args.get(2).ok_or_else(|| {
+                    "`aivyx federation yubikey-init` requires an instance id. Usage: `aivyx \
+                     federation yubikey-init <instance-id> <key-binding-path>`"
+                        .to_string()
+                })?;
+                let key_binding_path = args.get(3).ok_or_else(|| {
+                    "`aivyx federation yubikey-init` requires a key-binding output path. Usage: \
+                     `aivyx federation yubikey-init <instance-id> <key-binding-path>`"
+                        .to_string()
+                })?;
+                if args.len() > 4 {
+                    return Err(format!(
+                        "`aivyx federation yubikey-init` accepts exactly an instance id and an \
+                         output path. Got extra args: `{}`",
+                        args[4..].join(" ")
+                    ));
+                }
+                FederationSubcommand::YubikeyInit {
+                    instance_id: instance_id.clone(),
+                    key_binding_path: PathBuf::from(key_binding_path),
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unrecognized federation subcommand: `{other}`. Supported: federation \
+                     yubikey-init <instance-id> <key-binding-path>"
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Federation(subcommand),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -13713,6 +13833,80 @@ mod tests {
             .expect_err("`identity wat` must error");
         assert!(
             err.contains("unrecognized identity subcommand"),
+            "error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Chapter Passport Task 8 — `aivyx federation <subcommand>` parser
+    // tests. These test argument parsing/dispatch only (present
+    // regardless of the `yubikey` Cargo feature — see `CliMode::
+    // Federation`'s doc comment) — the provisioning flow itself
+    // (`aivyx-yubi`'s card logic) is already covered by that crate's own
+    // test suite and is not re-tested here.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn federation_yubikey_init_parses_with_instance_id_and_path() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+        ]))
+        .expect("`federation yubikey-init my-node /tmp/b.json` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Federation(FederationSubcommand::YubikeyInit {
+                instance_id: "my-node".to_string(),
+                key_binding_path: PathBuf::from("/tmp/b.json"),
+            })
+        );
+    }
+
+    #[test]
+    fn federation_without_subcommand_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["federation"]))
+            .expect_err("`federation` without subcommand must error");
+        assert!(err.contains("requires a subcommand"), "error: {err}");
+    }
+
+    #[test]
+    fn federation_yubikey_init_without_instance_id_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["federation", "yubikey-init"]))
+            .expect_err("`federation yubikey-init` without an instance id must error");
+        assert!(err.contains("requires an instance id"), "error: {err}");
+    }
+
+    #[test]
+    fn federation_yubikey_init_without_path_is_an_error() {
+        let err = parse_cli_args_from(&argv(&["federation", "yubikey-init", "my-node"]))
+            .expect_err("`federation yubikey-init my-node` without a path must error");
+        assert!(
+            err.contains("requires a key-binding output path"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn federation_yubikey_init_rejects_extra_args() {
+        let err = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+            "--bogus",
+        ]))
+        .expect_err("extra args must error");
+        assert!(err.contains("extra args"), "error: {err}");
+    }
+
+    #[test]
+    fn federation_unrecognized_subcommand_errors() {
+        let err = parse_cli_args_from(&argv(&["federation", "wat", "my-node", "/tmp/b.json"]))
+            .expect_err("`federation wat` must error");
+        assert!(
+            err.contains("unrecognized federation subcommand"),
             "error: {err}"
         );
     }

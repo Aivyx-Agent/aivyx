@@ -180,6 +180,17 @@ everything **network-shaped**: a **transport / relay server**, peer
 economics), designed privately and built when there's an installed base to
 network (the last link in `VISION.md`'s chain).
 
+**Hardware-backed identity (2026-09).** FED.1's operator-owned keypair can
+now be generated and held on a YubiKey's OpenPGP card applet instead of a
+software key sealed at rest — `Identity::load_hardware`, behind
+`aivyx-federation`'s own `yubikey` Cargo feature (off by default: the
+`aivyx-yubi` crate this pulls in transitively needs `libpcsclite`/`pcscd`
+at build and run time — a real, separate system dependency no other Aivyx
+command requires). Provisioning is a one-time operator step, `aivyx
+federation yubikey-init` — see `docs/INSTALL.md`'s "Hardware-backed
+federation identity (YubiKey)" section for setup, the `pcscd` requirement,
+and usage.
+
 ## 10. Open questions (resolve in-phase, not blocking FED.0)
 
 - **Discovery** — how do agents *find* each other? (a relay/directory; a private

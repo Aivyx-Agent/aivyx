@@ -4621,6 +4621,68 @@ To apply the imported Profile, hand-edit the target host's
 destructive-write scope tight to one on-disk artifact (the
 encrypted Persona chain).
 
+## Hardware-backed federation identity (YubiKey)
+
+Chapter Passport's federation identity (`docs/FEDERATION.md`) normally
+lives as a software Ed25519 key sealed at rest under your storage
+master key. `aivyx federation yubikey-init` provisions the alternative:
+an Ed25519 keypair generated **on** a YubiKey's OpenPGP card applet,
+never leaving the hardware, with every signature gated behind a
+physical touch.
+
+**Requires `pcscd` running, and is not built by default.** This is a
+real, separate system dependency — no other Aivyx command needs a
+smart-card daemon — and the underlying crate (`aivyx-yubi`)
+transitively needs `libpcsclite` at *build* time too (via `pcsc-sys`),
+so the binary you download or build by default does not include this
+command at all:
+
+```sh
+# Debian/Ubuntu:
+sudo apt install pcscd libpcsclite-dev
+sudo systemctl enable --now pcscd
+# Arch:
+sudo pacman -S pcsclite ccid
+sudo systemctl enable --now pcscd
+
+# Build the CLI with the `yubikey` feature to get the subcommand:
+cargo build -p aivyx-cli --features yubikey
+```
+
+Without `--features yubikey`, `aivyx federation yubikey-init` still
+parses (so the error is actionable) but refuses immediately with a
+"rebuild with `--features yubikey`" message.
+
+**Before provisioning, the card's User and Admin PIN must already be
+changed away from the OpenPGP-card factory defaults** (`123456` /
+`12345678`) — e.g. via `gpg --card-edit` → `admin` → `passwd`. This
+command never changes a PIN on your behalf; it only refuses to proceed
+against a still-factory-default card.
+
+```sh
+aivyx federation yubikey-init my-instance-id ~/.config/aivyx/federation-hardware-binding.json
+# aivyx federation yubikey-init: discovering YubiKey (requires pcscd running)...
+# Admin PIN (input hidden):
+# aivyx federation yubikey-init: generating an Ed25519 keypair in the Signature slot
+#   (this overwrites any existing key in that slot)...
+# aivyx federation yubikey-init: setting the Signature slot's touch policy to fixed
+#   (every future signature will require a physical touch)...
+# aivyx federation yubikey-init: wrote binding record (...) to ~/.config/aivyx/federation-hardware-binding.json
+# aivyx federation yubikey-init: verified — instance `my-instance-id` is bound to card ...
+```
+
+This is **destructive** if the card's Signature slot already holds a
+key — provisioning overwrites it with no "don't clobber" guard. Only
+run it against a freshly-reset or never-before-provisioned card. The
+resulting binding record (`{instance_id, card_serial,
+public_key_base64}`) is plain, non-secret JSON — the private key never
+leaves the card, so there is nothing sensitive to protect in the file
+itself. What that binding record is *for* (wiring a running daemon to
+sign federation requests with the card instead of a software key,
+including the still-open question of how a long-running daemon obtains
+the User PIN at its own startup) is a separate, not-yet-solved
+integration step beyond this provisioning command's scope.
+
 ## Debugging missing notifications
 
 When a scheduled briefing or trigger-fired notification doesn't

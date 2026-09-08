@@ -7,6 +7,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **`aivyx federation yubikey-init` — hardware-backed federation identity
+  provisioning (Chapter Passport, Task 8).** Discovers a connected
+  YubiKey's OpenPGP card, refuses to proceed on a still-factory-default
+  PIN, generates an on-card Ed25519 keypair in the Signature slot, sets
+  its touch-policy to fixed (physical touch required on every future
+  signature), and writes the resulting `{instance_id, card_serial,
+  public_key_base64}` binding record to an operator-chosen path. Off by
+  default (`cargo build -p aivyx-cli --features yubikey`) — the
+  underlying `aivyx-yubi`/`aivyx-federation` dependencies transitively
+  need `libpcsclite`/`pcscd` at build and run time; without the feature
+  the subcommand still parses but refuses with a clear rebuild message.
+  See `docs/INSTALL.md`'s "Hardware-backed federation identity (YubiKey)"
+  section and `docs/FEDERATION.md`.
 - **CI now fails fast, by name, if a workspace git dependency ever
   silently reverts to private.** `scripts/check-git-deps-public.sh`
   (Phase 192) is wired into `quality-gate.yml` as an early step —
