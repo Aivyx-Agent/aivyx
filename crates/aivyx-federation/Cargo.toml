@@ -38,19 +38,21 @@ aivyx-ipc = { path = "../aivyx-ipc" }
 serde_json = { workspace = true }
 
 # Task 7 (Chapter Passport, hardware-backed identity): hardware-backed Ed25519
-# signing via a YubiKey's OpenPGP card applet. `aivyx-yubi` is a local-only
-# sibling repo (same parent directory as this workspace, i.e.
-# `../../../aivyx-yubi` from this crate: aivyx-federation -> crates -> aivyx
-# -> Rust -> aivyx-yubi) with no GitHub remote yet, so a `path` dependency is
-# used instead of the `git` dependency style this workspace otherwise uses
-# for sibling Aivyx repos (see `aivyx-confine`/`aivyx-checkpoint`/
-# `aivyx-kvcache` in the root Cargo.toml) — switch to `git` once `aivyx-yubi`
-# gets a remote. `optional`: gated behind the `yubikey` feature (default
-# off) below — `aivyx-yubi` transitively needs `libpcsclite` at build time
-# (via `pcsc-sys`), which isn't installed on every contributor's machine or
-# in the default CI job, so it must never be pulled in by a plain
-# `cargo build --workspace`.
-aivyx-yubi = { path = "../../../aivyx-yubi", optional = true }
+# signing via a YubiKey's OpenPGP card applet. Centralized in the root
+# Cargo.toml's `[workspace.dependencies]` as a `git` dependency (pinned by
+# commit SHA), same pattern as `aivyx-confine`/`aivyx-checkpoint`/
+# `aivyx-kvcache` — a real GitHub remote now exists
+# (github.com/Aivyx-Agent/aivyx-yubi), created specifically so this
+# dependency wouldn't need a fragile local `path` reference that breaks CI
+# and every other contributor's checkout (a `path` dependency's manifest
+# must be resolvable on disk even when the feature gating it is off; a
+# `git` dependency only needs the remote reachable, and is never touched at
+# all when the `yubikey` feature — see below — isn't enabled). `optional`:
+# gated behind the `yubikey` feature (default off) — `aivyx-yubi`
+# transitively needs `libpcsclite` at build time (via `pcsc-sys`), which
+# isn't installed on every contributor's machine or in the default CI job,
+# so it must never be pulled in by a plain `cargo build --workspace`.
+aivyx-yubi = { workspace = true, optional = true }
 # Only needed for the hardware-signing arm of `sign_request`, which
 # `spawn_blocking`s the actual (multi-second, touch-gated) signing call off
 # the calling executor thread. Optional + tied to the same `yubikey` feature
@@ -61,8 +63,9 @@ tokio = { workspace = true, optional = true }
 [features]
 # Off by default: see the `aivyx-yubi` dependency comment above for why.
 # Enable with `cargo build -p aivyx-federation --features yubikey` (needs
-# `libpcsclite`/pkg-config available, and the `aivyx-yubi` sibling repo
-# checked out at `../../../aivyx-yubi`).
+# `libpcsclite`/pkg-config available locally to build `pcsc-sys`; `aivyx-yubi`
+# itself is fetched automatically from its own `git` remote by Cargo, no
+# local sibling checkout needed).
 yubikey = ["dep:aivyx-yubi", "dep:tokio"]
 
 [dev-dependencies]

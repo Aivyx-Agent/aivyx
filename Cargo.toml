@@ -291,6 +291,18 @@ aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", re
 # MUST stay a public repo — see the aivyx-confine entry above for why.
 aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
 
+# Hardware-backed Ed25519 signing via a YubiKey's OpenPGP card applet
+# (Chapter Passport's optional hardware-identity backend, aivyx-federation's
+# `IdentitySigner::Hardware`). Same pinned-by-commit-SHA pattern as
+# aivyx-checkpoint/aivyx-confine/aivyx-kvcache above — MUST stay a public
+# repo for the same CI-checkout reason (a `git` dependency, unlike a `path`
+# dependency, does NOT require local filesystem presence to resolve, but it
+# does require the remote to be reachable). Marked `optional = true` at each
+# consuming crate (not here) because it transitively needs `libpcsclite` at
+# build time via `pcsc-sys` — gated behind the `yubikey` Cargo feature,
+# off by default, so the default workspace build never touches it.
+aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "d62cb9d91f9100cc349eac0125efcc89e464e52d" }
+
 # Prompt-injection phrase-list tripwire (Chapter Picket) for untrusted
 # tool output (fs.read, web.fetch, every tool-process/MCP tool),
 # extracted from the sibling aivyx-coder repo rather than reimplemented

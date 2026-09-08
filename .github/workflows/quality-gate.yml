@@ -90,25 +90,21 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test --workspace
         run: cargo test --workspace
-      # NOTE (Chapter Passport Task 7): aivyx-federation's hardware-backed
-      # (YubiKey) `yubikey` feature is deliberately NOT exercised by a
-      # `--features yubikey` step in this job, even though `libpcsclite-dev`
-      # is installed above in anticipation of it. That feature's
-      # `aivyx-yubi` dependency is a `path` dependency to a sibling repo
-      # (`../../../aivyx-yubi`) that has **no git remote at all** (confirmed)
-      # — `actions/checkout@v4` above only fetches this repo, so that path
-      # never exists on this runner, and a `cargo build -p aivyx-federation
-      # --features yubikey` step here would fail on every single run at
-      # manifest-resolution time, permanently redding out this required
-      # check (ci.yml gates every PR; release.yml gates every tag — see the
-      # file header) until `aivyx-yubi` gets a real remote. The default
-      # `--workspace` build/clippy/test above never needs this feature (it's
-      # `optional`, off by default — confirmed via `cargo tree -p
-      # aivyx-federation` showing no `aivyx-yubi`/`pcsc` edge). Add a
-      # `--features yubikey` step here once `aivyx-yubi` is fetchable in CI
-      # (a `git` dependency once it has a remote, per that crate's own
-      # Cargo.toml comment) — until then it's exercised locally only
-      # (`cargo test -p aivyx-federation --features yubikey`).
+      # Chapter Passport Task 7: aivyx-federation's hardware-backed (YubiKey)
+      # `yubikey` feature, exercised separately from the default `--workspace`
+      # steps above (which never touch it — `optional`, off by default,
+      # confirmed via `cargo tree -p aivyx-federation` showing no
+      # `aivyx-yubi`/`pcsc` edge with no flags passed). `aivyx-yubi` is a
+      # `git` dependency (github.com/Aivyx-Agent/aivyx-yubi, pinned by commit
+      # SHA in the root Cargo.toml), fetched automatically by Cargo — no
+      # sibling checkout needed, unlike the `path`-dependency approach this
+      # comment used to warn against before that repo had a real remote.
+      # `libpcsclite-dev`/`pkgconf`, installed above, are what `pcsc-sys`
+      # needs to build.
+      - name: cargo clippy -p aivyx-federation --all-targets --features yubikey -- -D warnings
+        run: cargo clippy -p aivyx-federation --all-targets --features yubikey -- -D warnings
+      - name: cargo test -p aivyx-federation --features yubikey
+        run: cargo test -p aivyx-federation --features yubikey
       # Chapter M — the aivyx-web Dioxus client must compile to wasm32 (it
       # speaks the daemon protocol through the shared aivyx-ipc types). The
       # steps above build it on the native target; this guards the real one.
