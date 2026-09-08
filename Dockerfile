@@ -2,7 +2,7 @@
 #
 # Multi-stage: a Rust builder compiles the daemon + every tool-process binary,
 # then a slim Debian runtime carries just the binaries + the appliance config.
-# The Studio web bundle is already embedded in the `aivyx` binary at compile
+# The Studio web bundle is already embedded in the `aivyx-pa` binary at compile
 # time (from the committed crates/aivyx-web/dist/), so no Node/dx is needed here.
 #
 # TLS is rustls (pure-Rust) and crypto is RustCrypto — no OpenSSL — so the
@@ -32,7 +32,7 @@ RUN cargo build --release \
         -p aivyx-gmail -p aivyx-calendar -p aivyx-drive -p aivyx-contacts \
         -p aivyx-notion -p aivyx-obsidian -p aivyx-n8n -p aivyx-toolkit \
     && mkdir -p /out \
-    && for b in aivyx aivyx-gmail aivyx-calendar aivyx-drive aivyx-contacts \
+    && for b in aivyx-pa aivyx-gmail aivyx-calendar aivyx-drive aivyx-contacts \
                 aivyx-notion aivyx-obsidian aivyx-n8n aivyx-toolkit; do \
          cp "target/release/$b" /out/; \
        done
@@ -48,18 +48,18 @@ RUN apt-get update \
 COPY --from=builder /out/ /usr/local/bin/
 
 # The baked appliance default config + the entrypoint that bridges the
-# passphrase secret and seeds ~/.aivyx on first boot.
+# passphrase secret and seeds ~/.aivyx-pa on first boot.
 COPY deploy/docker/aivyx.appliance.toml /etc/aivyx/aivyx.appliance.toml
 COPY deploy/docker/entrypoint.sh /usr/local/bin/aivyx-entrypoint
 RUN chmod +x /usr/local/bin/aivyx-entrypoint
 
-# Studio + state live here; mount a named volume on /root/.aivyx to persist.
-# WORKDIR is /root/.aivyx because the daemon reads `./aivyx.toml` relative to its
-# working directory (there is no --config flag yet), and the entrypoint seeds the
-# appliance config there on first boot.
+# Studio + state live here; mount a named volume on /root/.aivyx-pa to persist.
+# WORKDIR is /root/.aivyx-pa because the daemon reads `./aivyx-pa.toml` relative
+# to its working directory (there is no --config flag yet), and the entrypoint
+# seeds the appliance config there on first boot.
 ENV HOME=/root
-WORKDIR /root/.aivyx
-VOLUME ["/root/.aivyx", "/work"]
+WORKDIR /root/.aivyx-pa
+VOLUME ["/root/.aivyx-pa", "/work"]
 EXPOSE 7843
 
 ENTRYPOINT ["/usr/local/bin/aivyx-entrypoint"]

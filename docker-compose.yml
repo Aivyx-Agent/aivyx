@@ -24,12 +24,12 @@ services:
     ports:
       - "127.0.0.1:7843:7843"
     volumes:
-      - aivyx-data:/root/.aivyx        # config + encrypted store + audit chain + tokens
+      - aivyx-pa-data:/root/.aivyx-pa  # config + encrypted store + audit chain + tokens
       - ./workspace:/work              # the agent's filesystem reach (fs_root)
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your shell or .env}
     secrets:
-      - aivyx_passphrase               # → AIVYX_PASSPHRASE via the entrypoint
+      - aivyx_pa_passphrase            # → AIVYX_PA_PASSPHRASE via the entrypoint
     restart: unless-stopped
 
   # ── optional local-model profile: `docker compose --profile ollama up` ──
@@ -44,9 +44,9 @@ services:
     restart: unless-stopped
 
 volumes:
-  aivyx-data:
+  aivyx-pa-data:
   ollama-data:
 
 secrets:
-  aivyx_passphrase:
+  aivyx_pa_passphrase:
     file: ./deploy/docker/secrets/passphrase

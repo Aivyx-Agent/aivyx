@@ -1,7 +1,7 @@
 # Aivyx — default appliance config (Chapter Harbor, HB.1).
 #
 # Baked into the container image as a sensible zero-config default. Mount your
-# own config over `/root/.aivyx/aivyx.toml` to override any of this.
+# own config over `/root/.aivyx-pa/aivyx-pa.toml` to override any of this.
 #
 # This is the SERVER-APPLIANCE profile (see docs/DOCKER.md): the agent reaches a
 # bind-mounted /work volume, the Studio is exposed deliberately, and there is no
@@ -17,7 +17,7 @@ model = "claude-sonnet-4-6"
 [storage]
 # Lives under the mounted named volume so the encrypted store + audit chain
 # persist across `docker compose down/up`.
-path = "/root/.aivyx/store.redb"
+path = "/root/.aivyx-pa/store.redb"
 
 [fs]
 # The agent's filesystem reach = the bind-mounted /work volume (NOT the host's

@@ -10,7 +10,7 @@
 # Assumptions about the remote host:
 #   - reachable over SSH as $AIVYX_RIG (user@host)
 #   - runs the daemon as a systemd *user* service named `aivyx-pa-daemon`
-#     (i.e. installed via `aivyx daemon install`, Chapter Anchor)
+#     (i.e. installed via `aivyx-pa daemon install`, Chapter Anchor)
 #   - the `aivyx-pa` binary lives at $AIVYX_BIN (default ~/.local/bin/aivyx-pa)
 #
 # Usage:
