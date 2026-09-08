@@ -142,10 +142,11 @@ Generated-TOML / prose mentions of `aivyx.toml` inside doc comments and
 comments; `aivyx-cli/.../init.rs` wizard prompts; `daemon_service.rs`'s
 `cwd.join("aivyx.toml").exists()` check) are downstream of the same
 constant and not enumerated individually here — they're mechanical once
-`CONFIG_FILE`'s value changes, but there are enough of them (a rough
-`grep -rn '"aivyx\.toml"' crates --include="*.rs" | wc -l` returns **~90
-lines**) that Task 2 should budget real time for the sweep, not treat it
-as a single-line fix.
+`CONFIG_FILE`'s value changes, but there are enough of them that Task 2
+should budget real time for the sweep, not treat it as a single-line fix.
+**Corrected during review**: `grep -rn '"aivyx\.toml"' crates --include="*.rs"
+| wc -l` genuinely returns **228 lines**, not this row's original "~90"
+estimate — budget for the real, larger number.
 
 ---
 
@@ -266,7 +267,7 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Aivyx, a capable assistant runn
 | `aivyx-desktop/src/gate_watch.rs:149` | `.summary("Aivyx — approval needed")` | desktop OS notification summary | `Aivyx PA` |
 | `aivyx-web/src/main.rs:1163` | `document::Title { "Aivyx Studio" }` | web Studio browser tab title | `Aivyx PA` |
 | `aivyx-web/src/main.rs:1414` | `img { alt: "Aivyx" }` | logo image alt text | `Aivyx PA` |
-| `aivyx-web/src/main.rs:1415` | `span { "AIVYX" }` (wordmark) | sidebar brand wordmark text | `Aivyx PA` |
+| `aivyx-web/src/main.rs:1415` | `span { "AIVYX" }` (wordmark) | sidebar brand wordmark text | `Aivyx PA` — noted during review: the current literal is all-caps as a literal Rust string, not via a CSS `text-transform` rule (`stitch.css` confirmed to have none), so this row is a deliberate casing call, not a copy-paste of the standard prose convention; `AIVYX PA` (matching the existing all-caps visual style) is equally defensible if that reads better in the actual UI — Task 2's own judgment call |
 | `aivyx-web/src/main.rs:7074` | `placeholder: "Aivyx (default)"` | assistant-name input placeholder | `Aivyx PA` |
 | `aivyx-tui/examples/connect.rs:185` | `"Aivyx never sees a shared secret — you own the app."` | example-file prose describing the OAuth model | `Aivyx PA` — arguably closer to docs prose than a runtime constant, but lives in `crates/` |
 
@@ -334,9 +335,9 @@ as folded into Table E's environment-variable work.
 
 | file:line | current literal | what it's for | new literal |
 |---|---|---|---|
-| `crates/aivyx-config/src/lib.rs:3958` | `aivyx: RawAivyx` field on the outer raw-TOML struct | makes `[aivyx]` a real TOML table name (serde derives the section name from the field name) | `Aivyx PA` — renaming the Rust field renames the TOML section name that operators write; this is a breaking config-format change, not just an internal rename, so treat with the same care as the CLI/env-var rename |
-| `crates/aivyx-config/src/lib.rs:5599-5602` | `struct RawAivyx { passphrase: Option<String> }` | backing struct | same as above |
-| `crates/aivyx-channel/src/keyring_store.rs:6-7` (doc comment) | `` `[aivyx] passphrase]` in the TOML `` | describes the same section | mirrors decision above |
+| `crates/aivyx-config/src/lib.rs:3958` | `aivyx: RawAivyx` field on the outer raw-TOML struct | makes `[aivyx]` a real TOML table name (serde derives the section name from the field name) | `aivyx_pa: RawAivyxPa` (Rust field/struct → snake_case, following normal Rust naming, not the prose "Aivyx PA" convention used elsewhere in this document) → the TOML section operators write becomes `[aivyx_pa]`; this is a breaking config-format change, not just an internal rename, so treat with the same care as the CLI/env-var rename |
+| `crates/aivyx-config/src/lib.rs:5599-5602` | `struct RawAivyx { passphrase: Option<String> }` | backing struct | `struct RawAivyxPa { passphrase: Option<String> }` — same as above |
+| `crates/aivyx-channel/src/keyring_store.rs:6-7` (doc comment) | `` `[aivyx] passphrase]` in the TOML `` | describes the same section | `` `[aivyx_pa] passphrase]` `` — mirrors decision above |
 
 ---
 
@@ -360,12 +361,12 @@ as folded into Table E's environment-variable work.
 
 - Table A (keyring): 1 site.
 - Table B (`.aivyx`/`aivyx` dir-segment construction, real code): 31 sites across 23 files in 15 crates + 1 test mirror.
-- Table C (`aivyx.toml` filename): 1 canonical const + ~90 downstream literal mentions (not individually enumerated).
+- Table C (`aivyx.toml` filename): 1 canonical const + 228 downstream literal mentions (not individually enumerated — corrected during review from an original "~90" estimate).
 - Table D (systemd/launchd): 3 consts + operator-facing hint strings + test mirrors, all in 1 file (plus 2 test-fixture mirrors in `sensitive_paths.rs`).
 - Table E (`AIVYX_*` env prefix): ~30 distinct env var names, definitions concentrated in `aivyx-config/src/lib.rs` with a handful in `aivyx-calendar`, `aivyx-cli`, `aivyx-desktop`, `aivyx-llm`, `aivyx-pack`; hundreds of downstream test-literal usages not enumerated.
-- **Table F (assistant persona identity — the surprise cluster): ~35 sites across 11 crates, all downstream of one unresolved product-shape question.**
+- **Table F (assistant persona identity — the surprise cluster): ~35 sites across 11 crates, all downstream of one product-shape question — resolved by the operator: renames to "Aivyx PA."**
 - Table G (MCP client name): 1 site.
 - Table H (webhook source field): 1 site + 3 mirrors.
-- Table I (binary name in CLI's own user-facing text): 6+ enumerated sites, ~140 lines matching the broader pattern, not individually enumerated.
-- Table J (`[aivyx]` TOML section): 1 struct field (a breaking config-format change, not just an internal rename).
+- Table I (binary name in CLI's own user-facing text): 6+ enumerated sites, 110 lines matching the broader pattern (confirmed by independent review), not individually enumerated.
+- Table J (`[aivyx]` TOML section): 3 sites — a breaking config-format change (Rust field/struct → `aivyx_pa`/`RawAivyxPa`, TOML section → `[aivyx_pa]`), not just an internal rename; corrected during review from an initial mis-applied "Aivyx PA" prose substitution.
 - Category (b): 8 hits confirmed genuinely out of scope.
