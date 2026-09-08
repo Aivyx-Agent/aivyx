@@ -1,9 +1,9 @@
-# Installing Aivyx
+# Installing Aivyx PA
 
 This doc covers the full install matrix. For the abbreviated
 "Five-minute setup" path, see the [root README](../README.md).
 
-Aivyx ships a single binary, `aivyx`, plus five optional channel
+Aivyx PA ships a single binary, `aivyx-pa`, plus five optional channel
 adapters baked into it (CLI, Telegram, Discord, Slack, Web UI).
 There are no hosted dependencies — your binary talks directly to
 your LLM provider (Anthropic / OpenAI-compatible / Ollama) and
@@ -14,7 +14,7 @@ stores everything locally in an encrypted redb file.
 The recommended install path is the [shell installer](#shell-installer-recommended),
 which downloads a prebuilt binary for your platform; you can also
 [build from source](#build-from-source). Both install the same
-single `aivyx` binary. The release pipeline is active — see the
+single `aivyx-pa` binary. The release pipeline is active — see the
 [CHANGELOG](../CHANGELOG.md) for release history.
 
 ## Supported targets
@@ -25,14 +25,14 @@ version drift.
 
 | Target | Binary | Notes |
 |---|---|---|
-| Linux x86_64 (musl) | `aivyx` | Debian 8+ / Ubuntu 16+ / Arch / Alpine / RHEL 7+ |
-| Linux aarch64 (musl) | `aivyx` | ARM64 servers, Raspberry Pi 4/5 (64-bit OS), Asahi Linux |
-| macOS x86_64 | `aivyx` | Intel Macs, macOS 10.13+ |
-| macOS aarch64 | `aivyx` | Apple Silicon (M1 / M2 / M3 / M4), macOS 11+ |
+| Linux x86_64 (musl) | `aivyx-pa` | Debian 8+ / Ubuntu 16+ / Arch / Alpine / RHEL 7+ |
+| Linux aarch64 (musl) | `aivyx-pa` | ARM64 servers, Raspberry Pi 4/5 (64-bit OS), Asahi Linux |
+| macOS x86_64 | `aivyx-pa` | Intel Macs, macOS 10.13+ |
+| macOS aarch64 | `aivyx-pa` | Apple Silicon (M1 / M2 / M3 / M4), macOS 11+ |
 
 Native Windows is **not yet supported** — see [Windows
 (WSL2 or Docker)](#windows-wsl2-or-docker) below for the two
-supported ways to run Aivyx on a Windows machine today.
+supported ways to run Aivyx PA on a Windows machine today.
 
 ## Windows (WSL2 or Docker)
 
@@ -40,7 +40,7 @@ There is no native `*-pc-windows-msvc` binary yet, and it is a
 deliberate deferral rather than an oversight: two load-bearing
 subsystems are Unix-specific.
 
-1. **Daemon IPC is Unix-domain-socket-only.** Every Aivyx frontend
+1. **Daemon IPC is Unix-domain-socket-only.** Every Aivyx PA frontend
    (REPL, TUI, Web Studio, voice) is a thin client that talks to the
    local daemon over a Unix domain socket. A native Windows build
    needs a NamedPipe (or token-authenticated loopback) transport
@@ -56,7 +56,7 @@ one of the two fully-supported paths below — **both run the exact same
 Linux binary**, with no loss of functionality.
 
 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) runs a real
-Linux kernel under Windows. Aivyx installs and behaves there exactly
+Linux kernel under Windows. Aivyx PA installs and behaves there exactly
 as a Linux x86_64 install — the local-first model holds (the agent
 reaches your files inside the WSL2 filesystem, accessible from Windows
 at `\\wsl$\`). There are two WSL paths: a **pre-built Aivyx distro**
@@ -101,8 +101,8 @@ wsl --install            # installs WSL2 + a default Ubuntu
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
   | sh
-aivyx --version
-aivyx init
+aivyx-pa --version
+aivyx-pa init
 ```
 
 Either way, the Web Studio is reachable from a Windows browser at
@@ -126,7 +126,7 @@ the Studio in its own window, manages the daemon, and fires OS notifications whe
 a mission needs your approval. It's *native chrome over the same web Studio* (a
 system webview runs the exact same UI), not a separate interface.
 
-![The Aivyx desktop app — the Studio running in a native window, daemon connected](images/desktop-app.png)
+![The Aivyx PA desktop app — the Studio running in a native window, daemon connected](images/desktop-app.png)
 
 Features: a tray / menu-bar icon (Open Studio · Restart daemon · Start at login ·
 Quit), hide-to-tray on close, native approval-gate notifications, and a global
@@ -155,8 +155,8 @@ cargo build -p aivyx-desktop --release
 ./target/release/aivyx-desktop
 ```
 
-On launch it attaches to a running daemon, or spawns one (`aivyx daemon run
---web-ui`) — resolving the `aivyx` binary from `AIVYX_BIN` or `PATH`.
+On launch it attaches to a running daemon, or spawns one (`aivyx-pa daemon run
+--web-ui`) — resolving the `aivyx-pa` binary from `AIVYX_PA_BIN` or `PATH`.
 
 ### Packaging (installer)
 
@@ -188,14 +188,14 @@ of the repository:
 ```sh
 git clone https://github.com/Aivyx-Agent/aivyx
 cd aivyx
-cargo build --release --bin aivyx
-# binary lands at target/release/aivyx
+cargo build --release --bin aivyx-pa
+# binary lands at target/release/aivyx-pa
 ```
 
 Install into `~/.cargo/bin/` (if `cargo install` is preferred):
 
 ```sh
-cargo install --path crates/aivyx-cli --bin aivyx
+cargo install --path crates/aivyx-cli --bin aivyx-pa
 ```
 
 The pre-commit hook (`./scripts/install-hooks.sh`) is optional
@@ -203,7 +203,7 @@ for end users; it enforces `cargo clippy --workspace --all-targets
 -- -D warnings` on every commit and is recommended for
 contributors.
 
-## Running Aivyx locally for development (Phase 99)
+## Running Aivyx PA locally for development (Phase 99)
 
 For a development loop — building from a clone and exercising the
 real agent on your own machine — two scripts under `scripts/`
@@ -214,18 +214,18 @@ key, no network egress, no per-run cost).
 - [Ollama](https://ollama.ai) installed and running (`ollama serve`)
 - A **tool-capable** model pulled — recommended: `ollama pull qwen3:8b`.
   The agent needs tool-calling, so a small non-tool-caller (e.g.
-  `llama3.2:3b`) won't be useful. `aivyx init` will offer to pull the
+  `llama3.2:3b`) won't be useful. `aivyx-pa init` will offer to pull the
   recommended model for you.
 
-> **Local-model reliability (Chapter P).** Aivyx auto-detects the model's
+> **Local-model reliability (Chapter P).** Aivyx PA auto-detects the model's
 > native context window and sizes `num_ctx` for you — no manual
 > `[ollama] num_ctx` needed (the agent prompt would otherwise starve the
 > Ollama default of 4096 down to a single token). Thinking models
 > (qwen3) and their tool-calls are handled transparently. If a first turn
-> ever comes back empty, run **`aivyx doctor`** — it checks Ollama, the
+> ever comes back empty, run **`aivyx-pa doctor`** — it checks Ollama, the
 > model, and a live test reply, and tells you exactly what to fix.
 
-**Interactive session** — `scripts/dev-run.sh` builds `aivyx` and
+**Interactive session** — `scripts/dev-run.sh` builds `aivyx-pa` and
 drops you into a chat REPL:
 
 ```sh
@@ -261,15 +261,15 @@ repo infrastructure is still being decided.
 ## Shell installer (recommended)
 
 The cargo-dist-generated installer detects your arch, downloads
-the right tarball, verifies its checksum, and drops `aivyx` into
+the right tarball, verifies its checksum, and drops `aivyx-pa` into
 `$CARGO_HOME/bin/` (typically `~/.cargo/bin/`).
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
   | sh
-aivyx --version
-# aivyx x.y.z
+aivyx-pa --version
+# aivyx-pa x.y.z
 ```
 
 For a specific version, replace `latest` with the tag (see the
@@ -291,7 +291,7 @@ Two ways past the warning:
 **(a) Strip the quarantine attribute** (one-shot, recommended):
 
 ```sh
-xattr -d com.apple.quarantine "$(command -v aivyx)"
+xattr -d com.apple.quarantine "$(command -v aivyx-pa)"
 ```
 
 **(b) Right-click → Open** the binary once from Finder. macOS
@@ -303,7 +303,7 @@ it lands in a follow-up phase once operator pressure surfaces.
 
 ## Docker — the server appliance
 
-`docker compose up` runs Aivyx as an always-on **server appliance**: the
+`docker compose up` runs Aivyx PA as an always-on **server appliance**: the
 daemon + the Studio web GUI in one container, no Rust toolchain on your
 machine.
 
@@ -341,11 +341,11 @@ live in `./workspace` (mounted at `/work`).
   Exposing the Studio off-host needs **both** `[daemon] web_ui_host = "0.0.0.0"`
   *and* `[daemon] web_ui_allowed_origins = ["https://your-host"]` (the daemon
   rejects off-host WebSocket origins otherwise), **plus** auth + TLS in front
-  (a reverse proxy like Caddy/Traefik — Aivyx doesn't ship one). The daemon
+  (a reverse proxy like Caddy/Traefik — Aivyx PA doesn't ship one). The daemon
   prints a one-line warning when it binds a non-loopback host. **Also check
   the host's own firewall** (ufw/firewalld/iptables) if a client still can't
   connect after that — a live baptism found a rig's UFW silently dropping the
-  Studio's port while every Aivyx-side check (bind, token, cookie, `/ws`
+  Studio's port while every Aivyx PA-side check (bind, token, cookie, `/ws`
   upgrade) was green, with zero feedback pointing at the real cause; see
   `docs/GATEHOUSE.md`'s "Known gap" note.
 - **Passphrase posture.** The store passphrase comes from a Docker *secret*
@@ -369,21 +369,21 @@ phase); until then `docker compose up --build` builds it locally from source.
 
 | File | Default location | Configurable? |
 |---|---|---|
-| `aivyx` binary | `~/.cargo/bin/aivyx` | Yes — `--install-path` flag on the installer |
-| Config | `./aivyx.toml` (CWD) or `~/.config/aivyx/aivyx.toml` | Yes — `--config <path>` on `aivyx`; the wizard writes to CWD by default |
+| `aivyx-pa` binary | `~/.cargo/bin/aivyx-pa` | Yes — `--install-path` flag on the installer |
+| Config | `./aivyx-pa.toml` (CWD) or `~/.config/aivyx-pa/aivyx-pa.toml` | Yes — `--config <path>` on `aivyx-pa`; the wizard writes to CWD by default |
 | Encrypted store | per-config (`[storage] path`) | Yes — TOML `[storage] path` |
-| Daemon socket | `$XDG_RUNTIME_DIR/aivyx.sock` (Linux) / `$TMPDIR/aivyx.sock` (macOS) | No |
-| Daemon PID file | `$XDG_RUNTIME_DIR/aivyx.pid` (Linux) / `$TMPDIR/aivyx.pid` (macOS) | No |
+| Daemon socket | `$XDG_RUNTIME_DIR/aivyx-pa.sock` (Linux) / `$TMPDIR/aivyx-pa.sock` (macOS) | No |
+| Daemon PID file | `$XDG_RUNTIME_DIR/aivyx-pa.pid` (Linux) / `$TMPDIR/aivyx-pa.pid` (macOS) | No |
 | Web UI port | `127.0.0.1:7843` | Yes — TOML `[daemon] web_ui_port` or `--web-ui-port <N>` |
 
 ## First-run checklist
 
 After install:
 
-1. **`aivyx init`** — interactive wizard. Detects Ollama at
+1. **`aivyx-pa init`** — interactive wizard. Detects Ollama at
    `http://127.0.0.1:11434` and offers it as the default
    provider (no API key required). Otherwise prompts for an
-   Anthropic or OpenAI key. Writes `aivyx.toml` to your CWD with
+   Anthropic or OpenAI key. Writes `aivyx-pa.toml` to your CWD with
    `0600` permissions.
 
    **Phase 181 — the guided identity builder.** The wizard's
@@ -411,7 +411,7 @@ After install:
    **Phase 104 — verify-before-write.** When the operator picks
    Anthropic or OpenAI, the wizard hits the provider's
    `GET /v1/models` with the supplied key before writing
-   `aivyx.toml` and confirms the chosen model is in the
+   `aivyx-pa.toml` and confirms the chosen model is in the
    returned list. A wrong key or typo'd model is caught here
    and re-prompts the implicated field; a broken config never
    lands on disk. After three failed attempts the wizard
@@ -422,26 +422,26 @@ After install:
    llama3.2:3b` starter suggestion).
 
    **Faster path with a starter template** (Phase 66):
-   `aivyx init --list-templates` to discover available starters
+   `aivyx-pa init --list-templates` to discover available starters
    (`coder`, `researcher`, `personal`), then
-   `aivyx init --template <name>` to run the wizard with
+   `aivyx-pa init --template <name>` to run the wizard with
    pre-filled defaults from the template. The generated
-   `aivyx.toml` includes the template's role declarations, MCP
+   `aivyx-pa.toml` includes the template's role declarations, MCP
    blocks, and commented-out automation hints. See
    [`docs/TEMPLATES.md`](TEMPLATES.md) for the full template
    reference.
 
    **Authoring your own tool process** (Phase 103): if you want
    to ship a tool the substrate doesn't already include, run
-   `aivyx tool init <path>` to scaffold a runnable Rust
+   `aivyx-pa tool init <path>` to scaffold a runnable Rust
    tool-process starter at `<path>` — `Cargo.toml`, a
    `src/main.rs` with the handshake + invocation loop, a
    `README.md`, and a conformance test. Edit the body of
    `handle_invocation`, build, then point a `[[tool_process]]`
-   entry in `aivyx.toml` at the resulting binary. See
+   entry in `aivyx-pa.toml` at the resulting binary. See
    [`docs/TOOL_SDK.md`](TOOL_SDK.md) for the full protocol.
 
-2. **`aivyx`** — auto-spawns the daemon (foreground or
+2. **`aivyx-pa`** — auto-spawns the daemon (foreground or
    background depending on flag), drops you into a REPL session,
    and serves the Web UI on `127.0.0.1:7843` if you enabled it.
 
@@ -449,10 +449,10 @@ After install:
    Missions, Audit (with cold-verify), Sessions, Profile,
    Persona tabs.
 
-4. **`aivyx --verify-only`** at any time runs the offline
+4. **`aivyx-pa --verify-only`** at any time runs the offline
    HMAC audit-chain verification pass.
 
-5. **`aivyx audit export`** (Phase 105) dumps the audit chain
+5. **`aivyx-pa audit export`** (Phase 105) dumps the audit chain
    as JSONL on stdout. `--from <seq>` and `--limit <N>` slice
    the output via the same `entries_range` reader the Web UI
    Audit tab uses. Each line carries the full `SignedEntry`
@@ -466,7 +466,7 @@ After install:
 **Phase 110 — Skills Auto-Creation (Reflection Staging).**
 Skills are procedural patterns the agent drafts after complex
 turns and the operator approves through the existing
-persona-proposal surface (`aivyx persona proposals`). Approved
+persona-proposal surface (`aivyx-pa persona proposals`). Approved
 skills land in the Persona chain as `LearnedSkill` deltas,
 render into the agent's system prompt as a `## Learned skills`
 section (one bullet per skill: `name: trigger`), and are
@@ -487,7 +487,7 @@ P10's substrate tool count grew from ten to thirteen with
 read-only inspection of operator-configured repos; they share
 a `git.read` capability scope qualified by repo path and shell
 out to the system `git` binary (no Rust deps). To enable, add
-a `[git]` section to `aivyx.toml` listing the allowed repo
+a `[git]` section to `aivyx-pa.toml` listing the allowed repo
 paths:
 
 ```toml
@@ -543,71 +543,71 @@ just without the OS-level boundary — same as before this feature
 existed). See `docs/THREAT_MODEL.md` §5.6 / property 7 in §6 for the
 full mechanism and its current scope.
 
-6. **`aivyx mcp recipes`** (Phase 106) lists Aivyx's curated
+6. **`aivyx-pa mcp recipes`** (Phase 106) lists Aivyx PA's curated
    catalog of MCP servers worth enabling — `filesystem`,
    `github`, `gitlab`, `sqlite`, `postgres`, `time`, `fetch`,
    `brave-search`, `slack`, `memory`, `puppeteer`,
-   `everything`, `aivyx-coder`. Bare form prints the list; `aivyx mcp
+   `everything`, `aivyx-coder`. Bare form prints the list; `aivyx-pa mcp
    recipes <name>` prints a paste-able `[[mcp_server]]` block
    plus an inline `[mcp_server.sandbox]` block so a
    copy-paste produces a sandboxed config (Phase 55 substrate
    posture). The canonical reference lives in
    [`docs/MCP_RECIPES.md`](MCP_RECIPES.md). Distinct from
-   `aivyx mcp-server <name>` (Phase 46) which *runs* a
+   `aivyx-pa mcp-server <name>` (Phase 46) which *runs* a
    bundled server — recipes is the catalog of external ones.
 
-For deployment guidance (threat model, what Aivyx defends
+For deployment guidance (threat model, what Aivyx PA defends
 against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
 agent to anything sensitive.
 
 ## Running as a service — runs for days (Chapter Anchor)
 
-`aivyx` is most useful left running: the daemon keeps its scheduled
+`aivyx-pa` is most useful left running: the daemon keeps its scheduled
 routines firing, its autonomous loop available, and the Studio up.
-`aivyx daemon run` ties the daemon to your terminal; **`aivyx daemon
+`aivyx-pa daemon run` ties the daemon to your terminal; **`aivyx-pa daemon
 install`** registers it as a real background service that survives
 logout and reboot — no hand-rolled `systemd`/`launchd` files.
 
 ```sh
 # install + start the daemon as a per-user service
-aivyx daemon install            # add --web-ui to also serve the Studio
+aivyx-pa daemon install         # add --web-ui to also serve the Studio
                                 # add --no-start to install without starting
 
-# check it (also shown in `aivyx doctor`)
-systemctl --user status aivyx-daemon          # Linux
-launchctl print gui/$(id -u)/com.aivyx.daemon # macOS
-journalctl --user -u aivyx-daemon -f          # Linux logs
+# check it (also shown in `aivyx-pa doctor`)
+systemctl --user status aivyx-pa-daemon          # Linux
+launchctl print gui/$(id -u)/com.aivyx-pa.daemon # macOS
+journalctl --user -u aivyx-pa-daemon -f          # Linux logs
 
 # remove it (stops, disables, deletes the unit + its secret env file)
-aivyx daemon uninstall
+aivyx-pa daemon uninstall
 ```
 
 - **Linux** — a systemd **user** unit at
-  `~/.config/systemd/user/aivyx-daemon.service`, plus
+  `~/.config/systemd/user/aivyx-pa-daemon.service`, plus
   `loginctl enable-linger` so it runs **without an active login
   session** (the runs-for-days requirement). No root, no `sudo`.
 - **macOS** — a launchd `LaunchAgent` at
-  `~/Library/LaunchAgents/com.aivyx.daemon.plist` (`RunAtLoad`,
+  `~/Library/LaunchAgents/com.aivyx-pa.daemon.plist` (`RunAtLoad`,
   restart-on-crash).
 - **The store passphrase.** The service is unattended, so it can't
   prompt: `daemon install` captures your passphrase (from
-  `AIVYX_PASSPHRASE` or a one-time hidden prompt) and stores it for
+  `AIVYX_PA_PASSPHRASE` or a one-time hidden prompt) and stores it for
   the service. On **Linux** it goes in a `0600` env file
-  (`~/.config/aivyx/daemon.env`) the unit references — never in the
+  (`~/.config/aivyx-pa/daemon.env`) the unit references — never in the
   unit itself. On **macOS** it rides the plist's
   `EnvironmentVariables` (the plist is written `0600`). Either way the
   secret is owner-only at rest.
 - **Working directory.** The unit runs from the directory holding your
-  `aivyx.toml` (the cwd at install time, else `$HOME`), so the daemon
+  `aivyx-pa.toml` (the cwd at install time, else `$HOME`), so the daemon
   finds your config.
 - **Windows / containers** — use the [Docker appliance](#docker--the-server-appliance)
   (always-on by design) or the desktop app's autostart instead.
 
-Re-running `aivyx daemon install` is idempotent — it rewrites the unit
+Re-running `aivyx-pa daemon install` is idempotent — it rewrites the unit
 and restarts the service, picking up a new binary path or `--web-ui`.
 
-## Running Aivyx on Discord (Phase 107)
+## Running Aivyx PA on Discord (Phase 107)
 
 The Discord adapter mirrors the Telegram pattern: one bot
 account, configured per-operator, sees DMs and any guild
@@ -629,14 +629,14 @@ Persona + mission-gate behavior.
    scopes `bot` + permissions `Send Messages`, `Read Message
    History`). Or just DM the bot from the developer-portal
    account.
-4. **Configure aivyx** — set the token via env or TOML:
+4. **Configure aivyx-pa** — set the token via env or TOML:
 
    ```sh
-   export AIVYX_DISCORD_TOKEN='your_bot_token_here'
-   aivyx --channel discord
+   export AIVYX_PA_DISCORD_TOKEN='your_bot_token_here'
+   aivyx-pa --channel discord
    ```
 
-   …or in `aivyx.toml`:
+   …or in `aivyx-pa.toml`:
 
    ```toml
    [discord]
@@ -705,11 +705,11 @@ trigger per rolling hour. See `docs/DAEMON_TEAMS.md` §6 and
 `docs/ROUTINES.md` for the full behavior and how it compares to the
 CLI and scheduled ways to start a team mission.
 
-## Running Aivyx on Slack (Phase 108)
+## Running Aivyx PA on Slack (Phase 108)
 
 The Slack adapter follows the same shape as Discord and
 Telegram: one Slack app, one Socket Mode WebSocket from
-aivyx to Slack, the bot sees DMs and channels it's been
+aivyx-pa to Slack, the bot sees DMs and channels it's been
 invited to. SemiTrusted tier; per-`(team_id, channel_id)`
 memory partitioning so a Slack bot installed in two
 workspaces partitions cleanly even when channel ids
@@ -733,15 +733,15 @@ collide.
    resulting `xoxb-...` bot token.
 6. **Invite the bot** to any channel you want it to listen
    in. DMs work out of the box.
-7. **Configure aivyx** — set both tokens via env or TOML:
+7. **Configure aivyx-pa** — set both tokens via env or TOML:
 
    ```sh
-   export AIVYX_SLACK_BOT_TOKEN='xoxb-...'
-   export AIVYX_SLACK_APP_TOKEN='xapp-...'
-   aivyx --channel slack
+   export AIVYX_PA_SLACK_BOT_TOKEN='xoxb-...'
+   export AIVYX_PA_SLACK_APP_TOKEN='xapp-...'
+   aivyx-pa --channel slack
    ```
 
-   …or in `aivyx.toml`:
+   …or in `aivyx-pa.toml`:
 
    ```toml
    [slack]
@@ -770,18 +770,18 @@ verification pass, separate from the phase sequence).
 
 ## The terminal UI (Phase 185)
 
-`aivyx tui` launches a **terminal application** instead of the
+`aivyx-pa tui` launches a **terminal application** instead of the
 plain line REPL: a scrollable chat pane, a status bar
 (role · daemon · working), and an input line — rendered with
-`ratatui`. Like every Aivyx interface it is a **frontend client**
+`ratatui`. Like every Aivyx PA interface it is a **frontend client**
 over the local daemon IPC: it connects to the running daemon
 (auto-spawning one if none is listening), exactly as the REPL
 does. The daemon — not the TUI — holds the agent, state,
 capabilities, and audit, and it survives the TUI exiting.
 
 ```sh
-aivyx tui                 # default role
-aivyx tui --role coder    # pick a role, like the REPL
+aivyx-pa tui                 # default role
+aivyx-pa tui --role coder    # pick a role, like the REPL
 ```
 
 Keybindings:
@@ -797,9 +797,9 @@ Keybindings:
 
 **Opt-in by design.** The TUI requires a real terminal, so the
 **REPL stays the default** and the only non-TTY / scripting /
-piped path — automation that pipes into `aivyx` keeps working
+piped path — automation that pipes into `aivyx-pa` keeps working
 unchanged. Promote the TUI to the default in your own workflow by
-aliasing `aivyx` to `aivyx tui`.
+aliasing `aivyx-pa` to `aivyx-pa tui`.
 
 **New dependencies.** The TUI is the first feature to add
 workspace dependencies in a long time: `ratatui` + `crossterm`,
@@ -831,7 +831,7 @@ Three Trusted-tier tools back this — `skills.teach`,
 `confirmed: true` the agent sets only after you approve the
 draft, so a skill is never saved silently. A skill is a Persona
 (P14) delta on the HMAC-chained persona log — every teach /
-update / forget is **audited and reversible** (`aivyx persona`).
+update / forget is **audited and reversible** (`aivyx-pa persona`).
 
 This is the *operator-authored* path; the reflection
 auto-proposer below is the complementary *agent-detected* path
@@ -907,14 +907,14 @@ shape that category expects (LearnedSkill, ListAppend, or
 ScalarSet); high-confidence non-dup proposals for enabled
 categories auto-accept into the Persona chain; below-
 threshold verdicts stage as Pending proposals the operator
-resolves through `aivyx persona proposals approve`.
+resolves through `aivyx-pa persona proposals approve`.
 
 **Inspection flags** (Phase 113, generalized in Phase 114):
-- `aivyx persona list --auto-only` shows ALL entries the
+- `aivyx-pa persona list --auto-only` shows ALL entries the
   auto-proposer wrote across every category (delta_id
   prefix `pd-auto-`).
-- `aivyx persona list --manual-only` shows the complement.
-- `aivyx audit export --event-type SkillAutoProposal`
+- `aivyx-pa persona list --manual-only` shows the complement.
+- `aivyx-pa audit export --event-type SkillAutoProposal`
   emits only the auto-proposer's audit-event variants for
   forensic walks (`jq`-able JSONL). Phase 114 entries
   carry the `category` field so operators can filter by
@@ -955,7 +955,7 @@ forensic separation.
   background spawn. The user's reply is sent first; the
   pipeline runs after.
 - Auto-accepted Persona deltas are revertible through the
-  existing Phase 60 surface: `aivyx persona revert
+  existing Phase 60 surface: `aivyx-pa persona revert
   <delta_id>`. The revert is itself an audit-chained chain
   append, so the forensic trail stays intact.
 - Per-category enable flags let the operator opt out of
@@ -1029,7 +1029,7 @@ emits alongside its regular `ToolCall` audit entry. The
 ToolCall keeps the input-hash (D4 secrets-safety
 preserved); the SkillInvocation carries the skill name in
 cleartext so Phase 116's `record_turn_outcomes` can
-populate per-skill ledger rows. `aivyx audit export
+populate per-skill ledger rows. `aivyx-pa audit export
 --event-type SkillInvocation` filters to the new variant
 for forensic walks.
 
@@ -1038,7 +1038,7 @@ for forensic walks.
   `tokio::spawn` after finalize. Audit-walk failures log
   WARN and don't affect the turn.
 - Operator can inspect the encrypted ledger via a future
-  `aivyx tool-relevance dump` CLI (deferred — until the
+  `aivyx-pa tool-relevance dump` CLI (deferred — until the
   live-prompt path lands, the prompt section IS the
   inspection surface).
 - Disabling the section (or setting `enabled = false`)
@@ -1055,16 +1055,16 @@ operator-declared Profile or operator-curated Role config
 and proposes refinements as `ProfileHint` or
 `RoleDefinitionSuggestion` Persona-chain entries. The
 operator reviews each proposal and copies the rendered
-draft into `aivyx.toml` if they want to act on it.
+draft into `aivyx-pa.toml` if they want to act on it.
 
 **Contract preservation.** Phase 118 honors:
 - **P13** (Profile is operator-declared, Phase 56 amendment).
-  `ProfileHint` proposals NEVER mutate `aivyx.toml`. Approved
+  `ProfileHint` proposals NEVER mutate `aivyx-pa.toml`. Approved
   hints sit in the Persona chain as a record-of-suggestion
   the operator can read at their convenience.
 - **P9** (Per-Role full capability declaration, Phase 13).
   `RoleDefinitionSuggestion` proposals NEVER mutate
-  `aivyx.toml`. Approved drafts likewise sit in the chain
+  `aivyx-pa.toml`. Approved drafts likewise sit in the chain
   for operator copy-paste.
 
 Both categories are **always-staged for operator approval**,
@@ -1113,11 +1113,11 @@ enabled = true          # default; set false to silence
 4. The operator reviews:
 
    ```sh
-   aivyx persona proposals list
+   aivyx-pa persona proposals list
    # [Pending] pp-abc...  category=ProfileHint  ...
    #   op = {"kind":"AppendList","value":"..."}
 
-   aivyx persona proposals show pp-abc...
+   aivyx-pa persona proposals show pp-abc...
    # Proposal pp-abc...
    # =========================
    #   category    = ProfileHint
@@ -1129,8 +1129,8 @@ enabled = true          # default; set false to silence
    #       operator consistently uses bullets in their
    #       own messages and asks for shorter replies
    #
-   #   To apply: edit aivyx.toml [profile] and update the
-   #   field above. Phase 118 does NOT auto-mutate aivyx.toml.
+   #   To apply: edit aivyx-pa.toml [profile] and update the
+   #   field above. Phase 118 does NOT auto-mutate aivyx-pa.toml.
    ```
 5. **Phase 119 — apply the hint with one command.** From
    Phase 119 onward, the operator doesn't have to translate
@@ -1138,45 +1138,45 @@ enabled = true          # default; set false to silence
    proposal first, then run the apply-helper:
 
    ```sh
-   aivyx persona proposals approve pp-abc...
-   aivyx profile apply-hint pp-abc...
-   # Apply `communication_style` = "terse and bullet-formatted" to aivyx.toml?
+   aivyx-pa persona proposals approve pp-abc...
+   aivyx-pa profile apply-hint pp-abc...
+   # Apply `communication_style` = "terse and bullet-formatted" to aivyx-pa.toml?
    # [y/N] (re-run with --yes to skip this prompt)
    y
    #
-   # Applied `communication_style` to aivyx.toml.
+   # Applied `communication_style` to aivyx-pa.toml.
    # Audit event `ProfileHintApplied` recorded for proposal `pp-abc...`.
    # Restart the daemon for the new value to take effect:
-   # `aivyx daemon stop && aivyx`.
+   # `aivyx-pa daemon stop && aivyx-pa`.
    ```
 
    The apply is atomic (tmp-file + rename); comments and
-   other sections in `aivyx.toml` are preserved
+   other sections in `aivyx-pa.toml` are preserved
    byte-for-byte. List-field hints (e.g.
    `behavioral_preferences`) append idempotently; re-running
    the same apply twice is a no-op.
 
 6. For a `RoleDefinitionSuggestion`, the analogous Phase 119
-   command is `aivyx role import`:
+   command is `aivyx-pa role import`:
 
    ```sh
-   aivyx persona proposals approve pp-role-xyz...
-   aivyx role import pp-role-xyz...
-   # Import role `research-deploy` inheriting from `research` into aivyx.toml?
+   aivyx-pa persona proposals approve pp-role-xyz...
+   aivyx-pa role import pp-role-xyz...
+   # Import role `research-deploy` inheriting from `research` into aivyx-pa.toml?
    # [y/N] (re-run with --yes to skip this prompt)
    y
    #
-   # Imported role `research-deploy` into aivyx.toml.
+   # Imported role `research-deploy` into aivyx-pa.toml.
    # Audit event `RoleDraftImported` recorded for proposal `pp-role-xyz...`.
    # Restart the daemon for the new role to take effect:
-   # `aivyx daemon stop && aivyx`.
+   # `aivyx-pa daemon stop && aivyx-pa`.
    ```
 
    Refuses to overwrite an existing `[roles.<name>]`
    section without `--force`. With `--force`, replaces the
    section entirely.
 
-7. Either way, `aivyx persona proposals approve pp-abc...`
+7. Either way, `aivyx-pa persona proposals approve pp-abc...`
    marks the chain entry as accepted (or `reject` to
    discard). Approved proposals land in
    `EffectivePersona::profile_hints` /
@@ -1193,15 +1193,15 @@ enabled = true          # default; set false to silence
   relevance ledger to suppress the `profile_pattern_repeated`
   signal source. The `role_shape_recurring` signal sources
   directly from the audit chain and stays active.
-- Phase 118 never auto-mutates `aivyx.toml`. The operator
+- Phase 118 never auto-mutates `aivyx-pa.toml`. The operator
   is always in the loop. If a `ProfileHint` or `RoleDraft`
   approval shows up that the operator doesn't want to act
   on, the approval is a no-op against the live config —
   the entry sits in the chain as "noted but not applied"
   state.
 - **Phase 119 — apply commands also never auto-mutate
-  without operator action.** `aivyx profile apply-hint` and
-  `aivyx role import` are explicit operator gestures. They
+  without operator action.** `aivyx-pa profile apply-hint` and
+  `aivyx-pa role import` are explicit operator gestures. They
   confirm with `[y/N]` by default; pass `--yes` to skip
   the prompt in scripted workflows. The apply step records
   a `ProfileHintApplied` / `RoleDraftImported` audit event
@@ -1219,7 +1219,7 @@ learning loop had accumulated. Phase 119 closes that
 deferred surface:
 
 ```sh
-aivyx tool-relevance dump
+aivyx-pa tool-relevance dump
 # keyword_key      surface  identifier         success  failure  last_seen_unix_ms
 # ---------------  -------  -----------------  -------  -------  -----------------
 # research+deploy  skill    summarize-pdf            3        0      1715000040000
@@ -1235,12 +1235,12 @@ Restrict the dump to a single keyword key with
 `--keyword-key`:
 
 ```sh
-aivyx tool-relevance dump --keyword-key research+deploy
+aivyx-pa tool-relevance dump --keyword-key research+deploy
 ```
 
 The dump talks to the running daemon over IPC; it requires
 the daemon to be up. With `[tool_relevance] enabled =
-false` in `aivyx.toml`, the dump errors with
+false` in `aivyx-pa.toml`, the dump errors with
 `no_tool_relevance_ledger` rather than returning an empty
 table (the substrate is bypassed entirely, not silently
 empty).
@@ -1287,7 +1287,7 @@ structured response that lets it recover.
    Operator forensics see the auto-correction explicitly:
 
    ```sh
-   aivyx audit export --event-type ToolCall | \
+   aivyx-pa audit export --event-type ToolCall | \
      jq 'select(.auto_corrected_from)'
    # {
    #   "kind": "ToolCall",
@@ -1322,7 +1322,7 @@ structured response that lets it recover.
 ### Operator config knob
 
 The fuzzy threshold is operator-configurable via
-`aivyx.toml`:
+`aivyx-pa.toml`:
 
 ```toml
 [providers]
@@ -1374,14 +1374,14 @@ is operator-conservative-leaning at the default:
 ### Escape hatches
 
 - Set `tool_name_auto_correct_threshold = 1.0` in
-  `aivyx.toml` to disable fuzzy recovery. The provider
+  `aivyx-pa.toml` to disable fuzzy recovery. The provider
   still classifies, but the planner never auto-corrects;
   every Unknown name produces the `unknown_tool` error
   path immediately.
 - The provider-side validation always runs; there is no
   knob to disable it. Cheap pure-function check; no LLM
   cost.
-- Audit forensics: `aivyx audit export --event-type
+- Audit forensics: `aivyx-pa audit export --event-type
   ToolCall | jq 'select(.auto_corrected_from)' | jq -s
   length` counts auto-corrections in the chain. Use this
   to evaluate whether your local-model choice is
@@ -1401,7 +1401,7 @@ protocol.
 
 **Phase 121 ships a dedicated `OllamaProvider`** that talks
 Ollama's `/api/chat` natively. After Phase 121, `provider
-= "ollama"` in `aivyx.toml` routes to the native adapter
+= "ollama"` in `aivyx-pa.toml` routes to the native adapter
 **transparently** — operators using Ollama get native
 benefits without changing their config.
 
@@ -1422,7 +1422,7 @@ benefits without changing their config.
   strings.
 
 **Behavior NOT changed:**
-- Existing `aivyx.toml` files with `provider = "ollama"`
+- Existing `aivyx-pa.toml` files with `provider = "ollama"`
   work unchanged. The base-URL handling, model-name
   selection, and channel adapters all continue to work.
 - Phase 120's tool-call recovery substrate flows uniformly
@@ -1438,7 +1438,7 @@ benefits without changing their config.
 ### Configuring Ollama-specific options
 
 Phase 121 introduces a new `[ollama]` section in
-`aivyx.toml` for the operator-relevant subset of Ollama's
+`aivyx-pa.toml` for the operator-relevant subset of Ollama's
 modelfile options. All fields are optional; unset fields
 fall through to Ollama's per-model defaults.
 
@@ -1480,7 +1480,7 @@ the OpenAI provider's defensive empty-key posture).
 
 ```sh
 export OLLAMA_API_KEY="opaque-token-issued-by-your-proxy"
-aivyx
+aivyx-pa
 ```
 
 ### When to pick `provider = "openai"` instead
@@ -1501,18 +1501,18 @@ In both cases use `provider = "openai"` and set
 
 ## Local LLM provider alternatives (Phase 133)
 
-Aivyx ships first-class support for **three local-LLM
+Aivyx PA ships first-class support for **three local-LLM
 runtimes** — Ollama (default), `llama-server` from
 llama.cpp, and [Jan](https://jan.ai). Pick whichever
 fits your workflow; all three are documented as
 equal-status. Switching providers is a one-line
-`aivyx.toml` change, no rebuild required.
+`aivyx-pa.toml` change, no rebuild required.
 
 ### The three providers at a glance
 
 | Provider | License | UX shape | Default port | Model management | Phones home? |
 |---|---|---|---|---|---|
-| **Ollama** | MIT | CLI-first daemon | `:11434` | `ollama pull <model>` + Aivyx exposes `ollama.list/show/pull` as agent tools | Yes — update checks + telemetry (see [Ollama privacy posture](#ollama-privacy-posture) below) |
+| **Ollama** | MIT | CLI-first daemon | `:11434` | `ollama pull <model>` + Aivyx PA exposes `ollama.list/show/pull` as agent tools | Yes — update checks + telemetry (see [Ollama privacy posture](#ollama-privacy-posture) below) |
 | **`llama-server`** (llama.cpp) | MIT | Raw bare-metal | `:8080` | Manual GGUF download from HuggingFace | No — pure inference server, no outbound calls |
 | **[Jan](https://jan.ai)** | Apache 2.0 | Desktop GUI + API | `:1337` | GUI-driven model hub | No — explicitly no telemetry by default |
 
@@ -1520,7 +1520,7 @@ equal-status. Switching providers is a one-line
 
 - **Use Ollama** when you want CLI-first model management
   (`ollama pull qwen3:32b` is genuinely the smoothest
-  install UX for a new model), when Aivyx's
+  install UX for a new model), when Aivyx PA's
   `ollama.list/show/pull` agent tools matter to your
   workflow, or when you already have it installed and
   see no reason to switch.
@@ -1534,11 +1534,11 @@ equal-status. Switching providers is a one-line
   model browsing/downloading without sacrificing the
   OpenAI-compatible API surface, when the no-telemetry
   posture matters and you don't want a CLI tool, or
-  when you're recommending Aivyx to a less technical
+  when you're recommending Aivyx PA to a less technical
   end user who would otherwise pick LM Studio
   (proprietary).
 
-### `aivyx.toml` snippets
+### `aivyx-pa.toml` snippets
 
 **Ollama** (default; no change needed for existing
 operators):
@@ -1561,7 +1561,7 @@ base_url = "http://localhost:8080"  # override if you bound a custom port
 
 #### KV-cache persistence (`llama-server` only)
 
-Aivyx can persist a `llama-server` slot's KV-cache state to disk across
+Aivyx PA can persist a `llama-server` slot's KV-cache state to disk across
 process restarts. This benefits `provider = "llama_cpp"` (aliases:
 `llamacpp`, `llama-cpp`) specifically — Ollama and Jan have no equivalent
 slot-save API, so this is a no-op for those providers. With it working, a
@@ -1571,7 +1571,7 @@ paying for it again from a cold slot.
 
 **Hard prerequisite:** start `llama-server` with `--slot-save-path`
 pointed at exactly `<data_local_dir>/kvcache/slots` (on Linux,
-`~/.local/share/aivyx/kvcache/slots`; the exact path is
+`~/.local/share/aivyx-pa/kvcache/slots`; the exact path is
 platform-specific — resolved via the `directories` crate). If the flag is
 missing, or points somewhere else, the feature does not error — it
 silently does nothing useful: every turn pays the save/restore round
@@ -1579,14 +1579,14 @@ trip's latency for none of its benefit.
 
 ```sh
 llama-server -m /path/to/model.gguf -c 32768 \
-  --slot-save-path ~/.local/share/aivyx/kvcache/slots
+  --slot-save-path ~/.local/share/aivyx-pa/kvcache/slots
 ```
 
 By default this activates automatically once `provider = "llama_cpp"`
 and the flag above are both set, using
-`~/.local/share/aivyx/kvcache/slots` (platform-specific — see the
+`~/.local/share/aivyx-pa/kvcache/slots` (platform-specific — see the
 `directories` crate's own docs). Set `[kvcache] store_path` in
-`aivyx.toml` to use a different directory instead — in particular, to
+`aivyx-pa.toml` to use a different directory instead — in particular, to
 share the store with a locally delegated `aivyx-coder` process pointed
 at the same `llama-server`; see `docs/MCP_RECIPES.md`'s `aivyx-coder`
 recipe for that pairing.
@@ -1603,7 +1603,7 @@ in `crates/aivyx-team/src/factory.rs`). The real reason they benefit is
 that each distinct soul/role has its own distinct stable system prompt —
 a distinct cache key — so it earns its own slot and cache entry the same
 way a fresh daemon process does. The on-disk budget is also currently a
-hard-coded default rather than an `aivyx.toml` knob — a known follow-up,
+hard-coded default rather than an `aivyx-pa.toml` knob — a known follow-up,
 not something this fix wave adds.
 
 **Jan** (open the Jan desktop app, enable "Local API
@@ -1619,7 +1619,7 @@ base_url = "http://localhost:1337/v1"  # override if you changed Jan's port
 
 ### Coordinating GPU-slot access across multiple processes (`aivyx-broker`)
 
-If more than one local process shares a single `llama-server` — e.g. `aivyx`'s
+If more than one local process shares a single `llama-server` — e.g. `aivyx-pa`'s
 own daemon and a delegated
 [`aivyx-coder`](https://github.com/Aivyx-Agent/aivyx-coder) subprocess pointed
 at the same GPU — each picks a physical KV-cache slot independently, with zero
@@ -1630,12 +1630,12 @@ cache-locality thrash.
 [`aivyx-broker`](https://github.com/Aivyx-Agent/aivyx-broker) is a standalone
 local daemon that sits between every client and the real `llama-server`: it
 owns live slot admission and the KV-cache restore/warm/save lifecycle, then
-forwards the completion through untouched. Point `aivyx` at the broker
+forwards the completion through untouched. Point `aivyx-pa` at the broker
 instead of `llama-server` directly and it stops doing its own local
 slot-picking and kvcache restore/save — the broker now owns that (see
 `aivyx-broker`'s own `README.md` for how to build, run, and configure it,
 including its `--kvcache-store-path` flag, which should point at the same
-directory this repo's own `[kvcache] store_path` / `AIVYX_KVCACHE_STORE_PATH`
+directory this repo's own `[kvcache] store_path` / `AIVYX_PA_KVCACHE_STORE_PATH`
 would otherwise use, so every client shares one on-disk cache).
 
 ```toml
@@ -1648,7 +1648,7 @@ base_url = "http://127.0.0.1:8899"  # aivyx-broker's own default bind; override 
 ```
 
 `aivyx-broker` must already be running (started the same way you'd start
-`llama-server` itself — there is no auto-spawn); if it isn't, `aivyx` sees a
+`llama-server` itself — there is no auto-spawn); if it isn't, `aivyx-pa` sees a
 connection-refused error against `[broker] base_url`, the same shape as
 `llama-server` being down. Only worth adopting once more than one local
 process actually shares the same `llama-server` — a single-process setup gets
@@ -1657,7 +1657,7 @@ no benefit from it and should stay on `provider = "llamacpp"`'s own
 
 ### Tradeoffs the matrix doesn't capture
 
-- **Model-family metadata.** Aivyx's textual tool-call
+- **Model-family metadata.** Aivyx PA's textual tool-call
   extractor (Phase 127) uses Ollama's `/api/show` to
   detect qwen / phi / etc. and pick the right tool-call
   parser. Neither `llama-server` nor Jan exposes
@@ -1668,7 +1668,7 @@ no benefit from it and should stay on `provider = "llamacpp"`'s own
   configuration on llama-server / Jan.
 
 - **`ollama.list/show/pull` agent tools.** These three
-  Aivyx tools are Ollama-specific and not registered
+  Aivyx PA tools are Ollama-specific and not registered
   for the other providers — `llama-server` has no
   registry equivalent, and Jan's model hub lives in the
   desktop GUI. Agents on the alternative providers
@@ -1677,13 +1677,13 @@ no benefit from it and should stay on `provider = "llamacpp"`'s own
 - **Daemon-style operation.** `llama-server` and Ollama
   both run as long-lived background processes. Jan runs
   inside the desktop app — closing the app stops the
-  API server. For 24/7 daemon-style Aivyx
+  API server. For 24/7 daemon-style Aivyx PA
   deployments (Telegram/Discord/Slack frontends), pick
   Ollama or `llama-server`.
 
 ### Ollama privacy posture
 
-Aivyx markets itself as a privacy-first local-agent
+Aivyx PA markets itself as a privacy-first local-agent
 platform, which puts Ollama's outbound network calls
 under scrutiny. Honest framing of what's known:
 
@@ -1724,7 +1724,7 @@ minimize its outbound surface:
    firewall block above.
 4. **Audit your specific deployment.** Run Ollama
    behind a packet logger (tcpdump, OpenSnitch,
-   Little Snitch) during a representative Aivyx turn
+   Little Snitch) during a representative Aivyx PA turn
    and confirm what you see. The honest answer to
    "what does Ollama send?" is **operator-verified,
    not project-documented**.
@@ -1732,7 +1732,7 @@ minimize its outbound surface:
 **Alternative posture: use `llama-server` or Jan
 instead.** Both are documented above; both have no
 outbound network calls by default. The trade-off is
-the loss of Ollama's `pull` UX and Aivyx's
+the loss of Ollama's `pull` UX and Aivyx PA's
 `ollama.list/show/pull` agent tools.
 
 ### What Phase 133 deliberately doesn't ship
@@ -1743,10 +1743,10 @@ the loss of Ollama's `pull` UX and Aivyx's
   start.
 - **No `jan.list/show/pull` agent tools.** Jan's
   model hub is GUI-driven; an agent-side API would
-  be a Jan upstream feature request, not Aivyx work.
+  be a Jan upstream feature request, not Aivyx PA work.
 - **No embedded Rust-native inference.** Direction B
   from the Phase 133 research note (mistral.rs /
-  Candle inside Aivyx as a Rust dependency, no
+  Candle inside Aivyx PA as a Rust dependency, no
   separate runtime) is the leading Phase 134+
   candidate. Phase 133 ships the multi-provider
   story first and gathers empirical signal before
@@ -1754,14 +1754,14 @@ the loss of Ollama's `pull` UX and Aivyx's
 
 ### Embedded Rust-native inference (Phase 134)
 
-Phase 134 ships **Direction B**: Aivyx can run a
+Phase 134 ships **Direction B**: Aivyx PA can run a
 local LLM **inside its own process** by linking
 against the `mistralrs` crate as a Rust dependency.
 Zero outbound network calls during inference; no
 separate runtime server to install. Single-binary
 local-agent UX.
 
-#### Building Aivyx with the embedded provider
+#### Building Aivyx PA with the embedded provider
 
 ```bash
 # Recommended for new users — pulls in the embedded
@@ -1790,7 +1790,7 @@ backend-acceleration features have prerequisites:
 | Metal | `provider-mistral-rs-metal` | macOS + Xcode | Apple Silicon |
 | Accelerate | `provider-mistral-rs-accelerate` | macOS + Xcode | Apple CPU |
 
-#### `aivyx.toml` snippet
+#### `aivyx-pa.toml` snippet
 
 ```toml
 [agent]
@@ -1818,7 +1818,7 @@ model_path = "/home/operator/models/Qwen3-4B-Q4_K_M.gguf"
 
 #### Recommended GGUF models
 
-Aivyx doesn't bundle any model — operators download
+Aivyx PA doesn't bundle any model — operators download
 the GGUF themselves and point `model_path` at it.
 Recommended starting points for the embedded provider:
 
@@ -1840,13 +1840,13 @@ working sets.
   install with no separate runtime to manage, when
   you want **zero outbound network calls during
   inference** (the privacy end state), or when you're
-  recommending Aivyx to a less technical operator
+  recommending Aivyx PA to a less technical operator
   who'd otherwise stall at "install Ollama first."
 - **Stick with Ollama** when you want `ollama
   pull <model>` as your model-download UX, when
-  Aivyx's `ollama.list/show/pull` agent tools matter
+  Aivyx PA's `ollama.list/show/pull` agent tools matter
   to your workflow, or when you already have Ollama
-  installed and aren't motivated to rebuild Aivyx.
+  installed and aren't motivated to rebuild Aivyx PA.
 
 #### Honest tradeoffs
 
@@ -1859,10 +1859,10 @@ working sets.
   the CPU variant. CUDA variant adds NVIDIA runtime
   libraries.
 - **mistralrs is pre-1.0.** Pinned to `=0.8.*` in
-  Aivyx's Cargo.toml. Aivyx-side upgrades happen
+  Aivyx PA's Cargo.toml. Aivyx PA-side upgrades happen
   explicitly per-phase.
 - **TLS stack.** mistralrs's transitive dependency
-  tree pulls in `aws-lc-rs` alongside Aivyx's
+  tree pulls in `aws-lc-rs` alongside Aivyx PA's
   workspace `rustls`. Both stacks coexist; the slim
   Ollama-only build keeps rustls-only as before.
 
@@ -1874,7 +1874,7 @@ working sets.
   the assistant message arrive whole, not
   token-by-token. mistralrs 0.8.1's `Stream<'a>`
   borrows from the Model, which doesn't satisfy
-  Aivyx's `LlmStream` contract without a
+  Aivyx PA's `LlmStream` contract without a
   self-referential struct or a mpsc-forwarding
   spawned task — both deferred to Phase 135.
 - **Multimodal inputs.** Image / audio / video
@@ -1885,7 +1885,7 @@ working sets.
   `LlmProvider::tool_call_family_hint` returns
   `None` for embedded. Operators with non-default
   tool-call formats (qwen3 XML, phi4 wrappers) rely
-  on the heuristic detection in Aivyx's textual
+  on the heuristic detection in Aivyx PA's textual
   extractor or set `[mistralrs] family_hint = "..."`
   in a future phase.
 - **`mistralrs.list/show/pull` agent tools.** Same
@@ -1903,7 +1903,7 @@ working sets.
 
 ## Voice channel: talk to the agent, agent talks back (Phase 135)
 
-Aivyx ships **voice I/O** — its eighth channel adapter.
+Aivyx PA ships **voice I/O** — its eighth channel adapter.
 The operator speaks into the microphone; Whisper
 transcribes; the agent runs the turn; **Kokoro**
 synthesizes the response; the operator hears it through
@@ -1944,7 +1944,7 @@ $ cargo install aivyx-channel
 | `ort` (Kokoro TTS) | nothing extra | `ort`'s default `download-binaries` fetches a prebuilt ONNX Runtime at build time — **no system ONNX headers, no espeak-ng** |
 | `cpal` + `rodio` | OS audio API | always installed (ALSA / PipeWire / CoreAudio / WASAPI come with the OS) |
 
-### `aivyx.toml` snippet
+### `aivyx-pa.toml` snippet
 
 ```toml
 [agent]
@@ -2034,7 +2034,7 @@ $ wget https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files
 ### Running it
 
 ```bash
-$ aivyx --channel voice
+$ aivyx-pa --channel voice
 ```
 
 **Phase 156 closed Phase 154's three honest-
@@ -2207,10 +2207,10 @@ with custom plans can override two ways:
 - **Builder method:**
   `AnthropicConfig::new(...).with_pdf_page_cap(250)`.
 - **Environment variable:**
-  `AIVYX_ANTHROPIC_PDF_PAGE_CAP=250 aivyx ...`.
+  `AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP=250 aivyx-pa ...`.
   Invalid values (non-numeric, zero) fall back
   to the default. Set per-process; affects all
-  aivyx instances in the shell.
+  aivyx-pa instances in the shell.
 
 **Phase 168 — catalog-aware PDF page count.**
 Phase 165's byte-scan counted `/Type /Page`
@@ -2343,13 +2343,13 @@ guess which providers accept which formats.
 
 **Phase 162 security note for `url_headers`:**
 The TOML config file is the only place these
-credentials live. If your `aivyx.toml` ends up
+credentials live. If your `aivyx-pa.toml` ends up
 checked into version control or world-readable,
 the bearer tokens / cookies leak. Standard
 hygiene applies:
 
 ```bash
-chmod 600 ~/.config/aivyx/aivyx.toml
+chmod 600 ~/.config/aivyx-pa/aivyx-pa.toml
 ```
 
 Phase 165+ candidate for a secret-store
@@ -2541,20 +2541,20 @@ can now do in `--channel voice`.
 deferral.** The push-to-talk loop now runs end-to-
 end:
 
-1. Aivyx prints `[voice] press Enter to record (or
+1. Aivyx PA prints `[voice] press Enter to record (or
    \`quit\`)`.
 2. Operator hits Enter → cpal opens the configured
    mic, starts capturing.
 3. Operator speaks; hits Enter again to stop.
 4. Whisper transcribes the captured PCM.
-5. Aivyx prints `[voice] you said: <transcript>`,
+5. Aivyx PA prints `[voice] you said: <transcript>`,
    dispatches the agent turn.
-6. As the agent streams text back, Aivyx buffers it.
-7. On turn completion, Aivyx chunks the response at
+6. As the agent streams text back, Aivyx PA buffers it.
+7. On turn completion, Aivyx PA chunks the response at
    sentence boundaries; Kokoro synthesizes each
    sentence to PCM; rodio queues them on the
    speakers.
-8. Aivyx waits for playback to finish, then loops.
+8. Aivyx PA waits for playback to finish, then loops.
 
 **Operator validation is still where end-to-end
 audio gets stress-tested.** The substrate is unit-
@@ -2598,7 +2598,7 @@ shapes are:
   135 buffers the agent's full response, then chunks
   into sentences for synthesis. Streaming
   pipelined-with-LLM is Phase 136+.
-- **Wake-word activation.** "Hey Aivyx" style
+- **Wake-word activation.** "Hey Aivyx PA" style
   always-on listening is Phase 136+ (would add
   Porcupine or Silero-wakeword as a new dep).
 - **Voice activity detection.** Silero VAD for
@@ -2623,7 +2623,7 @@ dominant (no-correction) case. Same operator-forensics
 recipe works:
 
 ```sh
-aivyx audit export --event-type ToolCall | \
+aivyx-pa audit export --event-type ToolCall | \
   jq 'select(.auto_corrected_from)'
 ```
 
@@ -2741,7 +2741,7 @@ The config banner shows which strategy resolved for
 your model and where it came from:
 
 ```
-aivyx config sources:
+aivyx-pa config sources:
   provider          = ollama (toml)
   model             = "qwen3.6:27b" (toml)
   ollama_prompt_strategy = "few_shot_examples" (family: qwen3, default)
@@ -2867,7 +2867,7 @@ explicitly refused the exact tool by exact name despite
 the WRONG/RIGHT framing literally saying *"you DO have
 fs.write"* — confirming the capability-denial prior is
 prompt-unreachable. A glm-4.7-flash control (strategy=
-none) showed the same failure mode without any Aivyx
+none) showed the same failure mode without any Aivyx PA
 substrate, ruling out "Phase 124 made things worse." See
 PHASE_124.md "Live verification (Task 4)" for the full
 empirical table.
@@ -3013,7 +3013,7 @@ a hybrid family-hint architecture backed by Ollama
 **Substrate-coverage matrix.** Each row is an empirical
 emission format observed across the local-LLM landscape.
 "Native" means Ollama's protocol channel handles it
-without aivyx-side extraction (`tool_calls` array arrives
+without aivyx-pa-side extraction (`tool_calls` array arrives
 populated). "Substrate" means aivyx-core's textual
 extractor catches it via Phase 126/127's planner-side
 fallback. "Gap" means neither path handles it today.
@@ -3033,7 +3033,7 @@ fallback. "Gap" means neither path handles it today.
 | Tool-code JSON (Phase 124 qwen3.6 sample) | `<tool_code>` + JSON | ✅ Phase 126 | depends |
 
 **Operator-facing summary:** if your model is in the
-"Native" column with ✅, Aivyx works without any extraction
+"Native" column with ✅, Aivyx PA works without any extraction
 substrate involvement. If your model needs the
 "Substrate" path (qwen3.5/3.6, Gemma 3, Phi-4-mini, or any
 model emitting bare JSON), Phase 127 catches it
@@ -3041,14 +3041,14 @@ automatically. No operator config required for the
 substrate.
 
 **Reliable-native-protocol trio (recommended for tool-use
-workloads):** Llama 3.1+ ($AIVYX_MODEL=llama3.1$),
+workloads):** Llama 3.1+ ($AIVYX_PA_MODEL=llama3.1$),
 mistral-nemo, phi4-mini. Per Ollama's official tool-support
 blog post + this phase's literature these models ship with
 matching renderer + parser pipelines and reliably emit
 structured `tool_calls`.
 
 **Family-hint architecture.** When `provider = "ollama"`,
-Aivyx queries `/api/show` once per model at first use and
+Aivyx PA queries `/api/show` once per model at first use and
 caches the reported `details.family` string. The hint
 biases the extractor's inner-shape priority — Qwen-family
 models try Qwen3-Coder XML first inside `<tool_call>`,
@@ -3141,12 +3141,12 @@ adds a **bundled, secure-by-default preset**:
 default_backend = "auto"   # auto | bubblewrap | firejail | none
 ```
 
-- **`auto`** (written into every new `aivyx init` config) detects
+- **`auto`** (written into every new `aivyx-pa init` config) detects
   `bwrap` (bubblewrap) then `firejail` on `PATH` and applies a
   conservative-but-functional preset automatically: read-only
   system directories, a private `/tmp`, an isolated PID
   namespace, **`$HOME` hidden except a writable bind of the
-  tool's own `~/.aivyx/tool-processes/<name>/` token dir**, and
+  tool's own `~/.aivyx-pa/tool-processes/<name>/` token dir**, and
   network left on (it is already capability-gated at the IPC
   boundary, and productivity tools need it). If neither backend
   is installed, `auto` warns at startup and falls back to no
@@ -3167,20 +3167,20 @@ applied posture per tool at startup (`sandboxed (bubblewrap)` or
 > only. `[mcp_server]` entries — operator-configured external
 > programs with unknown filesystem needs — keep the Phase 55
 > explicit `[mcp_server.sandbox]` model. A tool whose data lives
-> outside `~/.aivyx/tool-processes/<name>/` should declare an
+> outside `~/.aivyx-pa/tool-processes/<name>/` should declare an
 > explicit `[tool_process.sandbox]` block instead.
 
-## Connecting a productivity tool — `aivyx connect` (Phase 182)
+## Connecting a productivity tool — `aivyx-pa connect` (Phase 182)
 
 The fastest way to connect a Google productivity tool (Gmail,
 Calendar, Drive, Contacts) is the guided command:
 
 ```sh
-aivyx connect            # list connectable services + status
-aivyx connect gmail      # guided OAuth onboarding for Gmail
+aivyx-pa connect            # list connectable services + status
+aivyx-pa connect gmail      # guided OAuth onboarding for Gmail
 ```
 
-`aivyx connect <service>` walks you through the whole thing:
+`aivyx-pa connect <service>` walks you through the whole thing:
 
 1. **Google Cloud app setup** — it prints the exact steps (enable
    the API, create an OAuth client ID of type *Desktop app*, and
@@ -3188,25 +3188,25 @@ aivyx connect gmail      # guided OAuth onboarding for Gmail
    register), then prompts you to paste the **Client ID** and
    **Client secret** from the console.
 2. **Writes `config.toml`** to
-   `~/.aivyx/tool-processes/<service>/config.toml` (`0600`) — you
+   `~/.aivyx-pa/tool-processes/<service>/config.toml` (`0600`) — you
    never hand-edit it. Scopes are filled by the service's own
    defaults, so you don't need to know scope URLs.
 3. **Runs the consent flow** by shelling out to the tested
    per-service `aivyx-<service> auth init` (a loopback server
    catches the browser redirect and exchanges the code for
-   tokens). It finds the binary as a sibling of `aivyx` or on
+   tokens). It finds the binary as a sibling of `aivyx-pa` or on
    `PATH`, or asks for the path.
 4. **Confirms** the connection and **offers to add the
-   `[[tool_process]]` entry** to your `aivyx.toml` so the tool is
+   `[[tool_process]]` entry** to your `aivyx-pa.toml` so the tool is
    enabled — restart the daemon to load it.
 
-If a Google tool is configured in `aivyx.toml` but not yet
+If a Google tool is configured in `aivyx-pa.toml` but not yet
 authenticated, the daemon prints the remedy at startup
-(*"run `aivyx connect <service>`"*).
+(*"run `aivyx-pa connect <service>`"*).
 
 > **Token-based services (Notion / n8n)** still use their own
 > `auth` flow today (paste an integration token); a guided
-> `aivyx connect` path for them is a planned follow-on. The
+> `aivyx-pa connect` path for them is a planned follow-on. The
 > manual per-service setup below still works for every tool.
 
 ## Vertical packs — install a signed pack (Chapter Freight)
