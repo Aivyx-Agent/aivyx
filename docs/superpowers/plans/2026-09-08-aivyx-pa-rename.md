@@ -553,7 +553,10 @@ git commit -m "docs: rename Aivyx to Aivyx PA in Tier-2 docs batch 1"
 
 **Files:**
 - Modify: every file listed in
-  `docs/superpowers/plans/rename-audit/tier2-batch-2.md` (47 files)
+  `docs/superpowers/plans/rename-audit/tier2-batch-2.md` (43 files — was
+  47; CLA.md, CLAUDE.md, CONTRIBUTING.md, and SECURITY.md were removed
+  after a post-Task-8 gap-fill, commit `a799b0b0`, renamed them already —
+  see that file's own header note)
 
 **Interfaces:**
 - Consumes: `tier2-batch-2.md` (Task 1, as corrected above).

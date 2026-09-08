@@ -1,6 +1,11 @@
-CLA.md
-CLAUDE.md
-CONTRIBUTING.md
+# Tier-2 batch 2 (43 files, for Task 11)
+#
+# Originally 47 files. CLA.md, CLAUDE.md, CONTRIBUTING.md, and SECURITY.md
+# were removed from this list after the post-Task-8 gap-fill (commit
+# a799b0b0) renamed them already -- they sat outside docs/*.md's own glob
+# scope (root-level files) but were separately discovered and fixed while
+# closing the Docker/WSL infra gap. Task 11 does not need to touch them.
+
 docs/amendments/2026-04-17-capability-taxonomy-growth.md
 docs/amendments/2026-04-17-daemon-ipc-protocol.md
 docs/amendments/2026-04-17-mission-state-machine.md
@@ -44,4 +49,3 @@ docs/VITRINE.md
 docs/WEB_MISSION_CONTROL.md
 docs/WHETSTONE.md
 docs/WIRE.md
-SECURITY.md
