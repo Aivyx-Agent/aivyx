@@ -17,7 +17,7 @@
 # ----------------------------------------------------------------
 #
 # A real deployment supplies `[anthropic] api_key`, `[fs] root`,
-# `[storage] path`, `[aivyx] passphrase`, etc. They are omitted
+# `[storage] path`, `[aivyx_pa] passphrase`, etc. They are omitted
 # here so the file can be loaded by tests via `LoadOptions`
 # with `require_api_key = false`. Copy this file and add those
 # fields before pointing a live binary at it.
@@ -334,7 +334,7 @@ parent_role = "researcher"
 #   stream_options.include_usage is omitted (some Ollama
 #   versions reject unknown fields).
 #
-# Can also be overridden via `AIVYX_PROVIDER` env var or
+# Can also be overridden via `AIVYX_PA_PROVIDER` env var or
 # `--provider` CLI flag.
 #
 # See `examples/aivyx-ollama.toml` for a complete local LLM
@@ -356,15 +356,15 @@ parent_role = "researcher"
 # real directory the agent owns for its thoughts, ideas, plans, and
 # projects, reached by the `workspace.*` tools. Always available
 # regardless of the access level (even a sandboxed agent gets one),
-# and inspectable by the operator with `aivyx workspace ls / cat`.
+# and inspectable by the operator with `aivyx-pa workspace ls / cat`.
 #
-# Defaults (no `[workspace]` section): enabled, at `~/.aivyx/workspace`,
+# Defaults (no `[workspace]` section): enabled, at `~/.aivyx-pa/workspace`,
 # with proactive journaling on every 6h. Set `enabled = false` to turn
 # the whole subsystem off.
 #
 # [workspace]
 # enabled = true
-# path = "~/.aivyx/workspace"     # override the default location
+# path = "~/.aivyx-pa/workspace"     # override the default location
 #
 # [workspace.journaling]
 # # Proactive journaling: every `interval_secs`, if there has been
@@ -629,7 +629,7 @@ parent_role = "researcher"
 # attempts per `rate_limit_window_secs` for the target. Excess
 # attempts skip the backend call and record
 # `AutoNotifyOutcomeSummary::SkippedByRateLimit` in the audit
-# chain (visible in `aivyx notify history` and the Web UI
+# chain (visible in `aivyx-pa notify history` and the Web UI
 # Notifications pane). Both fields must be set together or
 # neither — partial config rejects at load time. State lives in
 # memory for the daemon's lifetime; daemon restart resets the
@@ -663,7 +663,7 @@ parent_role = "researcher"
 # refine how the assistant communicates, prefers, and avoids.
 # Each proposed delta is queued as a Pending row in the encrypted
 # proposal store; the operator reviews via the new Web UI
-# Proposals pane or `aivyx persona proposals` CLI.
+# Proposals pane or `aivyx-pa persona proposals` CLI.
 #
 # Why a dedicated section instead of reusing `[[schedule]]`?
 # Per Q1(a) at Phase 70 sign-off: the reflection-turn semantics
@@ -688,7 +688,7 @@ parent_role = "researcher"
 #
 # Phase 71 closes the loop: when this section is configured
 # AND the daemon has an audit log open (the default for any
-# normal `aivyx daemon run`), the daemon spawns a scheduler
+# normal `aivyx-pa daemon run`), the daemon spawns a scheduler
 # task that fires reflection turns on each entry's cron
 # pattern. The reflection turn carries a canonical reflection
 # system prompt (conservative phrasing: propose only when a
@@ -697,7 +697,7 @@ parent_role = "researcher"
 # chain. Any persona deltas the agent proposes via
 # `reflection.propose` land as Pending rows in the persona
 # proposal chain for asynchronous operator review via the
-# Web UI Proposals pane or `aivyx persona proposals` CLI.
+# Web UI Proposals pane or `aivyx-pa persona proposals` CLI.
 #
 # [[reflection_schedule]]
 # name = "nightly-reflection"
@@ -735,9 +735,9 @@ parent_role = "researcher"
 # skip_when_idle = true
 # min_audit_entries_to_fire = 5
 #
-# To SEE it: daemon log `aivyx reflection: schedule "X" —
+# To SEE it: daemon log `aivyx-pa reflection: schedule "X" —
 # skipped (audit-growth K below threshold M)` each skipped
-# cycle; `aivyx learning` / Web UI "Learning" tab show a
+# cycle; `aivyx-pa learning` / Web UI "Learning" tab show a
 # "Reflection cadence (Phase 95)" block with per-schedule
 # `K fired, S skipped` counts. Schedules without cadence
 # decisions are omitted from the block.
@@ -751,7 +751,7 @@ parent_role = "researcher"
 #
 # 1. Keyword search. The agent gets a `memory.search` tool
 #    (case-insensitive substring across topics + bodies);
-#    operators get `aivyx memory search <query>` + the Web UI
+#    operators get `aivyx-pa memory search <query>` + the Web UI
 #    Memory pane's search bar. No config — it's always
 #    available to any role holding the cross-topic
 #    `memory.read:topic:*` wildcard scope.
@@ -865,7 +865,7 @@ parent_role = "researcher"
 #   - An hourly backfill re-embeds anything missing a vector, so
 #     enabling this on an existing store gradually indexes the
 #     whole back-catalog (bounded per tick — no startup stall).
-#   - `aivyx memory search <q> --semantic`, the agent's
+#   - `aivyx-pa memory search <q> --semantic`, the agent's
 #     `memory.search` `mode` arg, and the Web UI "semantic"
 #     toggle all use it.
 #
@@ -877,7 +877,7 @@ parent_role = "researcher"
 #       [embedding]
 #       base_url = "https://api.openai.com"
 #       model = "text-embedding-3-small"
-#       api_key = "sk-..."          # or AIVYX_EMBEDDING_API_KEY,
+#       api_key = "sk-..."          # or AIVYX_PA_EMBEDDING_API_KEY,
 #                                   # or the encrypted secrets store
 #       dimensions = 1536
 #
@@ -897,7 +897,7 @@ parent_role = "researcher"
 #   base_url   = "https://api.openai.com"
 #   model      = "text-embedding-3-small"
 #   dimensions = 1536
-# api_key resolves env (AIVYX_EMBEDDING_API_KEY) > this TOML key
+# api_key resolves env (AIVYX_PA_EMBEDDING_API_KEY) > this TOML key
 # > the encrypted secrets store — same precedence as the
 # anthropic / openai keys.
 #
@@ -910,7 +910,7 @@ parent_role = "researcher"
 # your message and silently injects the most relevant past
 # memories into that turn's context (a clearly-labeled,
 # reference-only block; the daemon log prints
-# `aivyx recall: injected N memories [...]` when it fires). No
+# `aivyx-pa recall: injected N memories [...]` when it fires). No
 # embedding configured → no auto-recall, exactly as before.
 #
 # Two knobs tune it (both optional, shown with their defaults):
@@ -1167,7 +1167,7 @@ parent_role = "researcher"
 #   recall_graph_decay   = 0.5
 #   recall_graph_weight  = 1.0
 #
-# The daemon prints `aivyx recall-graph: injected N via
+# The daemon prints `aivyx-pa recall-graph: injected N via
 # graph-walk` when the graph source actually steered a turn.
 #
 # ----------------------------------------------------------------
@@ -1260,11 +1260,11 @@ parent_role = "researcher"
 # ~30-day recall-event retention are fixed for v1 (a tuning
 # knob is a deferred follow-up). Nothing to configure — it is
 # entirely a function of auto-recall + a reflection schedule
-# being present. Daemon log lines `aivyx recall-feedback: …`
+# being present. Daemon log lines `aivyx-pa recall-feedback: …`
 # show each cycle's effect.
 #
 # To SEE what it has learned and why (Phase 78): run
-# `aivyx learning [--window <secs>]` or open the Web UI
+# `aivyx-pa learning [--window <secs>]` or open the Web UI
 # "Learning" tab — a read-only digest + per-proposal
 # provenance. Also nothing to configure.
 
@@ -1306,9 +1306,9 @@ parent_role = "researcher"
 # see the model's actual response text (not in the audit
 # chain today). A future phase enriches the input.
 #
-# To SEE it: daemon log `aivyx recall-judgment: schedule "X"
+# To SEE it: daemon log `aivyx-pa recall-judgment: schedule "X"
 # — judged N (used=…, irrelevant=…, hurt=…, skipped=…)` each
-# cycle that fires; `aivyx learning` / Web UI "Learning"
+# cycle that fires; `aivyx-pa learning` / Web UI "Learning"
 # tab show a new "LLM-judged recall usefulness (last cycle,
 # opt-in)" block.
 
@@ -1351,7 +1351,7 @@ parent_role = "researcher"
 # (`[recall_judgment]`), so the two configs remain
 # independently reason-aboutable.
 #
-# To SEE it: `aivyx learning` flags the augment with a
+# To SEE it: `aivyx-pa learning` flags the augment with a
 # `signal source: judgment-driven (Phase 93 — augmenting
 # structural)` banner under the recall count when the knob
 # is on.
@@ -1363,8 +1363,8 @@ parent_role = "researcher"
 # Soul. Core identity + every behavioral_constraint are ALWAYS
 # injected in full (never selected away). Below the size
 # threshold / no [embedding] → full Persona as before,
-# byte-identical. Nothing to configure; the `aivyx learning`
-# view and the daemon log (`aivyx persona: injected N/M
+# byte-identical. Nothing to configure; the `aivyx-pa learning`
+# view and the daemon log (`aivyx-pa persona: injected N/M
 # facets`) show what it selected.
 
 # ----------------------------------------------------------------
@@ -1389,7 +1389,7 @@ parent_role = "researcher"
 # TOP of Phase 73's per-target rate-limit, and a never-nag
 # dedup log so the same item is never surfaced twice. Every
 # send lands in the notify history; the last cycle shows in
-# `aivyx learning` and the Web UI "Learning" tab.
+# `aivyx-pa learning` and the Web UI "Learning" tab.
 #
 # [proactive]
 # enabled = true
@@ -1420,12 +1420,12 @@ parent_role = "researcher"
 #
 # Safety: it ONLY ever files Pending PersonaProposals — the
 # loop never edits identity itself; you approve/reject in
-# `aivyx persona` / the Web UI and `aivyx persona revert`
+# `aivyx-pa persona` / the Web UI and `aivyx-pa persona revert`
 # undoes any approved action. The scalar identity and EVERY
 # behavioral_constraint are structurally excluded — only the
 # six soft lists are ever touched. A deterministic proposal id
 # means it never re-proposes (never nags). The last cycle
-# shows in `aivyx learning` and the Web UI "Learning" tab.
+# shows in `aivyx-pa learning` and the Web UI "Learning" tab.
 #
 # [persona_lifecycle]
 # enabled = true
@@ -1473,8 +1473,8 @@ parent_role = "researcher"
 #
 # A refinement is a governed persona proposal (a v1→v2 supersession
 # pair with provenance + lineage). It is PROPOSE-ONLY: you approve /
-# edit / reject it in the Studio Agents screen (or `aivyx persona`),
-# and `aivyx persona revert` undoes any approved one — exactly like
+# edit / reject it in the Studio Agents screen (or `aivyx-pa persona`),
+# and `aivyx-pa persona revert` undoes any approved one — exactly like
 # every other change to the agent's identity.
 #
 # Off unless this block is present AND `enabled = true`. It also
@@ -1504,7 +1504,7 @@ parent_role = "researcher"
 #
 # Like every other identity change it is PROPOSE-ONLY: you approve /
 # edit / reject it in the Studio Agents screen, reversible via
-# `aivyx persona revert`. It needs a [[reflection_schedule]] (it
+# `aivyx-pa persona revert`. It needs a [[reflection_schedule]] (it
 # piggybacks that cron) AND the wiki + graph layers populated (the
 # simplest way: `[memory] profile = "smart"`). Off unless this block
 # is present AND `enabled = true`.
@@ -1540,10 +1540,10 @@ parent_role = "researcher"
 # code constants (tuning deferred, like the recall-log's 30-day
 # retention).
 #
-# To SEE it: `aivyx learning` or the Web UI "Learning" tab now
+# To SEE it: `aivyx-pa learning` or the Web UI "Learning" tab now
 # shows an "Accumulated helpfulness (all-time, decayed)" block
 # (signed score + sample count) alongside the windowed view.
-# Daemon log: `aivyx helpfulness-ledger: folded N, pruned M`.
+# Daemon log: `aivyx-pa helpfulness-ledger: folded N, pruned M`.
 # Nothing to configure.
 
 # ----------------------------------------------------------------
@@ -1567,9 +1567,9 @@ parent_role = "researcher"
 # half-life as the Phase 82 ledger; the top-8 cap bounds the
 # combinatorics and it self-prunes (decayed + ~90d untouched).
 #
-# To SEE it: `aivyx learning` / the Web UI "Learning" tab show
+# To SEE it: `aivyx-pa learning` / the Web UI "Learning" tab show
 # a "Topics that consistently help together" block (signed
-# score + sample count). Daemon log: `aivyx cooccurrence:
+# score + sample count). Daemon log: `aivyx-pa cooccurrence:
 # folded N, pruned M`. Nothing to configure.
 
 # ----------------------------------------------------------------
@@ -1601,8 +1601,8 @@ parent_role = "researcher"
 # max_siblings = 3   # optional, default 3  — hard per-turn cap
 # min_affinity = 1.0 # optional, default 1.0 — decayed floor
 #
-# To SEE it: daemon log `aivyx recall-cluster: injected N
-# affined sibling(s)`; `aivyx learning` / Web UI "Learning"
+# To SEE it: daemon log `aivyx-pa recall-cluster: injected N
+# affined sibling(s)`; `aivyx-pa learning` / Web UI "Learning"
 # tab show a "Cluster co-recall (last turn)" block (count +
 # driver→sibling pairs).
 
@@ -1632,7 +1632,7 @@ parent_role = "researcher"
 # absolute (a pair already in the chain in ANY status is never
 # re-filed); the LLM phrases the prose but the operator is
 # still the final filter (edit-then-approve / reject via the
-# Web UI Proposals pane or `aivyx persona proposals`).
+# Web UI Proposals pane or `aivyx-pa persona proposals`).
 #
 # [persona_consolidation]
 # enabled = true
@@ -1658,19 +1658,19 @@ parent_role = "researcher"
 # Phase 87 / Phase 88 proposal flow is byte-identical to
 # pre-Phase-92.
 #
-# To SEE it: daemon log `aivyx persona-consolidation: schedule
+# To SEE it: daemon log `aivyx-pa persona-consolidation: schedule
 # "X" — filed N` each cycle that fires (with
 # `(LLM unavailable)` appended when the LLM is unreachable;
 # `(superseded=K)` appended when supersession fires);
-# `aivyx learning` / Web UI "Learning" tab show a
+# `aivyx-pa learning` / Web UI "Learning" tab show a
 # "Pattern-driven Persona proposals (last cycle, opt-in)"
 # block (with a "superseded N" suffix on the count line
 # when supersession fires); the proposals themselves
-# appear in `aivyx persona proposals` like every other
+# appear in `aivyx-pa persona proposals` like every other
 # Phase 70 / Phase 81 / Phase 85 proposal.
 #
 # Phase 94 adds **grouped rendering** for the linked
-# supersession pair: `aivyx persona proposals` renders the
+# supersession pair: `aivyx-pa persona proposals` renders the
 # two halves with `└─ supersedes:` / `└─ superseded by:`
 # indicators, and the Web UI Proposals pane renders them as
 # one card with a primary "Approve both" action plus a
@@ -1683,7 +1683,7 @@ parent_role = "researcher"
 # Discord channel (Phase 107)
 # ----------------------------------------------------------------
 #
-# `aivyx --channel discord` runs the bot account configured below
+# `aivyx-pa --channel discord` runs the bot account configured below
 # against Discord's Gateway. SemiTrusted tier (same ceiling as
 # Telegram); DMs and any guild text channels you've added the bot
 # to get distinct memory partitions keyed on Discord's channel_id
@@ -1708,7 +1708,7 @@ parent_role = "researcher"
 # Slack channel (Phase 108)
 # ----------------------------------------------------------------
 #
-# `aivyx --channel slack` runs the bot account configured below
+# `aivyx-pa --channel slack` runs the bot account configured below
 # against Slack's Socket Mode WebSocket. SemiTrusted tier (same
 # ceiling as Telegram and Discord); each (team_id, channel_id)
 # pair gets a distinct memory partition keyed on the Q3a
@@ -1782,18 +1782,18 @@ parent_role = "researcher"
 # ----------------------------------------------------------------
 #
 # By default the daemon runs the built-in 9-role Nonagon
-# (`aivyx team roster` prints it). To run a customised team —
+# (`aivyx-pa team roster` prints it). To run a customised team —
 # a different lead, tighter specialists, or a vertical pack like
 # the Kitchen BOH team — point `config_path` at a `[team]`-rooted
-# TOML file (the same shape `aivyx team run --config <file>` loads,
+# TOML file (the same shape `aivyx-pa team run --config <file>` loads,
 # e.g. `crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`).
 #
-# A relative path is resolved against this `aivyx.toml`'s directory.
+# A relative path is resolved against this `aivyx-pa.toml`'s directory.
 # When unset, the daemon also looks for a conventional `team.toml`
 # beside this file; if neither exists it uses the default Nonagon.
 # The Studio's Teams screen writes this file (Chapter Roster);
 # changes apply on the next daemon start. Scaffold a starter file
-# with `aivyx team init [--pack <default|path.toml>] [--out team.toml]`.
+# with `aivyx-pa team init [--pack <default|path.toml>] [--out team.toml]`.
 #
 # [team]
 # config_path = "team.toml"

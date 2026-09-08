@@ -43,7 +43,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # TOML for the operator-supplied OAuth client config file at
-# `~/.aivyx/tool-processes/calendar/config.toml`. Mirrors
+# `~/.aivyx-pa/tool-processes/calendar/config.toml`. Mirrors
 # aivyx-gmail's choice; documented in PHASE_128.md.
 toml = "0.8"
 

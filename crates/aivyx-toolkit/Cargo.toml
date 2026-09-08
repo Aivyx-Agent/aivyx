@@ -41,7 +41,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # TOML for the operator-supplied tool-bundle config file at
-# `~/.aivyx/tool-processes/toolkit/config.toml`. Version-
+# `~/.aivyx-pa/tool-processes/toolkit/config.toml`. Version-
 # pinned to match aivyx-config / aivyx-gmail.
 toml = "0.8"
 

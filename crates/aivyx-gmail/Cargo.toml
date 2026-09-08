@@ -45,7 +45,7 @@ serde_json = { workspace = true }
 base64 = { workspace = true }
 
 # TOML for the operator-supplied OAuth client config file at
-# `~/.aivyx/tool-processes/gmail/config.toml`. Version-pinned to
+# `~/.aivyx-pa/tool-processes/gmail/config.toml`. Version-pinned to
 # match aivyx-config's existing `toml` dependency so the
 # workspace stays version-coherent without yet promoting `toml`
 # to a `[workspace.dependencies]` entry (deferred until enough

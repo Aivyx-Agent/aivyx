@@ -37,7 +37,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # TOML for the operator config at
-# `~/.aivyx/tool-processes/kitchen/config.toml`.
+# `~/.aivyx-pa/tool-processes/kitchen/config.toml`.
 toml = "0.8"
 
 thiserror = { workspace = true }

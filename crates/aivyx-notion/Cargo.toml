@@ -37,7 +37,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # TOML for the operator-supplied config file at
-# `~/.aivyx/tool-processes/notion/config.toml` carrying the
+# `~/.aivyx-pa/tool-processes/notion/config.toml` carrying the
 # Notion Integration Token. No OAuth flow → no
 # aivyx-google-oauth dep needed.
 toml = "0.8"

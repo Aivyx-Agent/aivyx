@@ -1,6 +1,6 @@
 # Aivyx — SemiTrusted-focused worked example (Phase 15 Task 4)
 #
-# This is the companion to `examples/aivyx.toml`, which teaches
+# This is the companion to `examples/aivyx-pa.toml`, which teaches
 # the **Trusted-tier** attenuation story. This file teaches the
 # **SemiTrusted-tier ▲-row footgun**: what happens to roles that
 # declare `fs.read` / `fs.write` (bare or path-qualified) when
@@ -9,10 +9,10 @@
 # lower-tier) channel once those adapters land.
 #
 # ----------------------------------------------------------------
-# Why a separate file instead of extending aivyx.toml
+# Why a separate file instead of extending aivyx-pa.toml
 # ----------------------------------------------------------------
 #
-# The Trusted example (aivyx.toml) is a role tree teaching
+# The Trusted example (aivyx-pa.toml) is a role tree teaching
 # D4 Rule 2 (unqualified-held grants qualified-needed): a
 # `default` root declaring unqualified `fs.read` lets children
 # declare qualified `fs.read:<path>` forms that survive the
@@ -34,11 +34,11 @@
 #
 # Loads via `LoadOptions { require_api_key: false,
 # require_telegram_token: false, .. }`, same shape as
-# `aivyx.toml`. The path-qualified fs scopes below use
+# `aivyx-pa.toml`. The path-qualified fs scopes below use
 # `/tmp/notes` as a stand-in; a real deployment would point at
 # whatever directory a Telegram-attached note-taker should be
 # allowed to touch, under the operator's
-# `AIVYX_FS_ROOT`/`fs.root` setting.
+# `AIVYX_PA_FS_ROOT`/`fs.root` setting.
 #
 # ----------------------------------------------------------------
 # The ▲-row footgun, concretely
@@ -124,7 +124,7 @@ trust_ceiling = "Trusted"
 # `telegram_researcher` is the **declared-carefully** SemiTrusted
 # role. An operator migrating from the Trusted example would
 # reach for path-qualification here, following the shape that
-# works in `aivyx.toml`:
+# works in `aivyx-pa.toml`:
 #
 #   fs.read:/tmp/notes/**   ← "narrow grant, should survive"
 #
