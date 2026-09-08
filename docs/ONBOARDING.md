@@ -20,10 +20,10 @@
 
 ## 1. The gap — onboarding is split, and the reusable half is trapped
 
-Aivyx already creates a capable agent at first run, but the machinery is split
+Aivyx PA already creates a capable agent at first run, but the machinery is split
 across two surfaces that don't share it evenly:
 
-| Step | CLI (`aivyx init`) | Web Studio |
+| Step | CLI (`aivyx-pa init`) | Web Studio |
 |---|---|---|
 | Provider / model select | ✅ full wizard (`init.rs`) | ❌ none |
 | **Profile** draft (declared identity) | ✅ `identity_draft.rs` (LLM) | ❌ none |
@@ -48,7 +48,7 @@ Two problems fall out of that table:
 
 The **Persona-seed** half is **already unified**: `persona_seed_draft.rs`
 (`aivyx-channel`) is, per its own module doc, *"shared by the daemon's
-`DraftPersonaSeed` IPC handler (the Studio) and the `aivyx init` wizard (the
+`DraftPersonaSeed` IPC handler (the Studio) and the `aivyx-pa init` wizard (the
 CLI), so there is one drafting implementation."* Chapter X built exactly the
 unification this chapter needs — one drafter, two surfaces, daemon-side LLM
 behind IPC, local-first fallback, operator-as-author-of-record.
@@ -63,7 +63,7 @@ flow, reusing the IPC that already exists:
 | `DraftPersonaSeed` IPC + `PersonaSeedWire` | new `DraftProfile` IPC + `ProfileDraftWire` (GE.2) |
 | `SeedPersona` plants the seed | `SetProfile` already writes the Profile (Chapter V) |
 | Studio Agents persona-seed card | a sequenced Studio **onboarding flow** (GE.3) |
-| `aivyx init` calls the shared drafter | `aivyx init` calls it from its new home (GE.1) |
+| `aivyx-pa init` calls the shared drafter | `aivyx-pa init` calls it from its new home (GE.1) |
 
 After Genesis, both surfaces drive the **same** Profile drafter, the **same**
 Persona-seed drafter, and the **same** config writers — the split in §1's table
@@ -93,14 +93,14 @@ here so the boundary is explicit, not forgotten.
 
 ## 4. The daemon chicken-and-egg — and how Genesis resolves it
 
-`aivyx init` writes `aivyx.toml` **before** the daemon boots — true cold-start.
+`aivyx-pa init` writes `aivyx-pa.toml` **before** the daemon boots — true cold-start.
 The web Studio only talks to an **already-running** daemon. So the web cannot be
 the *very first* surface a user touches without a daemon that boots unconfigured
 and serves an onboarding wizard (a larger change).
 
 **Resolution for this chapter:**
 
-- `aivyx init` **remains the canonical cold-start path** (no daemon required).
+- `aivyx-pa init` **remains the canonical cold-start path** (no daemon required).
 - The **web onboarding flow targets a running daemon** — the *complete-your-
   agent* / *re-onboard* / *refine-identity* path. This is the common real case:
   the daemon is installed and started with a minimal config (provider + model,
@@ -127,10 +127,10 @@ it's the awkward edge of the web flow. Two options were on the table:
 **Decision (GE.4): (a).** The web flow does **not** write provider/model. The
 daemon can't be talking to the browser at all unless a provider/model is already
 configured (it's load-time and precedes boot), so writing it from the live web
-session is the wrong layer — that's `aivyx init`'s job (the cold-start path,
+session is the wrong layer — that's `aivyx-pa init`'s job (the cold-start path,
 §4). The onboarding intro instead **shows** the configured provider/model
 read-only (from the existing `GetSettings` snapshot, which already carries both),
-with a one-line pointer to `aivyx init` / the config for changing it. Option (b)
+with a one-line pointer to `aivyx-pa init` / the config for changing it. Option (b)
 remains a clean future add if a true browser cold-start mode (§4) ever lands —
 at that point the daemon boots unconfigured and a provider/model *write* step
 becomes necessary rather than redundant.
@@ -150,7 +150,7 @@ becomes necessary rather than redundant.
 | Phase | Deliverable |
 |---|---|
 | **GE.0** | This contract. |
-| **GE.1** | Lift `identity_draft` (Profile drafting) out of the CLI bin into `aivyx-channel`, next to `persona_seed_draft`; `aivyx init` consumes it from the new home (pure move — no behavior change, existing tests green). Now reusable by the daemon. |
+| **GE.1** | Lift `identity_draft` (Profile drafting) out of the CLI bin into `aivyx-channel`, next to `persona_seed_draft`; `aivyx-pa init` consumes it from the new home (pure move — no behavior change, existing tests green). Now reusable by the daemon. |
 | **GE.2** | `DraftProfile` IPC + a wasm-clean `ProfileDraftWire` in `aivyx-ipc` (mirrors `DraftPersonaSeed`/`PersonaSeedWire`); daemon handler calls the lifted drafter. `SetProfile` (Chapter V) already persists the result — no new write path. |
 | **GE.3** | The Studio **onboarding flow**: a sequenced first-run view that chains Profile (DraftProfile → review/edit → SetProfile) → Persona seed (DraftPersonaSeed → SeedPersona, exist) → access level (SetAccessLevel, exists), against a running daemon (§4). Reuses the existing Stitch component kit. |
 | **GE.4** | Decide §5: either document the CLI/installer-set provider assumption, or add a provider/model config writer + IPC + a leading web step. |

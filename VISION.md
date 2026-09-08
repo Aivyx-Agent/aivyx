@@ -23,16 +23,16 @@ time. A thing built right is a thing that compounds; a thing rushed is a thing
 that gets away from us again. "Build It Right First" is not a slogan — it is the
 tie-breaker for every decision in this repository.
 
-## 1. What Aivyx *is* (and is not)
+## 1. What Aivyx PA *is* (and is not)
 
-**Aivyx is a self-learning agentic *personal* assistant that the end user makes
+**Aivyx PA is a self-learning agentic *personal* assistant that the end user makes
 their own.** A user-defined **Profile**, a reflection-grown **Persona/Soul**, a
 local-first encrypted substrate, a capability-gated security model, and a
 multi-agent team it can convene to do real work. It is meant to become
 *yours* — an irreplaceable partner that improves through use, governed so that
 it can never rewrite who it is without you.
 
-**Aivyx is not** a faceless worker farm. The self-learning identity — the Soul,
+**Aivyx PA is not** a faceless worker farm. The self-learning identity — the Soul,
 the governed Persona evolution, the guarantee that *no agent reshapes itself or
 another without the operator* — is not decoration. It is the heart of the
 product and the seed of its moat. The architecture has a heart, and it points
