@@ -3948,6 +3948,34 @@ startup banner that printed the wrong base_url field for broker mode.
 integration) are logged in their own repos, not here — see
 `aivyx-ecosystem/ROADMAP.md` for the cross-repo account.
 
+## Phase 208 — `aivyx` client integration for `aivyx-yubi` (hardware-backed federation identity) [COMPLETE]
+
+Opened and shipped 2026-09-08 — see [PHASE_208.md](archive/phases/PHASE_208.md).
+A second security-focused idea from the operator, scoped independently
+from Phase 207's GPU-slot work: could a YubiKey harden `aivyx-federation`'s
+Ed25519 identity keypair, moving the private key into hardware entirely
+(never on disk, even encrypted) with every signature requiring a physical
+touch? Grounding ruled out the more obvious-looking PIV route (the
+`yubikey` crate is unmaintained, lacks Ed25519) in favor of the OpenPGP
+applet (actively maintained, Ed25519 since 2019). Built as a new
+standalone repo, `aivyx-yubi` — given a real GitHub remote mid-effort once
+it became clear `aivyx-federation` genuinely needs it as a Cargo
+dependency (unlike `aivyx-broker`, reached only over HTTP) — with this
+phase wiring `aivyx-federation`'s `Identity` (its first production
+consumer ever, confirmed via direct grounding that no crate depended on
+it before this phase) and a new `aivyx federation yubikey-init` CLI
+subcommand. Two structurally real bugs were caught in review, both fixed
+and independently re-verified against real vendored source: an incomplete
+first attempt at feature-gating the hardware dependency (Cargo resolves
+`path` dependencies at manifest-load time regardless of feature state,
+breaking CI and every other contributor's build until the crate got a
+real `git` remote), and a genuine PC/SC deadlock in the CLI's own
+provisioning flow (holding one exclusive card transaction open while
+attempting to open a second on the same reader would hang the command
+forever on real hardware, after the card had already been irreversibly
+re-keyed). `aivyx-yubi` itself is logged in its own repo, not here — see
+`aivyx-ecosystem/ROADMAP.md` for the cross-repo account.
+
 ## Chapter H — Productize: From Mature Substrate to Launchable Product (Phases 180–184) [COMPLETE]
 
 After the Phase 172–179 correction-learning + autonomous-loop
