@@ -73,9 +73,9 @@ jobs:
         # WebKitGTK + appindicator + libxdo dev libs so the `--workspace`
         # clippy/test below can build it. (aivyx-web is wasm-only and handled
         # by the dedicated wasm step.) libpcsclite-dev + pkgconf are installed
-        # ahead of time for aivyx-federation's OPTIONAL, default-off
-        # `yubikey` feature's `pcsc-sys` build script — see the NOTE below
-        # for why that feature is deliberately NOT built in this job yet.
+        # ahead of time for aivyx-federation's optional, default-off
+        # `yubikey` feature — its `pcsc-sys` build script needs them for
+        # the dedicated `--features yubikey` steps below.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
