@@ -1,4 +1,4 @@
-# Aivyx Threat Model
+# Aivyx PA Threat Model
 
 **Status:** Draft. **Last reviewed:** Phase 180 exit (2026-06-06)
 — the bundled secure-by-default sandbox preset (§6, §4.10); prior
@@ -6,7 +6,7 @@ pass added the productivity-tool OAuth asset (§3), the autonomous
 loop (§4.9), and productivity-tool egress (§4.10). **Owners:**
 the operator.
 
-This document is **operator-facing**. It states plainly what Aivyx
+This document is **operator-facing**. It states plainly what Aivyx PA
 defends against, what it does not, and where each defense lives in
 the code. It is a sibling of `DESIGN.md` (technical contract) and
 `PRODUCT.md` (product contract), not a derivation of them — those
@@ -20,7 +20,7 @@ right and the document is wrong — file an issue.
 
 ## 1. Scope
 
-Aivyx is a **single-operator personal agent**. The threat model is
+Aivyx PA is a **single-operator personal agent**. The threat model is
 written around exactly one human, on hardware they control, talking
 to LLM providers under their own API key, holding secrets they
 own.
@@ -32,7 +32,7 @@ is **not**:
 - a shared workstation tool where two humans take turns,
 - a server-side bot answering anonymous web traffic.
 
-Operators who run Aivyx in a context that breaks the single-operator
+Operators who run Aivyx PA in a context that breaks the single-operator
 assumption (e.g., a shared dev box where a second user can `read(2)`
 the IPC socket) are responsible for understanding that the model no
 longer applies.
@@ -40,10 +40,10 @@ longer applies.
 ## 2. The operator and their adversaries
 
 The operator's identity is **the OS user who owns the daemon
-process** (`PRODUCT.md` P6). There is no Aivyx-level account, no
+process** (`PRODUCT.md` P6). There is no Aivyx PA-level account, no
 password, no token. If you can read the daemon's IPC socket
 (mode `0600`, owner = operator UID), you are by definition the
-operator. Rotation of an "Aivyx account" is therefore not a
+operator. Rotation of an "Aivyx PA account" is therefore not a
 concept; rotation of the redb passphrase is.
 
 The model recognizes four **adversary archetypes**, aligned with
@@ -51,7 +51,7 @@ the trust tiers in `aivyx-capability/src/lib.rs:503` (D5):
 
 | Tier | Archetype | Example | Default authority |
 |---|---|---|---|
-| `Kernel` | Aivyx itself | the turn loop, audit writer | unconditional (internal use only) |
+| `Kernel` | Aivyx PA itself | the turn loop, audit writer | unconditional (internal use only) |
 | `Trusted` | the operator at their own keyboard | Local CLI, Web UI on `127.0.0.1` | near-total, with extra audit on destructive ops |
 | `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
 | `Untrusted` | anyone the operator has not authenticated | webhook requests, unallowlisted senders | near-empty — read public memory, that's it |
@@ -230,7 +230,7 @@ The agent has no path to silent self-modification. Both `memory`
 and runtime role overrides (`RoleOverrides`, Phase 30) flow through
 the same approval gate.
 
-### 4.9 The autonomous loop runs unbounded (the Aivyx Ralph loop)
+### 4.9 The autonomous loop runs unbounded (the Aivyx PA Ralph loop)
 
 **Mitigation:** The autonomous loop (Phases 173–177) is a
 self-re-arming agent that works a backlog without per-iteration
@@ -310,24 +310,24 @@ the daemon's now-writable web surface.
 
 The honest section. These are out-of-scope by design; if they
 matter to your deployment, you need additional controls *outside*
-Aivyx.
+Aivyx PA.
 
 ### 5.1 The operator's machine being root-compromised
 
 If an attacker has the operator's UID or kernel access, every
 in-RAM key, every plaintext memory entry, and every audit row is
-theirs. The threat model assumes the OS underneath Aivyx is sound.
+theirs. The threat model assumes the OS underneath Aivyx PA is sound.
 
 ### 5.2 A malicious MCP server
 
 **Status update (Phase 55):** the worst-case posture of this gap
 has narrowed; the residual risk is operator-configurable.
 
-Aivyx ships MCP support (Phases 23/24/32). MCP servers run as
+Aivyx PA ships MCP support (Phases 23/24/32). MCP servers run as
 **child processes of the daemon**, spawned via `aivyx-mcp`'s
 stdio transport, under the operator's UID. There is **no
 signed-server registry, no content-level scan of the server
-binary, no Aivyx-curated allowlist**. The MCP ecosystem's
+binary, no Aivyx PA-curated allowlist**. The MCP ecosystem's
 discovery surface (GitHub search, blog posts, Slack threads) is
 the npm-style problem the Hermes threat model named explicitly.
 
@@ -355,7 +355,7 @@ examples.
   server runs with operator OS authority. Phase 55 makes
   hardening *available*, not *automatic*.
 - A misconfigured wrapper that lets the MCP server retain access
-  to sensitive paths is the operator's responsibility. Aivyx
+  to sensitive paths is the operator's responsibility. Aivyx PA
   doesn't validate wrapper policies.
 - The SSE transport (remote MCP server over HTTP) is not
   sandbox-able because there's no local child — its threat
@@ -401,7 +401,7 @@ they would regret if the LLM acted maliciously.
 
 ### 5.4 Network-level eavesdropping on LLM provider traffic
 
-Aivyx uses `rustls` over HTTPS for every LLM provider call. We
+Aivyx PA uses `rustls` over HTTPS for every LLM provider call. We
 trust the TLS stack and the operator's CA roots. If a corporate
 or hostile MITM has injected a root CA into the operator's trust
 store, the agent will use it.
@@ -432,7 +432,7 @@ gap has narrowed substantially.
   `[tool_process.sandbox] wrapper = "..." args = [...]` and the
   daemon spawns `wrapper wrapper_args... command command_args...`
   instead of the bare command. Bubblewrap, firejail, Docker,
-  sandbox-exec — Aivyx supplies the policy slot; the operator
+  sandbox-exec — Aivyx PA supplies the policy slot; the operator
   supplies the policy. See `docs/TOOL_SDK.md` §9 for worked
   examples.
 - **Phase 180 — secure-by-default.** A *bundled* default preset
@@ -502,7 +502,7 @@ gap has narrowed substantially.
 
 The Phase 52 sandbox layer narrows the second item — operators
 who care about confinement can wrap with their tool of choice
-without Aivyx prescribing one.
+without Aivyx PA prescribing one.
 
 ### 5.7 Side channels (timing, power, electromagnetic)
 
@@ -510,12 +510,12 @@ We use constant-time AEAD primitives from RustCrypto. We do not
 defend against an attacker who can measure the daemon's wall-clock
 behavior or power draw. This is appropriate for a personal agent;
 operators in adversarial environments (red-team training labs,
-nation-state targets) should not rely on Aivyx for this.
+nation-state targets) should not rely on Aivyx PA for this.
 
 ### 5.8 Channel-platform compromise
 
 If Telegram is compromised, the operator's bot token leaks and an
-attacker can send messages as the operator. Aivyx will then
+attacker can send messages as the operator. Aivyx PA will then
 classify them as `SemiTrusted` (because the chat-id allowlist
 matches) and run them within the tier ceiling. The damage is
 bounded by `CEILING_SEMITRUSTED`, but it is not zero. This is the
@@ -526,9 +526,9 @@ trade for using third-party messaging platforms at all.
 A second OS user on the same machine who has been granted access
 to the operator's home directory, runtime directory, or store file
 defeats the OS-level identity model. The fix is the OS's job:
-don't share UIDs. Aivyx does not enforce isolation between OS
+don't share UIDs. Aivyx PA does not enforce isolation between OS
 users of the same instance because — per `PRODUCT.md` P1 — there
-is no such thing as a multi-tenant Aivyx instance.
+is no such thing as a multi-tenant Aivyx PA instance.
 
 ### 5.10 `aivyx-desktop`'s unmaintained GTK3 dependency stack (Linux)
 
@@ -571,7 +571,7 @@ webview model changes for other reasons.
 ## 6. Property summary
 
 For operators asking "what should I be able to assume about a
-running Aivyx daemon":
+running Aivyx PA daemon":
 
 1. **Confidentiality at rest:** Yes, against anyone without the
    passphrase. AEAD + Argon2id.
