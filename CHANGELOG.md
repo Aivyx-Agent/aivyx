@@ -5,6 +5,36 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The product is now Aivyx PA. BREAKING: binary, config file, and data
+  paths all renamed, with no automatic migration.** The CLI binary is
+  `aivyx-pa` (previously `aivyx`); the config file the CLI looks for by
+  default is `aivyx-pa.toml` (previously `aivyx.toml`), and its
+  passphrase section is now `[aivyx_pa]` (previously `[aivyx]`); the
+  config/data directories moved from `~/.config/aivyx/` and
+  `~/.local/share/aivyx/` to `~/.config/aivyx-pa/` and
+  `~/.local/share/aivyx-pa/`; the `AIVYX_*` environment-variable prefix
+  is now `AIVYX_PA_*`; and the OS-keyring service name used to store the
+  passphrase moved from `aivyx` to `aivyx-pa`. Nothing above is copied,
+  renamed, or migrated automatically — an existing install that wants to
+  keep its data has to move it by hand before running the new binary:
+
+  ```sh
+  mv ~/.config/aivyx ~/.config/aivyx-pa
+  mv ~/.local/share/aivyx ~/.local/share/aivyx-pa
+  mv aivyx.toml aivyx-pa.toml   # if using a CWD-relative config
+  ```
+
+  then edit the moved config's `[aivyx]` section header to `[aivyx_pa]`,
+  rename any `AIVYX_*` environment variables it relies on to
+  `AIVYX_PA_*`, re-enter the passphrase once if it was stored in the OS
+  keyring (a fresh `aivyx-pa` lookup under the new service name won't
+  find an entry saved under the old one), and update the binary name in
+  any systemd/launchd unit, shell alias, or script that invokes it. The
+  passphrase itself and the encrypted store's contents are unaffected —
+  this is a path/name rename only, not a re-encryption.
+
 ### Added
 
 - **`aivyx federation yubikey-init` — hardware-backed federation identity

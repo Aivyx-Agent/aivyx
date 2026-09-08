@@ -1,10 +1,10 @@
-# Aivyx
+# Aivyx PA
 
 > A personal autonomous agent platform that runs on your hardware,
 > talks to cloud LLMs under your own API key, and never compromises
 > privacy or auditability for the sake of a feature.
 
-Aivyx is a Rust-built agent framework whose load-bearing
+Aivyx PA is a Rust-built agent framework whose load-bearing
 properties are **capability-based security**, **HMAC-chained
 auditability**, and **encryption at rest**. It does not run as a
 hosted service. There is no Aivyx-the-company server in your
@@ -17,13 +17,13 @@ verifiable offline.
 > destination (local teams becoming a network of agents), and the
 > discipline every chapter is held against.
 
-![The Aivyx Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
+![The Aivyx PA Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
 
 ## Status (v0.9.4 — source-available, BUSL-1.1, 2026-09-05)
 
 | | |
 |---|---|
-| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), Repertoire (a Studio Skills library showing every skill + its effectiveness), Stencil + Bridle + Emboss (reliable local tool-calling via grammar-constrained decoding on both local engines), Abacus (a pure-compute utilities pack — calc / unit + timezone convert / date math), Sheaf (structured-data readers — CSV / XLSX / PDF over `fs.read`), Conduit (operator-added MCP servers that work — `env` / `headers` / `aivyx mcp status`), Keel (the default system prompt enriched from a one-line stub into a real operating charter), Outfit (default starter skills so a fresh agent works on turn one), Engram (semantic memory that works out of the box — `init` configures embeddings + turns on the memory stack), Tutor (`aivyx skills teach` — operator-initiated skill authoring on a grown agent), Ember (embedding-free "lite" recall — `[memory] profile = lite` gives BM25 lexical + co-occurrence recall with zero setup), Ballast (a per-mission budget that caps + gracefully halts runaway autonomous team missions), Helm (opt-in `[loop] resume_on_boot` so autonomous runs survive a daemon restart), Ledger (the weekly digest is assembled deterministically from real memory — it can no longer confabulate), Deckhand (opt-in `[applications]` — the agent can use the GUI apps open on your own machine), Concord (memory contradiction detection — `aivyx memory conflicts` / `resolve` / `dismiss` flags and resolves contradictory stored facts, within or across topics), a live-dogfood autonomous-loop hardening pass (auto-delegation resolves specialists by role, completion verification judges the real memory artifact, malformed local tool-calls retry instead of failing the turn), and a privacy-first security hardening pass — Ward (a sensitive-path read guard so the agent can't read SSH/cloud creds, `.env`, or Aivyx's own store/passphrase), Rampart (a network egress guard blocking SSRF / cloud-metadata / private-network reach, including DNS-rebinding), Bulwark (prompt-injection resistance — fetched/parsed/tool content is fenced as untrusted data), Portcullis (a sensitive-path write guard blocking backdoor/persistence writes to authorized_keys, shell rc files, systemd/cron/autostart), Keyring (the master passphrase in the OS credential store instead of plaintext env/TOML), and Gallery (a Studio screen for images the agent generates via a connected ComfyUI MCP server, served through a new authenticated proxy route) — with prompt-injection fencing across every untrusted-content ingress (web, files, MCP, tool-process integrations) and egress guards extended to net.dns — and 15 contract amendments |
+| Phases shipped | Phase 0 → the complete Studio (Chapters R–Z + Voice), plus post-Studio chapters — Throttle (tool-call rate limits), Contacts (Google People API), Genesis (unified CLI + web agent onboarding), Harbor (Docker appliance), Charter (MIT → BUSL-1.1 relicense), Timbre (permissive Kokoro voice, GPL-free), Atlas (tool audit + `tools.list`), Forge (`web.extract` + `git.commit`), Loom (graph-augmented recall), Codex (knowledge-wiki layer), Lattice (typed knowledge graph + `graph.query`), Lexicon (a controlled relation vocabulary for the graph), Synapse (one `[memory] profile` switch that activates the whole memory stack), Whetstone (skills that sharpen — the agent proposes a refined version of an underperforming skill), Praxis (the agent authors new specialized skills from its own consolidated knowledge), Repertoire (a Studio Skills library showing every skill + its effectiveness), Stencil + Bridle + Emboss (reliable local tool-calling via grammar-constrained decoding on both local engines), Abacus (a pure-compute utilities pack — calc / unit + timezone convert / date math), Sheaf (structured-data readers — CSV / XLSX / PDF over `fs.read`), Conduit (operator-added MCP servers that work — `env` / `headers` / `aivyx-pa mcp status`), Keel (the default system prompt enriched from a one-line stub into a real operating charter), Outfit (default starter skills so a fresh agent works on turn one), Engram (semantic memory that works out of the box — `init` configures embeddings + turns on the memory stack), Tutor (`aivyx-pa skills teach` — operator-initiated skill authoring on a grown agent), Ember (embedding-free "lite" recall — `[memory] profile = lite` gives BM25 lexical + co-occurrence recall with zero setup), Ballast (a per-mission budget that caps + gracefully halts runaway autonomous team missions), Helm (opt-in `[loop] resume_on_boot` so autonomous runs survive a daemon restart), Ledger (the weekly digest is assembled deterministically from real memory — it can no longer confabulate), Deckhand (opt-in `[applications]` — the agent can use the GUI apps open on your own machine), Concord (memory contradiction detection — `aivyx-pa memory conflicts` / `resolve` / `dismiss` flags and resolves contradictory stored facts, within or across topics), a live-dogfood autonomous-loop hardening pass (auto-delegation resolves specialists by role, completion verification judges the real memory artifact, malformed local tool-calls retry instead of failing the turn), and a privacy-first security hardening pass — Ward (a sensitive-path read guard so the agent can't read SSH/cloud creds, `.env`, or Aivyx PA's own store/passphrase), Rampart (a network egress guard blocking SSRF / cloud-metadata / private-network reach, including DNS-rebinding), Bulwark (prompt-injection resistance — fetched/parsed/tool content is fenced as untrusted data), Portcullis (a sensitive-path write guard blocking backdoor/persistence writes to authorized_keys, shell rc files, systemd/cron/autostart), Keyring (the master passphrase in the OS credential store instead of plaintext env/TOML), and Gallery (a Studio screen for images the agent generates via a connected ComfyUI MCP server, served through a new authenticated proxy route) — with prompt-injection fencing across every untrusted-content ingress (web, files, MCP, tool-process integrations) and egress guards extended to net.dns — and 15 contract amendments |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
 | Release pipeline | **Active** — on each version tag, cargo-dist builds the CLI (Linux x86_64/aarch64 musl + macOS x86_64/aarch64) and a separate workflow builds the **desktop app** (`.deb` + macOS `.app`); both attach to the GitHub Release. Latest is **`v0.9.4`** (the release-pipeline integrity fixes — the git-dependency visibility fix and the `aivyx-confine` Landlock/musl fixes that had been silently breaking releases — plus Chapter Picket's active prompt-injection tripwire) via the [shell installer](docs/INSTALL.md#shell-installer-recommended), the [desktop app](docs/INSTALL.md#desktop-app), or the [WSL distro](docs/INSTALL.md#windows-wsl2-or-docker) |
 | Studio (web GUI) | **Complete** — every screen live: Create (guided onboarding) · Command · Missions · Mission Control (live team-mission graph + controls) · Chat · Memory (+ graph) · Wiki (knowledge pages) · Graph (typed knowledge graph) · Skills (the skill library) · Settings · Agents · Teams · Documents (browse + edit) · Gallery (ComfyUI images) · Voice; offline, local-first, served on `:7843` |
@@ -36,7 +36,7 @@ verifiable offline.
 
 ## Five-minute setup
 
-Aivyx ships zero hosted dependencies. The quickest path is the
+Aivyx PA ships zero hosted dependencies. The quickest path is the
 one-line shell installer (a prebuilt binary for your platform):
 
 ```sh
@@ -47,13 +47,13 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 Prefer to compile? The build-from-source steps below work too.
 
 **Want an always-on server instead of a local binary?** `docker
-compose up` runs Aivyx as a homelab/VPS **appliance** (daemon +
+compose up` runs Aivyx PA as a homelab/VPS **appliance** (daemon +
 Studio in a container) — a different, deliberately-scoped profile
 from the local-first install. See
 [`docs/INSTALL.md`](docs/INSTALL.md#docker--the-server-appliance)
 and [`docs/DOCKER.md`](docs/DOCKER.md).
 
-**Want a native app instead of the CLI?** Aivyx ships **`aivyx-desktop`** —
+**Want a native app instead of the CLI?** Aivyx PA ships **`aivyx-desktop`** —
 the Studio in a native window with a system tray, approval notifications, and a
 summon hotkey. Grab the `.deb` (Linux) or `.app` (macOS) from the
 [latest release](https://github.com/Aivyx-Agent/aivyx/releases/latest), or see
@@ -66,7 +66,7 @@ appliance above — both fully supported. See
 [`docs/INSTALL.md`](docs/INSTALL.md#windows-wsl2-or-docker).
 
 **Onboarding fast-path:** after `cargo build --release --bin
-aivyx`, run `./target/release/aivyx init --template coder` (or
+aivyx-pa`, run `./target/release/aivyx-pa init --template coder` (or
 `researcher` / `personal`) to skip the from-scratch config and run
 the wizard pre-filled from a starter archetype. See
 [`docs/TEMPLATES.md`](docs/TEMPLATES.md) for what each template
@@ -76,34 +76,34 @@ contains. The manual path below is shown for reference.
 # 1. Install Ollama and pull a tool-capable model (no API key required)
 ollama pull qwen3:8b
 
-# 2. Build aivyx
+# 2. Build aivyx-pa
 git clone https://github.com/Aivyx-Agent/aivyx
 cd aivyx
-cargo build --release --bin aivyx
+cargo build --release --bin aivyx-pa
 
 # 3. Drop a minimal config in your CWD
-cat > aivyx.toml <<'EOF'
+cat > aivyx-pa.toml <<'EOF'
 [agent]
 provider = "ollama"
 model = "qwen3:8b"
 
 [fs]
-root = "/tmp/aivyx-sandbox"
+root = "/tmp/aivyx-pa-sandbox"
 
 [storage]
-path = "/tmp/aivyx-store.redb"
+path = "/tmp/aivyx-pa-store.redb"
 
 [daemon]
 web_ui = true   # enable the localhost-only web UI on :7843
 
-[aivyx]
+[aivyx_pa]
 passphrase = "set-a-real-passphrase"
 EOF
 
 # 4. Create the fs sandbox and launch
-mkdir -p /tmp/aivyx-sandbox
-./target/release/aivyx init    # interactive wizard (or skip if you already wrote aivyx.toml)
-./target/release/aivyx         # auto-spawns the daemon, drops into a session
+mkdir -p /tmp/aivyx-pa-sandbox
+./target/release/aivyx-pa init    # interactive wizard (or skip if you already wrote aivyx-pa.toml)
+./target/release/aivyx-pa         # auto-spawns the daemon, drops into a session
 ```
 
 Then open `http://127.0.0.1:7843/` in a browser — that's the
@@ -116,26 +116,26 @@ Studio's own **Audit** screen (sidebar, under System).
 
 To keep it running for days — scheduled routines firing, the loop
 available — install it as a background service (no hand-rolled
-`systemd`/`launchd`): `aivyx daemon install` (Linux/macOS; survives
+`systemd`/`launchd`): `aivyx-pa daemon install` (Linux/macOS; survives
 logout + reboot). See [`docs/INSTALL.md`](docs/INSTALL.md#running-as-a-service--runs-for-days-chapter-anchor).
 
 **Terminal frontends + the Nonagon (Chapter I/J):**
 
 ```sh
-./target/release/aivyx tui                 # the ratatui terminal UI
-./target/release/aivyx team roster         # the default 9-role Nonagon
-./target/release/aivyx team run "research the latest on X and draft a summary"
-./target/release/aivyx team roster --config crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml
+./target/release/aivyx-pa tui                 # the ratatui terminal UI
+./target/release/aivyx-pa team roster         # the default 9-role Nonagon
+./target/release/aivyx-pa team run "research the latest on X and draft a summary"
+./target/release/aivyx-pa team roster --config crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml
 ```
 
-`aivyx team run` hands the mission to a **lead** agent that decomposes it
+`aivyx-pa team run` hands the mission to a **lead** agent that decomposes it
 into a DAG, delegates to least-privileged specialists, verifies, and
 synthesizes — every step on the one HMAC chain. A **vertical pack** swaps in
 a domain crew via `--config <pack.toml>` (the kitchen Back-of-House Nonagon
 is the worked example). See [`docs/NONAGON.md`](docs/NONAGON.md).
 
 For a config that uses Anthropic or OpenAI instead, see
-[`examples/aivyx.toml`](examples/aivyx.toml). For a Telegram
+[`examples/aivyx-pa.toml`](examples/aivyx-pa.toml). For a Telegram
 adapter, see [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
 For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
@@ -143,7 +143,7 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
 - **Runs on your hardware, no API key.** The headline path is local inference
   via [Ollama](https://ollama.com) with a zero-config on-ramp — auto
-  context-window sizing, a vetted tool-capable model, and `aivyx doctor` to
+  context-window sizing, a vetted tool-capable model, and `aivyx-pa doctor` to
   confirm the path end to end. Anthropic / OpenAI are optional, under *your*
   key, talking directly to the provider.
 - **Secure by construction.** Capability-based scopes + trust tiers bound
@@ -152,10 +152,10 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
   (Argon2id → HKDF → ChaCha20-Poly1305).
 - **Operator-chosen reach.** *You* pick how far the agent reaches —
   **sandbox** / **workspace** / **home** / **full** — as an audited setting
-  (`aivyx access`); irreversible filesystem ops are confirm-first.
+  (`aivyx-pa access`); irreversible filesystem ops are confirm-first.
 - **Operator-chosen autonomy.** *You* pick how autonomous the agent is —
   **manual** / **assisted** / **supervised** / **autonomous** / **unleashed** —
-  one dial (`aivyx autonomy`, or the Studio) that composes the safety knobs and
+  one dial (`aivyx-pa autonomy`, or the Studio) that composes the safety knobs and
   arms the autonomous loop. Autonomy is a choice you make, never one the agent
   grows into: it cannot widen its own reach or rewrite its own identity.
 - **A self-learning identity.** A user-defined **Profile** plus a
@@ -189,8 +189,8 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
   edit), Gallery (ComfyUI images), Voice.
 - **One onboarding, two surfaces.** A guided "create your agent" flow (Profile →
   Persona seed → access) drives the **same** drafters and config writers from
-  both `aivyx init` (CLI cold-start) and the Studio (live daemon).
-- **More frontends, one daemon.** A terminal TUI (`aivyx tui`), the CLI, and
+  both `aivyx-pa init` (CLI cold-start) and the Studio (live daemon).
+- **More frontends, one daemon.** A terminal TUI (`aivyx-pa tui`), the CLI, and
   channel adapters — Telegram, Discord, Slack, voice.
 - **Productivity integrations.** Gmail, Calendar, Drive, Contacts, Notion,
   Obsidian, n8n, plus a web/task/health toolkit — each a sandboxed,
@@ -209,7 +209,7 @@ recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
 The v0.6.0 arc (the toolbox release) **widened what the agent can do**:
 a pure-compute utilities pack (Chapter Abacus), structured-data readers over
 `fs.read` (Chapter Sheaf), and the wiring that turns the whole MCP server
-ecosystem into an operator-config story — secrets, headers, and `aivyx mcp
+ecosystem into an operator-config story — secrets, headers, and `aivyx-pa mcp
 status` (Chapter Conduit). That last one reframes "new integrations": GitHub,
 weather, Google Tasks and the rest are now a few lines of `[[mcp_server]]`
 config, not in-tree builds. From here:
@@ -243,7 +243,7 @@ release is `v0.9.4` (see the CHANGELOG for what shipped):
 - `.github/workflows/wsl-release.yml` reuses that appliance image to export
   a **WSL distribution** (`Aivyx.wsl`) — the daemon pre-installed for
   Windows/WSL2 users — and attaches it to the release. This is the
-  cheapest real "Aivyx on Windows" path: it sidesteps the deferred native
+  cheapest real "Aivyx PA on Windows" path: it sidesteps the deferred native
   Windows port (the daemon's Unix-socket IPC just works inside WSL2's Linux
   kernel). See [docs/INSTALL.md](docs/INSTALL.md#windows-wsl2-or-docker).
 - `.github/workflows/ci.yml` runs `cargo clippy --workspace --all-targets
@@ -270,7 +270,7 @@ operator
    │
    │  Unix-socket IPC (mode 0600)
    ▼
- aivyx daemon
+ aivyx-pa daemon
    ├── turn loop (capability check → audit → execute → audit)
    ├── HMAC-chained audit log (offline-verifiable)
    ├── encrypted redb store (Argon2id → HKDF → ChaCha20-Poly1305)
@@ -308,11 +308,11 @@ OAuth substrate.
 
 ## Where to look next
 
-**For operators** wanting to use Aivyx:
+**For operators** wanting to use Aivyx PA:
 - [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — creating your agent:
-  the guided Profile → Persona → access flow, shared by `aivyx init`
+  the guided Profile → Persona → access flow, shared by `aivyx-pa init`
   and the Studio's **Create** screen.
-- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what Aivyx
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what Aivyx PA
   defends against, what it doesn't. Read this before deploying.
 - [`examples/`](examples/) — worked TOML configs for Ollama,
   Anthropic, and the SemiTrusted (Telegram) tier.
@@ -368,7 +368,7 @@ This is a single-operator personal-agent platform by design
 channels: file an issue, discuss the shape, send a PR. New
 channels, new tools, new provider adapters fit cleanly into the
 existing SDK surfaces. Before your first PR, read
-[CONTRIBUTING.md](CONTRIBUTING.md) — Aivyx is source-available
+[CONTRIBUTING.md](CONTRIBUTING.md) — Aivyx PA is source-available
 under BUSL-1.1, so a short [CLA](CLA.md) (accepted via a
 `git commit -s` sign-off) is required.
 
@@ -389,7 +389,7 @@ OSI "open source." See [docs/LICENSING.md](docs/LICENSING.md) for
 the model and the licensing FAQ. (v0.2.0 and prior remain MIT in
 perpetuity.)
 
-The "Aivyx" name and associated branding are trademarked — see
-[TRADEMARK.md](TRADEMARK.md) for the brand usage rule (BUSL +
-branded: fork the code for non-commercial use; don't call the
-fork "Aivyx").
+The "Aivyx" and "Aivyx PA" names and associated branding are
+trademarked — see [TRADEMARK.md](TRADEMARK.md) for the brand usage
+rule (BUSL + branded: fork the code for non-commercial use; don't
+call the fork "Aivyx" or "Aivyx PA").

@@ -1,6 +1,6 @@
 # Commercial Licensing
 
-Aivyx is **source-available** under the [Business Source License 1.1](LICENSE)
+Aivyx PA is **source-available** under the [Business Source License 1.1](LICENSE)
 (BUSL-1.1). It is **free for personal and non-commercial use**, and requires a
 **paid commercial license for business or production use**. This page explains,
 in plain English, which side of that line you are on and how to get a license if
@@ -12,16 +12,16 @@ you need one.
 
 ## Free — no license needed
 
-You may use, copy, modify, and build on Aivyx **at no cost** for **personal and
+You may use, copy, modify, and build on Aivyx PA **at no cost** for **personal and
 non-commercial** purposes. That includes:
 
-- An **individual** running Aivyx as their own personal assistant.
+- An **individual** running Aivyx PA as their own personal assistant.
 - **Learning, evaluation, experimentation, and research.**
 - **Hobby and personal projects** that are not run for commercial advantage.
 - Use by a **registered non-profit** or an **accredited educational
   institution**.
 
-If that describes you, you are done — enjoy Aivyx, and nothing below applies.
+If that describes you, you are done — enjoy Aivyx PA, and nothing below applies.
 
 ## Paid — a commercial license is required
 
@@ -31,10 +31,10 @@ this includes:
 
 - Any use **by or on behalf of a for-profit company** — including internal use
   by employees or contractors (there is no "internal use is free" carve-out).
-- Running Aivyx **in production** as part of, or in support of, a **commercial
+- Running Aivyx PA **in production** as part of, or in support of, a **commercial
   product or service**.
 - Any use that **generates revenue**, directly or indirectly.
-- **Offering Aivyx to third parties** — hosted, embedded, resold, or as a
+- **Offering Aivyx PA to third parties** — hosted, embedded, resold, or as a
   service.
 
 In short: **if a business depends on it, the business buys a license.** This is
@@ -49,7 +49,7 @@ true whether you run the stock build or your own modified fork.
 | Registered non-profit / accredited school | **Free** |
 | A for-profit company, even just internally | **Commercial license** |
 | Production use behind a paid product or service | **Commercial license** |
-| Hosting or reselling Aivyx to customers | **Commercial license** |
+| Hosting or reselling Aivyx PA to customers | **Commercial license** |
 
 Not sure which bucket you fall in? **Ask** (below) — we would rather answer than
 have you guess.
@@ -67,7 +67,7 @@ clock. The commercial license covers the period before a version's conversion
 Email **aivyx@aivyx-studio.com** with:
 
 - **Who you are** — company / organization name.
-- **How you intend to use Aivyx** — internal tooling, embedded in a product,
+- **How you intend to use Aivyx PA** — internal tooling, embedded in a product,
   hosted service, etc.
 - **Rough scale** — team size, number of deployments, or end users, if known.
 
@@ -82,7 +82,8 @@ We will reply with terms and next steps.
 
 ## A note on trademark
 
-A commercial *code* license is separate from the **"Aivyx" name and branding**,
-which are trademarked. Permission to use the software under either the free grant
-or a commercial license does **not** grant rights to the Aivyx name or logo. See
-[`TRADEMARK.md`](TRADEMARK.md) for brand-usage rules.
+A commercial *code* license is separate from the **"Aivyx" and "Aivyx PA" names
+and branding**, which are trademarked. Permission to use the software under
+either the free grant or a commercial license does **not** grant rights to the
+Aivyx or Aivyx PA name or logo. See [`TRADEMARK.md`](TRADEMARK.md) for
+brand-usage rules.
