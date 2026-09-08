@@ -1,6 +1,6 @@
-# Aivyx in Docker (Chapter Harbor)
+# Aivyx PA in Docker (Chapter Harbor)
 
-Run Aivyx as an always-on **server appliance** — daemon + Studio in one
+Run Aivyx PA as an always-on **server appliance** — daemon + Studio in one
 `docker compose up`, no Rust toolchain on your machine. This is **not** the
 desktop local-first install: in a container the agent reaches a bind-mounted
 volume (not your real home), the Studio is exposed deliberately, and there's no
@@ -24,7 +24,7 @@ open http://localhost:7843     # → use the "Create" screen (Chapter Genesis)
 ```
 
 State (config, encrypted store, audit chain, OAuth tokens) persists in the
-`aivyx-data` volume across `docker compose down`/`up`. The agent's files live in
+`aivyx-pa-data` volume across `docker compose down`/`up`. The agent's files live in
 `./workspace` (mounted at `/work`).
 
 ## What's in here
@@ -34,7 +34,7 @@ State (config, encrypted store, audit chain, OAuth tokens) persists in the
 | [`../../Dockerfile`](../../Dockerfile) | Multi-stage build: daemon + all tool binaries → debian-slim |
 | [`../../docker-compose.yml`](../../docker-compose.yml) | The appliance service (+ optional `ollama` profile) |
 | `aivyx.appliance.toml` | Baked default config (mount your own to override) |
-| `entrypoint.sh` | Bridges the passphrase secret → `AIVYX_PASSPHRASE`; seeds `~/.aivyx` on first boot |
+| `entrypoint.sh` | Bridges the passphrase secret → `AIVYX_PA_PASSPHRASE`; seeds `~/.aivyx-pa` on first boot |
 | `secrets/` | Your store passphrase (git-ignored; only `passphrase.example` is tracked) |
 
 ## Notes & limits (this phase)
