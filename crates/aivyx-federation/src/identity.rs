@@ -468,7 +468,15 @@ fn set_file_permissions_600(_path: &Path) -> Result<(), FederationError> {
 
 /// Instance ids appear in signed headers, audit payloads, and logs — restrict
 /// to ASCII alphanumeric + `-`/`_` so they can't inject into any of those.
-fn validate_instance_id(id: &str) -> Result<(), FederationError> {
+///
+/// `pub` (not private): this is the one authoritative validation rule for an
+/// `instance_id`, and callers that need to reject a bad id *before* doing
+/// expensive or irreversible work of their own (e.g. `aivyx-cli`'s
+/// `federation yubikey-init`, which must refuse a malformed instance id
+/// before touching a YubiKey at all — see that command's own doc comment)
+/// should call this directly rather than duplicating the character-class
+/// rule inline.
+pub fn validate_instance_id(id: &str) -> Result<(), FederationError> {
     if id.is_empty() {
         return Err(FederationError::Validation(
             "federation instance_id must not be empty".into(),

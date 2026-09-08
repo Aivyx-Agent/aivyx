@@ -4659,6 +4659,19 @@ changed away from the OpenPGP-card factory defaults** (`123456` /
 command never changes a PIN on your behalf; it only refuses to proceed
 against a still-factory-default card.
 
+**PIN retry budget warning.** Every run of this command — even a
+successful one — consumes one retry attempt off *both* the User and
+Admin PIN's limited counters (typically 3 each on real hardware), via
+the factory-default-PIN check that runs before anything else. If Admin
+PIN verification then also fails (e.g. a mistyped PIN), that's a
+*second* retry burned on the Admin PIN in the same run. Two mistakes,
+not three, can permanently block the Admin PIN — a blocked Admin PIN
+has **no** self-recovery path short of a full card wipe
+(TERMINATE+ACTIVATE, which erases all existing keys; only a
+pre-configured Reset Code can otherwise recover it). Check your retry
+counter (e.g. `gpg --card-status`) before retrying a failed
+`yubikey-init` run.
+
 ```sh
 aivyx federation yubikey-init my-instance-id ~/.config/aivyx/federation-hardware-binding.json
 # aivyx federation yubikey-init: discovering YubiKey (requires pcscd running)...
@@ -4668,7 +4681,12 @@ aivyx federation yubikey-init my-instance-id ~/.config/aivyx/federation-hardware
 # aivyx federation yubikey-init: setting the Signature slot's touch policy to fixed
 #   (every future signature will require a physical touch)...
 # aivyx federation yubikey-init: wrote binding record (...) to ~/.config/aivyx/federation-hardware-binding.json
-# aivyx federation yubikey-init: verified — instance `my-instance-id` is bound to card ...
+# aivyx federation yubikey-init: post-provisioning check passed — a fresh re-discovery of
+#   card ... confirms its serial and Signature-slot public key match what provisioning just
+#   wrote for instance `my-instance-id`, and aivyx-federation's own Identity::load_hardware
+#   (the real production load path) accepts them. This does NOT confirm the touch policy is
+#   being enforced live on the card -- that is confirmed the first time this identity actually
+#   signs a real federation request, not by this init command.
 ```
 
 This is **destructive** if the card's Signature slot already holds a

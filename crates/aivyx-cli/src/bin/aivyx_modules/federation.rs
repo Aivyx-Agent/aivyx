@@ -51,6 +51,23 @@
 //!    from step 6 is already written by this point — a failure here is
 //!    reported as an error, but does not un-write it (provisioning is
 //!    already real and irreversible on the card by this point).
+//!
+//!    **This step opens a second, independent PC/SC connection to the same
+//!    physical reader.** The provisioning transaction and card handle from
+//!    steps 1-6 are explicitly `drop`ped before this step runs (Finding
+//!    C-1) — `SCardBeginTransaction` blocks indefinitely (it does not fail
+//!    fast) if another exclusive transaction is still held on the same
+//!    reader, so failing to release the first transaction first would hang
+//!    this command forever right after the card has already been
+//!    irreversibly re-keyed.
+//!
+//!    **What this step does NOT verify**: whether the touch-policy setting
+//!    from step 5 actually took effect live on the card. `YubiKeySigner::
+//!    sign` hard-refuses if the live touch policy isn't `Fixed`, but doing
+//!    that check here would require collecting the User PIN and a real
+//!    physical touch, which isn't this provisioning command's job (Finding
+//!    I-1) — see this step's own user-facing message for the accurate,
+//!    non-overclaiming description of what was and wasn't confirmed.
 
 use std::path::Path;
 
@@ -72,16 +89,18 @@ struct KeyBindingRecord {
 /// Entry point for `aivyx federation yubikey-init <instance-id>
 /// <key-binding-path>`. See this module's doc comment for the full flow.
 pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<(), String> {
-    // Fail fast on an obviously-bad instance id before touching the card
-    // at all (card discovery + the PIN-factory-default check below both
-    // cost real, limited PIN retry attempts on a card whose PINs are
-    // already correctly changed — see `pin::require_pin_changed`'s doc
-    // comment). `aivyx_federation::Identity::load_hardware` re-validates
-    // this authoritatively at the end regardless (step 7); this is just a
-    // cheap early exit for the common "forgot the argument" mistake.
-    if instance_id.is_empty() {
-        return Err("aivyx federation yubikey-init: instance-id must not be empty".to_string());
-    }
+    // Fail fast on an invalid instance id before touching the card at all
+    // (card discovery + the PIN-factory-default check below both cost
+    // real, limited PIN retry attempts on a card whose PINs are already
+    // correctly changed — see `pin::require_pin_changed`'s doc comment —
+    // and key generation below is destructive and irreversible on the
+    // card itself). Reuses `aivyx_federation::identity::validate_instance_id`
+    // directly (Finding I-2) rather than duplicating its character-class
+    // rule inline, so this early check can never drift out of sync with
+    // the authoritative rule `Identity::load_hardware` re-applies at the
+    // end regardless (step 7).
+    aivyx_federation::identity::validate_instance_id(instance_id)
+        .map_err(|e| format!("aivyx federation yubikey-init: {e}"))?;
 
     eprintln!("aivyx federation yubikey-init: discovering YubiKey (requires pcscd running)...");
     let mut card = discovery::discover_real_card()
@@ -111,7 +130,42 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
         .as_admin_card(SecretString::from(admin_pin))
         .map_err(YubiError::from)
         .map_err(|e| {
-            format!("aivyx federation yubikey-init: Admin PIN verification failed: {e}")
+            // `as_admin_card`'s failure routes through `YubiError`'s
+            // generic, context-free `From<openpgp_card::Error>` blanket
+            // conversion (see that impl's own doc comment in `aivyx-yubi`)
+            // -- a blocked PIN comes back labeled `pin_kind: "A"` ("A PIN
+            // is blocked..."), even though this call site unambiguously
+            // knows it's the ADMIN PIN that just failed. Rewrite that
+            // specific case with an unambiguous, correctly-labeled message
+            // and accurate (non-circular) recovery guidance -- never
+            // "verify with the admin PIN", since that's exactly what's
+            // blocked here (Finding I-4) -- instead of relying on the
+            // generic fallback's ambiguous wording.
+            let description = if matches!(&e, YubiError::PinBlocked { .. }) {
+                "Admin PIN is blocked (too many failed attempts). This cannot be recovered \
+                 with the Admin PIN itself -- only a pre-configured Reset Code (if one was \
+                 set up) or a full card reset (TERMINATE+ACTIVATE, which erases all keys) can \
+                 recover from this state."
+                    .to_string()
+            } else {
+                format!("Admin PIN verification failed: {e}")
+            };
+            // Finding I-3: `pin::require_pin_changed` above and this
+            // verification attempt each burn one of the Admin PIN's
+            // limited real retries (`aivyx-yubi`'s own `pin.rs` documents
+            // this at length) -- two mistakes, not three, can permanently
+            // block it, with no self-recovery short of a full card wipe.
+            // Nothing else in this command's output warns the operator of
+            // that before they retry blindly.
+            format!(
+                "aivyx federation yubikey-init: {description}\n\n\
+                 Warning: this failed attempt just consumed one of the Admin PIN's limited \
+                 real retry attempts, and the factory-default-PIN check that already ran \
+                 earlier in this same command consumed one too. A blocked Admin PIN has NO \
+                 self-recovery path short of a full card wipe (TERMINATE+ACTIVATE, which \
+                 erases all existing keys) -- check your retry counter (e.g. `gpg \
+                 --card-status`) before retrying blindly."
+            )
         })?;
 
     eprintln!(
@@ -138,6 +192,23 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
         format!("aivyx federation yubikey-init: failed to read the card's serial: {e}")
     })?;
 
+    // Finding C-1 (CRITICAL): explicitly close the exclusive PC/SC
+    // transaction (`tx`) and disconnect the underlying card handle
+    // (`card`) now that all real card I/O for this provisioning attempt
+    // is done -- BEFORE the verification pass below opens a *second*,
+    // independent PC/SC connection to the same physical reader via
+    // `YubiKeySigner::new`. `SCardBeginTransaction` (what that second
+    // connection's own transaction call performs internally) blocks
+    // indefinitely -- it does not fail fast -- if another exclusive
+    // transaction is still held on the same reader. Without this, the
+    // command would hang forever right here, after the card has already
+    // been irreversibly re-keyed and the binding record already written,
+    // with no way for the operator to tell whether provisioning actually
+    // succeeded. `tx` borrows `card` mutably (`Card<Transaction<'_>>`), so
+    // it must be dropped first.
+    drop(tx);
+    drop(card);
+
     let public_key_base64 = base64::engine::general_purpose::STANDARD.encode(public_key.as_ref());
 
     let record = KeyBindingRecord {
@@ -158,7 +229,10 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // the exact production load path (`Identity::load_hardware`) accepts
     // what we just provisioned. The binding record above is already
     // written by this point regardless of this check's outcome — the
-    // card's state is already real and irreversible.
+    // card's state is already real and irreversible. Safe to open a fresh
+    // PC/SC connection here: `tx`/`card` were already dropped above
+    // (Finding C-1), so no exclusive transaction is still held on this
+    // reader.
     let verifying_signer = YubiKeySigner::new(SecretString::from(String::new())).map_err(|e| {
         format!(
             "aivyx federation yubikey-init: wrote {} but a fresh re-discovery for verification \
@@ -166,6 +240,19 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
             key_binding_path.display(),
         )
     })?;
+    // NB (Finding I-1): `load_hardware`'s serial check compares the
+    // freshly re-discovered card's serial against `card_serial` -- which
+    // was itself just read from this exact same card, seconds earlier, in
+    // this exact same run. That comparison can never meaningfully fail in
+    // this flow; it isn't a "wrong card" check here (unlike in `sign()`'s
+    // long-lived-signer use case where it genuinely guards against a card
+    // swap). What this whole pass *does* meaningfully confirm is narrower:
+    // the card is discoverable again, its serial and public key match what
+    // provisioning itself just reported, and `Identity::load_hardware`
+    // (the real production load path) accepts all of it end to end. It
+    // does NOT confirm the touch policy set in step 5 is being enforced
+    // live -- see the success message below for the honest, non-
+    // overclaiming summary of what was and wasn't checked.
     let identity = aivyx_federation::identity::Identity::load_hardware(
         instance_id.to_string(),
         verifying_signer,
@@ -188,8 +275,12 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     }
 
     eprintln!(
-        "aivyx federation yubikey-init: verified — instance `{}` is bound to card {} and \
-         loads correctly via aivyx-federation's own Identity::load_hardware.",
+        "aivyx federation yubikey-init: post-provisioning check passed — a fresh re-discovery \
+         of card {1} confirms its serial and Signature-slot public key match what provisioning \
+         just wrote for instance `{0}`, and aivyx-federation's own Identity::load_hardware \
+         (the real production load path) accepts them. This does NOT confirm the touch policy \
+         is being enforced live on the card -- that is confirmed the first time this identity \
+         actually signs a real federation request, not by this init command.",
         identity.instance_id(),
         card_serial,
     );
@@ -240,13 +331,36 @@ mod tests {
 
     #[test]
     fn empty_instance_id_is_rejected_before_touching_any_card() {
-        let path = std::env::temp_dir().join("aivyx-federation-cli-test-unused.json");
+        // Finding M-3: a fixed temp filename, asserted not to exist, is
+        // flaky on a shared `/tmp` (a leftover from a prior interrupted
+        // run or another user could make this spuriously fail) -- mirror
+        // `write_binding_record_creates_parent_dirs_and_pretty_json`'s own
+        // UUID-based unique filename instead.
+        let path = std::env::temp_dir().join(format!(
+            "aivyx-federation-cli-test-{}.json",
+            uuid::Uuid::new_v4()
+        ));
         let err = run_yubikey_init("", &path).expect_err("an empty instance id must be rejected");
-        assert!(
-            err.contains("instance-id must not be empty"),
-            "error: {err}"
-        );
-        // Must not have written anything -- the empty-id check runs
+        assert!(err.contains("must not be empty"), "error: {err}");
+        // Must not have written anything -- the instance-id check runs
+        // before any card I/O or file write (Finding I-2).
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn invalid_instance_id_is_rejected_before_touching_any_card() {
+        // Finding I-2: the fuller validation rule (only ASCII
+        // alphanumeric, `-`, and `_`) must run up front too, not just the
+        // empty-string case -- an id containing e.g. a space must never
+        // reach card discovery/I/O.
+        let path = std::env::temp_dir().join(format!(
+            "aivyx-federation-cli-test-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let err = run_yubikey_init("bad id with spaces", &path)
+            .expect_err("an instance id with invalid characters must be rejected");
+        assert!(err.contains("invalid characters"), "error: {err}");
+        // Must not have written anything -- the instance-id check runs
         // before any card I/O or file write.
         assert!(!path.exists());
     }
