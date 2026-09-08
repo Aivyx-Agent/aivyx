@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Aivyx is a Rust-built, local-first autonomous agent platform (a personal-agent
+Aivyx PA is a Rust-built, local-first autonomous agent platform (a personal-agent
 daemon + multi-frontend architecture). It runs on the operator's own hardware,
 talks to LLM providers (Ollama local, or Anthropic/OpenAI under the operator's
-own key) directly — there is no Aivyx-hosted service in the request path.
+own key) directly — there is no Aivyx PA-hosted service in the request path.
 Load-bearing properties: capability-based security, HMAC-chained auditability,
 and encryption at rest.
 
@@ -169,7 +169,7 @@ working near file I/O, network calls, or untrusted content:
 - **Ward** + **Portcullis** — the same file,
   `aivyx-core/src/sensitive_paths.rs`. One `SensitivePolicy` struct handles
   both directions: Ward blocks *reads* of SSH/cloud creds, `.env`, and
-  Aivyx's own `.redb` store; Portcullis blocks *writes* to persistence
+  Aivyx PA's own `.redb` store; Portcullis blocks *writes* to persistence
   targets (`authorized_keys`, shell rc files, systemd/cron, git hooks).
   Default-off, operator-enabled via `[access] allow_sensitive_paths`.
 - **Rampart** — `aivyx-core/src/egress.rs`. SSRF guard for `net.*`/`web.*`
@@ -190,7 +190,7 @@ working near file I/O, network calls, or untrusted content:
 
 - `docs/TOOLS.md` — full tool catalog (capability scope, min trust tier, delivery mechanism).
 - `docs/CHANNEL_SDK.md` / `docs/TOOL_SDK.md` — contracts for writing a new channel adapter or tool process (any language; see `examples/python-channel/`, `examples/python-tool/`).
-- `docs/THREAT_MODEL.md` — what Aivyx defends against, and what it explicitly doesn't.
+- `docs/THREAT_MODEL.md` — what Aivyx PA defends against, and what it explicitly doesn't.
 - `docs/NONAGON.md` — the multi-agent team mission model.
 - `docs/DAEMON_IPC.md` — the daemon's wire protocol.
 - `docs/ROADMAP.md` / `CHANGELOG.md` — phase-by-phase history (docs are organized by "chapter" codenames — e.g. Ward, Rampart, Nonagon — referenced throughout the codebase and commit history; grep the chapter name if a comment references one you don't recognize).

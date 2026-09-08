@@ -1,6 +1,6 @@
 # Python tool process — reference implementation
 
-A minimal Aivyx tool process written in Python 3, demonstrating
+A minimal Aivyx PA tool process written in Python 3, demonstrating
 that the tool process IPC protocol is language-agnostic. Stdlib
 only — no `pip install` step.
 

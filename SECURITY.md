@@ -1,6 +1,6 @@
 # Security Policy
 
-Aivyx is a single-operator personal agent (see `docs/THREAT_MODEL.md`
+Aivyx PA is a single-operator personal agent (see `docs/THREAT_MODEL.md`
 for the full account) — not a multi-tenant service. Its load-bearing
 security properties are **capability-based scopes + trust tiers**
 (bounding what a tool call can reach), an **HMAC-chained,

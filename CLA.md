@@ -1,10 +1,10 @@
-# Aivyx Contributor License Agreement
+# Aivyx PA Contributor License Agreement
 
 **Version 1.0**
 
-Thank you for contributing to Aivyx. This Contributor License Agreement (the
+Thank you for contributing to Aivyx PA. This Contributor License Agreement (the
 "Agreement") sets out the terms under which You provide Contributions to the
-Licensor. It exists so that Aivyx can be offered under its dual model —
+Licensor. It exists so that Aivyx PA can be offered under its dual model —
 source-available under the Business Source License 1.1 for free
 personal/non-commercial use, and under separate commercial licenses for
 commercial use (see [`LICENSE`](LICENSE) and [`COMMERCIAL.md`](COMMERCIAL.md)).
@@ -13,9 +13,9 @@ commercial use (see [`LICENSE`](LICENSE) and [`COMMERCIAL.md`](COMMERCIAL.md)).
 grant*, not an assignment. It does not stop You from using Your Contributions for
 any other purpose.
 
-By submitting a Contribution to Aivyx (including by adding a `Signed-off-by`
+By submitting a Contribution to Aivyx PA (including by adding a `Signed-off-by`
 trailer to a commit, as described in [`CONTRIBUTING.md`](CONTRIBUTING.md)), You
-agree to the following terms for that and all future Contributions to Aivyx.
+agree to the following terms for that and all future Contributions to Aivyx PA.
 
 ## 1. Definitions
 
@@ -26,7 +26,7 @@ agree to the following terms for that and all future Contributions to Aivyx.
   entity and its affiliates, and You represent that You are authorized to bind it.
 - **"Contribution"** means any original work of authorship — including any
   modifications or additions to existing work — that You intentionally submit to
-  the Licensor for inclusion in, or documentation of, Aivyx. "Submit" means any
+  the Licensor for inclusion in, or documentation of, Aivyx PA. "Submit" means any
   form of electronic, verbal, or written communication sent to the Licensor or
   its representatives (for example, pull requests, patches, issues, and code
   review comments), excluding communication conspicuously marked or otherwise
@@ -45,7 +45,7 @@ to **license and sublicense Your Contributions, and derivative works of them,
 under any license terms of the Licensor's choosing — including the Business
 Source License 1.1, the MIT License, and separate commercial (paid) license
 terms — and to change those terms for future versions.** This is the right that
-permits Aivyx to be offered for free for non-commercial use and under paid
+permits Aivyx PA to be offered for free for non-commercial use and under paid
 commercial licenses at the same time.
 
 ## 3. Grant of Patent License
@@ -54,13 +54,13 @@ Subject to the terms of this Agreement, You grant to the Licensor and to
 recipients of software distributed by the Licensor a perpetual, worldwide,
 non-exclusive, royalty-free, irrevocable (except as stated in this section)
 patent license to make, have made, use, offer to sell, sell, import, and
-otherwise transfer Aivyx, where such license applies only to those patent claims
+otherwise transfer Aivyx PA, where such license applies only to those patent claims
 licensable by You that are necessarily infringed by Your Contribution alone or by
-combination of Your Contribution with Aivyx.
+combination of Your Contribution with Aivyx PA.
 
 If any entity institutes patent litigation against You or any other entity
 (including a cross-claim or counterclaim in a lawsuit) alleging that Your
-Contribution, or Aivyx to which You have contributed, constitutes direct or
+Contribution, or Aivyx PA to which You have contributed, constitutes direct or
 contributory patent infringement, then any patent licenses granted to that entity
 under this Agreement for that Contribution or work shall terminate as of the date
 such litigation is filed.
@@ -102,7 +102,7 @@ MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE.
 ## 7. No Obligation
 
 The Licensor is not obligated to use, include, or distribute Your Contributions.
-The decision to include any Contribution in Aivyx is entirely at the Licensor's
+The decision to include any Contribution in Aivyx PA is entirely at the Licensor's
 discretion.
 
 ## 8. Miscellaneous

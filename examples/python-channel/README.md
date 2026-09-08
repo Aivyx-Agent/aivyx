@@ -1,6 +1,6 @@
 # Python channel adapter — reference implementation
 
-A minimal Aivyx channel adapter written in Python 3, demonstrating
+A minimal Aivyx PA channel adapter written in Python 3, demonstrating
 that the daemon's IPC protocol is language-agnostic. Stdlib only —
 no `pip install` step.
 

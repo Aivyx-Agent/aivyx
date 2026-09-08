@@ -1,6 +1,6 @@
-# Contributing to Aivyx
+# Contributing to Aivyx PA
 
-Thanks for your interest in contributing. Aivyx is a single-operator
+Thanks for your interest in contributing. Aivyx PA is a single-operator
 personal-agent platform by design (PRODUCT.md P1 + P6), but well-shaped
 contributions — new channels, tools, and provider adapters that fit the existing
 SDK surfaces — are welcome.
@@ -11,7 +11,7 @@ is the normal "how to work in this repo" guidance.
 
 ## 1. The Contributor License Agreement (required)
 
-Aivyx is **source-available under [BUSL-1.1](LICENSE)** and is offered under a
+Aivyx PA is **source-available under [BUSL-1.1](LICENSE)** and is offered under a
 dual model — **free for personal/non-commercial use, paid for commercial use**
 (see [`COMMERCIAL.md`](COMMERCIAL.md)). For that model to be lawful, the project
 must hold the right to license **all** of the code — including your
