@@ -3218,28 +3218,28 @@ ship the same way.
 
 ```sh
 # 1. Trust the publisher (one-time). The publisher gives you their
-#    verifying key; add it to aivyx.toml:
+#    verifying key; add it to aivyx-pa.toml:
 #      [pack]
 #      trusted_publishers = ["<base64 key>"]
 
 # 2. Look before you leap — verifies the signature and prints what the
 #    pack will wire:
-aivyx pack inspect kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
+aivyx-pa pack inspect kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
 
-# 3. Install: verifies again, unpacks to ~/.aivyx/packs/<name>/<ver>/,
+# 3. Install: verifies again, unpacks to ~/.aivyx-pa/packs/<name>/<ver>/,
 #    wires the [[tool_process]] entries, and sets [team] config_path
 #    ONLY if you don't already have one (never clobbers your roster).
-aivyx pack install kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
+aivyx-pa pack install kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
 
 # 4. Restart the daemon to load it, then connect the pack's data
 #    source if it has one (Kitchen wants its KitchenDB credentials):
-aivyx connect kitchen
+aivyx-pa connect kitchen
 ```
 
 The install refuses: an untrusted or tampered signature, a bundle built
 for a different platform, a pack needing a newer daemon, and any
 archive entry that tries to escape the install directory. A pack is
-**capability**; `aivyx connect <pack>` supplies your **credentials** —
+**capability**; `aivyx-pa connect <pack>` supplies your **credentials** —
 the two compose.
 
 **Publishing a pack** (pack authors): stage `manifest.toml` + `bin/` +
@@ -3247,8 +3247,8 @@ the two compose.
 tables), then:
 
 ```sh
-aivyx pack keygen my-signing.key      # prints the operators' trust snippet
-aivyx pack build ./stage --key my-signing.key --out my-pack.aivyxpack
+aivyx-pa pack keygen my-signing.key      # prints the operators' trust snippet
+aivyx-pa pack build ./stage --key my-signing.key --out my-pack.aivyxpack
 ```
 
 Bundles are deterministic per staging tree; the signature covers the
@@ -3258,14 +3258,14 @@ whole payload. See `docs/FREIGHT.md` for the format, and
 ## External productivity integrations (Chapter F)
 
 After three named local-LLM rehab phases (120-122), the
-operator pressure redirected toward **Aivyx as productivity
+operator pressure redirected toward **Aivyx PA as productivity
 assistant, not just chat surface**. Chapter F opens that
 axis: external services (Gmail, Calendar, Drive, GitHub, …)
 as first-class operator-facing capabilities, each shipped as
 a separate third-party tool process per the P10 substrate
 contract.
 
-Aivyx core stays at the **thirteen substrate tools forever**
+Aivyx PA core stays at the **thirteen substrate tools forever**
 cap (`fs.*`, `memory.*`, `shell.exec`, `web.fetch`,
 `web.post`, `git.read`, `net.dns`). P10 explicitly names
 email and calendar as third-party territory; Chapter F is
@@ -3289,7 +3289,7 @@ single `aivyx-gmail` binary:
 | `gmail.search` | `email.read` | Search messages via Gmail's query DSL (e.g. `from:alice is:unread`). Returns IDs + thread IDs. |
 | `gmail.read` | `email.read` | Read one full message by ID. Returns headers, body text + HTML, attachment metadata (no bytes). |
 | `gmail.draft` | `email.write` | Create a Gmail draft. **Safe write** — draft requires explicit Gmail-UI send by the operator. |
-| `gmail.send` | `email.send` | Send a message directly. **No undo from Aivyx.** Trusted-tier-only by default. |
+| `gmail.send` | `email.send` | Send a message directly. **No undo from Aivyx PA.** Trusted-tier-only by default. |
 
 All four scopes ship in `aivyx-capability::CEILING_TRUSTED`
 ONLY — SemiTrusted and Untrusted roles get zero email
@@ -3303,7 +3303,7 @@ makes it a conscious choice, not a default.
 
 Gmail uses operator-provided OAuth (Q1a Recommended at
 Phase 123 sign-off): you create your own OAuth client in
-your own Google Cloud project. Aivyx ships no shared OAuth
+your own Google Cloud project. Aivyx PA ships no shared OAuth
 app — privacy posture stays under operator control.
 
 **1. Create a Google Cloud OAuth client:**
@@ -3327,11 +3327,11 @@ OAuth client works for up to 100 manually-added test users
 (your own account counts as one). To publish for general
 operator use, Google requires app verification — out of
 scope for self-hosted single-operator use; relevant only if
-you distribute Aivyx to others.
+you distribute Aivyx PA to others.
 
 **2. Write the tool-process config file:**
 
-Create `~/.aivyx/tool-processes/gmail/config.toml`:
+Create `~/.aivyx-pa/tool-processes/gmail/config.toml`:
 
 ```toml
 client_id = "XXXXX.apps.googleusercontent.com"
@@ -3361,7 +3361,7 @@ browser, click through the consent screen, and Google
 redirects back to the loopback URI. The CLI captures the
 auth code, exchanges it for tokens via Google's token
 endpoint, and saves the result to
-`~/.aivyx/tool-processes/gmail/tokens.json` (0600 perms).
+`~/.aivyx-pa/tool-processes/gmail/tokens.json` (0600 perms).
 
 Subsequent runs of any Gmail tool will use these tokens.
 The access token auto-refreshes ~60 seconds before expiry;
@@ -3380,7 +3380,7 @@ available flag. The access token is redacted to
 `<N chars, …tail4>` so terminal scrollback / screen-share
 can't leak it.
 
-**5. Register the tool process in `aivyx.toml`:**
+**5. Register the tool process in `aivyx-pa.toml`:**
 
 ```toml
 [[tool_process]]
@@ -3478,7 +3478,7 @@ fallback.
 
 Chapter F second integration. `aivyx-calendar` is a
 separate binary the operator installs and wires into
-`aivyx.toml` via `[[tool_process]]` — same shape as the
+`aivyx-pa.toml` via `[[tool_process]]` — same shape as the
 Gmail tool process. Calendar uses the SAME Google OAuth
 flow as Gmail, just a different scope. Most operators
 will reuse their existing Gmail OAuth client.
@@ -3487,7 +3487,7 @@ will reuse their existing Gmail OAuth client.
 
 Two paths depending on whether you already set up Gmail:
 
-**Path A — you already have an Aivyx Gmail OAuth client
+**Path A — you already have an Aivyx PA Gmail OAuth client
 in your GCP project (recommended):**
 
 1. **Enable the Calendar API** in the same GCP project
@@ -3497,7 +3497,7 @@ in your GCP project (recommended):**
    screen: `https://www.googleapis.com/auth/calendar`
    (the broad read+write scope — narrower options below).
 3. **Write
-   `~/.aivyx/tool-processes/calendar/config.toml`** with
+   `~/.aivyx-pa/tool-processes/calendar/config.toml`** with
    the SAME `client_id` + `client_secret` you used for
    Gmail:
 
@@ -3549,7 +3549,7 @@ clear "scope not granted" message when the narrower
 read-only scopes are in effect, so the failure surface is
 operator-discoverable rather than silent.
 
-#### `aivyx.toml` `[[tool_process]]` registration
+#### `aivyx-pa.toml` `[[tool_process]]` registration
 
 ```toml
 [[tool_process]]
@@ -3569,7 +3569,7 @@ handshake:
 | `calendar.create_event` | `calendar.write` | Create a new event; required `summary`/`start`/`end`, optional attendees/location/etc. Trusted-tier-only by default. |
 | `calendar.update_event` | `calendar.write` | Partial-patch an existing event by ID. Only fields you supply are changed; everything else is preserved. Trusted-tier-only. |
 | `calendar.delete_event` | `calendar.write` | Delete an event by ID. Idempotent — already-deleted events succeed with `was_already_deleted: true`. Trusted-tier-only. |
-| `calendar.upcoming` | `calendar.read` | **Phase 141 + 142 + 151 + 155 + 158.** Surface imminent events with relative-time enrichment, optionally across multiple calendars. Input `{window_hours? default 24, calendar_id? OR calendar_ids? (mutually exclusive; default ["primary"]), max_results?, fuzzy_dedup? default true (Phase 155 — normalize summary; Phase 158 — sliding-window ±5min adjacency merge replaces the bucket flooring, so 10:04+10:06 merge and chains like 10:00→10:04→10:08 fold to one cluster), writable_only? default false (Phase 155 — pre-fetches calendar list and filters to owner/writer; intersects with calendar_ids if explicit, replaces if defaulted; **Phase 158** — backed by a 5-minute session cache so repeated calls in the same session skip the round trip; **Phase 171** — TTL is now operator-tunable via `CalendarClient::with_writable_calendars_cache_ttl(Duration)` builder method or `AIVYX_CALENDAR_CACHE_TTL_SECS` env var, default 300s), max_concurrent? (Phase 155 — throttle parallel fan-out for rate-limited operators), min_concurrent? (Phase 158 — floor on permit count, cap 16; composes with max_concurrent as `permits = clamp(calendar_count, min, max)`; min ≤ max validated at parse time)}`. Each event has the `list_events` shape plus `starts_in_human` ("in 15 minutes", "tomorrow"), `is_imminent` (true if starts within 30 minutes), and `calendar_id` (Phase 142 traceability). When `calendar_ids` has multiple entries the per-calendar requests run **in parallel** (Phase 151) — or throttled via `max_concurrent` (Phase 155) / floored via `min_concurrent` (Phase 158) — and the merged results are **deduped** (Phase 151 exact / Phase 155 fuzzy / Phase 158 sliding-window) before the sort + cap. LLM-ergonomic shape for "what's coming up" / "do I have anything today" prompts. |
+| `calendar.upcoming` | `calendar.read` | **Phase 141 + 142 + 151 + 155 + 158.** Surface imminent events with relative-time enrichment, optionally across multiple calendars. Input `{window_hours? default 24, calendar_id? OR calendar_ids? (mutually exclusive; default ["primary"]), max_results?, fuzzy_dedup? default true (Phase 155 — normalize summary; Phase 158 — sliding-window ±5min adjacency merge replaces the bucket flooring, so 10:04+10:06 merge and chains like 10:00→10:04→10:08 fold to one cluster), writable_only? default false (Phase 155 — pre-fetches calendar list and filters to owner/writer; intersects with calendar_ids if explicit, replaces if defaulted; **Phase 158** — backed by a 5-minute session cache so repeated calls in the same session skip the round trip; **Phase 171** — TTL is now operator-tunable via `CalendarClient::with_writable_calendars_cache_ttl(Duration)` builder method or `AIVYX_PA_CALENDAR_CACHE_TTL_SECS` env var, default 300s), max_concurrent? (Phase 155 — throttle parallel fan-out for rate-limited operators), min_concurrent? (Phase 158 — floor on permit count, cap 16; composes with max_concurrent as `permits = clamp(calendar_count, min, max)`; min ≤ max validated at parse time)}`. Each event has the `list_events` shape plus `starts_in_human` ("in 15 minutes", "tomorrow"), `is_imminent` (true if starts within 30 minutes), and `calendar_id` (Phase 142 traceability). When `calendar_ids` has multiple entries the per-calendar requests run **in parallel** (Phase 151) — or throttled via `max_concurrent` (Phase 155) / floored via `min_concurrent` (Phase 158) — and the merged results are **deduped** (Phase 151 exact / Phase 155 fuzzy / Phase 158 sliding-window) before the sort + cap. LLM-ergonomic shape for "what's coming up" / "do I have anything today" prompts. |
 | `calendar.list_calendars` | `calendar.read` | **Phase 142 + 151.** Enumerate the calendars the operator has access to. No arguments. Returns `{ calendars: [{ id, summary, is_primary, access_role, can_read, can_write }] }` where `access_role` is one of `owner`/`writer`/`reader`/`freeBusyReader` from Google. **Phase 151** adds derived booleans: `can_read` is true for `owner`/`writer`/`reader` (event content visible); `can_write` is true for `owner`/`writer`. `freeBusyReader` is `(can_read=false, can_write=false)` — busy times visible but event content isn't. Use this once per conversation so the agent can pass concrete IDs to `calendar.upcoming` (via `calendar_ids`) or `calendar.list_events` (via `calendar_id`). |
 
 #### Per-role capability grants
@@ -3579,7 +3579,7 @@ Trusted-tier-only at the ceiling level (matches the
 email.* / web.search third-party-tool-process gating
 pattern). Operators who want to grant Calendar access to
 a non-Trusted role can do so via `capability_scopes` in
-that role's `aivyx.toml` entry:
+that role's `aivyx-pa.toml` entry:
 
 ```toml
 [[role]]
@@ -3662,7 +3662,7 @@ operator setup pattern.
 
 #### One-time operator setup
 
-Three paths depending on your existing Aivyx Google
+Three paths depending on your existing Aivyx PA Google
 integrations:
 
 **Path A — you already have Gmail and/or Calendar
@@ -3678,7 +3678,7 @@ configured (recommended):**
    the GCP Console: `http://127.0.0.1:8767/callback`
    (gmail uses 8765, calendar 8766; drive uses 8767).
 4. **Write
-   `~/.aivyx/tool-processes/drive/config.toml`** with
+   `~/.aivyx-pa/tool-processes/drive/config.toml`** with
    the SAME `client_id` + `client_secret` as your
    other integrations:
 
@@ -3712,8 +3712,8 @@ across all files the user can access. Narrower
 options:
 
 ```toml
-# Only files created by Aivyx (best least-privilege
-# posture for write workflows; Aivyx can't see
+# Only files created by Aivyx PA (best least-privilege
+# posture for write workflows; Aivyx PA can't see
 # pre-existing files):
 scopes = ["https://www.googleapis.com/auth/drive.file"]
 
@@ -3730,7 +3730,7 @@ fewer "re-auth with new scope" loops. Write tools
 `drive.delete_file`) fail with a clear "scope not
 granted" message when narrower scopes are in effect.
 
-#### `aivyx.toml` `[[tool_process]]` registration
+#### `aivyx-pa.toml` `[[tool_process]]` registration
 
 ```toml
 [[tool_process]]
@@ -3827,7 +3827,7 @@ search/get/list/download without any write surface.
 `aivyx-gmail`, `aivyx-calendar`, and `aivyx-drive` now
 all consume the shared `aivyx-google-oauth` substrate
 internally. Operator config files
-(`~/.aivyx/tool-processes/{gmail,calendar,drive}/config.toml`)
+(`~/.aivyx-pa/tool-processes/{gmail,calendar,drive}/config.toml`)
 remain per-service; no operator-side change. The lift
 is documented honestly in
 `docs/PHASE_129.md` for development-side audit trails.
@@ -3844,12 +3844,12 @@ storage on disk beyond the operator's config file).
 1. **Create a Notion integration:**
    Settings → My integrations → New integration →
    Internal integration → name it something like
-   "Aivyx" → save.
+   "Aivyx PA" → save.
 2. **Copy the Internal Integration Token** that Notion
    shows (format: `ntn_XXXXXXXX` or older
    `secret_XXXXXX`).
 3. **Write
-   `~/.aivyx/tool-processes/notion/config.toml`:**
+   `~/.aivyx-pa/tool-processes/notion/config.toml`:**
 
    ```toml
    notion_token = "ntn_XXXXXXXXXXXX"
@@ -3859,7 +3859,7 @@ storage on disk beyond the operator's config file).
 
    ```bash
    $ aivyx-notion auth check
-   aivyx-notion auth check: OK — token authenticated as bot `Aivyx`
+   aivyx-notion auth check: OK — token authenticated as bot `Aivyx PA`
    ```
 
 #### **Critical UX quirk: share pages with the integration**
@@ -3867,7 +3867,7 @@ storage on disk beyond the operator's config file).
 Notion integrations DON'T have implicit access to your
 workspace content. After setting up the integration you
 must explicitly share each page or database you want
-Aivyx to see:
+Aivyx PA to see:
 
 - **Via Notion's UI:** open the page → click "Share" →
   "Invite" → search for your integration's name →
@@ -3960,7 +3960,7 @@ extracts `[[wikilinks]]` and `#tags`).
 1. **Note your vault's absolute path** (e.g.,
    `~/Documents/MyVault` → `/Users/me/Documents/MyVault`).
 2. **Write
-   `~/.aivyx/tool-processes/obsidian/config.toml`:**
+   `~/.aivyx-pa/tool-processes/obsidian/config.toml`:**
 
    ```toml
    vault_path = "/absolute/path/to/MyVault"
@@ -3974,7 +3974,7 @@ extracts `[[wikilinks]]` and `#tags`).
    ```bash
    $ aivyx-obsidian auth check
    aivyx-obsidian auth check: OK
-     config: "/Users/me/.aivyx/tool-processes/obsidian/config.toml"
+     config: "/Users/me/.aivyx-pa/tool-processes/obsidian/config.toml"
      vault root: "/Users/me/Documents/MyVault"
    ```
 
@@ -4069,7 +4069,7 @@ capability_scopes = ["obsidian.read"]  # read-only access
 - **`obsidian.delete_note` is permanent.** No trash.
   Recover via your filesystem backups (Time Machine,
   Snapshots, git) or your Obsidian Sync history if
-  configured. Aivyx doesn't replicate Obsidian's UI
+  configured. Aivyx PA doesn't replicate Obsidian's UI
   trash semantics.
 
 #### What Phase 130 deliberately leaves to follow-on phases
@@ -4110,7 +4110,7 @@ header (not Bearer).
    support API keys natively for both Community and
    Cloud editions.
 
-3. **Write `~/.aivyx/tool-processes/n8n/config.toml`:**
+3. **Write `~/.aivyx-pa/tool-processes/n8n/config.toml`:**
 
    ```toml
    n8n_base_url = "https://n8n.example.com"
@@ -4126,7 +4126,7 @@ header (not Bearer).
    ```bash
    $ aivyx-n8n auth status
    aivyx-n8n auth status: OK
-     config: "/Users/me/.aivyx/tool-processes/n8n/config.toml"
+     config: "/Users/me/.aivyx-pa/tool-processes/n8n/config.toml"
      base_url: https://n8n.example.com
      api_key: present (non-empty)
      next: run `aivyx-n8n auth check` to ping the instance
@@ -4140,7 +4140,7 @@ header (not Bearer).
    for whitespace at either end of the config file's
    `n8n_api_key`.
 
-5. **Register the binary in Aivyx's `config.toml`:**
+5. **Register the binary in Aivyx PA's `config.toml`:**
 
    ```toml
    [[tools]]
@@ -4250,7 +4250,7 @@ instead of reimplementing it. The substrate owns:
   consumer side as a separate enum that composes via
   `#[error(transparent)] Substrate(...)`.
 - `default_config_path(service_subdir)` — computes
-  `$HOME/.aivyx/tool-processes/<subdir>/config.toml`.
+  `$HOME/.aivyx-pa/tool-processes/<subdir>/config.toml`.
 - `load_toml<T>` — generic TOML load.
 - `StatusReport` / `CheckReport` — Display-aware
   report types with `ok` / `fail` constructors.
@@ -4295,7 +4295,7 @@ capability** — web search, task tracking, monitoring, future
 tools like calendar reminders, expense tracking, etc.
 
 Per P10 + P11 + P12, every Chapter G tool ships as a third-
-party tool process. Aivyx core stays at the thirteen-tools-
+party tool process. Aivyx PA core stays at the thirteen-tools-
 forever cap. Chapter G reuses Phase 123's substrate (multi-
 tool harness + per-tool-process config + per-tool-process
 file storage) without architectural additions.
@@ -4339,7 +4339,7 @@ won't use web search.
 - Get a free key at <https://api.search.brave.com/>. The
   free tier allows 2000 queries/month at the time of
   writing.
-- Create `~/.aivyx/tool-processes/toolkit/config.toml`:
+- Create `~/.aivyx-pa/tool-processes/toolkit/config.toml`:
 
 ```toml
 [brave_search]
@@ -4349,7 +4349,7 @@ api_key = "BSA-..."
 (The other tools — `task.*` and `health.check.*` — need NO
 external credentials.)
 
-**3. Register the tool process in `aivyx.toml`:**
+**3. Register the tool process in `aivyx-pa.toml`:**
 
 ```toml
 [[tool_process]]
@@ -4424,7 +4424,7 @@ capability_scopes = [
 #### Budget tracking (Phase 143)
 
 Two tools sharing a JSON-persisted entry store at
-`~/.aivyx/tool-processes/toolkit/budget.json`
+`~/.aivyx-pa/tool-processes/toolkit/budget.json`
 (0600 perms, atomic write-then-rename). Same
 substrate posture as the task store.
 
@@ -4462,7 +4462,7 @@ want the *agent* to compose richer, more specific alert text instead of
 (or alongside) the automatic one. Operator's setup:
 
 ```toml
-# In your aivyx.toml or via the schedule.create tool:
+# In your aivyx-pa.toml or via the schedule.create tool:
 [[schedule]]
 name = "health-monitor-sweep"
 cron = "0 * * * *"   # every hour at minute 0
@@ -4481,7 +4481,7 @@ the tools themselves are simple.
 
 #### Operator state files
 
-All toolkit data lives under `~/.aivyx/tool-processes/toolkit/`:
+All toolkit data lives under `~/.aivyx-pa/tool-processes/toolkit/`:
 
 | File | Owner | Sensitivity |
 |---|---|---|
@@ -4490,7 +4490,7 @@ All toolkit data lives under `~/.aivyx/tool-processes/toolkit/`:
 | `health.json` | tool process (read/write) | Watcher URLs + state — 0600 auto |
 
 All files use the same atomic write-then-rename pattern as
-Gmail's token file (Phase 123). Operators backing up Aivyx
+Gmail's token file (Phase 123). Operators backing up Aivyx PA
 state should include this directory.
 
 #### Operator-side troubleshooting
@@ -4503,7 +4503,7 @@ state should include this directory.
 
 - **`web.search` returns "401" or "missing API key".** Your
   `[brave_search].api_key` is missing or wrong. Check
-  `~/.aivyx/tool-processes/toolkit/config.toml`; regenerate
+  `~/.aivyx-pa/tool-processes/toolkit/config.toml`; regenerate
   the key at the Brave dashboard if needed.
 
 - **Health watcher never polls.** The watcher's
@@ -4527,7 +4527,7 @@ state should include this directory.
 
 - ~~No automatic alert dispatch~~ — **shipped Phase 191.** Set
   `default_notify_target` (a top-level key, not inside any TOML
-  table) in `~/.aivyx/tool-processes/toolkit/config.toml` and the polling
+  table) in `~/.aivyx-pa/tool-processes/toolkit/config.toml` and the polling
   loop dispatches a notification directly (both directions: down
   and recovered) whenever `health.check.recent_changes` would
   have shown a new entry — no cron, no agent turn required. Because
@@ -4546,7 +4546,7 @@ state should include this directory.
   ```
 
   `phone` must name an actual configured `[[notify_target]]` entry in
-  `aivyx.toml` — a mismatched name fails with
+  `aivyx-pa.toml` — a mismatched name fails with
   `NotifyError::UnknownTarget`, logged only to the daemon's own
   stderr (the toolkit process has no channel back to the operator for
   this failure). The agent-mediated recipe above still works and is
@@ -4561,7 +4561,7 @@ state should include this directory.
   page content can chain `web.search` → `web.fetch`. A
   future tool could combine the two if pressure surfaces.
 
-## Moving Aivyx to a new machine
+## Moving Aivyx PA to a new machine
 
 Phase 64 ships **identity export**: a portable snapshot of your
 operator-declared Profile and the reflection-approved Persona
@@ -4571,8 +4571,8 @@ inspecting the chain offline with `jq`.
 
 ```sh
 # On the source host (daemon must be running):
-aivyx identity export ~/aivyx-snapshot.json
-# Wrote N deltas + Profile to ~/aivyx-snapshot.json
+aivyx-pa identity export ~/aivyx-pa-snapshot.json
+# Wrote N deltas + Profile to ~/aivyx-pa-snapshot.json
 # File permissions: 0600 (owner-only).
 ```
 
@@ -4600,12 +4600,12 @@ To restore a snapshot on a target host (Phase 65):
 
 ```sh
 # On the target host (daemon must be running):
-aivyx identity import ~/aivyx-snapshot.json
+aivyx-pa identity import ~/aivyx-pa-snapshot.json
 
 # If the target host already has a Persona chain, the import
 # refuses by default to avoid silent overwrite. Pass --force
 # to wipe and replace:
-aivyx identity import ~/aivyx-snapshot.json --force
+aivyx-pa identity import ~/aivyx-pa-snapshot.json --force
 ```
 
 On success the daemon refreshes its runtime persona state
@@ -4614,10 +4614,10 @@ without a restart.
 
 **Profile import is operator-driven.** The export bundle
 includes the source host's `[profile]` section for reference,
-but `aivyx identity import` does not auto-write `aivyx.toml`.
+but `aivyx-pa identity import` does not auto-write `aivyx-pa.toml`.
 To apply the imported Profile, hand-edit the target host's
-`aivyx.toml` to match the bundle's `profile` block, then
-`aivyx daemon stop && aivyx` to reload. This keeps the
+`aivyx-pa.toml` to match the bundle's `profile` block, then
+`aivyx-pa daemon stop && aivyx-pa` to reload. This keeps the
 destructive-write scope tight to one on-disk artifact (the
 encrypted Persona chain).
 
@@ -4625,13 +4625,13 @@ encrypted Persona chain).
 
 Chapter Passport's federation identity (`docs/FEDERATION.md`) normally
 lives as a software Ed25519 key sealed at rest under your storage
-master key. `aivyx federation yubikey-init` provisions the alternative:
+master key. `aivyx-pa federation yubikey-init` provisions the alternative:
 an Ed25519 keypair generated **on** a YubiKey's OpenPGP card applet,
 never leaving the hardware, with every signature gated behind a
 physical touch.
 
 **Requires `pcscd` running, and is not built by default.** This is a
-real, separate system dependency — no other Aivyx command needs a
+real, separate system dependency — no other Aivyx PA command needs a
 smart-card daemon — and the underlying crate (`aivyx-yubi`)
 transitively needs `libpcsclite` at *build* time too (via `pcsc-sys`),
 so the binary you download or build by default does not include this
@@ -4649,7 +4649,7 @@ sudo systemctl enable --now pcscd
 cargo build -p aivyx-cli --features yubikey
 ```
 
-Without `--features yubikey`, `aivyx federation yubikey-init` still
+Without `--features yubikey`, `aivyx-pa federation yubikey-init` still
 parses (so the error is actionable) but refuses immediately with a
 "rebuild with `--features yubikey`" message.
 
@@ -4673,15 +4673,15 @@ counter (e.g. `gpg --card-status`) before retrying a failed
 `yubikey-init` run.
 
 ```sh
-aivyx federation yubikey-init my-instance-id ~/.config/aivyx/federation-hardware-binding.json
-# aivyx federation yubikey-init: discovering YubiKey (requires pcscd running)...
+aivyx-pa federation yubikey-init my-instance-id ~/.config/aivyx-pa/federation-hardware-binding.json
+# aivyx-pa federation yubikey-init: discovering YubiKey (requires pcscd running)...
 # Admin PIN (input hidden):
-# aivyx federation yubikey-init: generating an Ed25519 keypair in the Signature slot
+# aivyx-pa federation yubikey-init: generating an Ed25519 keypair in the Signature slot
 #   (this overwrites any existing key in that slot)...
-# aivyx federation yubikey-init: setting the Signature slot's touch policy to fixed
+# aivyx-pa federation yubikey-init: setting the Signature slot's touch policy to fixed
 #   (every future signature will require a physical touch)...
-# aivyx federation yubikey-init: wrote binding record (...) to ~/.config/aivyx/federation-hardware-binding.json
-# aivyx federation yubikey-init: post-provisioning check passed — a fresh re-discovery of
+# aivyx-pa federation yubikey-init: wrote binding record (...) to ~/.config/aivyx-pa/federation-hardware-binding.json
+# aivyx-pa federation yubikey-init: post-provisioning check passed — a fresh re-discovery of
 #   card ... confirms its serial and Signature-slot public key match what provisioning just
 #   wrote for instance `my-instance-id`, and aivyx-federation's own Identity::load_hardware
 #   (the real production load path) accepts them. This does NOT confirm the touch policy is
@@ -4711,7 +4711,7 @@ auto-notify fire (delivered, skipped, or failed) as an
 
 ```sh
 # Walk the chain offline (no daemon needed):
-aivyx --verify-only
+aivyx-pa --verify-only
 
 # Or open the Web UI's Audit tab at http://127.0.0.1:7843
 ```
@@ -4816,9 +4816,9 @@ canonical record of what actually dispatched.
 ```sh
 # Terminal — flat-text table with seq, timestamp, target,
 # outcome, trigger source/id, optional detail column.
-aivyx notify history                          # latest 100, all targets
-aivyx notify history --target phone           # filter by target
-aivyx notify history --target phone --limit 500  # max per page
+aivyx-pa notify history                          # latest 100, all targets
+aivyx-pa notify history --target phone           # filter by target
+aivyx-pa notify history --target phone --limit 500  # max per page
 ```
 
 Web UI: open `http://127.0.0.1:7843/` and click the
@@ -4851,7 +4851,7 @@ auto-notify path both route through it.
 - **AWS SES** — host `email-smtp.<region>.amazonaws.com`,
   port `587`, IAM-derived SMTP credentials.
 
-**TLS is mandatory.** Aivyx rejects `tls_mode = "none"` at
+**TLS is mandatory.** Aivyx PA rejects `tls_mode = "none"` at
 config-load time because PLAIN/LOGIN auth over cleartext
 leaks credentials. If you need a plain-text relay for testing,
 use a localhost SMTP capture tool instead.
@@ -4873,7 +4873,7 @@ setup, no bot tokens.
 **Enable it in two steps:**
 
 1. Add a `[[notify_target]] kind = "web-ui"` block to
-   `aivyx.toml` (and make sure the Web UI server is enabled —
+   `aivyx-pa.toml` (and make sure the Web UI server is enabled —
    it ships on by default):
 
    ```toml
@@ -4912,10 +4912,10 @@ the cross-topic `memory.read:topic:*` wildcard scope).
 Operators have terminal + Web UI parity:
 
 ```sh
-aivyx memory list                    # every topic
-aivyx memory show <topic> [--limit N]
-aivyx memory search <query> [--limit N]
-aivyx memory evict <topic> [--yes]   # delete a whole topic
+aivyx-pa memory list                    # every topic
+aivyx-pa memory show <topic> [--limit N]
+aivyx-pa memory search <query> [--limit N]
+aivyx-pa memory evict <topic> [--yes]   # delete a whole topic
 ```
 
 The Web UI Memory tab gives the same: a topic list, per-topic
@@ -5002,7 +5002,7 @@ plumbing; one seam, every consumer benefits.
   topic-less methods (`gc_expired`, `list_topics`, the
   vector-only `semantic_search` paths).
 
-Enable it in `~/.config/aivyx/aivyx.toml`:
+Enable it in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [memory]
@@ -5046,7 +5046,7 @@ machine:
 base_url = "http://localhost:11434"   # local → on-device
 model = "nomic-embed-text"
 dimensions = 768
-# api_key resolves env (AIVYX_EMBEDDING_API_KEY) > this TOML
+# api_key resolves env (AIVYX_PA_EMBEDDING_API_KEY) > this TOML
 # key > the encrypted secrets store, same as the LLM keys.
 ```
 
@@ -5062,7 +5062,7 @@ vector index is still empty. You never get a hard error for
 asking for semantic; you get the best available answer.
 
 ```
-aivyx memory search "<query>" --semantic [--limit N]
+aivyx-pa memory search "<query>" --semantic [--limit N]
 ```
 
 The agent's `memory.search` tool gains a `mode` argument
@@ -5162,7 +5162,7 @@ in the conversation / Web UI as part of that turn), and the
 daemon log prints a one-line marker when recall fires:
 
 ```
-aivyx recall: injected 3 memories [project/notes, prefs]
+aivyx-pa recall: injected 3 memories [project/notes, prefs]
 ```
 
 The block is explicitly framed to the model as background
@@ -5263,7 +5263,7 @@ tokenizer dependency. Unicode `chars()`-counted, not
 bytes.
 
 **What the operator sees:** the existing recall
-breadcrumb (`aivyx recall: injected N memor[y|ies]`)
+breadcrumb (`aivyx-pa recall: injected N memor[y|ies]`)
 reflects the post-budget set, so observers match what
 was actually injected. The Phase 78 learning surface +
 the Phase 84 cluster stat + the Phase 77 recall_log all
@@ -5291,7 +5291,7 @@ The keyword search tool (Phase 74,
 `Memory::search`) handles these exact-match cases via
 case-insensitive substring matching, but operates as a
 **separate manual path** — the agent / operator drives
-`aivyx memory search`, not auto-recall.
+`aivyx-pa memory search`, not auto-recall.
 
 Phase 98 closes that gap with **Reciprocal Rank Fusion
 (RRF)**. With `[embedding].recall_hybrid = true`,
@@ -5374,7 +5374,7 @@ signal is coarse; across many turns it is reliable.
    **Pending** Persona proposal (e.g. "operator consistently
    benefits from recalled context about X — keep surfacing
    it"). You review and approve or reject it via the existing
-   `aivyx persona proposals` flow. **The loop never edits the
+   `aivyx-pa persona proposals` flow. **The loop never edits the
    Persona itself** — you remain the authority (the Phase 70
    P14 rule). The same deterministic proposal is filed once;
    it won't re-nag after a rejection.
@@ -5387,7 +5387,7 @@ present; otherwise it is a complete no-op (pre-Phase-77
 behavior). Each cycle prints a daemon-log breadcrumb:
 
 ```
-aivyx recall-feedback: schedule "nightly" — 12 entries scored, 4 promoted, 1 proposal(s) filed
+aivyx-pa recall-feedback: schedule "nightly" — 12 entries scored, 4 promoted, 1 proposal(s) filed
 ```
 
 ### LLM-judged recall usefulness (Phase 91)
@@ -5436,14 +5436,14 @@ production.
   the Q3a augment posture means even this weaker v1 judgment
   changes nothing it shouldn't.
 - **Operator-visible.** Each cycle prints a breadcrumb
-  (`aivyx recall-judgment: schedule "nightly" — judged 12
-  (used=7, irrelevant=4, hurt=1, skipped=0)`); `aivyx
+  (`aivyx-pa recall-judgment: schedule "nightly" — judged 12
+  (used=7, irrelevant=4, hurt=1, skipped=0)`); `aivyx-pa
   learning` + the Web UI Learning tab render a new
   "LLM-judged recall usefulness (last cycle, opt-in)" block
   showing per-classification counts + the `(topic, judgment)`
   pairs.
 
-Enable it in `~/.config/aivyx/aivyx.toml`:
+Enable it in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [recall_judgment]
@@ -5506,7 +5506,7 @@ self-improving loop end-to-end. **To turn it off:** set
 `correlate_detailed` returns to byte-identical pre-Phase-93
 behaviour.
 
-The `aivyx learning` surface flags the augment with a
+The `aivyx-pa learning` surface flags the augment with a
 `signal source: judgment-driven` banner under the recall
 count when the knob is on, so the operator can confirm at
 a glance that the loop is in the augmented mode they
@@ -5530,7 +5530,7 @@ Two layers ship:
 - **The correction ledger** — always on, zero-config (built
   alongside the recall log, like the Phase 82/83 ledgers). It
   only accumulates; it never changes behaviour on its own.
-  `aivyx learning` and the Web UI Learning tab render a
+  `aivyx-pa learning` and the Web UI Learning tab render a
   **"Most-reworked topics (accumulated)"** block so you can
   see what the agent is picking up.
 - **The correction-consolidation pass** — opt-in. When a
@@ -5542,7 +5542,7 @@ Two layers ship:
   edit-then-approve, or reject — the operator gate stays the
   sole authority (nothing is ever applied automatically).
 
-Enable the proposal pass in `~/.config/aivyx/aivyx.toml`:
+Enable the proposal pass in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [correction_consolidation]
@@ -5556,7 +5556,7 @@ Validation (only when `enabled = true`):
 `min_corrections` finite and `> 0.0`, `min_samples >= 1`,
 `max_proposals_per_cycle >= 1`. **To turn it off:** set
 `enabled = false` or delete the block — the ledger keeps
-accumulating passively (still visible in `aivyx learning`)
+accumulating passively (still visible in `aivyx-pa learning`)
 but no correction proposals are filed.
 
 By default the signal is structural, not semantic: "you came
@@ -5584,7 +5584,7 @@ on the recall log when the follow-up turn fired auto-recall; a
 follow-up with **no** recall has nothing to judge and falls
 back to the structural signal (counted). A parse/LLM failure
 also falls back — a transient outage never loses a signal.
-`aivyx learning` shows the last cycle's `rework / praise /
+`aivyx-pa learning` shows the last cycle's `rework / praise /
 unrelated / structural` counts.
 
 > **Privacy note.** Enabling this stores a truncated copy of
@@ -5613,7 +5613,7 @@ tools, keyed `tool:<scope_base>`, **driven by the outcome chain
 rather than the recall log** — so it catches the no-recall
 turns the topic attribution misses. The `tool:` keys are
 namespaced (they never collide with topic keys) and show up in
-`aivyx learning`'s accumulated corrections. Off → the ledger is
+`aivyx-pa learning`'s accumulated corrections. Off → the ledger is
 topic-only (byte-identical to Phase 172).
 
 ## Reminders (Phase 183)
@@ -5644,9 +5644,9 @@ Reminders are **Trusted-tier** — a SemiTrusted remote adapter
 can't set them (they push notifications). One-shot only;
 recurring reminders are the `[[schedule]]` cron surface.
 
-## Autonomous loop — the Aivyx Ralph loop (Phase 173)
+## Autonomous loop — the Aivyx PA Ralph loop (Phase 173)
 
-Aivyx's native answer to the "Ralph" technique
+Aivyx PA's native answer to the "Ralph" technique
 (snarktank/ralph): an autonomous, self-re-arming task loop.
 You stock a **backlog** of stories; the loop fires a
 **fresh-context agent turn per iteration**, each picking the
@@ -5657,7 +5657,7 @@ memory — not in a single long model context.
 
 The backlog is an **HMAC-chained substrate**
 (`KeyDomain::LoopBacklog`) — tamper-evident, capability-gated,
-and queryable via the `aivyx loop` CLI. The agent already has
+and queryable via the `aivyx-pa loop` CLI. The agent already has
 `git` + `shell` in the thirteen-tool core, so each iteration
 can commit and run gates; two new channel-tier tools
 (`loop.next` / `loop.complete`) let it walk the backlog.
@@ -5665,21 +5665,21 @@ can commit and run gates; two new channel-tier tools
 ### Stocking the backlog (works without arming a run)
 
 ```
-aivyx loop add "Add a --json flag to the report command" \
+aivyx-pa loop add "Add a --json flag to the report command" \
   --body "Acceptance: report --json emits valid JSON; tests pass." \
   --priority 50
-aivyx loop list
+aivyx-pa loop list
 ```
 
 Lower `--priority` numbers run first; ties break by insertion
 order. `--priority` defaults to `[loop].default_priority` (or
 `100`). The backlog is daemon-owned, so these commands need a
-running daemon (`aivyx daemon run`).
+running daemon (`aivyx-pa daemon run`).
 
 ### Arming + driving runs
 
 Runs are **opt-in** and fully autonomous once started. Arm the
-driver in `~/.config/aivyx/aivyx.toml`:
+driver in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [loop]
@@ -5703,17 +5703,17 @@ max_run_tokens = 2000000     # optional — stop the run past this many tokens
 Then, with the daemon running:
 
 ```
-aivyx loop start                      # run to backlog-done or a cap
-aivyx loop start --max-iterations 5   # lower the iteration cap for this run
-aivyx loop status                     # driver state, gate + cap config, live tokens used
-aivyx loop stop                       # end the run after the current iteration
-aivyx loop log [--limit N]            # the cross-iteration progress notes
-aivyx loop skip <story-id>            # prune a stuck / unwanted backlog story
+aivyx-pa loop start                      # run to backlog-done or a cap
+aivyx-pa loop start --max-iterations 5   # lower the iteration cap for this run
+aivyx-pa loop status                     # driver state, gate + cap config, live tokens used
+aivyx-pa loop stop                       # end the run after the current iteration
+aivyx-pa loop log [--limit N]            # the cross-iteration progress notes
+aivyx-pa loop skip <story-id>            # prune a stuck / unwanted backlog story
 ```
 
-`aivyx loop status` shows `tokens used: N / cap` once a run has
+`aivyx-pa loop status` shows `tokens used: N / cap` once a run has
 had an iteration, so you can watch spend approach the
-`max_run_tokens` budget live. `aivyx loop skip <id>` marks a
+`max_run_tokens` budget live. `aivyx-pa loop skip <id>` marks a
 `Pending` story `Skipped` (it stays in the append-only backlog
 chain as a skip, so the audit trail is preserved). The agent
 records progress notes with `loop.note`; an exact repeat of the
@@ -5722,19 +5722,19 @@ stays clean.
 
 A run stops on exactly one condition: the backlog drains,
 `max_iterations` is reached, the `max_run_secs` wall-clock cap
-is reached, a **gate run goes red**, or you `aivyx loop stop`.
+is reached, a **gate run goes red**, or you `aivyx-pa loop stop`.
 Every iteration is a `TriggerSource::Loop` turn in the audit
 chain.
 
 Validation (only when `enabled = true`): `max_iterations >= 1`,
 and `gate_timeout_secs >= 1` when a `gate_command` is set.
-`aivyx loop start` requires the section armed and a restart
+`aivyx-pa loop start` requires the section armed and a restart
 after enabling.
 
 ### Safety posture (read this before your first run)
 
 The loop **writes code and commits** each iteration — the
-highest-trust-stakes action Aivyx takes. The guardrails:
+highest-trust-stakes action Aivyx PA takes. The guardrails:
 
 - **Driver-side gate verification (Phase 174).** When
   `gate_command` is set, the driver runs it **before the first
@@ -5782,7 +5782,7 @@ the notes are *always* in context.
 Notes are durable (they live in the memory substrate under the
 reserved `loop:progress` topic) and persist across runs, so
 knowledge about your codebase accumulates over time. Inspect
-them any time with `aivyx loop log`. Set
+them any time with `aivyx-pa loop log`. Set
 `progress_inject_count = 0` to disable injection.
 
 With the cap trio complete (iterations + wall-clock + tokens),
@@ -5794,11 +5794,11 @@ direction), a real **cost model**, and a **Web UI loop pane**.
 
 ## Tool observability (Phase 102)
 
-`aivyx tools` is the read-only window onto the tool layer —
-the sibling of `aivyx learning`:
+`aivyx-pa tools` is the read-only window onto the tool layer —
+the sibling of `aivyx-pa learning`:
 
 ```
-aivyx tools [--window <secs>]
+aivyx-pa tools [--window <secs>]
 ```
 
 It lists every registered tool and annotates each with
@@ -5809,9 +5809,9 @@ recent slice; without it the whole audit chain is summed. A
 tool that has never been called still appears — a
 registered-but-unused tool is itself a signal — and a row
 marked `[unregistered]` is a capability base with call
-history but no currently registered tool. Like `aivyx
-memory` and `aivyx learning`, it is daemon-backed: it needs
-a running daemon (`aivyx daemon run`).
+history but no currently registered tool. Like `aivyx-pa
+memory` and `aivyx-pa learning`, it is daemon-backed: it needs
+a running daemon (`aivyx-pa daemon run`).
 
 ## Learning insights (Phase 78)
 
@@ -5821,7 +5821,7 @@ you can't trust. There's a read-only view of *what the
 assistant has learned and why*, with full CLI + Web UI parity:
 
 ```
-aivyx learning [--window <secs>]
+aivyx-pa learning [--window <secs>]
 ```
 
 and a **Learning** tab in the Web UI. Both show the same two
@@ -5842,7 +5842,7 @@ things:
   since you approve/reject those proposals.
 
 It is **read-only**: approve/reject still happens through
-`aivyx persona proposals` / the Proposals pane. Nothing here
+`aivyx-pa persona proposals` / the Proposals pane. Nothing here
 is configurable and nothing is persisted for it — the view is
 computed on demand from the live recall log, so it always
 matches what the loop actually did. The horizon is bounded by
@@ -5851,7 +5851,7 @@ no recall yet, it simply reports an empty digest (a valid
 "nothing learned yet", not an error).
 
 ```
-aivyx learning --window 604800   # last 7 days
+aivyx-pa learning --window 604800   # last 7 days
 ```
 
 ## Adaptive Persona (Phase 79)
@@ -5884,8 +5884,8 @@ is nothing to configure (a `[persona]` tuning block is a
 deferred follow-up).
 
 **Where to see it.** Each turn the daemon log prints
-`aivyx persona: injected N/M facets`, and the same
-selected/total appears in the `aivyx learning` view and the
+`aivyx-pa persona: injected N/M facets`, and the same
+selected/total appears in the `aivyx-pa learning` view and the
 Web UI **Learning** tab ("Adaptive Persona: N/M facets
 injected last turn") — the Phase 78 trust surface, extended:
 an adaptive Soul stays legible.
@@ -5926,7 +5926,7 @@ hard-capped, and fully explainable**:
   store; the same item is never surfaced twice across cycles.
   Rows GC on the reflection cadence (~30-day retain).
 
-**Configure it** in `~/.config/aivyx/aivyx.toml`:
+**Configure it** in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [proactive]
@@ -5949,10 +5949,10 @@ the `[proactive]` block.
 **Where it's recorded.** Every send lands in the notify
 history (the existing `AutoNotifyDispatched` audit event, same
 as any auto-notify). The daemon log prints a per-cycle
-breadcrumb `aivyx proactive: schedule … — surfaced N
+breadcrumb `aivyx-pa proactive: schedule … — surfaced N
 (deduped D, capped C)`, and the last cycle's outcome — items,
 their `reason` provenance, dedup/cap counts — appears in the
-`aivyx learning` view and the Web UI **Learning** tab
+`aivyx-pa learning` view and the Web UI **Learning** tab
 ("proactive: N surfaced last cycle"), the Phase 78 trust
 surface extended once more.
 
@@ -5978,8 +5978,8 @@ default, propose-only, core-protected, and fully reversible**:
   `[embedding]` provider (consolidation embeds facets).
 - **Propose-only — the loop never edits identity.** Every
   action is filed as a normal *Pending* `PersonaProposal` you
-  approve or reject in `aivyx persona` / the Web UI. Nothing
-  changes the Soul until you say so, and `aivyx persona
+  approve or reject in `aivyx-pa persona` / the Web UI. Nothing
+  changes the Soul until you say so, and `aivyx-pa persona
   revert` undoes any approved action (it is a plain
   `RemoveList` delta on the chain).
 - **The always-on core is structurally untouchable.** Only
@@ -6003,7 +6003,7 @@ default, propose-only, core-protected, and fully reversible**:
   already filed (in any status, including a prior *Rejected*)
   is never re-proposed.
 
-**Configure it** in `~/.config/aivyx/aivyx.toml`:
+**Configure it** in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [persona_lifecycle]
@@ -6024,11 +6024,11 @@ one signal class on. **To turn it off:** set
 `enabled = false` or delete the `[persona_lifecycle]` block.
 
 **Where to see it.** The daemon log prints
-`aivyx persona-lifecycle: schedule … — proposed N
+`aivyx-pa persona-lifecycle: schedule … — proposed N
 (deduped D)`, and the last cycle's proposed actions + their
-`reason` provenance appear in the `aivyx learning` view and
+`reason` provenance appear in the `aivyx-pa learning` view and
 the Web UI **Learning** tab ("persona lifecycle: N proposed
-last cycle"). Filed proposals show up in `aivyx persona`
+last cycle"). Filed proposals show up in `aivyx-pa persona`
 exactly like reflection-driven ones — the Phase 78 trust
 surface extended once more.
 
@@ -6078,7 +6078,7 @@ Validation (only when enabled and `signal_decay` is on):
 ever helpfulness-decayed when its `recall-fb` topic has
 genuinely, sustainedly hurt. Decay proposals cite the
 evidence (e.g. *"topic 'deploy' net -8.2 over 14 windows
-(sustained low helpfulness)"*) in the same `aivyx persona` /
+(sustained low helpfulness)"*) in the same `aivyx-pa persona` /
 Phase 78 surface.
 
 ### Pattern-driven decay (Phase 88)
@@ -6141,7 +6141,7 @@ to add explicit hysteresis (e.g. propose at affinity ≥ 1.0,
 decay only at affinity < 0.5). Decay proposals cite the
 pair + the decayed affinity ("co-occurrence pair `deploy` +
 `rollback` decayed affinity 0.30 (below floor 1.00);
-relationship no longer durable") in the same `aivyx persona`
+relationship no longer durable") in the same `aivyx-pa persona`
 / Phase 78 surface.
 
 ## Persistent helpfulness ledger (Phase 82)
@@ -6180,13 +6180,13 @@ and spans sessions, so the assistant can show you what has
   is a deferred follow-up, exactly as the recall-log's 30-day
   retention is fixed).
 
-**Where to see it.** Run `aivyx learning [--window <secs>]` or
+**Where to see it.** Run `aivyx-pa learning [--window <secs>]` or
 open the Web UI **Learning** tab: alongside the existing
 *windowed* "Most/Least helpful topics" there is now an
 **"Accumulated helpfulness (all-time, decayed)"** block — each
 topic with its signed decayed score and a sample count (your
 confidence proxy: one cycle is not a trend). The daemon log
-prints `aivyx helpfulness-ledger: folded N topic(s), pruned M`
+prints `aivyx-pa helpfulness-ledger: folded N topic(s), pruned M`
 each cycle. Nothing to configure.
 
 ## Cross-session pattern learning (Phase 83)
@@ -6223,11 +6223,11 @@ structure a personal assistant should internalize.
   ledger self-prunes (decayed-to-zero **and** ~90 days
   untouched → dropped), so storage tracks the live signal.
 
-**Where to see it.** `aivyx learning` and the Web UI
+**Where to see it.** `aivyx-pa learning` and the Web UI
 **Learning** tab now show a **"Topics that consistently help
 together"** block — each pair with its signed decayed score
 and a sample count. The daemon log prints
-`aivyx cooccurrence: folded N pair(s), pruned M` each cycle.
+`aivyx-pa cooccurrence: folded N pair(s), pruned M` each cycle.
 Nothing to configure.
 
 ## Cluster-aware co-recall (Phase 84)
@@ -6266,7 +6266,7 @@ budget-neutral, and self-policing**:
   helpfulness signal, so a bad expansion organically lands in
   worse turns and the affinity that drove it decays away.
 
-**Configure it** in `~/.config/aivyx/aivyx.toml`:
+**Configure it** in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [recall_cluster]
@@ -6280,8 +6280,8 @@ Validation (only when `enabled = true`): `max_siblings >= 1`,
 `enabled = false` or delete the `[recall_cluster]` block.
 
 **Where to see it.** The daemon log prints
-`aivyx recall-cluster: injected N affined sibling(s)` on turns
-that expand, and `aivyx learning` / the Web UI **Learning**
+`aivyx-pa recall-cluster: injected N affined sibling(s)` on turns
+that expand, and `aivyx-pa learning` / the Web UI **Learning**
 tab show a **"Cluster co-recall (last turn)"** block — the
 injected count and each `driver → sibling` pair.
 
@@ -6330,7 +6330,7 @@ sibling injection) is unchanged.
   Persona-selection floors; a stale window never injects a
   weakly-related memory or facet.
 
-**Configure it** in `~/.config/aivyx/aivyx.toml`:
+**Configure it** in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [embedding]
@@ -6393,7 +6393,7 @@ proposals; the resolution path is unchanged.
   are bounded by `max_proposals_per_cycle` (default `3`) so
   the review queue can never flood.
 
-**Configure it** in `~/.config/aivyx/aivyx.toml`:
+**Configure it** in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [persona_consolidation]
@@ -6413,13 +6413,13 @@ block — the Persona proposal pipeline is byte-identical to
 pre-Phase-87.
 
 **Where to see it.** The daemon log prints
-`aivyx persona-consolidation: schedule "X" — filed N` on
+`aivyx-pa persona-consolidation: schedule "X" — filed N` on
 cycles that fire (with `(LLM unavailable)` appended when the
-LLM is unreachable). `aivyx learning` / the Web UI
+LLM is unreachable). `aivyx-pa learning` / the Web UI
 **Learning** tab show a **"Pattern-driven Persona proposals
 (last cycle, opt-in)"** block with the filed pair list, or
 the engaged-but-quiet / LLM-down / off cases. The proposals
-themselves appear in `aivyx persona proposals` + the
+themselves appear in `aivyx-pa persona proposals` + the
 **Proposals** pane exactly like reflection-driven and
 lifecycle proposals — each one with provenance citing the
 specific co-occurrence pair (`co-occurrence pair X + Y —
@@ -6471,7 +6471,7 @@ presents them as a single supersession decision.
   → skip that supersession this cycle (the facet stays via
   the standard Phase 87/88 flow on a future cycle).
 
-Enable it in `~/.config/aivyx/aivyx.toml`:
+Enable it in `~/.config/aivyx-pa/aivyx-pa.toml`:
 
 ```toml
 [persona_consolidation]
@@ -6482,7 +6482,7 @@ enable_supersession = true   # optional, default false
 
 **What you'll see.** Each supersession produces TWO chain
 entries (counted as `filed = 2` on the surface; the
-`superseded` counter on `aivyx learning` shows the
+`superseded` counter on `aivyx-pa learning` shows the
 supersession event count). The `RemoveList` half's `reason`
 cites the new proposal as the replacement; the
 `AppendList` half's `reason` cites the old proposal as the
@@ -6495,7 +6495,7 @@ Phase 94 closes the first Phase 92 deferral: the CLI and the
 Web UI Persona-pane both render linked supersession pairs
 as a single grouped unit instead of two unrelated rows.
 
-- **CLI (`aivyx persona proposals`).** Linked pairs render
+- **CLI (`aivyx-pa persona proposals`).** Linked pairs render
   with a `└─ supersedes:` indicator under the
   `AppendList`-side row and a `└─ superseded by:`
   indicator under the `RemoveList`-side row. The
@@ -6534,7 +6534,7 @@ standalone rendering.
 Phase 70 closes the self-learning half of **P14 Persona**: the
 agent observes its own behavior, proposes Persona deltas, and
 the operator reviews them asynchronously in a dedicated Web
-UI Proposals pane or `aivyx persona proposals` CLI subcommand.
+UI Proposals pane or `aivyx-pa persona proposals` CLI subcommand.
 
 **What's running by default after install:** nothing
 auto-reflects. Reflection happens when the agent calls
@@ -6548,11 +6548,11 @@ proposal store and surface in the operator review pane.
 
 ```sh
 # Terminal:
-aivyx persona proposals list                       # status: pending (default)
-aivyx persona proposals list --status approved
-aivyx persona proposals show <proposal_id>
-aivyx persona proposals approve <proposal_id>
-aivyx persona proposals reject <proposal_id> --reason "too aggressive"
+aivyx-pa persona proposals list                       # status: pending (default)
+aivyx-pa persona proposals list --status approved
+aivyx-pa persona proposals show <proposal_id>
+aivyx-pa persona proposals approve <proposal_id>
+aivyx-pa persona proposals reject <proposal_id> --reason "too aggressive"
 ```
 
 Or open the Web UI at `http://127.0.0.1:7843/` (when enabled)
@@ -6577,7 +6577,7 @@ operator the moment a proposal lands.
 
 **Cron-fired auto-reflection (Phase 71)** runs on the
 configured cron. Declare one or more `[[reflection_schedule]]`
-blocks in `aivyx.toml`:
+blocks in `aivyx-pa.toml`:
 
 ```toml
 [[reflection_schedule]]
@@ -6639,8 +6639,8 @@ when `skip_when_idle = true` (zero would skip every cycle
 unconditionally; the loader rejects this at config time).
 
 **What you'll see.** Each skipped cycle logs
-`aivyx reflection: schedule "X" — skipped (audit-growth K
-below threshold M)`. The `aivyx learning` surface adds a
+`aivyx-pa reflection: schedule "X" — skipped (audit-growth K
+below threshold M)`. The `aivyx-pa learning` surface adds a
 **Reflection cadence (Phase 95)** block with one line per
 schedule that's made cadence decisions:
 
@@ -6658,17 +6658,17 @@ from the block to avoid noise.
 ```sh
 # If you installed it as a service (Chapter Anchor), remove that first —
 # stops + disables the unit and deletes its secret env file.
-aivyx daemon uninstall 2>/dev/null
+aivyx-pa daemon uninstall 2>/dev/null
 
 # Remove the binary
-rm "$(command -v aivyx)"
+rm "$(command -v aivyx-pa)"
 
 # Stop and remove the daemon socket/PID (if a daemon is still around)
-aivyx daemon stop 2>/dev/null
-rm -f /run/user/$UID/aivyx.sock /run/user/$UID/aivyx.pid
+aivyx-pa daemon stop 2>/dev/null
+rm -f /run/user/$UID/aivyx-pa.sock /run/user/$UID/aivyx-pa.pid
 
 # Remove the encrypted store and config (DESTROYS YOUR DATA)
-rm -f ./aivyx.toml /tmp/aivyx-store.redb
+rm -f ./aivyx-pa.toml /tmp/aivyx-pa-store.redb
 # Adjust paths to match your config's [storage] path.
 ```
 
