@@ -1,8 +1,8 @@
-# Aivyx Product — Phase 12.5 Review
+# Aivyx PA Product — Phase 12.5 Review
 
 Drafted 2026-04-15 during the post-Phase-12 product-shape review pass.
 This document is the **product analogue of [`DESIGN.md`](DESIGN.md)**: the
-locked decisions about *what Aivyx is for and what it is not* that every
+locked decisions about *what Aivyx PA is for and what it is not* that every
 subsequent phase must respect. `DESIGN.md` answers "how does the agent
 work" — `PRODUCT.md` answers "who is the agent for, what does it
 commit to do, and where is the line."
@@ -24,7 +24,7 @@ working-session transcript.
 
 ## The one-line pitch (LOCKED 2026-04-15, amended 2026-05-12)
 
-> **Aivyx is a self-learning, self-improving AI-personal assistant
+> **Aivyx PA is a self-learning, self-improving AI-personal assistant
 > with a user-defined Profile and Persona, running on your hardware,
 > talking to cloud or local LLMs under your own credentials, and
 > never compromising privacy or auditability for the sake of a feature.**
@@ -47,14 +47,14 @@ required to surface the drift as an amendment, not absorb it silently.
 
 ### The Rule
 
-> **One human operator per Aivyx instance. One primary agent the
+> **One human operator per Aivyx PA instance. One primary agent the
 > operator interacts with. Sub-agents exist as a mode the primary
 > agent switches into mid-session — not as separate processes, not as
 > parallel sessions, not as independent tool registries.**
 
 ### What this commits us to
 
-1. **No multi-tenancy. Ever.** A second human is a second Aivyx
+1. **No multi-tenancy. Ever.** A second human is a second Aivyx PA
    instance on a different machine (or under a different OS user
    on the same machine). There is no "shared" mode, no "team"
    mode, no tenancy primitive at any layer.
@@ -100,7 +100,7 @@ required to surface the drift as an amendment, not absorb it silently.
 
 ### The Rule
 
-> **Every Aivyx session is operator-inspectable in real time and
+> **Every Aivyx PA session is operator-inspectable in real time and
 > after the fact. Sessions complete in one of two shapes: a
 > bounded task with a clear start and end, or an open-ended
 > mission with operator-approval gates at decision points.**
@@ -118,7 +118,7 @@ required to surface the drift as an amendment, not absorb it silently.
 2. **Bounded tasks are the default shape.** A session begins
    when the operator initiates an interaction, runs through one
    or more turn-loop iterations, and ends when the goal is
-   satisfied or abandoned. This is the shape Aivyx ships today
+   satisfied or abandoned. This is the shape Aivyx PA ships today
    and the shape every channel adapter understands.
 
 3. **Open-ended missions are a forward commitment.** A mission
@@ -157,7 +157,7 @@ required to surface the drift as an amendment, not absorb it silently.
 
 ## Product Commitment 3 — Goals and Non-Goals of the Platform (LOCKED 2026-04-15)
 
-The product contract takes an explicit position on what Aivyx is
+The product contract takes an explicit position on what Aivyx PA is
 trying to become and what it explicitly refuses to become. Each
 goal below is a positive commitment that constrains future-phase
 work toward a target shape; each non-goal is a constraint that
@@ -166,18 +166,18 @@ prevents drift away from the target.
 ### Goals
 
 - **G1 — Web interaction.** `web.fetch` is the floor. Future
-  phases extend Aivyx to richer web interaction (page rendering,
+  phases extend Aivyx PA to richer web interaction (page rendering,
   form submission, structured scraping) **gated by role
   allowlists**. A `researcher` role may have a rich web surface;
   a `coder` role may have raw HTTP only. The goal is not "a web
   agent," it is "an agent the operator can configure to interact
   with the web within a role-defined envelope."
 
-- **G2 — Code interaction.** Aivyx is a coding agent in addition
+- **G2 — Code interaction.** Aivyx PA is a coding agent in addition
   to being other things. Full CRUD on files via `fs.read` /
   `fs.write`, shell execution via `shell.exec`, and a future
   TUI-level code-editing surface that the agent uses *as a tool*.
-  Aivyx does not become an IDE — it interacts with code through
+  Aivyx PA does not become an IDE — it interacts with code through
   the same tool family that interacts with everything else.
 
 - **G3 — Memory Reflection (outcome-driven self-improvement).**
@@ -203,18 +203,18 @@ prevents drift away from the target.
   and audited against the operator's capability ceiling.
 
 - **G6 — Local execution, cloud inference, privacy non-negotiable.**
-  Aivyx runs on the operator's hardware. Inference may go to
+  Aivyx PA runs on the operator's hardware. Inference may go to
   cloud LLM providers (Anthropic today; others as the
   `LlmProvider` trait grows). Storage is encrypted at rest with
   an operator-controlled passphrase. Network egress is gated by
   capability scopes. **Privacy and encryption are never
   compromised in the name of a feature** — this is the single
-  property that uniquely positions Aivyx, and the one a future
+  property that uniquely positions Aivyx PA, and the one a future
   phase is most likely to be tempted to compromise on. Don't.
 
 - **G7 — Third-party tool SDK.** Tools follow a documented
   contract any third party can implement to add new capabilities
-  to Aivyx. The SDK contract guarantees policy integration:
+  to Aivyx PA. The SDK contract guarantees policy integration:
   capability scopes, audit logging, cancellation, role
   allowlists, input schema enforcement. The SDK shape is pinned
   in **P11**; the distribution model is pinned in **P12**.
@@ -226,13 +226,13 @@ prevents drift away from the target.
 
 - **N1 — No multi-tenancy or shared instances.** Per **P1**.
 
-- **N2 — No hosted-service shape.** Aivyx is not a SaaS, has no
+- **N2 — No hosted-service shape.** Aivyx PA is not a SaaS, has no
   hosted control plane, has no Aivyx-the-company server in the
   loop. The operator runs the daemon on their own hardware
   under their own OS user, period. Per **P6** and **G6**.
 
 - **N3 — No marketplace dynamics.** Third-party tools are
-  possible per **G7**, but Aivyx core does not host a registry,
+  possible per **G7**, but Aivyx PA core does not host a registry,
   curate a directory, run a rating system, or distribute
   third-party tools. Operators install third-party tools the
   way they install any other software — explicitly, knowing
@@ -240,7 +240,7 @@ prevents drift away from the target.
   third-party `git-*` subcommands, not Chrome's relationship
   with the Web Store.
 
-- **N4 — Not an IDE.** Per **G2**: Aivyx interacts with code
+- **N4 — Not an IDE.** Per **G2**: Aivyx PA interacts with code
   via tools. It does not ship LSP integration, syntax
   highlighting beyond what the renderer already does,
   project-awareness beyond what the filesystem gives it, or
@@ -273,7 +273,7 @@ the corresponding phase work is enumerated in
 
 ### The Rule
 
-> **Aivyx runs as a long-running daemon process under the
+> **Aivyx PA runs as a long-running daemon process under the
 > operator's OS user. The user-facing CLI commands are frontends
 > that connect to the daemon. If no daemon is running when a
 > frontend launches, the frontend auto-spawns one and detaches
@@ -304,7 +304,7 @@ the corresponding phase work is enumerated in
 
 4. **IPC authentication is OS-level.** The daemon's IPC socket
    is owned by the operator's OS user with mode 0600. There is
-   no Aivyx-level password, token, or auth handshake on the
+   no Aivyx PA-level password, token, or auth handshake on the
    IPC. Anyone who can read the socket file is by definition
    the operator. Per **P6**.
 
@@ -346,7 +346,7 @@ one or more dedicated phases.
 
 ### The Rule
 
-> **Aivyx commits to a documented channel adapter SDK. First-party
+> **Aivyx PA commits to a documented channel adapter SDK. First-party
 > channels are whichever ones are worth shipping in core; the
 > contract pins the shape, not the count. Third parties can also
 > implement the adapter contract.**
@@ -398,15 +398,15 @@ one or more dedicated phases.
 ### The Rule
 
 > **The operator is the OS user who owns the daemon process and
-> the redb store. There is no Aivyx-level identity primitive,
-> no Aivyx-level authentication, no Aivyx-level account.**
+> the redb store. There is no Aivyx PA-level identity primitive,
+> no Aivyx PA-level authentication, no Aivyx PA-level account.**
 
 ### What this commits us to
 
 1. **Identity equals OS user, period.** The operator's
-   "identity" is whatever `id -u` returns. Aivyx does not
+   "identity" is whatever `id -u` returns. Aivyx PA does not
    maintain its own user table, does not issue tokens, does
-   not sign audit entries with an Aivyx-internal key. Audit
+   not sign audit entries with an Aivyx PA-internal key. Audit
    chains attribute work to "the OS user the daemon ran
    under," and that's the identity the contract commits to.
 
@@ -425,22 +425,22 @@ one or more dedicated phases.
    shared identity, no impersonation.
 
 4. **A leaked passphrase is rotated against the redb store
-   alone.** Because Aivyx has no separate identity primitive,
+   alone.** Because Aivyx PA has no separate identity primitive,
    compromising the passphrase compromises the storage, but
-   it does not require revoking an "Aivyx account" or
+   it does not require revoking an "Aivyx PA account" or
    re-issuing certificates. Rotation is a passphrase change
    on the redb store, full stop.
 
 ### What this commitment deliberately does not say
 
-- **It does not say the operator cannot use Aivyx remotely.**
+- **It does not say the operator cannot use Aivyx PA remotely.**
   Remote use means SSH'ing into the box and talking to the
   local daemon — exactly the way `tmux`, `mosh`, and other
-  long-lived per-user daemons work. Aivyx itself never grows
+  long-lived per-user daemons work. Aivyx PA itself never grows
   a network-listening surface; the network surface is `sshd`,
-  which is not Aivyx's concern.
+  which is not Aivyx PA's concern.
 - **It does not say multi-device sync is impossible.** A
-  future feature may sync Aivyx state between two machines
+  future feature may sync Aivyx PA state between two machines
   the same operator owns, but that sync is a peer-to-peer
   shape between two operator-owned daemons under one OS
   identity per box, not a cloud-side identity primitive.
@@ -488,7 +488,7 @@ one or more dedicated phases.
    child role's declaration cannot exceed the parent's, so the
    sub-agent cannot escalate.
 
-4. **Aivyx core ships zero default roles.** The `default` role
+4. **Aivyx PA core ships zero default roles.** The `default` role
    is implicit (synthesized at config load time if absent). The
    `coder` and `researcher` test fixtures from Phase 11 stay as
    test fixtures only — operators write their own role tree.
@@ -505,7 +505,7 @@ one or more dedicated phases.
 ### What this commitment deliberately does not say
 
 - **It does not say the role tree is small.** A complex
-  Aivyx deployment may have a deep tree of roles for
+  Aivyx PA deployment may have a deep tree of roles for
   different sub-tasks, missions, and contexts. The contract
   does not constrain depth or width.
 - **It does not say roles are immutable at runtime.** Per **P8**'s
@@ -585,9 +585,9 @@ one or more dedicated phases.
 
 ### Why this commitment is the most differentiating
 
-This is the single property that distinguishes Aivyx from
+This is the single property that distinguishes Aivyx PA from
 "Claude with a memory store" and from "AutoGPT with
-self-improvement." Aivyx commits to outcome-driven evolution
+self-improvement." Aivyx PA commits to outcome-driven evolution
 **and** to keeping every step of that evolution legible to
 the operator. The reflection layer phase is expected to be
 one of the most consequential in the platform's lifetime,
@@ -670,7 +670,7 @@ future implementation from compromising it for ergonomics.
 
 ### The Rule
 
-> **Aivyx core ships exactly fifteen first-party tools forever:
+> **Aivyx PA core ships exactly fifteen first-party tools forever:
 > `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`,
 > `memory.read`, `memory.write`, `memory.forget`,
 > `shell.exec`, `web.fetch`, `web.post`, `web.extract`,
@@ -697,7 +697,7 @@ future implementation from compromising it for ergonomics.
 ### What this commits us to
 
 1. **The substrate is the operator-discoverable surface.** An
-   operator who runs Aivyx for the first time finds these
+   operator who runs Aivyx PA for the first time finds these
    fifteen tools available (subject to role allowlists and
    trust tiers). Every richer capability — browser, LSP, code
    search, email, calendar, anything domain-specific — is a
@@ -718,21 +718,21 @@ future implementation from compromising it for ergonomics.
    rather than third-party. The default answer is "third
    party," and the burden of proof is on the addition.
 
-3. **The substrate principle is "what every Aivyx instance
+3. **The substrate principle is "what every Aivyx PA instance
    needs to bootstrap."** A tool belongs in core if and only
-   if Aivyx without it cannot perform basic operator-useful
+   if Aivyx PA without it cannot perform basic operator-useful
    work. `fs.*` and `memory.*` and `shell.exec` and
    `web.fetch`, and `web.post` together cover "read, write,
    delete, inspect, remember, execute, fetch, post" — the
    minimal set for an agent that does anything
    useful. Anything richer is curated by the operator's role
-   declarations and tool installations, not by Aivyx core.
+   declarations and tool installations, not by Aivyx PA core.
 
 ### Substrate vs. Infrastructure vs. Third-Party — the three-tier taxonomy
 
 The ten-tools-forever rule applies only to *substrate
 tools* — the operator-facing primitives an operator chooses
-when configuring a role. Aivyx is permitted (and expected)
+when configuring a role. Aivyx PA is permitted (and expected)
 to grow two adjacent tool categories that are **not**
 substrate and therefore **not** counted against the cap:
 
@@ -804,7 +804,7 @@ tools into core.
    author writes a tool against the documented `Tool` trait
    (and its supporting types: `ToolContext`, `ToolOutcome`,
    `Scope`, `JsonSchema`), declares a `required_scope`, and
-   gets *all* of Aivyx's safety properties as guarantees,
+   gets *all* of Aivyx PA's safety properties as guarantees,
    not as opt-ins. The author cannot accidentally skip
    audit logging, cannot accidentally bypass the capability
    check, cannot accidentally evade cancellation. The SDK
@@ -837,7 +837,7 @@ tools into core.
 ### What this commitment deliberately does not say
 
 - **It does not say what language the SDK is in.** Today the
-  SDK is Rust because Aivyx is Rust. The IPC protocol from
+  SDK is Rust because Aivyx PA is Rust. The IPC protocol from
   **P12** opens the door to non-Rust tools speaking the same
   contract; the language-independent surface becomes part
   of the SDK contract once **P12**'s IPC protocol lands.
@@ -856,7 +856,7 @@ tools into core.
 ### The Rule
 
 > **Third-party tools run as their own OS processes, communicate
-> with the Aivyx daemon over IPC, and are registered at daemon
+> with the Aivyx PA daemon over IPC, and are registered at daemon
 > startup. First-party substrate tools are a special case: they
 > ship in-process for performance, but they speak the same
 > protocol third-party tools speak.**
@@ -864,7 +864,7 @@ tools into core.
 ### What this commits us to
 
 1. **Process isolation is the security boundary.** A
-   misbehaving third-party tool cannot crash the Aivyx
+   misbehaving third-party tool cannot crash the Aivyx PA
    daemon, cannot read the daemon's memory, cannot exfiltrate
    the redb passphrase from process address space, cannot
    tamper with audit entries that haven't yet reached disk.
@@ -886,7 +886,7 @@ tools into core.
    tools speak a documented IPC protocol rather than a Rust
    trait, third-party tools may be written in any language
    that can speak the protocol. A Python data scientist can
-   write an Aivyx tool without learning Rust. The IPC
+   write an Aivyx PA tool without learning Rust. The IPC
    protocol becomes the language-independent dimension of
    the SDK from **P11**.
 
@@ -906,7 +906,7 @@ tools into core.
    from a config field, or via a discovery protocol),
    verifies their SDK contract version, and registers
    them into the tool catalog. Operators can add or
-   remove tools without rebuilding Aivyx.
+   remove tools without rebuilding Aivyx PA.
 
 ### What this commitment deliberately does not say
 
@@ -934,7 +934,7 @@ tools into core.
 
 ### The Rule
 
-> **Every Aivyx instance carries an operator-declared
+> **Every Aivyx PA instance carries an operator-declared
 > Profile that pins who this assistant is for and how it
 > communicates. Profile is loaded once per daemon lifetime
 > and injects into every turn's system prompt regardless of
@@ -953,7 +953,7 @@ tools into core.
 2. **Profile is single-instance per operator.** Per **P6**
    (OS-Level Operator Identity) and **P1** (Single Operator,
    Single Primary Agent), there is exactly one Profile per
-   Aivyx daemon. There is no "switch profile" gesture
+   Aivyx PA daemon. There is no "switch profile" gesture
    parallel to "switch role."
 
 3. **Profile is operator-declared at install/init time and
@@ -1088,7 +1088,7 @@ tools into core.
 
 5. **Persona is single-instance per operator.** Per **P1**
    and **P6**, there is exactly one Persona delta log per
-   Aivyx daemon, parallel to the single Profile.
+   Aivyx PA daemon, parallel to the single Profile.
 
 6. **Persona writes are capability-secured.** The agent
    needs an explicit capability (e.g., `persona.propose`,
@@ -1111,7 +1111,7 @@ tools into core.
   context, character traits, relationship milestones, or
   other categories.
 - **It does not say reflection *must* propose Persona
-  deltas.** An operator may run Aivyx for years with an
+  deltas.** An operator may run Aivyx PA for years with an
   empty delta log.
 - **It does not pin the storage backend.** Whether the log
   lives in a new `KeyDomain::Persona`, shares the audit
@@ -1130,7 +1130,7 @@ tools into core.
 
 ### Why this is the most differentiating commitment after P8
 
-**P8** already commits Aivyx to outcome-driven audited
+**P8** already commits Aivyx PA to outcome-driven audited
 self-improvement at the *behavior* level (memory, role
 overrides). **P14** extends that posture to the *identity*
 level: the assistant's *voice* itself can evolve, but every
@@ -1192,7 +1192,7 @@ The pass ran in three stages:
    binary entry surface, the channel adapters, the role
    primitive and capability ceilings, the seven shipped tools,
    and the audit chain. The walk produced a factual,
-   non-prescriptive inventory of "what Aivyx looks like from
+   non-prescriptive inventory of "what Aivyx PA looks like from
    outside today."
 
 2. **Stage 2 — Question pinning.** From the inventory, twelve
@@ -1216,7 +1216,7 @@ The pass ran in three stages:
 ### The four clusters
 
 - **Cluster 1 — Identity & intent (P1, P2, P3).** Who runs
-  Aivyx, what counts as success, what is in scope and what
+  Aivyx PA, what counts as success, what is in scope and what
   is explicitly out. The single most reframing cluster: the
   pinned answers expanded the product vision substantially
   beyond what the foundation today implements, taking the
@@ -1383,7 +1383,7 @@ take effect on the next turn without daemon restart.
 
 - **P6 — OS-Level Operator Identity.** Always true by
   construction. The daemon's IPC socket is mode `0600`, owned
-  by the operator's effective UID. No Aivyx-level identity.
+  by the operator's effective UID. No Aivyx PA-level identity.
 
 - **P7 — Single-Inheritance Role Tree.** Phase 11 (role
   primitive) + Phase 13 (config migration). `parent_role` in
@@ -1477,7 +1477,7 @@ take effect on the next turn without daemon restart.
   `communication_style`, `primary_use_cases`,
   `behavioral_preferences`, `behavioral_constraints`).
   `[profile]` TOML table per Q1(a). `Profile::default()`
-  synthesizes Q5(b) fallback (`assistant_name = "Aivyx"`,
+  synthesizes Q5(b) fallback (`assistant_name = "Aivyx PA"`,
   all other categories empty) — every pre-Phase-57
   `aivyx.toml` keeps working unchanged. `assemble_session_prompt`
   helper composes Profile + role envelope into a labeled
@@ -1664,7 +1664,7 @@ deliver P13:
 - **Phase 57 (Foundation, shipped 2026-05-12).** `aivyx-config::Profile`
   struct with six P13-commit-5 fields; `[profile]` TOML table
   parser per Q1(a); `Profile::default()` synthesizing
-  `assistant_name = "Aivyx"` + empty rest per Q5(b);
+  `assistant_name = "Aivyx PA"` + empty rest per Q5(b);
   `aivyx-channel::assemble_session_prompt` helper per Q3(c)
   composing Profile + role envelope into a labeled
   *"## About this assistant"* + *"## Active role:
