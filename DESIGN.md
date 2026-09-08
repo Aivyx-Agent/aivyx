@@ -1,4 +1,4 @@
-# Aivyx Design — Phase 0
+# Aivyx PA Design — Phase 0
 
 Started 2026-04-13 as an agent-first rebuild following the archival of the
 pre-rebuild codebase (`~/_archive/aivyx-2026-04-13/`). Agent-first means the
