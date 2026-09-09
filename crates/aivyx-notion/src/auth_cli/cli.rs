@@ -14,7 +14,7 @@ pub fn parse_cli_args_from(argv: &[String]) -> Result<BinaryMode, String> {
 }
 
 pub fn help_text() -> &'static str {
-    "aivyx-notion — Notion third-party tool process for Aivyx
+    "aivyx-notion — Notion third-party tool process for Aivyx PA
 
 USAGE:
     aivyx-notion [SUBCOMMAND]
@@ -28,7 +28,7 @@ SUBCOMMANDS:
     help           Show this text.
 
 When run with no arguments, the binary enters IPC-loop mode
-(spawned by the Aivyx daemon via [[tool_process]] in
+(spawned by the Aivyx PA daemon via [[tool_process]] in
 aivyx-pa.toml).
 
 CONFIG FILE
@@ -44,7 +44,7 @@ CRITICAL UX NOTE
     Notion integrations don't have implicit access to your
     workspace content. After creating the integration, you
     MUST explicitly share each page or database you want
-    Aivyx to see — via the Notion UI's Share → Invite menu,
+    Aivyx PA to see — via the Notion UI's Share → Invite menu,
     selecting your integration. Without this step, all API
     calls return empty results or 404."
 }

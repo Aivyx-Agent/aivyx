@@ -1,14 +1,14 @@
 #!/bin/bash
-# First-launch (OOBE) setup for the Aivyx WSL distribution. Invoked once, as
+# First-launch (OOBE) setup for the Aivyx PA WSL distribution. Invoked once, as
 # root, by /etc/wsl-distribution.conf the first time the distro starts. Its job
 # is to create an unprivileged default user (WSL discourages running as root)
-# and point the operator at the getting-started commands. Aivyx itself is
+# and point the operator at the getting-started commands. Aivyx PA itself is
 # already installed on PATH from the appliance image.
 set -eu
 
 DEFAULT_USER="aivyx"
 
-echo "Setting up the Aivyx WSL distribution…"
+echo "Setting up the Aivyx PA WSL distribution…"
 
 # Create the default user (uid 1000, matching wsl-distribution.conf defaultUid)
 # with passwordless sudo — the conventional WSL default — if absent.
@@ -22,7 +22,7 @@ fi
 
 cat <<'BANNER'
 
-  Aivyx is installed in this WSL distribution.
+  Aivyx PA is installed in this WSL distribution.
 
   Get started:
       aivyx-pa init   # one-time guided setup (model, access level, agent)
@@ -32,6 +32,6 @@ cat <<'BANNER'
       http://127.0.0.1:7843      (open it from your Windows browser)
 
   Your files live inside this distro and are reachable from Windows at
-      \\wsl$\Aivyx\home\aivyx
+      \\wsl$\Aivyx-PA\home\aivyx
 
 BANNER

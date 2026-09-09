@@ -1,4 +1,4 @@
-# Build the Aivyx WSL distribution and attach it to the GitHub Release.
+# Build the Aivyx PA WSL distribution and attach it to the GitHub Release.
 #
 # Fires on the version tag (like docker-publish.yml + desktop-release.yml),
 # reuses the appliance image the Docker Publish workflow pushes for that tag as
@@ -97,10 +97,10 @@ jobs:
           # A `.wsl` file (WSL 2.4.4+) is a gzip-compressed rootfs tarball that
           # contains /etc/wsl-distribution.conf. The same file also imports with
           # the classic `wsl --import`.
-          docker export "$cid" | gzip -9 > "Aivyx.wsl"
-          cp "Aivyx.wsl" "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz"
+          docker export "$cid" | gzip -9 > "Aivyx-PA.wsl"
+          cp "Aivyx-PA.wsl" "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz"
           docker rm "$cid" >/dev/null
-          ls -lh Aivyx.wsl "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz"
+          ls -lh Aivyx-PA.wsl "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz"
 
       - name: Attach the artifacts to the GitHub Release
         env:
@@ -118,6 +118,6 @@ jobs:
             sleep 20
           done
           gh release upload "$TAG" \
-            "Aivyx.wsl" \
+            "Aivyx-PA.wsl" \
             "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz" \
             --clobber --repo "${{ github.repository }}"

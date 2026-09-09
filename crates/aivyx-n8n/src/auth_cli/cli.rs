@@ -14,7 +14,7 @@ pub fn parse_cli_args_from(argv: &[String]) -> Result<BinaryMode, String> {
 }
 
 pub fn help_text() -> &'static str {
-    "aivyx-n8n — n8n workflow automation third-party tool process for Aivyx
+    "aivyx-n8n — n8n workflow automation third-party tool process for Aivyx PA
 
 USAGE:
     aivyx-n8n [SUBCOMMAND]

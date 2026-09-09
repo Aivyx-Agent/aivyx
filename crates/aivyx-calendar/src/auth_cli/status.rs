@@ -60,7 +60,7 @@ fn format_status_report(tokens: &TokenSet, path: &Path, now_unix_secs: i64) -> S
     };
 
     format!(
-        "Aivyx Calendar — token status\n\
+        "Aivyx PA Calendar — token status\n\
          --------------------------\n\
          Token file:        {path}\n\
          Granted scope:     {scope}\n\
@@ -80,7 +80,7 @@ fn format_status_report(tokens: &TokenSet, path: &Path, now_unix_secs: i64) -> S
 
 fn format_no_tokens_message(path: &Path) -> String {
     format!(
-        "Aivyx Calendar — token status\n\
+        "Aivyx PA Calendar — token status\n\
          --------------------------\n\
          No tokens found at {path}.\n\
          Run `aivyx-calendar auth init` to complete the OAuth flow.\n",
@@ -129,7 +129,7 @@ mod tests {
         let now = 1_700_000_000;
         ts.expires_at_unix_secs = now + 3600;
         let out = format_status_report(&ts, &PathBuf::from("/tmp/t.json"), now);
-        assert!(out.contains("Aivyx Calendar — token status"));
+        assert!(out.contains("Aivyx PA Calendar — token status"));
         assert!(out.contains("Token file:        /tmp/t.json"));
         assert!(out.contains("calendar.readonly"));
         assert!(out.contains("calendar.send"));

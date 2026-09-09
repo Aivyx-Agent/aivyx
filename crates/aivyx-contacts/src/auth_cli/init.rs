@@ -235,7 +235,7 @@ pub async fn await_callback(
         // Confirm to the browser before returning.
         write_browser_response(
             &mut write_half,
-            "Aivyx Contacts — authorization received",
+            "Aivyx PA Contacts — authorization received",
             "You can close this tab and return to your terminal.",
         )
         .await
@@ -348,7 +348,7 @@ pub async fn run_auth_init(
     let consent_url = build_consent_url(config, state_token);
     println!(
         "\n\
-         Aivyx Contacts — OAuth consent required\n\
+         Aivyx PA Contacts — OAuth consent required\n\
          ------------------------------------\n\
          Open this URL in your browser:\n\n  {consent_url}\n\n\
          After granting consent, Google will redirect you to\n\

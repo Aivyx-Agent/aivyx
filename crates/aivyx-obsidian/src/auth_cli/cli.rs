@@ -16,7 +16,7 @@ pub fn parse_cli_args_from(argv: &[String]) -> Result<BinaryMode, String> {
 }
 
 pub fn help_text() -> &'static str {
-    "aivyx-obsidian — Obsidian vault third-party tool process for Aivyx
+    "aivyx-obsidian — Obsidian vault third-party tool process for Aivyx PA
 
 USAGE:
     aivyx-obsidian [SUBCOMMAND]
@@ -32,7 +32,7 @@ SUBCOMMANDS:
     help           Show this text.
 
 When run with no arguments, the binary enters IPC-loop mode
-(spawned by the Aivyx daemon via [[tool_process]] in
+(spawned by the Aivyx PA daemon via [[tool_process]] in
 aivyx-pa.toml).
 
 CONFIG FILE

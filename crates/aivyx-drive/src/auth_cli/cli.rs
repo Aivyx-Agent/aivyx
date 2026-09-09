@@ -75,7 +75,7 @@ fn parse_auth(args: &[String]) -> Result<BinaryMode, String> {
 /// Render the operator-facing help text. Lives next to the
 /// parser so a future flag addition stays in lockstep.
 pub fn help_text() -> &'static str {
-    "aivyx-drive — Drive third-party tool process for Aivyx
+    "aivyx-drive — Drive third-party tool process for Aivyx PA
 
 USAGE:
     aivyx-drive [SUBCOMMAND]
@@ -96,9 +96,9 @@ SUBCOMMANDS:
 
     help           Print this text.
 
-When invoked with NO subcommand, the binary enters the Aivyx
+When invoked with NO subcommand, the binary enters the Aivyx PA
 tool-process IPC loop (Tasks 4-7 of Phase 123 — pending) and
-expects to be spawned by the Aivyx daemon via a
+expects to be spawned by the Aivyx PA daemon via a
 [[tool_process]] entry in aivyx-pa.toml. Operators should not
 invoke this mode directly.
 "

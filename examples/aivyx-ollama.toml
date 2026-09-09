@@ -1,12 +1,12 @@
-# Aivyx — Ollama (local LLM) worked example (Phase 34)
+# Aivyx PA — Ollama (local LLM) worked example (Phase 34)
 #
-# This file shows how to run Aivyx against a local Ollama
+# This file shows how to run Aivyx PA against a local Ollama
 # instance. Copy it, adjust the model name, and point the
 # binary at it:
 #
 #   ollama pull llama3.1
 #   ollama serve
-#   aivyx --config examples/aivyx-ollama.toml
+#   aivyx-pa --config examples/aivyx-ollama.toml
 #
 # ----------------------------------------------------------------
 # Prerequisites
@@ -17,7 +17,7 @@
 # 3. Start the server: `ollama serve`
 #    (or let it auto-start on macOS/Linux via the system service)
 #
-# Aivyx performs a health check at startup — if Ollama is not
+# Aivyx PA performs a health check at startup — if Ollama is not
 # reachable at the configured base URL, you'll see an actionable
 # warning with the exact command to run.
 #
@@ -50,12 +50,12 @@ model = "llama3.1"
 # api_key = "my-proxy-token"
 
 # ----------------------------------------------------------------
-# Roles (same as any Aivyx config — provider-independent)
+# Roles (same as any Aivyx PA config — provider-independent)
 # ----------------------------------------------------------------
 
 [[role]]
 name = "default"
-system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+system_prompt = "You are Aivyx PA — a careful, deliberate AI agent."
 capability_scopes = [
   "memory.read",
   "memory.write",

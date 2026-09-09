@@ -1,6 +1,6 @@
 //! # aivyx-drive
 //!
-//! Google Drive third-party tool process for Aivyx.
+//! Google Drive third-party tool process for Aivyx PA.
 //! Chapter F #3 — Phase 129. Ships as a separate binary
 //! the operator installs and wires into `aivyx-pa.toml` via
 //! `[[tool_process]]`. Per PRODUCT.md P10 (substrate is
@@ -41,7 +41,7 @@
 //!
 //! Operator-provided OAuth app — same posture as Gmail
 //! and Calendar. Most operators reuse their existing
-//! Aivyx Gmail / Calendar GCP project + client_id +
+//! Aivyx PA Gmail / Calendar GCP project + client_id +
 //! client_secret; they just enable the Drive API
 //! alongside the others, register
 //! `https://www.googleapis.com/auth/drive` on the OAuth
@@ -77,7 +77,7 @@ pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
 /// scope" loops) over least-privilege. INSTALL.md
 /// documents the three narrower options:
 ///
-/// - `auth/drive.file` — only files created by Aivyx
+/// - `auth/drive.file` — only files created by Aivyx PA
 /// - `auth/drive.readonly` — read-only all-files
 /// - `auth/drive.metadata.readonly` — read-only metadata
 ///

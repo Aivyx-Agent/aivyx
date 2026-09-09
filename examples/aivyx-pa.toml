@@ -1,4 +1,4 @@
-# Aivyx — worked example config (Phase 13 Task 3)
+# Aivyx PA — worked example config (Phase 13 Task 3)
 #
 # This file is the canonical worked example for the per-role
 # capability envelope shipped in PRODUCT.md P9 / Phase 13. Every
@@ -110,7 +110,7 @@
 # unqualified here keeps the example file portable.
 [[role]]
 name = "default"
-system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+system_prompt = "You are Aivyx PA — a careful, deliberate AI agent."
 # Phase 14 Task 2 adds unqualified `role.switch` to `default`'s
 # declared envelope. Unqualified means "any target" under D4 Rule
 # 2, and the root declaring it is what lets descendants (e.g.
@@ -1689,7 +1689,7 @@ parent_role = "researcher"
 # to get distinct memory partitions keyed on Discord's channel_id
 # snowflake.
 #
-# Setup walkthrough lives in docs/INSTALL.md "Running Aivyx on
+# Setup walkthrough lives in docs/INSTALL.md "Running Aivyx PA on
 # Discord" — Discord Developer Portal account → bot account → save
 # token → enable MESSAGE CONTENT INTENT → invite to server or DM
 # from the portal account.
@@ -1715,7 +1715,7 @@ parent_role = "researcher"
 # stringification — so a Slack bot installed in two workspaces
 # partitions cleanly even when channel ids collide.
 #
-# Setup walkthrough lives in docs/INSTALL.md "Running Aivyx on
+# Setup walkthrough lives in docs/INSTALL.md "Running Aivyx PA on
 # Slack" — Slack app creation → Socket Mode enablement → bot
 # scopes → install to workspace → save xoxb-* + xapp-* tokens.
 #

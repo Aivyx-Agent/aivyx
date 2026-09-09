@@ -1,4 +1,4 @@
-# Aivyx — SemiTrusted-focused worked example (Phase 15 Task 4)
+# Aivyx PA — SemiTrusted-focused worked example (Phase 15 Task 4)
 #
 # This is the companion to `examples/aivyx-pa.toml`, which teaches
 # the **Trusted-tier** attenuation story. This file teaches the
@@ -110,7 +110,7 @@
 # at a lower tier tries to inherit them.
 [[role]]
 name = "default"
-system_prompt = "You are Aivyx — a careful, deliberate AI agent."
+system_prompt = "You are Aivyx PA — a careful, deliberate AI agent."
 capability_scopes = [
   "memory.read",
   "memory.write",

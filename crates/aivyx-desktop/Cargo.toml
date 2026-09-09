@@ -57,7 +57,7 @@ dist = false
 # desktop CI runs on Ubuntu).
 [package.metadata.bundle]
 name = "Aivyx"
-identifier = "com.aivyx.desktop"
+identifier = "com.aivyx-pa.desktop"
 icon = ["assets/icon-256.png"]
 category = "Utility"
 short_description = "Aivyx — your personal AI assistant, in a native window."
