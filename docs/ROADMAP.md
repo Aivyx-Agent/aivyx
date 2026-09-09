@@ -4876,7 +4876,7 @@ Voice is the next UX axis Aivyx PA covers.
   Apache 2.0, 50+ voices across 30+ languages.
 - Q4a — push-to-talk MVP. Operator presses Enter
   to start/stop recording. Wake-word activation
-  ("Hey Aivyx") + always-listening with VAD trim
+  ("Hey Aivyx PA") + always-listening with VAD trim
   are Phase 136+.
 
 **Streak predictions — two HOLDs + one break:**

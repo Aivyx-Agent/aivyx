@@ -211,7 +211,7 @@ docker compose run --rm -it \
 docker compose restart aivyx
 ```
 
-Because `connect` writes to `/root/.aivyx-pa/...` (the `aivyx-data` volume) and the
+Because `connect` writes to `/root/.aivyx-pa/...` (the `aivyx-pa-data` volume) and the
 daemon mounts the same volume, the credential and the config edit are visible to
 the daemon after the restart. Nothing is published; the consent listener lives
 on host-loopback only for the duration of the one-shot.
