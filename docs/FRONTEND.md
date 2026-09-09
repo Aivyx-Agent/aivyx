@@ -446,7 +446,7 @@ symlink escapes are rejected. Two roots only:
 - **`workspace`** — the agent's workspace root (always-on; `None`/typed error
   when the workspace is disabled).
 - **`fs`** — the operator's `fs_root`, i.e. **the access level's reach**. At
-  `sandbox` that's `~/aivyx-sandbox`; at `home`/`full` it's broader **because the
+  `sandbox` that's `~/aivyx-pa-sandbox`; at `home`/`full` it's broader **because the
   operator granted it** (via Settings, confirm-first). Documents never reaches
   past `fs_root` — expanding it is the same operator-controlled lever the agent
   already obeys.

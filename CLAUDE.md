@@ -65,7 +65,7 @@ operator
  channel adapter (CLI / Telegram / Discord / Slack / Web UI / third-party)
    │  Unix-socket IPC (mode 0600)
    ▼
- aivyx daemon
+ aivyx-pa daemon
    ├── turn loop (capability check → audit → execute → audit)
    ├── HMAC-chained audit log (offline-verifiable)
    ├── encrypted redb store (Argon2id → HKDF → ChaCha20-Poly1305)
@@ -153,9 +153,9 @@ frontend crate outside `default-members`.
 
 ### Operator-facing dials (own the semantics carefully when touching them)
 
-- **Access** (`aivyx access`): sandbox / workspace / home / full — how far the
+- **Access** (`aivyx-pa access`): sandbox / workspace / home / full — how far the
   agent's filesystem/network reach extends.
-- **Autonomy** (`aivyx autonomy`): manual / assisted / supervised / autonomous
+- **Autonomy** (`aivyx-pa autonomy`): manual / assisted / supervised / autonomous
   / unleashed — composes the safety gates and arms the autonomous loop. An
   agent can never widen its own reach or autonomy.
 - **Memory profile** (`[memory] profile`): `lite` (BM25 + co-occurrence, no

@@ -25,7 +25,7 @@ This is the worked example referenced from:
 In one terminal, start the daemon:
 
 ```sh
-aivyx daemon run                  # or `aivyx` for auto-spawn
+aivyx-pa daemon run                  # or `aivyx-pa` for auto-spawn
 ```
 
 In another, run the Python adapter:
@@ -42,7 +42,7 @@ back. `Ctrl-C` cancels the current turn; `Ctrl-D` quits.
 The adapter implements exactly the lifecycle described in
 [`CHANNEL_SDK.md` § 3](../../docs/CHANNEL_SDK.md):
 
-1. Connect to `$XDG_RUNTIME_DIR/aivyx/daemon.sock`.
+1. Connect to `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock`.
 2. Read `DaemonReady`.
 3. (Optional) `ProtocolNegotiation`.
 4. `StartSession { role: <arg>, frontend_type: "Local" }`.

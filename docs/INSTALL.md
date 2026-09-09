@@ -332,7 +332,7 @@ docker compose up --build
 ```
 
 State (config, encrypted store, audit chain, OAuth tokens) persists in the
-`aivyx-data` named volume across `docker compose down` / `up`. The agent's files
+`aivyx-pa-data` named volume across `docker compose down` / `up`. The agent's files
 live in `./workspace` (mounted at `/work`).
 
 ### What you should know
@@ -349,7 +349,7 @@ live in `./workspace` (mounted at `/work`).
   upgrade) was green, with zero feedback pointing at the real cause; see
   `docs/GATEHOUSE.md`'s "Known gap" note.
 - **Passphrase posture.** The store passphrase comes from a Docker *secret*
-  (bridged to `AIVYX_PASSPHRASE` by the entrypoint), not a plain `environment:`
+  (bridged to `AIVYX_PA_PASSPHRASE` by the entrypoint), not a plain `environment:`
   value — a deliberate step down from the desktop's interactive prompt, but it
   keeps the passphrase out of `docker inspect`.
 - **Local models.** The bundled `ollama` sibling service is optional

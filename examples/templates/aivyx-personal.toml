@@ -2,7 +2,7 @@
 #
 # This is a starter template (Phase 66). `aivyx init --template
 # personal` pre-fills the interactive wizard with these defaults.
-# After generation, edit `aivyx.toml` to set your storage passphrase,
+# After generation, edit `aivyx-pa.toml` to set your storage passphrase,
 # provider details, and (if you want notifications) your Telegram
 # bot token + chat_id.
 #
@@ -31,7 +31,7 @@ base_url = "http://localhost:11434"
 # ----------------------------------------------------------------
 
 [storage]
-path = "~/.local/share/aivyx/store.redb"
+path = "~/.local/share/aivyx-pa/store.redb"
 
 [fs]
 # Sandbox root — point at a notes/journal directory.

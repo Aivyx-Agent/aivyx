@@ -71,7 +71,7 @@ fn check_service() {
                 Some(true) => pass("running — survives logout/reboot"),
                 Some(false) => println!(
                     "  ⚠ installed but not running\n     \
-                     → start it: `systemctl --user start aivyx-daemon` (or re-run `aivyx-pa daemon install`)"
+                     → start it: `systemctl --user start aivyx-pa-daemon` (or re-run `aivyx-pa daemon install`)"
                 ),
                 None => {}
             }

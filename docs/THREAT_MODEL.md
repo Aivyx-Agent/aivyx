@@ -75,13 +75,13 @@ What an attacker would gain by compromising each.
 |---|---|---|
 | Passphrase | In RAM during cold start; never on disk | Full read/write of the encrypted store. |
 | Master key | `MasterKey` in daemon RAM, zeroize-on-drop (`aivyx-crypto/src/lib.rs:175`) | Same. |
-| Encrypted store | `$XDG_DATA_HOME/aivyx/store.redb`, chmod 0600 | Confidential without the passphrase; needs Argon2id work to brute. |
+| Encrypted store | `$XDG_DATA_HOME/aivyx-pa/store.redb`, chmod 0600 | Confidential without the passphrase; needs Argon2id work to brute. |
 | Audit chain | redb `KeyDomain::Audit` | Reading reveals every tool call ever made. Tampering trips `AuditError::ChainBroken` on next open. |
 | API keys (LLM provider, Telegram bot token) | `KeyDomain::Secrets`, AEAD-sealed under a domain subkey | Spend on operator's LLM account; impersonate operator's bot. |
 | Productivity-tool OAuth tokens (Gmail, Calendar, Drive, Notion, …) | A **per-tool-process token file**, owned by the separate tool binary — *not* the daemon store | Act as the operator on that one external service. Scoped to the single tool process; a daemon-store compromise does not reach them, and vice versa. |
 | Memory entries | `KeyDomain::Memory`, AEAD-sealed under a domain subkey | Reveals everything the operator told the agent across sessions. |
-| Daemon IPC socket | `$XDG_RUNTIME_DIR/aivyx/aivyx.sock`, mode 0600 | Anything the operator can do. |
-| Source code & config | `~/Projects/.../aivyx/`, `aivyx.toml` | Loosen role envelopes, add malicious tools. |
+| Daemon IPC socket | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock`, mode 0600 | Anything the operator can do. |
+| Source code & config | `~/Projects/.../aivyx/`, `aivyx-pa.toml` | Loosen role envelopes, add malicious tools. |
 
 Twenty encrypted domains exist today: the original nine
 (Sessions, Memory, Audit, Secrets, ChannelState, Missions,
@@ -158,7 +158,7 @@ subkey under `KeyDomain::Audit`. Tampering with any byte of any
 entry breaks the chain at the first modified row and trips
 `AuditError::ChainBroken` on the next open.
 
-`aivyx --verify-only` cold-verifies the full chain without an LLM
+`aivyx-pa --verify-only` cold-verifies the full chain without an LLM
 API key, so audit verification works on a machine that has never
 been online.
 
@@ -172,7 +172,7 @@ socket, you are the operator by OS-level identity (`PRODUCT.md` P6).
 
 **Caveats.** This assumes the runtime directory is also private to
 the operator (true under standard systemd-logind setups). On a box
-where another OS user has `read` on `$XDG_RUNTIME_DIR/aivyx/`, the
+where another OS user has `read` on `$XDG_RUNTIME_DIR/aivyx-pa/`, the
 model breaks — but that already required compromising the
 operator's user account.
 
@@ -248,7 +248,7 @@ confirms the loop's build/test gates actually ran and passed
 advance the backlog. The backlog itself is an HMAC-chained
 append-only substrate: a tampered or reordered entry trips the
 chain check. The operator can stop a run at any time
-(`aivyx loop stop`) and inspect live spend (`aivyx loop status`).
+(`aivyx-pa loop stop`) and inspect live spend (`aivyx-pa loop status`).
 
 As of **Chapter Throttle**, an opt-in `[rate_limit]` adds a fourth
 bound that applies *within* every turn (loop iteration, Nonagon
@@ -438,7 +438,7 @@ gap has narrowed substantially.
 - **Phase 180 — secure-by-default.** A *bundled* default preset
   closes the "unsandboxed unless configured" gap for
   `[[tool_process]]`. `[sandbox] default_backend = "auto"`
-  (which the `aivyx init` wizard now writes into every new
+  (which the `aivyx-pa init` wizard now writes into every new
   config) detects bubblewrap / firejail on `PATH` and applies a
   conservative-but-functional preset automatically: read-only
   system dirs, a private `/tmp`, an isolated PID namespace,
@@ -580,7 +580,7 @@ running Aivyx PA daemon":
 3. **Authority bounding by tier:** Yes. The agent cannot exceed
    the tier ceiling for a turn, full stop.
 4. **Authority bounding by role:** Yes. The operator's role config
-   (`aivyx.toml`) attenuates further per the single-inheritance
+   (`aivyx-pa.toml`) attenuates further per the single-inheritance
    tree (`PRODUCT.md` P7, P9).
 5. **No silent self-modification:** Yes. Reflection writes go
    through operator-approved gates.

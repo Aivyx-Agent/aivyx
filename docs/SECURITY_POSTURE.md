@@ -20,7 +20,7 @@
 | Question | Answer |
 |---|---|
 | Can the agent run arbitrary shell commands? | **Only at Trusted tier, on the Local channel, within the operator-chosen `fs_root`.** Remote channels never get `shell.exec`. |
-| Can it reach the whole machine? | **Only if the operator sets `[access] level = full`** (default is `sandbox` = `~/aivyx-sandbox`). |
+| Can it reach the whole machine? | **Only if the operator sets `[access] level = full`** (default is `sandbox` = `~/aivyx-pa-sandbox`). |
 | Can it perform irreversible actions unattended? | **No** — destructive/outbound ops escalate, and unattended runs *reject-and-abort* at any escalation (never auto-approve). See §3. |
 | Can it spend money without limit? | **No** — the autonomous loop enforces token + dollar + iteration + wall-clock caps. See §4. |
 | Can it grant itself new powers? | **No** — `config.write`, `role.update`, `role.switch`, `tool.allowlist` are Kernel-tier, above the agent's ceiling. See §5. |
@@ -78,7 +78,7 @@ both; nothing else needs per-level plumbing.
 
 | Level | `fs_root` | Shell? | Intended use |
 |---|---|---|---|
-| `sandbox` *(default)* | `~/aivyx-sandbox` | no | untrusted / shared agent |
+| `sandbox` *(default)* | `~/aivyx-pa-sandbox` | no | untrusted / shared agent |
 | `workspace` | a chosen dir | within dir | a project / working tree |
 | `home` | `$HOME` | yes | the personal-assistant default |
 | `full` | `/` | yes | whole machine (explicit warning) |

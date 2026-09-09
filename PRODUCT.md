@@ -285,8 +285,8 @@ the corresponding phase work is enumerated in
 1. **The daemon is the only execution shape.** Foreground-only
    mode, as it exists today, is replaced. The same binary
    serves as both daemon and frontend depending on how it is
-   invoked, and the operator's normal usage (`aivyx`,
-   `aivyx --channel telegram`, etc.) routes through frontends
+   invoked, and the operator's normal usage (`aivyx-pa`,
+   `aivyx-pa --channel telegram`, etc.) routes through frontends
    to a backing daemon.
 
 2. **The daemon holds live agent state.** Active turns, in-flight
@@ -298,7 +298,7 @@ the corresponding phase work is enumerated in
 3. **The daemon's IPC surface is the single integration point.**
    Channel frontends speak to the daemon over IPC. Third-party
    tool processes (per **P12**) speak to the daemon over the
-   same IPC. Future inspection surfaces (a `aivyx status`
+   same IPC. Future inspection surfaces (a `aivyx-pa status`
    subcommand, a localhost web UI, etc.) all attach via IPC.
    This is one protocol to design, defend, and version.
 
@@ -309,12 +309,12 @@ the corresponding phase work is enumerated in
    the operator. Per **P6**.
 
 5. **Auto-spawn is invisible in the common case.** An operator
-   running `aivyx` for the first time on a fresh box should not
+   running `aivyx-pa` for the first time on a fresh box should not
    need to learn the word "daemon" before getting a working
    agent. The frontend detects no running daemon, spawns one,
    detaches it, and connects — all transparently. The operator
    only thinks about the daemon when they explicitly want to
-   manage it (`aivyx daemon stop`, `aivyx daemon status`).
+   manage it (`aivyx-pa daemon stop`, `aivyx-pa daemon status`).
 
 ### What this commitment deliberately does not say
 
@@ -611,7 +611,7 @@ future implementation from compromising it for ergonomics.
 ### What this commits us to
 
 1. **The role config is the single source of truth.** An
-   operator reads one file (their `aivyx.toml` or per-role
+   operator reads one file (their `aivyx-pa.toml` or per-role
    files) to know what any role can do. There are no hidden
    capabilities, no operator-level grants that bypass the
    role, no implicit "the binary always allows X."
@@ -1004,7 +1004,7 @@ tools into core.
   disk shape and field naming.
 - **It does not require Profile to be encrypted.** Profile
   carries no secrets per Commit 7.
-- **It does not require `aivyx init` to be the only entry
+- **It does not require `aivyx-pa init` to be the only entry
   point.** Phase 57 extends the init wizard with use-case
   prompts, but other channels may bootstrap Profile.
 - **It does not preclude Profile from referencing other
@@ -1414,7 +1414,7 @@ take effect on the next turn without daemon restart.
 
 - **P9 — Per-Role Full Capability Declaration.** Phase 13.
   `capability_scopes` parsed via `Scope::parse` at config-load
-  time. Four-role worked example in `examples/aivyx.toml`.
+  time. Four-role worked example in `examples/aivyx-pa.toml`.
   `--print-role` debug flag for operator introspection.
 
 - **P10 — Substrate-Only Core, Fifteen Tools Forever.**
@@ -1479,13 +1479,13 @@ take effect on the next turn without daemon restart.
   `[profile]` TOML table per Q1(a). `Profile::default()`
   synthesizes Q5(b) fallback (`assistant_name = "Aivyx PA"`,
   all other categories empty) — every pre-Phase-57
-  `aivyx.toml` keeps working unchanged. `assemble_session_prompt`
+  `aivyx-pa.toml` keeps working unchanged. `assemble_session_prompt`
   helper composes Profile + role envelope into a labeled
   *"## About this assistant"* + *"## Active role:
   <name>"* system prompt per Q3(c). Operator surface:
-  `aivyx init` extension (Phase 57 Q4(c) — three opt-in
-  prompts), `aivyx profile show` (read aivyx.toml, print
-  labeled), `aivyx profile edit` (toml_edit-driven
+  `aivyx-pa init` extension (Phase 57 Q4(c) — three opt-in
+  prompts), `aivyx-pa profile show` (read aivyx-pa.toml, print
+  labeled), `aivyx-pa profile edit` (toml_edit-driven
   surgical `[profile]` section update in `$EDITOR` per
   Q2(a)), Web UI Profile pane via `Query::GetProfile` IPC
   per Q4(a). Reload semantics: load-time-only per Q5(a)
@@ -1518,7 +1518,7 @@ take effect on the next turn without daemon restart.
   restoring the original; `Query::GetEffectivePersona` +
   `Query::ListPersonaDeltas` IPC envelopes;
   `FrontendMessage::RevertPersonaDelta` for
-  operator-initiated revert; `aivyx persona show` / `list`
+  operator-initiated revert; `aivyx-pa persona show` / `list`
   / `revert` CLI subcommands; Web UI Persona pane with
   effective-state rendering and click-to-revert per Q3(a).
   Reverts are operator-only per Q5(a) — auto-approved
@@ -1671,14 +1671,14 @@ deliver P13:
   <name>"* layout (with non-invasive passthrough when
   Profile is at its synthesized default); wiring through
   both parent and role-switch child planner factories so
-  sub-sessions inherit the same Profile section; `aivyx
+  sub-sessions inherit the same Profile section; `aivyx-pa
   init` extension with three opt-in Profile prompts per
   Q4(c); startup-banner `profile` row.
 
 - **Phase 58 (Inspection, shipped 2026-05-12).** Closes
-  the milestone with the operator surface: `aivyx profile
-  show` (read `aivyx.toml`, labeled banner-style format
-  per Q3(a)); `aivyx profile edit` (`toml_edit`-driven
+  the milestone with the operator surface: `aivyx-pa profile
+  show` (read `aivyx-pa.toml`, labeled banner-style format
+  per Q3(a)); `aivyx-pa profile edit` (`toml_edit`-driven
   surgical `[profile]` section update in `$EDITOR` per
   Q2(a), preserves comments and other sections); Web UI
   Profile pane via `Query::GetProfile` IPC envelope +
@@ -1725,7 +1725,7 @@ deliver P14 and close the forward-commitment ledger.
   `Query::ListPersonaDeltas` IPC envelopes;
   `FrontendMessage::RevertPersonaDelta` +
   `DaemonMessage::PersonaRevertResolved` for
-  operator-initiated revert. `aivyx persona show / list /
+  operator-initiated revert. `aivyx-pa persona show / list /
   revert` CLI subcommands (daemon-IPC-backed). Web UI
   Persona pane with effective-state rendering and
   click-to-revert per Q3(a). Reverts are operator-only per

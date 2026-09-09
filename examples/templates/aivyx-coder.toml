@@ -2,7 +2,7 @@
 #
 # This is a starter template (Phase 66). `aivyx init --template coder`
 # pre-fills the interactive wizard with these defaults. After
-# generation, edit `aivyx.toml` to set your storage passphrase and
+# generation, edit `aivyx-pa.toml` to set your storage passphrase and
 # add your provider API key (or stick with Ollama for the
 # zero-API-key path).
 #
@@ -30,7 +30,7 @@ base_url = "http://localhost:11434"
 # ----------------------------------------------------------------
 
 [storage]
-path = "~/.local/share/aivyx/store.redb"
+path = "~/.local/share/aivyx-pa/store.redb"
 
 [fs]
 # Sandbox root — every fs.read/fs.write below resolves under this

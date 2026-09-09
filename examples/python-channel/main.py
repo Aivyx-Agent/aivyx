@@ -57,7 +57,7 @@ def main() -> int:
     parser.add_argument(
         "--socket",
         help="Path to the daemon's Unix socket. "
-        "Defaults to $XDG_RUNTIME_DIR/aivyx/daemon.sock.",
+        "Defaults to $XDG_RUNTIME_DIR/aivyx-pa/daemon.sock.",
     )
     parser.add_argument("--role", help="Role to activate (default: server default).")
     args = parser.parse_args()
@@ -67,7 +67,7 @@ def main() -> int:
     except (FileNotFoundError, ConnectionRefusedError) as exc:
         print(f"\x1b[31maivyx-python: could not reach daemon: {exc}\x1b[0m", file=sys.stderr)
         print(
-            "Is the daemon running? Try `aivyx daemon run` in another terminal.",
+            "Is the daemon running? Try `aivyx-pa daemon run` in another terminal.",
             file=sys.stderr,
         )
         return 1

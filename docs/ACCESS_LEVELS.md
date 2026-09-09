@@ -4,7 +4,7 @@
 > (mirrors `docs/HEADLESS_MODE.md` / `docs/WEB_MISSION_CONTROL.md`).
 >
 > Today every filesystem and shell action runs inside a single sandbox root
-> (`[fs] root`, default `~/aivyx-sandbox`). That is correct for an *untrusted*
+> (`[fs] root`, default `~/aivyx-pa-sandbox`). That is correct for an *untrusted*
 > agent but limiting for a **personal** assistant on the operator's own
 > machine — asked to "list the folders in my home directory," the agent can
 > only see its sandbox.
@@ -55,7 +55,7 @@
 
 | Level | `fs_root` | Granted to Local/Trusted | Confirm posture | Intended use |
 |---|---|---|---|---|
-| `sandbox` *(default)* | `~/aivyx-sandbox` | `fs.read` `fs.write` `fs.metadata` | n/a | untrusted / shared agent — today's behavior |
+| `sandbox` *(default)* | `~/aivyx-pa-sandbox` | `fs.read` `fs.write` `fs.metadata` | n/a | untrusted / shared agent — today's behavior |
 | `workspace` | operator-chosen dir | + `shell.exec`, `fs.delete` (within dir) | on | a project / working tree |
 | `home` | `$HOME` | `fs.*` (incl. delete) + `shell.exec` | on | the personal-assistant default |
 | `full` | `/` | `fs.*` (incl. delete) + `shell.exec` | on | whole machine (explicit warning) |
@@ -80,7 +80,7 @@ confirm_destructive = true
 ```
 
 **Resolution rules** (`aivyx-config`):
-- `level` selects the default `fs_root`: `sandbox`→`~/aivyx-sandbox`,
+- `level` selects the default `fs_root`: `sandbox`→`~/aivyx-pa-sandbox`,
   `home`→`$HOME`, `full`→`/`, `workspace`/`custom`→the declared `root`.
 - An explicit `[fs] root` (or `[access] root`) overrides the derived default.
 - **No `[access]` section ⇒ `sandbox`** ⇒ existing configs unchanged.

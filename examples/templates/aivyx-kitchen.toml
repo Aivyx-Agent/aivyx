@@ -31,7 +31,7 @@ base_url = "http://localhost:11434"
 # ----------------------------------------------------------------
 
 [storage]
-path = "~/.local/share/aivyx/store.redb"
+path = "~/.local/share/aivyx-pa/store.redb"
 
 [fs]
 # Where the agent writes digests / reports / exports. The KitchenDB

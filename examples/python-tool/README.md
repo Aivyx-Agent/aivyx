@@ -28,7 +28,7 @@ domain needs and keeps everything else.
 
 ## Hook it up to the daemon
 
-Add to your `aivyx.toml`:
+Add to your `aivyx-pa.toml`:
 
 ```toml
 [[tool_process]]
@@ -37,7 +37,7 @@ command = "python3"
 args = ["/absolute/path/to/aivyx/examples/python-tool/tool.py"]
 ```
 
-Start the daemon (`aivyx daemon run`). On startup the daemon
+Start the daemon (`aivyx-pa daemon run`). On startup the daemon
 spawns the script, performs the handshake, and registers
 `wordcount` in the tool registry. From the agent's perspective
 it is indistinguishable from a first-party tool.

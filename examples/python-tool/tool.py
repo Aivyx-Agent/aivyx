@@ -17,7 +17,7 @@ Run it manually:
     python3 examples/python-tool/tool.py
 
 …but you almost never do — the Aivyx daemon spawns this process
-itself from a `[[tool_process]]` entry in your `aivyx.toml`.
+itself from a `[[tool_process]]` entry in your `aivyx-pa.toml`.
 """
 
 from __future__ import annotations
