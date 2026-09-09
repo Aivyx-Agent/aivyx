@@ -84,8 +84,8 @@ Grab `Aivyx.wsl` from the
 creates your user, then:
 
 ```sh
-aivyx init      # one-time guided setup
-aivyx           # start chatting — auto-starts the local daemon
+aivyx-pa init      # one-time guided setup
+aivyx-pa           # start chatting — auto-starts the local daemon
 ```
 
 ### Option A2 — manual install into your own Ubuntu WSL
