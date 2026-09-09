@@ -1,20 +1,20 @@
-# Audit Chain Export (`aivyx audit export`)
+# Audit Chain Export (`aivyx-pa audit export`)
 
-Phase 105 added a read-only offline export of Aivyx's HMAC-chained audit
+Phase 105 added a read-only offline export of Aivyx PA's HMAC-chained audit
 log. Every tool call, scope denial, turn boundary, memory access, and
 auto-notify dispatch lands in the chain as a structured `AuditEvent`;
-`aivyx audit export` plumbs those entries out as **JSONL** on stdout so
+`aivyx-pa audit export` plumbs those entries out as **JSONL** on stdout so
 downstream tooling — `jq`, training pipelines, forensic auditors — can
 consume them without reaching into `redb` by hand.
 
 ## At a glance
 
 ```text
-aivyx audit export [--from <seq>] [--limit <N>] > trajectory.jsonl
+aivyx-pa audit export [--from <seq>] [--limit <N>] > trajectory.jsonl
 ```
 
 - **Offline**: opens encrypted storage cold with the operator's
-  passphrase, the same path `aivyx --verify-only` uses. Works whether
+  passphrase, the same path `aivyx-pa --verify-only` uses. Works whether
   the daemon is running or not.
 - **Read-only**: the chain itself stays append-only; the export never
   mutates a byte.
@@ -68,7 +68,7 @@ Start emitting at entry `<seq>`. Defaults to 0 (the whole chain).
 
 ```bash
 # Skip the first 1000 entries.
-aivyx audit export --from 1000 > tail.jsonl
+aivyx-pa audit export --from 1000 > tail.jsonl
 ```
 
 ### `--limit <N>`
@@ -79,13 +79,13 @@ flag).
 
 ```bash
 # Just the next 100 after entry 1000.
-aivyx audit export --from 1000 --limit 100 > sample.jsonl
+aivyx-pa audit export --from 1000 --limit 100 > sample.jsonl
 ```
 
 Flag order does not matter:
 
 ```bash
-aivyx audit export --limit 100 --from 1000   # equivalent to above
+aivyx-pa audit export --limit 100 --from 1000   # equivalent to above
 ```
 
 ### Time-range and correlation filters
@@ -95,17 +95,17 @@ session/mission-correlated exports pipe through `jq`:
 
 ```bash
 # Last hour, by appended_at_ms.
-aivyx audit export \
+aivyx-pa audit export \
   | jq -c 'select(.appended_at_ms > (now * 1000 - 3600000))' \
   > last-hour.jsonl
 
 # All entries for one session.
-aivyx audit export \
+aivyx-pa audit export \
   | jq -c 'select(.event.session_id == "abc-123")' \
   > session.jsonl
 
 # Just tool calls + their outcome kinds.
-aivyx audit export \
+aivyx-pa audit export \
   | jq -c 'select(.event.kind == "ToolCall") | {seq, tool: .event.tool_id, outcome: .event.outcome.kind}'
 ```
 
@@ -134,9 +134,9 @@ audit-chain section.
 
 ## Security posture
 
-`aivyx audit export` cannot be triggered remotely over the daemon
+`aivyx-pa audit export` cannot be triggered remotely over the daemon
 socket (Q3a — offline-only). The export requires the operator's
-passphrase, the same as `aivyx --verify-only`. The dump lands on the
+passphrase, the same as `aivyx-pa --verify-only`. The dump lands on the
 operator's stdout, where the operator chooses what to do with it —
 pipe to a file, pipe to `jq`, pipe to a training pipeline, throw away.
 
@@ -164,7 +164,7 @@ Each is a focused add to the existing surface, not a substrate change.
 
 ## See also
 
-- `aivyx --verify-only` — companion forensic mode, walks the chain
+- `aivyx-pa --verify-only` — companion forensic mode, walks the chain
   without emitting it. Run it first if you suspect tamper.
 - `crates/aivyx-audit/src/lib.rs` — canonical source for the
   `AuditEvent` variants and `SignedEntry` shape.

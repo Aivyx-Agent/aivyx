@@ -109,7 +109,7 @@ live LLM. Once the kitchen toolkit is wired (Brigade §6) and the team points at
 the BOH pack (`[team] config_path = "kitchen-boh.toml"`):
 
 ```sh
-aivyx team run "Run the end-of-day BOH close." --config crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml
+aivyx-pa team run "Run the end-of-day BOH close." --config crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml
 ```
 
 Aria decomposes into the four steps. Expect: **stocktake** counts via

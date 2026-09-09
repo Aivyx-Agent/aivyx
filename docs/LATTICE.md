@@ -9,7 +9,7 @@
 > graph is always **derived** (memory stays the source of truth); **zero new
 > deps**; full workspace suite + clippy + `cargo deny` green. The locked
 > reference for the
-> chapter that gives Aivyx a **real, directed, typed knowledge graph**:
+> chapter that gives Aivyx PA a **real, directed, typed knowledge graph**:
 > nodes are **entities** (people, systems, concepts) and edges are
 > **typed, directed relations** (`deploy` —*depends-on*→ `ci`), extracted
 > from memory by the LLM. It is the last of the two tracks [[LOOM]]
@@ -22,7 +22,7 @@
 
 ## 1. Why — the graph today has no *meaning* on its edges
 
-Aivyx already has *a* graph: Chapter MG draws topic nodes and the Phase
+Aivyx PA already has *a* graph: Chapter MG draws topic nodes and the Phase
 83 **co-occurrence** edges (Loom's `neighbors_within` walks them). But a
 co-occurrence edge says only "these two topics were recalled together" —
 it is **undirected and untyped**. It cannot answer:
@@ -174,7 +174,7 @@ phase so the diff stays reviewable.
 
 ---
 
-*Chapter Lattice is the graph Aivyx has been circling since the
+*Chapter Lattice is the graph Aivyx PA has been circling since the
 co-occurrence ledger: not "these topics go together" but "**this** relates
 to **that**, in **this** way, in **this** direction." It is extracted from
 what the agent already remembers, queryable by the agent, browsable by the

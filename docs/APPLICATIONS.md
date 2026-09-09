@@ -1,13 +1,13 @@
 # Using your open applications (Chapter Deckhand)
 
-**Opt-in. Default off.** Aivyx can, when you turn it on, use the GUI
+**Opt-in. Default off.** Aivyx PA can, when you turn it on, use the GUI
 applications already open on your own machine — list windows, focus one,
 type / press keys / click, and capture a screenshot. This gives the agent
 "hands" on your desktop for the workflows that have no CLI or API.
 
 It is deliberately **off by default and tightly fenced**: driving live GUI apps
 reaches your whole desktop and cannot be sandboxed, so it is the opposite of the
-auditable, scoped tool calls Aivyx is built on. The capability is therefore
+auditable, scoped tool calls Aivyx PA is built on. The capability is therefore
 Trusted-tier only, confirm-first on input, and every action is a named,
 audited tool call.
 
@@ -70,7 +70,7 @@ backends.
 This capability cannot be tested on a headless server (the dogfood rig is
 TTY-only) — it needs a real desktop session. On your desktop, after enabling it:
 
-1. `aivyx doctor` / start the daemon; confirm the `applications` tool process is
+1. `aivyx-pa doctor` / start the daemon; confirm the `applications` tool process is
    listed.
 2. Ask the agent to "list my open windows" → `app.list` returns them.
 3. Ask it to focus one and type into it → `app.focus` then `app.type` (approve

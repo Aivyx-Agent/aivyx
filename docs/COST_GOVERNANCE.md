@@ -3,15 +3,15 @@
 > **Status:** ✅ **shipped** (Chapter K complete). This began as the design
 > contract and is now fully implemented: the `aivyx-cost` crate (pricing +
 > `CostReport` + `BudgetEnforcer`), the per-turn `AuditEvent::LlmCost`,
-> `aivyx cost [--today]`, the `[pricing.<model>]` / `[budget]` config, the
-> autonomous-loop per-run dollar cap (surfaced in `aivyx loop status`), and
+> `aivyx-pa cost [--today]`, the `[pricing.<model>]` / `[budget]` config, the
+> autonomous-loop per-run dollar cap (surfaced in `aivyx-pa loop status`), and
 > the pre-call budget gate on the interactive / team / voice turn loop.
 >
 > Cost governance gives the operator **visibility and control over LLM
 > spend**: every turn's token usage is priced into dollars, aggregated into
 > a report, and bounded by **budgets** (caps that *alert* or *deny* when
 > exceeded). It is **free core** — observability + safety, not customer
-> billing — and it matters most exactly where Aivyx now spends the most:
+> billing — and it matters most exactly where Aivyx PA now spends the most:
 > the **autonomous loop** and **multi-agent team missions**, which multiply
 > token consumption.
 >
@@ -23,7 +23,7 @@
 
 ## 1. The key insight — usage is already on the chain
 
-Aivyx already records, on the **one HMAC audit chain**, an
+Aivyx PA already records, on the **one HMAC audit chain**, an
 `AuditEvent::TurnEnded { usage: TokenUsage }` for every turn — and the
 autonomous loop already *aggregates* it (`loop_driver::sum_turn_usage` sums
 `input_tokens + output_tokens` over `TurnEnded` events to enforce
@@ -35,7 +35,7 @@ autonomous loop already *aggregates* it (`loop_driver::sum_turn_usage` sums
    generalising the loop's per-run token sum.
 3. **Budgets** — **$ caps** (per-run / per-day) that *alert* or *deny*,
    generalising the loop's single `max_run_tokens` cap.
-4. **Surfaces** — an `aivyx cost` report + `[budget]` / `[pricing]` config.
+4. **Surfaces** — an `aivyx-pa cost` report + `[budget]` / `[pricing]` config.
 
 This is **leaner than the archive**, which built a separate encrypted ledger
 store. We reuse the chain as the source of truth and add a thin priced view
@@ -81,7 +81,7 @@ impl Pricing {
   the report surfaces so the operator adds a rate rather than silently
   under-counting.
 - **Defaults are overridable.** Shipped rates are a convenience, clearly
-  marked; `[pricing.<model>]` in `aivyx.toml` is authoritative.
+  marked; `[pricing.<model>]` in `aivyx-pa.toml` is authoritative.
 
 ## 4. Budgets
 
@@ -135,8 +135,8 @@ Chapter-J lesson: these came in ~40–60% under).*
 | **K.1 Pricing** | the `aivyx-cost` crate; `TokenCounts` / `ModelRate` / `Cost` / `Pricing` (defaults + `cost_of` + overrides); local-free + unknown-flagged semantics. Pure, no storage. | ~15–20 |
 | **K.2 Priced ledger over the chain** | a `CostReport` that scans `TurnEnded` usage, prices it, and aggregates (per-day / per-session / total, priced vs untracked). Decide + (if taken) add `model` to `TurnEnded` for per-turn precision. | ~15–25 |
 | **K.3 BudgetEnforcer** | `BudgetConfig` + `check` (Alert/Deny) + reservations (team concurrency). Pure logic over a ledger view. | ~15–25 |
-| **K.4 Wiring** | record/price each turn; **pre-call $ gate** in the turn loop; generalise the autonomous-loop budget to $; ~~bound team missions~~ (done — Chapter Ballast, `[budget] per_mission_tokens`/`per_mission_usd`). `aivyx cost` report CLI. | ~15–25 |
-| **K.5 Config** | `[budget]` + `[pricing.<model>]` in `aivyx.toml` (aivyx-config), threaded through the daemon. | ~10–15 |
+| **K.4 Wiring** | record/price each turn; **pre-call $ gate** in the turn loop; generalise the autonomous-loop budget to $; ~~bound team missions~~ (done — Chapter Ballast, `[budget] per_mission_tokens`/`per_mission_usd`). `aivyx-pa cost` report CLI. | ~15–25 |
+| **K.5 Config** | `[budget]` + `[pricing.<model>]` in `aivyx-pa.toml` (aivyx-config), threaded through the daemon. | ~10–15 |
 
 ```
 K.1 ─▶ K.2 ─▶ K.3 ─▶ K.4 ─▶ K.5

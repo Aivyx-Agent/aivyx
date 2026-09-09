@@ -1,4 +1,4 @@
-# Aivyx Backend Framework — Audit Review
+# Aivyx PA Backend Framework — Audit Review
 
 **Date:** 2026-06-16 (v0.2.0, post-Studio)
 **Scope:** The agent framework **backend** — all 32 workspace crates
@@ -47,7 +47,7 @@ The Phase-179/184 backend review's **blockers are closed**:
 | No default sandbox | ✅ Closed (Ch. H.180 — `[sandbox] default_backend = "auto"`) |
 | Distribution dormant | ✅ Closed (Ch. Q + v0.2.0 cargo-dist binaries) |
 | Thin first-launch identity | ✅ Closed (H.181 + W/X LLM-assisted persona seed) |
-| No credential UX | ✅ Closed (`aivyx connect`, H.182) |
+| No credential UX | ✅ Closed (`aivyx-pa connect`, H.182) |
 | Skills code-shaped | ✅ Closed (conversational skill-teaching, H.184) |
 
 ## 3. Findings — issues to resolve (ranked)
@@ -99,7 +99,7 @@ covered set still skews developer / knowledge-worker
 
 `fxhash` (RUSTSEC-2025-0057), `number_prefix` (RUSTSEC-2025-0119),
 `paste` (RUSTSEC-2024-0436) — **unmaintained, not vulnerable**; zero CVEs.
-None is a direct Aivyx dependency: `fxhash` / `number_prefix` only enter the
+None is a direct Aivyx PA dependency: `fxhash` / `number_prefix` only enter the
 build under the opt-in `mistralrs` local-LLM provider features (via
 `bm25` / `indicatif`→`hf-hub`), and `paste` rides `frankenstein`
 (`aivyx-telegram`). No code change removes them until those upstreams update.

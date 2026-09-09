@@ -1,4 +1,4 @@
-# Aivyx Roadmap
+# Aivyx PA Roadmap
 
 A living list of planned phases beyond the one currently active.
 
@@ -79,7 +79,7 @@ count) that per-phase tests structurally can't.
    bundled with the Phase 107 Discord deferral.
 3. **Cross-channel regression sweep:** one local turn + one
    Telegram turn + one-of-each-other-adapter turn against the
-   **same** persistent audit chain, then `aivyx --verify-only`
+   **same** persistent audit chain, then `aivyx-pa --verify-only`
    reporting a combined event count. This is the Phase 8 exit
    criterion rewritten to be N-channel rather than Telegram-
    specific.
@@ -101,7 +101,7 @@ fields in `aivyx-config` (Task 1, `2c7acfe`), binary
 capability assembly rewritten to walk the declared
 parent chain with backcompat-floor substitution per
 empty level (Task 2, `af89874`), worked-example
-`examples/aivyx.toml` demonstrating the inheritance
+`examples/aivyx-pa.toml` demonstrating the inheritance
 primitive including the empty-child surprise case
 (Task 3, `a19c6e4`), and a `--print-role` debug flag
 for operator introspection of effective envelopes
@@ -147,7 +147,7 @@ impossibility test, which read from the same
 and exited 2026-04-16 as the **first non-product-shape
 sub-phase** in project history. Five tasks: open
 commit (Task 1, `2d97cfd`), cross-crate integration
-test against `examples/aivyx.toml` closing the Phase
+test against `examples/aivyx-pa.toml` closing the Phase
 13 Task 3 cross-crate half (Task 2, `1cc94d6`),
 renderer lift into `crates/aivyx-channel/src/role_
 render.rs` picking up the Phase 14 Task 5 optional
@@ -349,7 +349,7 @@ exited 2026-04-17. OpenAI-compatible `LlmProvider` adapter
 (`provider-openai` feature in `aivyx-llm`) with `OpenAiProvider`
 implementing `stream_turn` for `/v1/chat/completions`. Shared
 `HttpTransport` seam lifted to crate root. Config + CLI wiring:
-`ProviderKind` enum, `--provider` flag, `AIVYX_PROVIDER` env,
+`ProviderKind` enum, `--provider` flag, `AIVYX_PA_PROVIDER` env,
 `[agent] provider` + `[openai]` TOML sections. Provider-aware
 `validate()`. PRODUCT_ROADMAP Multi-Provider milestone delivered.
 DESIGN.md unchanged. PRODUCT.md unchanged. Production-core
@@ -568,11 +568,11 @@ extended with `context_tokens_before/after_pruning`. Per-provider
 context window defaults (200k/128k/8k). 857 tests, zero clippy.
 DESIGN.md streak → 2, PRODUCT.md streak → 7, lib.rs streak broken.
 
-## Phase 44 — `aivyx init` Interactive First-Run Wizard (shipped)
+## Phase 44 — `aivyx-pa init` Interactive First-Run Wizard (shipped)
 
 Interactive setup wizard for non-technical end users. Detects
 Ollama locally (zero API key path), walks through provider/model
-selection, writes `aivyx.toml` with 0600 permissions. 876 tests,
+selection, writes `aivyx-pa.toml` with 0600 permissions. 876 tests,
 zero clippy. DESIGN.md streak → 3, PRODUCT.md streak → 8,
 lib.rs streak → 1.
 
@@ -589,7 +589,7 @@ lib.rs streak -> 0.
 
 ## Phase 46 — Web Search + Document Retrieval (Bundled MCP) [SHIPPED]
 
-First bundled MCP server: `aivyx mcp-server web-search`. Two
+First bundled MCP server: `aivyx-pa mcp-server web-search`. Two
 tools: `web_search` (query → results) and `web_read` (URL →
 cleaned text). Search backend hierarchy: Brave Search API →
 SerpAPI → DuckDuckGo HTML scraping (zero-config fallback).
@@ -673,10 +673,10 @@ substrate per PRODUCT.md P13:
   `communication_style`, `primary_use_cases`,
   `behavioral_preferences`, `behavioral_constraints`).
 - `[profile]` TOML table per Q1(a) (plain-text-
-  inspectable, in `aivyx.toml` alongside roles).
+  inspectable, in `aivyx-pa.toml` alongside roles).
 - `Profile::default()` synthesizing Q5(b) fallback
   (`assistant_name = DEFAULT_ASSISTANT_NAME`, all else
-  empty) — every pre-Phase-57 `aivyx.toml` keeps working
+  empty) — every pre-Phase-57 `aivyx-pa.toml` keeps working
   unchanged.
 - `aivyx-channel::assemble_session_prompt` helper composing
   Profile + role envelope into a labeled system prompt per
@@ -688,7 +688,7 @@ substrate per PRODUCT.md P13:
   child factory (`profile_for_factory` capture), so
   sub-sessions inherit the same Profile section as their
   parent.
-- `aivyx init` extended with three opt-in Profile prompts
+- `aivyx-pa init` extended with three opt-in Profile prompts
   per Q4(c) (assistant name, primary use case,
   communication style); `render_toml` emits `[profile]`
   only when the operator customized at least one field.
@@ -709,15 +709,15 @@ inspection and edit surface that closes the Assistant Profile
 milestone. After Phase 58, **P1–P13 are all fully shipped**;
 only P14 (Persona, Phases 59–60) remains forward.
 
-- `aivyx profile show` (CLI) — reads `aivyx.toml` via the
+- `aivyx-pa profile show` (CLI) — reads `aivyx-pa.toml` via the
   existing config loader path, renders the resolved Profile
   in labeled banner-style format per Q3(a). Works whether
   the daemon is running or not.
-- `aivyx profile edit` (CLI) — opens the `[profile]`
+- `aivyx-pa profile edit` (CLI) — opens the `[profile]`
   section in `$EDITOR` against a tempfile, merges back via
   `toml_edit` surgical update per Q2(a) preserving every
-  other section and every comment in `aivyx.toml`. Prints
-  a `aivyx daemon stop && aivyx` restart reminder on save
+  other section and every comment in `aivyx-pa.toml`. Prints
+  a `aivyx-pa daemon stop && aivyx-pa` restart reminder on save
   per Q5(a) load-time-only semantics.
 - `CliMode::Profile(ProfileSubcommand)` nested enum per
   Q1(a); five new parser tests cover happy paths and
@@ -799,7 +799,7 @@ resolutions:
 
 - **Q1(c) — nested CLI enum.** New `CliMode::Persona(PersonaSubcommand)`
   with `Show` / `List` / `Revert { target_delta_id }`
-  variants. `aivyx persona show` prints the effective
+  variants. `aivyx-pa persona show` prints the effective
   state; `list` prints the chain; `revert` operator-
   initiated undo.
 - **Q2(a) — direct closure capture.** Per-turn planner-
@@ -855,9 +855,9 @@ the **Distribution Milestone** (phase 1 of N).
 
 Delivered across six engineering tasks + one mid-phase fixup:
 
-- **Task 2 — `aivyx --version` / `-V` CLI flag.** New
+- **Task 2 — `aivyx-pa --version` / `-V` CLI flag.** New
   `CliMode::Version` variant in the hand-rolled parser; prints
-  `aivyx <CARGO_PKG_VERSION>` and exits 0 without touching the
+  `aivyx-pa <CARGO_PKG_VERSION>` and exits 0 without touching the
   config loader, storage layer, or daemon socket. Three parser
   tests (long, short, extra-args rejection).
 - **Task 3 — `cargo-dist` initialization.** Q1(a) sign-off:
@@ -916,7 +916,7 @@ the closed forward-commitment ledger and the first phase of the
 new **Reach Milestone**. Gives the agent a `notify.send`
 infrastructure tool that pushes a message to an
 operator-configured `[[notify_target]]` (Telegram chat or
-generic webhook URL). Transforms Aivyx from purely reactive
+generic webhook URL). Transforms Aivyx PA from purely reactive
 ("I talk to it") to proactive ("it can wake my phone").
 
 Delivered across seven engineering tasks:
@@ -965,7 +965,7 @@ Delivered across seven engineering tasks:
   constructs the right backend per target. Binary's
   session-build path builds a dedicated `ReqwestTransport`
   when Telegram targets exist, constructs the dispatcher,
-  registers `NotifySendTool` with it. `examples/aivyx.toml`
+  registers `NotifySendTool` with it. `examples/aivyx-pa.toml`
   gains a documented `[[notify_target]]` section (commented
   out by default).
 
@@ -1031,7 +1031,7 @@ combined, 6, 7):
   binary shares one Arc between `NotifySendTool` (Phase 62)
   and `DaemonConfig` for the trigger path.
 - **Task 6 — Worked example.** New section in
-  `examples/aivyx.toml` documents the schedule + notify_target
+  `examples/aivyx-pa.toml` documents the schedule + notify_target
   pattern with operator rationale.
 
 Streak predictions all correct: DESIGN.md → 10, PRODUCT.md → 3,
@@ -1086,11 +1086,11 @@ Delivered across five engineering tasks (Tasks 1, 2+4, 3+6, 7,
   `aivyx_modules/identity.rs` with `run_identity_export(path)`
   — fetches Persona via IPC, loads Profile via aivyx-config
   directly, writes 0600 JSON. New `CliMode::Identity(...)` +
-  `IdentitySubcommand::Export` variant. `aivyx identity import`
+  `IdentitySubcommand::Export` variant. `aivyx-pa identity import`
   recognized but routes to a descriptive Phase-65 deferral
   error. 6 parser tests + 2 module tests.
 
-- **Task 7 — Operator docs.** New "Moving Aivyx to a new
+- **Task 7 — Operator docs.** New "Moving Aivyx PA to a new
   machine" section in `docs/INSTALL.md` documents the export
   flow, the JSON shape, the HMAC re-bind design (Q1(a)), and
   the Phase 65 deferral.
@@ -1100,7 +1100,7 @@ Streak predictions all correct: DESIGN.md → 11, PRODUCT.md → 4,
 core run in project history; beats Phase 63's 11). Tests +17
 (1154 → 1171). Zero clippy warnings. Zero new workspace deps.
 
-**Scope adjustment at exit:** Task 5 (`aivyx identity import
+**Scope adjustment at exit:** Task 5 (`aivyx-pa identity import
 <path>`) deferred to Phase 65 per the implementation-time
 sign-off on Option B (future-proofing argument). The import
 side carries substantial substrate of its own — new IPC
@@ -1113,7 +1113,7 @@ opens next with the dedicated scope.
 ## Phase 65 — Identity Import (Persona Phase 4)
 
 **Frozen — see [PHASE_65.md](archive/phases/PHASE_65.md).** Closes the Phase
-60 identity-deferral end to end. `aivyx identity import
+60 identity-deferral end to end. `aivyx-pa identity import
 <path>` replays an exported bundle onto the local persona
 chain, re-signing each delta against the target host's HMAC
 key. Together with Phase 64's export, the operator now has a
@@ -1143,11 +1143,11 @@ combined, Tasks 7+8 combined, Exit):
   file, locally validates via Phase 64's
   `parse_and_validate`, forwards to daemon, prints
   per-Q4(a) summary + Q2(a) Profile-hand-edit reminder.
-- **Parser update.** `aivyx identity import <path>
+- **Parser update.** `aivyx-pa identity import <path>
   [--force]` replaces the Phase 64 deferral message;
   trailing `--force` accepted, double-force and unknown
   args rejected.
-- **Docs.** `docs/INSTALL.md` "Moving Aivyx to a new
+- **Docs.** `docs/INSTALL.md` "Moving Aivyx PA to a new
   machine" updated with the import command, the conflict-
   resolution explanation, and the Q2(a) Profile note.
 
@@ -1170,9 +1170,9 @@ import).
 
 **Frozen — see [PHASE_66.md](archive/phases/PHASE_66.md).** Closes the third
 post-Phase-60 codebase-review direction (after Distribution
-and Reach). Ships `aivyx init --template <name>` so a fresh
+and Reach). Ships `aivyx-pa init --template <name>` so a fresh
 operator gets from "downloaded the binary" to "useful agent"
-without writing aivyx.toml from scratch. Three starter
+without writing aivyx-pa.toml from scratch. Three starter
 templates cover the common archetypes: `coder` (software
 engineering), `researcher` (research + synthesis), `personal`
 (personal task management + briefings).
@@ -1184,17 +1184,17 @@ combined, Tasks 9+10):
   `init_templates.rs` module with `Template { name,
   description, source, toml_content }`, `bundled_templates()`
   via `include_str!`, `user_templates()` reading from
-  `$XDG_DATA_HOME/aivyx/templates/` or
-  `~/.local/share/aivyx/templates/`, `list_templates()`
+  `$XDG_DATA_HOME/aivyx-pa/templates/` or
+  `~/.local/share/aivyx-pa/templates/`, `list_templates()`
   unioning both with user-dir winning on collision,
   `load_template(name)` with descriptive miss error, and
   `parse_description` reading the `# description: …` marker
   from leading TOML comments.
 - **CLI flags.** `CliMode::Init` becomes `Init(InitMode)`
   with `Interactive`, `InteractiveFromTemplate { name }`,
-  `ListTemplates` variants. Parser accepts `aivyx init`,
-  `aivyx init --template <name>`, `aivyx init --template`
-  (no name → list), `aivyx init --list-templates`.
+  `ListTemplates` variants. Parser accepts `aivyx-pa init`,
+  `aivyx-pa init --template <name>`, `aivyx-pa init --template`
+  (no name → list), `aivyx-pa init --list-templates`.
 - **Wizard pre-fill.** New `TemplateDefaults` extracts
   provider, model, fs_root, storage_path, assistant_name,
   primary_use_case, communication_style from a template's
@@ -1205,7 +1205,7 @@ combined, Tasks 9+10):
   declarations, MCP server blocks, commented-out sections
   all survive.
 - **Three starter templates** in `examples/templates/`. Each
-  is a complete `aivyx.toml` with archetype-appropriate
+  is a complete `aivyx-pa.toml` with archetype-appropriate
   Profile content, role envelope, and MCP/notify defaults
   (commented-out where appropriate).
 - **20 unit tests** (14 registry + 6 parser) including
@@ -1253,7 +1253,7 @@ combined, Tasks 5+6, Exit):
   `AutoNotifyOutcomeSummary` (Delivered /
   SkippedEmptyResponse / Failed { error_kind,
   error_message }) enums. All `#[serde(tag = "kind")]` so
-  existing chain readers (Web UI Audit tab, `aivyx
+  existing chain readers (Web UI Audit tab, `aivyx-pa
   --verify-only`) parse the new variant without per-reader
   changes.
 - **Plumbing.** `TriggerDispatch` gains an
@@ -1329,7 +1329,7 @@ combined, Exit):
 - **Dispatcher + binary wiring.** `build_notify_dispatcher`
   gains an `EmailDispatchContext` parameter; binary builds
   the `LettreEmailSender` once if any email target exists.
-- **Docs + worked example.** `examples/aivyx.toml` gains
+- **Docs + worked example.** `examples/aivyx-pa.toml` gains
   commented `[email]` + email `[[notify_target]]` blocks
   with provider-specific setup (Gmail / Fastmail /
   ProtonMail Bridge / SES / self-hosted). `docs/INSTALL.md`
@@ -1396,7 +1396,7 @@ each as their own commit, Exit):
   AND renders a stackable in-page toast banner per Q2 (both
   UX modes). One-time "Enable notifications" prompt on page
   load when `Notification.permission === "default"`.
-- **Docs + worked example.** `examples/aivyx.toml` gains a
+- **Docs + worked example.** `examples/aivyx-pa.toml` gains a
   commented `kind = "web-ui"` block; `docs/INSTALL.md`
   "Web UI desktop notifications" subsection covers the
   two-step enable, the browser-tab-must-be-open caveat, and
@@ -1432,7 +1432,7 @@ at the moment of proposal. Phase 70 adds the **asynchronous
 review surface**: agent calls `reflection.propose` →
 proposals land as Pending rows in a new encrypted proposal
 chain → operator reviews on their own schedule via the Web UI
-Proposals pane or `aivyx persona proposals` CLI →
+Proposals pane or `aivyx-pa persona proposals` CLI →
 approval/rejection appends to the persona chain (or audit
 trail) accordingly.
 
@@ -1479,7 +1479,7 @@ Exit):
   Save & Approve for edit-on-approve / Reject with optional
   reason). Approved cards with operator-edited applied_op
   render both ops for audit visibility.
-- **CLI subcommands.** `aivyx persona proposals list
+- **CLI subcommands.** `aivyx-pa persona proposals list
   [--status STATUS]` (default `pending`), `show <id>`,
   `approve <id>`, `reject <id> [--reason TEXT]`. Pretty-
   prints proposals with all status-specific fields.
@@ -1551,7 +1551,7 @@ Task 5, Tasks 7+Exit):
   line per registered schedule. Graceful degradation: when
   schedules exist but no audit log is available, a clear
   diagnostic prints and the scheduler is not spawned.
-- **Docs.** `examples/aivyx.toml` and `docs/INSTALL.md` flip
+- **Docs.** `examples/aivyx-pa.toml` and `docs/INSTALL.md` flip
   from the Phase 70 "deferred-polish" caveat to a concrete
   setup walkthrough.
 
@@ -1651,7 +1651,7 @@ items shipped in one phase:
   pagination (cap 500, matches the audit pane). Web UI
   Notifications tab renders a 4-column grid with
   colour-coded outcome badges; auto-populated per-target
-  chips filter the view. CLI parity: `aivyx notify history
+  chips filter the view. CLI parity: `aivyx-pa notify history
   [--target NAME] [--limit N]`.
 
 `NotificationHistoryEntry` is the flat wire shape; the
@@ -1680,7 +1680,7 @@ self-learning triad — Persona (P14), reflection (Phases
 - **Keyword search.** `Memory::search` (case-insensitive
   substring across topics + bodies) + the `memory.search`
   agent tool (cross-topic wildcard scope) + `SearchMemory`
-  IPC + `aivyx memory search` CLI + Web UI search bar. No
+  IPC + `aivyx-pa memory search` CLI + Web UI search bar. No
   embedding dep per Q1(a) — semantic retrieval defers to a
   future RAG arc.
 - **Per-topic retention.** `[[memory.retention]]` config
@@ -1697,7 +1697,7 @@ self-learning triad — Persona (P14), reflection (Phases
   note now survives a never-read younger one.
 - **Operator surfaces.** Web UI Memory pane (two-column
   browse + search + per-topic confirm-gated Evict per Q4(a))
-  + `aivyx memory list/show/search/evict` CLI parity. New
+  + `aivyx-pa memory list/show/search/evict` CLI parity. New
   IPC: ListMemoryTopics / GetMemoryTopicEntries /
   SearchMemory queries + EvictMemoryTopic frontend message.
 
@@ -1758,7 +1758,7 @@ project record, beating Phase 74's 22). Tests +46 (1378 →
 Zero new workspace deps. Privacy is the operator's `base_url`
 choice — cloud or fully on-device.
 
-Likely follow-ups (ANN index, explicit `aivyx memory reembed`,
+Likely follow-ups (ANN index, explicit `aivyx-pa memory reembed`,
 hybrid keyword+semantic fusion, query-embedding cache) are
 operator-feedback-gated.
 
@@ -1791,7 +1791,7 @@ on the Phase 75 substrate, zero new deps.
   `ContextRecall` `AuditTag` variant would have broken the
   core streak (the enum lives in the streak file), so the
   marker is the established stderr-breadcrumb convention
-  (`aivyx recall: injected N memories […]`); the recalled
+  (`aivyx-pa recall: injected N memories […]`); the recalled
   content is independently visible as the in-turn block. No
   separate Web UI indicator. The streak discipline had teeth
   this phase — a late cost was paid in scope, not in the
@@ -1874,7 +1874,7 @@ new storage, zero new deps.
   proposal chain (the same builders the reflection loop uses).
   No recall substrate → an empty digest, a valid "nothing
   learned yet" answer, not an error.
-- **Full parity (Q2a):** `aivyx learning [--window <secs>]`
+- **Full parity (Q2a):** `aivyx-pa learning [--window <secs>]`
   CLI + a read-only Web UI **Learning** tab; approve/reject
   stays in the existing Proposals surface.
 
@@ -1918,7 +1918,7 @@ deps.
   threshold / no embedding / embed failure → `None` →
   byte-identical full Persona. The feature is invisible until
   the Soul is large enough to need bounding.
-- **Legible (Q4a):** per-turn `aivyx persona: injected N/M
+- **Legible (Q4a):** per-turn `aivyx-pa persona: injected N/M
   facets` breadcrumb + a `persona_selection` field on the
   Phase 78 `GetLearningInsights` surface (CLI + Web UI).
 
@@ -2391,7 +2391,7 @@ Streak all three correct: DESIGN.md → **34**, PRODUCT.md →
 **27**, `aivyx-core/src/lib.rs` → **35** (new project
 record, beats Phase 86's 34) — the new pass + config block +
 Phase 78 surface stat all live in `aivyx-channel` /
-`aivyx-config` / `bin/aivyx`; proposals land through the
+`aivyx-config` / `bin/aivyx-pa`; proposals land through the
 existing `PersistentPersonaProposalLog::append` API (no new
 chain operation); no new `AuditTag`. Test count delta within
 the predicted `+11-15` band (`+15` exactly — config section
@@ -2790,7 +2790,7 @@ supersession proposals."* Phase 92 shipped the structured
 `supersedes_proposal_id` linkage on `ProposedPersonaDelta`
 but rendered it only via `reason` text on each half.
 Phase 94 makes the linkage operator-visible at a glance
-in both surfaces: the `aivyx persona proposals` CLI shows
+in both surfaces: the `aivyx-pa persona proposals` CLI shows
 linked pairs with `└─ supersedes:` indicators; the Web UI
 Proposals tab renders the pair as one card with a primary
 "Approve both" action plus a `⋮ Split` menu for partial
@@ -2892,8 +2892,8 @@ monotonic-slower-only, never faster.
   schedule wants a high threshold; an hourly responsive
   schedule wants a low one.
 - **Observable (Q4a):** daemon log on skip
-  (`aivyx reflection: schedule "X" — skipped (audit-growth
-  K below threshold M)`) + `aivyx learning` surface
+  (`aivyx-pa reflection: schedule "X" — skipped (audit-growth
+  K below threshold M)`) + `aivyx-pa learning` surface
   block (`Reflection cadence (Phase 95):` with per-
   schedule `K fired, S skipped` counts). Real-time + aggregate.
 
@@ -2979,7 +2979,7 @@ clippy warnings. Zero new workspace deps.
 Likely follow-ups (HNSW-quality recall for very large
 stores; iterative k-means refinement; persisted index
 across daemon restarts; incremental updates; topic-aware
-centroid seeding; ANN for the `aivyx memory search`
+centroid seeding; ANN for the `aivyx-pa memory search`
 operator path — see PHASE_96.md deferrals list) are
 operator-feedback-gated.
 
@@ -3131,7 +3131,7 @@ operator-feedback-gated.
 operator-feedback infrastructure phase. Ninety-nine phases
 of substrate shipped with the test pyramid resting entirely
 on `cargo test`; what the project never had was a one-command
-way to build the `aivyx` binary and drive the real agent
+way to build the `aivyx-pa` binary and drive the real agent
 stack against a real LLM backend locally. Phase 99 built
 that loop: a `scripts/dev-run.sh` launcher (interactive
 session against a fully local Ollama backend, all state under
@@ -3175,14 +3175,14 @@ no tool behind them.
   reliability item: the planner validates a known tool's
   call input against the tool's schema before dispatch and
   loops the model to repair a malformed call.
-- **Phase 102 — Tool Observability (`aivyx tools`).**
+- **Phase 102 — Tool Observability (`aivyx-pa tools`).**
   Shipped — see below and [PHASE_102.md](archive/phases/PHASE_102.md). A
   read-only subcommand that lists every registered tool
   and annotates each with audit-derived call/outcome
   stats, with a `--window` filter.
-- **Phase 103 — External Tool Ergonomics (`aivyx tool init`).**
+- **Phase 103 — External Tool Ergonomics (`aivyx-pa tool init`).**
   Shipped — see below and [PHASE_103.md](archive/phases/PHASE_103.md). The
-  closing Chapter B item: an `aivyx tool init <path>`
+  closing Chapter B item: an `aivyx-pa tool init <path>`
   subcommand that scaffolds a runnable Rust tool-process
   starter (Cargo.toml, src/main.rs handshake + invocation
   loop, README, conformance test, `[[tool_process]]`
@@ -3200,7 +3200,7 @@ Operator Onboarding** — opens at Phase 104.
 
 Chapter B closed the tool layer in good shape; the next axis
 of work is the *fresh operator's* experience. From the
-moment they decide to try Aivyx to the moment their first
+moment they decide to try Aivyx PA to the moment their first
 turn returns a useful answer, every step is operator-
 visible and every paper-cut compounds. Chapter C is the
 arc that closes those paper-cuts: init wizard polish,
@@ -3211,11 +3211,11 @@ resolves — the Phase 61 `v0.1.0` publication that turns
 lands as its own focused phase in the small-scope,
 Q-block-signed-off rhythm Chapters A and B established.
 The chapter opens with the first thing every new operator
-touches: the `aivyx init` wizard itself.
+touches: the `aivyx-pa init` wizard itself.
 
 **Expected phases (subject to revision at each exit):**
 
-- **Phase 104 — `aivyx init` Polish.** Shipped — see
+- **Phase 104 — `aivyx-pa init` Polish.** Shipped — see
   below and [PHASE_104.md](archive/phases/PHASE_104.md). Refreshed
   stale provider defaults, named a concrete starter
   model on the empty-Ollama path, and added a verify-
@@ -3244,10 +3244,10 @@ Breadth** takes the immediate post-Phase-104 sequence.
 
 ## Chapter D — Substrate Breadth (Phases 105–110+)
 
-Phase 104 closed with a comparison pass between Aivyx and
+Phase 104 closed with a comparison pass between Aivyx PA and
 the **Hermes Agent** (Nous Research, MIT, Python — the
 closest public reference for a personal-AI-agent
-substrate). The comparison found the Aivyx substrate sound
+substrate). The comparison found the Aivyx PA substrate sound
 but its *out-of-the-box surface* narrower than the
 reference along five axes: a smaller channel-adapter set
 (Local / Telegram / Web UI vs. Hermes's six), a smaller
@@ -3264,7 +3264,7 @@ operator pressure tightens the exact scope.
 
 **Expected phases (subject to revision at each exit):**
 
-- **Phase 105 — Trajectory Logging (`aivyx audit export`).**
+- **Phase 105 — Trajectory Logging (`aivyx-pa audit export`).**
   Shipped — see below and [PHASE_105.md](archive/phases/PHASE_105.md).
   Lowest-risk Chapter D item. The HMAC audit chain already
   carried the structured per-turn / per-tool-call rows a
@@ -3283,7 +3283,7 @@ operator pressure tightens the exact scope.
   brave-search, slack, memory, puppeteer, everything) with
   paste-able `[[mcp_server]]` + inline `[mcp_server.sandbox]`
   blocks per Q3a + env vars + capability-scope notes. Plus a
-  new `aivyx mcp recipes [<name>]` CLI surface per Q2a. All
+  new `aivyx-pa mcp recipes [<name>]` CLI surface per Q2a. All
   three byte-identity streaks held → DESIGN.md 53,
   PRODUCT.md 6, `aivyx-core/src/lib.rs` 6. New bundled-
   server code stays a deferral pending operator pressure.
@@ -3291,7 +3291,7 @@ operator pressure tightens the exact scope.
 - **Phase 107 — Discord Channel Adapter (`aivyx-discord`).**
   Shipped — see below and [PHASE_107.md](archive/phases/PHASE_107.md). Full
   parity with `aivyx-telegram` at the in-process layer.
-  `aivyx --channel discord` runs an end-to-end Discord bot
+  `aivyx-pa --channel discord` runs an end-to-end Discord bot
   against twilight-rs (twilight-gateway + twilight-http +
   twilight-model). Two streak-prediction surprises in the
   operator's favor: `aivyx-core/src/lib.rs` held
@@ -3449,13 +3449,13 @@ operator pressure and observed value from Phase 114.
 After Chapter E's #4 closed by Phase 118 and three named
 Local-LLM Rehab phases (120 + 121 + 122) shipped real
 substrate, Chapter F opens a fresh thematic axis:
-**Aivyx as a productivity assistant, not just a chat
+**Aivyx PA as a productivity assistant, not just a chat
 surface.** External integrations — Gmail, Calendar, Drive,
 GitHub, etc — as first-class operator-facing capabilities.
 
 Per P10 + P11 + P12, every Chapter F integration ships as
 a separate third-party tool process via the existing
-`[[tool_process]]` substrate (Phase 49). Aivyx core
+`[[tool_process]]` substrate (Phase 49). Aivyx PA core
 stays at exactly thirteen substrate tools forever; each
 Chapter F integration is a separate binary the operator
 installs and registers. P10 explicitly names email and
@@ -3502,7 +3502,7 @@ matters. Channels-without-working-tools is wrong-order.
 
 Chapter G fills operator-facing tool surface gaps the
 Phase 122/124 transcripts surfaced (gemma4's hallucinated
-enumeration partly mapped to existing Aivyx tools, partly
+enumeration partly mapped to existing Aivyx PA tools, partly
 to gaps). Different from Chapter F (Gmail / Calendar /
 etc are specific external service integrations); Chapter
 G is broader operator capability — web search, task
@@ -3510,7 +3510,7 @@ tracking, monitoring, future tools like calendar
 reminders, expense tracking, etc.
 
 Per P10 + P11 + P12, every Chapter G integration ships as
-a third-party tool process. Aivyx core stays at the
+a third-party tool process. Aivyx PA core stays at the
 thirteen-tools-forever cap. Chapter G reuses Phase 123's
 substrate (multi-tool harness + per-tool-process config +
 per-tool-process file storage + capability-base extension
@@ -3557,7 +3557,7 @@ and observed first-real-use signal.
 ## Chapter N — Release & Distribution Integrity (Phases 192, 193, 197) [COMPLETE]
 
 Opened 2026-09-05 after investigating "how would an end user deploy
-Aivyx on their own bare metal" surfaced that `v0.9.0` — the version
+Aivyx PA on their own bare metal" surfaced that `v0.9.0` — the version
 `README.md`'s own "Status" line named as current — was never actually
 published as a real GitHub Release. Root cause, confirmed against real
 GitHub/CI state rather than documentation claims: `aivyx-confine`,
@@ -3572,7 +3572,7 @@ contributor too. Full grounding:
 `docs/superpowers/specs/2026-09-05-release-distribution-integrity-design.md`.
 
 Goal: an unaffiliated outside end user can get a current, working
-`aivyx` binary through every path `docs/INSTALL.md` documents, and the
+`aivyx-pa` binary through every path `docs/INSTALL.md` documents, and the
 release pipeline can't silently regress into shipping stale or broken
 artifacts again without being caught immediately.
 
@@ -3633,15 +3633,15 @@ Clean.
 Opened 2026-09-05, while investigating end-user deployment options
 surfaced a broader question: given `aivyx-confine`/`aivyx-checkpoint`/
 `aivyx-kvcache` were all extracted from `aivyx-coder` and adopted by
-`aivyx`, are there other similar frameworks worth considering? A fresh
+`aivyx-pa`, are there other similar frameworks worth considering? A fresh
 survey (real code opened in both repos) found one strong candidate:
 `aivyx-coder`'s `aivyx-sandbox/src/injection_scan.rs` — a phrase-list
 prompt-injection tripwire, real and extensively wired into five call
 sites there (editor context, repo map, user/project `AGENTS.md`, generic
-tool output). `aivyx` has only a passive defense (Bulwark's
+tool output). `aivyx-pa` has only a passive defense (Bulwark's
 `fence_untrusted_output`, which labels untrusted content for the model
 but never actively scans for known injection phrasings or halts
-execution) — a real gap given `aivyx`'s autonomy dial runs fully
+execution) — a real gap given `aivyx-pa`'s autonomy dial runs fully
 unattended at `Autonomous`/`Unleashed` tiers. Full design:
 `docs/superpowers/specs/2026-09-05-injection-guard-design.md`.
 
@@ -3803,27 +3803,27 @@ operation surfaces a real miss.
 ## Phase 202 — First-Launch Store Safety [COMPLETE]
 
 Opened 2026-09-06 from a direct audit of what happens when an End User
-launches Aivyx for the first time — traced against real code, not
+launches Aivyx PA for the first time — traced against real code, not
 inferred from docs. Shipped the same day — see
 [PHASE_202.md](archive/phases/PHASE_202.md). Found and closed a real bug
-chain: running bare `aivyx` before `aivyx init` on a fresh machine
+chain: running bare `aivyx-pa` before `aivyx-pa init` on a fresh machine
 silently created a permanent, unconfirmed encrypted store (real mkdirs,
 an unconfirmed interactive passphrase prompt, a real `RedbStorage::open`)
-before config validation ever ran, and a later, real `aivyx init` run
+before config validation ever ran, and a later, real `aivyx-pa init` run
 could then collide with that orphaned store under a different
 passphrase — an opaque, undiagnosable decrypt failure. Three
 mechanisms: an early-validate gate in `run()` that only activates when
 no store exists yet (preserving the store-can-supply-a-secret fallback
 for every returning install, byte-for-byte, independently verified by
 building and running the real binary for both paths), a store-collision
-guard in `aivyx init` mirroring its existing `aivyx.toml`-overwrite
+guard in `aivyx-pa init` mirroring its existing `aivyx-pa.toml`-overwrite
 guard, and confirm-reentry on the first-time interactive passphrase
 prompt scoped to new-store creation only. The final whole-branch review
 found 3 Important issues by going further than reading the diff — it
 built and ran the real binary itself: a zeroize-hygiene regression in
 the new confirm-reentry function (contradicting the module's own
 documented invariant), a real pre-existing `$XDG_DATA_HOME` divergence
-between `aivyx init`'s own path defaults and `aivyx-config`'s loader
+between `aivyx-pa init`'s own path defaults and `aivyx-config`'s loader
 that this phase's own design spec incorrectly claimed didn't exist
 (letting the new store-collision guard silently miss an orphaned store
 on some machines), and two stale `#[allow(dead_code)]` attributes from
@@ -3837,14 +3837,14 @@ Closes all 3 follow-ups Phase 202's own final review logged: the real
 gap (`verify-only`/`audit export`/`cost` could still create a store on
 an unconfigured machine, since those 3 modes never require an API key
 so `config.validate()` could never catch it) plus 2 cosmetic issues
-(doubled `aivyx:`-prefixed output, an untestable passphrase-retry
+(doubled `aivyx-pa:`-prefixed output, an untestable passphrase-retry
 message). Task 1's own review caught a real bug its implementer's
 self-report missed entirely — a doc comment left genuinely duplicated
 by an imperfect find/replace, found only by reading the real file
 directly. The final whole-branch review found something more serious:
 Task 1's own fix had reintroduced the exact doubled-prefix symptom it
 existed to remove, and traced that the diagnostic-mode hint pointed
-operators at `aivyx init` — which never creates a store — walking
+operators at `aivyx-pa init` — which never creates a store — walking
 through the real dead-end loop that would produce. Both fixed and
 independently re-verified against the real, built binary (not just the
 diff), confirming a single prefix, a correct remedy, and zero files
@@ -3893,19 +3893,19 @@ silently absent. Every cell traces to an existing source (a `View` enum
 doc comment or existing roadmap prose) — nothing invented, independently
 re-verified against the real code twice.
 
-## Phase 206 — Configurable KV-Cache Store Path Sharing (Aivyx ↔ Aivyx Coder) [COMPLETE]
+## Phase 206 — Configurable KV-Cache Store Path Sharing (Aivyx PA ↔ Aivyx Coder) [COMPLETE]
 
 Opened and shipped 2026-09-07 — see [PHASE_206.md](archive/phases/PHASE_206.md).
-Followed a direct-code interoperability audit (aivyx and aivyx-coder can
+Followed a direct-code interoperability audit (aivyx-pa and aivyx-coder can
 already interact today via a real, working MCP bridge — aivyx-coder
-exposes `code`/`code_reply` MCP tools that aivyx's Nonagon team bridges
+exposes `code`/`code_reply` MCP tools that aivyx-pa's Nonagon team bridges
 in as an out-of-process specialist) and a refinements audit that found
 `aivyx-kvcache`'s cross-process store — built specifically so the two
 apps could share prefill work — could never actually be shared, since
 both hardcoded their own app-name-scoped store path with no override.
 Added one to each side, plus a security fix each (aivyx-coder's own
 deny_paths protection for the directory was blind to any override;
-aivyx had *no* protection for its own kvcache directory at all). The
+aivyx-pa had *no* protection for its own kvcache directory at all). The
 final whole-branch review (Opus, spanning both repos) found the largest
 finding set of any phase this run — 1 Critical + 6 Important + 3 Minor,
 led by a doc that told operators to write a TOML key that didn't match
@@ -3920,7 +3920,7 @@ was still running caused a commit to land on the wrong (harmless)
 branch, caught only by checking `git worktree list` directly rather than
 trusting the subagent's own reported hash.
 
-## Phase 207 — `aivyx` client integration for `aivyx-broker` (multi-process GPU-slot coordination) [COMPLETE]
+## Phase 207 — `aivyx-pa` client integration for `aivyx-broker` (multi-process GPU-slot coordination) [COMPLETE]
 
 Opened and shipped 2026-09-07 — see [PHASE_207.md](archive/phases/PHASE_207.md).
 The larger of two opportunities surfaced by a strategic question about
@@ -3934,7 +3934,7 @@ rather than corrupting state, narrowing the problem from data corruption
 to silent head-of-line blocking and cache-locality thrash. Built as a
 new standalone repo, `aivyx-broker` (a loopback-only daemon owning
 cache-locality-aware slot admission and the full `aivyx-kvcache`
-restore/warm/save lifecycle), with this phase wiring `aivyx` up as a
+restore/warm/save lifecycle), with this phase wiring `aivyx-pa` up as a
 client via a new `ProviderKind::Broker`. The review found a real gap the
 plan hadn't anticipated: team-mission specialists shared the
 broker-pointed backend but weren't wired for it, so a hint-less
@@ -3948,7 +3948,7 @@ startup banner that printed the wrong base_url field for broker mode.
 integration) are logged in their own repos, not here — see
 `aivyx-ecosystem/ROADMAP.md` for the cross-repo account.
 
-## Phase 208 — `aivyx` client integration for `aivyx-yubi` (hardware-backed federation identity) [COMPLETE]
+## Phase 208 — `aivyx-pa` client integration for `aivyx-yubi` (hardware-backed federation identity) [COMPLETE]
 
 Opened and shipped 2026-09-08 — see [PHASE_208.md](archive/phases/PHASE_208.md).
 A second security-focused idea from the operator, scoped independently
@@ -3963,7 +3963,7 @@ it became clear `aivyx-federation` genuinely needs it as a Cargo
 dependency (unlike `aivyx-broker`, reached only over HTTP) — with this
 phase wiring `aivyx-federation`'s `Identity` (its first production
 consumer ever, confirmed via direct grounding that no crate depended on
-it before this phase) and a new `aivyx federation yubikey-init` CLI
+it before this phase) and a new `aivyx-pa federation yubikey-init` CLI
 subcommand. Two structurally real bugs were caught in review, both fixed
 and independently re-verified against real vendored source: an incomplete
 first attempt at feature-gating the hardware dependency (Cargo resolves
@@ -4006,7 +4006,7 @@ frozen.
   LLM-drafted from a relationship conversation with a fully
   offline manual fallback + a "meet your assistant" preview.
 - **Phase 182 — Guided in-agent credential onboarding.**
-  `aivyx connect <service>` — Google Cloud guidance, config
+  `aivyx-pa connect <service>` — Google Cloud guidance, config
   write, shell-out to the tested `auth init`, `[[tool_process]]`
   auto-wire, startup surfacing.
 - **Phase 183 — Reminders (everyday-PA breadth #1).** Daemon-
@@ -4061,9 +4061,9 @@ Plugs into [`VERTICAL_PACKS.md`](VERTICAL_PACKS.md).
 the `MessageBus`, the `MissionPlan` **DAG** (cycle detection + ready-set)
 + the concurrent `TeamRuntime`, the `decompose_task`/`synthesize_results`/
 `verify_output`/`delegate_task`/`query_agent`/`send_message`/`read_message`
-tools, and `TeamAssembly` (the wiring entrypoint). The CLI: **`aivyx team
+tools, and `TeamAssembly` (the wiring entrypoint). The CLI: **`aivyx-pa team
 run "<mission>" [--config <pack.toml>]`** (in-process, on the HMAC chain,
-specialists holding their real attenuated tools) and **`aivyx team roster
+specialists holding their real attenuated tools) and **`aivyx-pa team roster
 [--config <pack.toml>]`**. First vertical: the **`aivyx-kitchen`** pack
 (Aria's Back-of-House Nonagon + the overnight-close mission, shipped as a
 `TeamConfig` + a TOML asset). TUI: the live **Missions** panel
@@ -4078,7 +4078,7 @@ of team missions.
 ## Chapter I — Interface & Reach (Phases 185+)
 
 How the End User **connects to, interacts with, launches, and
-runs** their Aivyx Agent. The load-bearing framing (DESIGN /
+runs** their Aivyx PA Agent. The load-bearing framing (DESIGN /
 PRODUCT P5): there is exactly **one daemon** — it holds the
 agent, state, capabilities, and audit — and every interface is a
 **frontend client** that connects over the local Unix-socket IPC
@@ -4101,7 +4101,7 @@ systemd/launchd wiring.
   job of the existing messaging channels.
 - **Headline frontend: a rich terminal TUI** (replacing the
   REPL).
-- **Productize launch/run:** `aivyx service install` (always-on
+- **Productize launch/run:** `aivyx-pa service install` (always-on
   daemon) + a first-run launch flow.
 
 > **A deliberate streak break.** A real TUI needs a terminal-UI
@@ -4184,12 +4184,12 @@ verify):**
 
 - **Daemon banner bleed on auto-spawn — FIXED.** The auto-spawned
   daemon inherited the frontend's controlling TTY, so its startup
-  banner (`aivyx config sources…`, `… listening on …`, the webhook
+  banner (`aivyx-pa config sources…`, `… listening on …`, the webhook
   line) printed onto the launching terminal — in the TUI it bled
   under the alternate screen. `spawn_daemon_and_wait` now redirects
   the daemon's stdout/stderr to a sibling `daemon.log` (next to the
   socket + pid). Verified: screen-banner count 0, `daemon.log`
-  banner count 3. Direct `aivyx daemon run` is unaffected.
+  banner count 3. Direct `aivyx-pa daemon run` is unaffected.
 - **`RecoveryNotice` broke the first connect after an unclean
   daemon shutdown — FIXED.** The daemon sends a `RecoveryNotice`
   envelope (take-once) between `DaemonReady` and `SessionStarted` to
@@ -4230,11 +4230,11 @@ daemon's job, not a pull-only tool process.
 
 ## Phase 182 — Guided In-Agent Credential Onboarding (Chapter H #3)
 
-**Frozen — see [PHASE_182.md](archive/phases/PHASE_182.md).** `aivyx connect
+**Frozen — see [PHASE_182.md](archive/phases/PHASE_182.md).** `aivyx-pa connect
 <service>` replaces the undocumented connect-a-tool sequence: it
 guides the Google Cloud app setup, writes `config.toml`, shells
 out to the tested per-service `auth init`, confirms, and offers
-to wire `[[tool_process]]`. Surfaces "run `aivyx connect`" for an
+to wire `[[tool_process]]`. Surfaces "run `aivyx-pa connect`" for an
 unauthenticated tool at startup.
 
 ## Phase 181 — Guided First-Launch Identity Builder (Chapter H #2)
@@ -4283,8 +4283,8 @@ tests, in band.
 ## Phase 177 — Loop Loose-Ends Bundle
 
 **Frozen — see [PHASE_177.md](archive/phases/PHASE_177.md).** Operator polish on
-the autonomous loop: live `tokens used` in `aivyx loop status`,
-`aivyx loop skip <id>`, and progress-note de-duplication.
+the autonomous loop: live `tokens used` in `aivyx-pa loop status`,
+`aivyx-pa loop skip <id>`, and progress-note de-duplication.
 
 ## Phase 176 — Loop Token-Budget Cap
 
@@ -4306,9 +4306,9 @@ backlog gets easier as it goes.
 verification that the loop's build/test gates actually ran and
 passed before a backlog story is marked complete.
 
-## Phase 173 — Autonomous Loop Foundation (the Aivyx Ralph Loop)
+## Phase 173 — Autonomous Loop Foundation (the Aivyx PA Ralph Loop)
 
-**Frozen — see [PHASE_173.md](archive/phases/PHASE_173.md).** Aivyx's native
+**Frozen — see [PHASE_173.md](archive/phases/PHASE_173.md).** Aivyx PA's native
 answer to the "Ralph" technique: a fully autonomous,
 self-re-arming agent loop over an HMAC-chained append-only
 backlog substrate, a re-arming driver (sibling of the reflection
@@ -4707,7 +4707,7 @@ to another Phase 125 Chapter G #2 candidate. Adds
 `budget.summary(period?, since?, until?)` to the
 aivyx-toolkit harness. Persistence follows the existing
 task_store pattern: JSON at
-`~/.aivyx/tool-processes/toolkit/budget.json` with
+`~/.aivyx-pa/tool-processes/toolkit/budget.json` with
 schema_version + 0600 perms + atomic write. Two new
 capability bases (budget.read / budget.write) Trusted-
 only by default like the rest of the toolkit. Zero new
@@ -4846,7 +4846,7 @@ hold per operator framing.
 ## Phase 135 — Voice I/O: Talk to the Agent, Agent Talks Back
 
 **Frozen — see [PHASE_135.md](archive/phases/PHASE_135.md).** First multimodal-
-interaction phase. Aivyx has shipped text + image input
+interaction phase. Aivyx PA has shipped text + image input
 through cloud LLMs since Phase 45, but operator-facing
 input has always been keyboard-only and agent output
 text-only. Phase 135 changes that: the operator speaks
@@ -4859,7 +4859,7 @@ inference.
 
 **Direct operator request:** "Talk to the agent and
 the agent talks back instead of just text on screen."
-Voice is the next UX axis Aivyx covers.
+Voice is the next UX axis Aivyx PA covers.
 
 **Q-block — 3 Recommended + 1 non-Recommended:**
 - Q1a — new `aivyx-voice` crate (Chapter-F-style
@@ -4915,7 +4915,7 @@ framing, intentional hold.
 **Frozen — see [PHASE_134.md](archive/phases/PHASE_134.md).** Largest
 architectural phase since Phase 121. Phase 133 set
 up the question — three first-class out-of-process
-providers; now what? Phase 134 answers: **Aivyx can
+providers; now what? Phase 134 answers: **Aivyx PA can
 embed a Rust-native LLM engine and ship as a single
 batteries-included binary**, by linking against
 `mistralrs` as a Rust dependency.
@@ -4952,7 +4952,7 @@ dep (mistralrs, behind opt-in gate). Test count
 - CUDA backend needs the CUDA toolkit; Metal
   needs macOS.
 - `mistralrs` is pre-1.0 — pinned to
-  `=0.8.*`; upgrade-by-Aivyx-version contract.
+  `=0.8.*`; upgrade-by-Aivyx-PA-version contract.
 - Per-model tool-call format detection may
   behave differently under embedded vs Ollama
   (Phase 135+ empirical validation).
@@ -4965,7 +4965,7 @@ Activation Milestone.**
 **Frozen — see [PHASE_133.md](archive/phases/PHASE_133.md).** First multi-provider
 phase since Phase 121 (which swapped Ollama's
 OpenAI-compat path for a native `/api/chat`
-adapter). Phase 133 widens Aivyx's local-LLM story
+adapter). Phase 133 widens Aivyx PA's local-LLM story
 from "Ollama only" to "Ollama as one option among
 first-class equals."
 
@@ -4996,7 +4996,7 @@ project doesn't publicly enumerate. The January
 2026 SentinelOne/Censys investigation found 175,000
 publicly-exposed Ollama hosts across 130 countries
 — governance gaps + prompt-injection proxy
-potential. Aivyx markets itself as privacy-first
+potential. Aivyx PA markets itself as privacy-first
 local-agent; "Ollama only" is misaligned without
 honest caveats.
 
@@ -5454,7 +5454,7 @@ Phase 128 ships:
     CEILING_TRUSTED)
 - **Two new capability bases:** `calendar.read`,
   `calendar.write`.
-- **`aivyx auth` extension** — Calendar uses the same
+- **`aivyx-pa auth` extension** — Calendar uses the same
   OAuth flow as Gmail with a different scope
   (`auth/calendar`); auth_cli copy parameterizes.
 - **INSTALL.md walkthrough** — operator-side setup
@@ -5532,7 +5532,7 @@ model based on their hardware (Llama 3.x for CPU-
 friendly setups, Qwen3-Coder for code-heavy work,
 Mistral Nemo for the midrange, Phi-4-mini for edge
 devices, Gemma 3/4 for the Google-fine-tuned path,
-DeepSeek R1 for reasoning). Aivyx's tool-call
+DeepSeek R1 for reasoning). Aivyx PA's tool-call
 substrate has to handle whichever the operator picked.
 The Phase 126 amendment was explicit: fix the tooling,
 not document the gap.
@@ -5741,12 +5741,12 @@ Phase 125 ships `aivyx-toolkit` — a single binary registering
 
 - **`web.search`** (1 tool, scope `web.search`) — Brave
   Search API; operator-provided API key in
-  `~/.aivyx/tool-processes/toolkit/config.toml`. Free tier
+  `~/.aivyx-pa/tool-processes/toolkit/config.toml`. Free tier
   fits personal use.
 - **`task.create / list / complete / delete`** (4 tools,
   scopes `task.read` + `task.write`) — lightweight TODO
   tracking; JSON file storage at
-  `~/.aivyx/tool-processes/toolkit/tasks.json` with
+  `~/.aivyx-pa/tool-processes/toolkit/tasks.json` with
   0600 perms.
 - **`health.check.add / list / recent_changes`** (3 tools,
   scopes `health.read` + `health.write`) — scheduled URL
@@ -5857,7 +5857,7 @@ failure on the load-bearing invocation question.** Neither
 qwen3.6:27b nor gemma4:31b produced an actual fs.write
 invocation through the protocol. A bonus glm-4.7-flash
 control (undetected family → strategy=none) showed the
-same failure mode without any Aivyx substrate, confirming
+same failure mode without any Aivyx PA substrate, confirming
 the failure is at the model layer, not Phase 124's
 substrate. **The model-layer ceiling holds definitively
 after four substrate attempts (Phase 120 fuzzy recovery
@@ -5895,7 +5895,7 @@ unchanged.
 opener. Operator-pressure pick after the audit's #1
 (Channel Activation Milestone) was deferred for the
 twelfth time. Targets the external-productivity-
-integrations axis: Aivyx as productivity assistant, not
+integrations axis: Aivyx PA as productivity assistant, not
 just chat surface.
 
 Phase 123 ships Gmail as a separate `aivyx-gmail` binary
@@ -5918,18 +5918,18 @@ per-tool-process file storage.
   drafts require explicit Gmail-UI send by the operator.
 - `gmail.send` — direct send (`email.send`); Trusted-tier
   only by default (mirrors `shell.exec` / `notify.send`
-  gating per Phase 62 Q2(a)). No undo from Aivyx.
+  gating per Phase 62 Q2(a)). No undo from Aivyx PA.
 
 **Auth substrate (Q1a Recommended):**
 - Operator-provided Google OAuth app — operator creates
   own GCP project, pastes `client_id` + `client_secret`
-  into `~/.aivyx/tool-processes/gmail/config.toml`. Aivyx
+  into `~/.aivyx-pa/tool-processes/gmail/config.toml`. Aivyx PA
   ships no shared OAuth app.
 - `aivyx-gmail auth init` CLI handles auth-code exchange
   via a local-loopback HTTP listener; CSRF state binding
   via UUID v4.
 - Per-tool-process token file at
-  `~/.aivyx/tool-processes/gmail/tokens.json` (0600 perms,
+  `~/.aivyx-pa/tool-processes/gmail/tokens.json` (0600 perms,
   atomic write-then-rename). Auto-refresh ~60s before
   token expiry; refresh-token preserved across refreshes
   (Google's typical behavior).
@@ -6001,7 +6001,7 @@ strategy + provenance (`family: qwen3, default` /
 - Q1c — Both substrate moves (non-Recommended). Per
   Phase 6 Q5 honest framing correction documented in
   open doc: "suppress in-prompt catalog" is a no-op
-  (Aivyx's system prompt has no tool catalog; tools
+  (Aivyx PA's system prompt has no tool catalog; tools
   flow via Ollama's protocol tools array only). The
   pick reduced to "ship per-turn injection."
 - Q2a — Per-model-family TOML config (Recommended).
@@ -6167,17 +6167,17 @@ path (#3), release prep, new Chapter F.
 
 **Frozen — see [PHASE_119.md](archive/phases/PHASE_119.md).** Audit-
 informed phase. Closes the manual-edit gap left by
-Phase 118 and the deferred `aivyx tool-relevance dump`
+Phase 118 and the deferred `aivyx-pa tool-relevance dump`
 CLI from Phase 116. Three new operator-side CLI
 commands shipped together:
-- `aivyx profile apply-hint <id>` — applies an
-  approved `ProfileHint` to `aivyx.toml`'s `[profile]`
+- `aivyx-pa profile apply-hint <id>` — applies an
+  approved `ProfileHint` to `aivyx-pa.toml`'s `[profile]`
   section atomically.
-- `aivyx role import <id>` — adds a new
+- `aivyx-pa role import <id>` — adds a new
   `[roles.<name>]` section from an approved
   `RoleDefinitionSuggestion` (with parent inheritance
   honored; refuses overwrite without `--force`).
-- `aivyx tool-relevance dump` — renders the encrypted
+- `aivyx-pa tool-relevance dump` — renders the encrypted
   Phase 116 relevance ledger as a human-readable table
   per keyword-key.
 
@@ -6214,7 +6214,7 @@ thorough coverage is worth the count. Same posture as
 Phase 118's +60 overshoot.
 
 Zero new workspace deps (`toml_edit` already
-transitively present from Phase 58 `aivyx profile
+transitively present from Phase 58 `aivyx-pa profile
 edit`). Zero clippy warnings.
 
 After Phase 119, **every named operator-value deferral
@@ -6231,8 +6231,8 @@ named Chapter E axis. Adds `ProfileHint` and
 proposer pipeline (heuristic + LLM-judge + routing) to
 fire for both, forces always-staged routing for the two
 new categories regardless of confidence, and surfaces
-approved drafts through the existing `aivyx persona
-proposals` CLI for operator copy into `aivyx.toml`.
+approved drafts through the existing `aivyx-pa persona
+proposals` CLI for operator copy into `aivyx-pa.toml`.
 
 **Q-block (one non-Recommended):**
 - Q1c — **Both Profile attributes AND new Role
@@ -6489,9 +6489,9 @@ Chapter D and Phase 112:
   `SkillAutoProposerContext` from the loaded TOML (makes
   the auto-proposer actually enable-able via config
   rather than only via source-edit).
-- Phase 112 operator-inspection flags: `aivyx persona
+- Phase 112 operator-inspection flags: `aivyx-pa persona
   list --auto-only` / `--manual-only` filter the persona
-  chain by `pd-auto-*` `delta_id` prefix; `aivyx audit
+  chain by `pd-auto-*` `delta_id` prefix; `aivyx-pa audit
   export --event-type SkillAutoProposal` filter
   on the existing audit-export JSONL emitter.
 - Phase 110-deferred A3 amendment addendum: `KNOWN_BASES`
@@ -6539,7 +6539,7 @@ at the skill layer end-to-end: complex turns fire the
 auto-proposer in a detached background task; high-confidence
 verdicts auto-accept into the LearnedSkill chain; below-
 threshold verdicts stage for operator review through the
-existing `aivyx persona proposals approve` surface.
+existing `aivyx-pa persona proposals approve` surface.
 
 **Streak outcomes** — 2 of 3 streaks held (1 positive
 surprise), 1 broke as predicted:
@@ -6563,8 +6563,8 @@ surface pieces shipped as a focused follow-on:
   `aivyx-config` (the struct exists in `aivyx-channel`
   with `Default` impl; promotion follows the Phase 91
   `RecallJudgmentConfig` precedent).
-- `aivyx persona list --auto-only` / `--manual-only` and
-  `aivyx audit export --event-type` filter flags. Data is
+- `aivyx-pa persona list --auto-only` / `--manual-only` and
+  `aivyx-pa audit export --event-type` filter flags. Data is
   already audit-logged; these are operator-convenience.
 
 **The Channel Activation Milestone is still unblocked**
@@ -6633,7 +6633,7 @@ complex turns, staged as Persona-style deltas the operator
 approves via the existing persona-proposal surface, then
 rendered into the agent's system prompt alongside Persona
 content on every subsequent turn. Mid-ground between
-Hermes's autonomous skill creation and Aivyx's current
+Hermes's autonomous skill creation and Aivyx PA's current
 per-action reflection propose / apply; stays inside P8's
 "outcome-driven audited reflection" envelope. Q1a chose
 **11th PersonaDeltaCategory variant `LearnedSkill`** reusing
@@ -6684,14 +6684,14 @@ to confirmed-at-three). Adds a new workspace crate
 (`aivyx-slack`) at foundation scope — DMs + channel
 messages only; threads, Block Kit, attachments, slash
 commands all stay named deferrals. The headline outcome: an
-operator with a Slack workspace runs `aivyx --channel slack`
+operator with a Slack workspace runs `aivyx-pa --channel slack`
 with a bot token + an app-level Socket Mode token, talks to
 the bot from any DM or invited channel, and gets the same
 agent experience they already get on Discord and Telegram.
 Q1a chose **slack-morphism** as the SDK (thin protocol
 wrapper, matches Phase 107's twilight-rs decision). Q2a
 chose **Socket Mode only** (WebSocket initiated outbound
-from aivyx, no public endpoint — matches Discord's Gateway
+from aivyx-pa, no public endpoint — matches Discord's Gateway
 shape and the substrate's local-daemon posture). Q3a chose
 `format!("{team_id}:{channel_id}")` as the partition key —
 **confirms three-data-point `Option<String>` partition
@@ -6755,7 +6755,7 @@ Channel Activation Milestone per the
 
 **Frozen — see [PHASE_106.md](archive/phases/PHASE_106.md).** The second
 Chapter D item. Phase 46 shipped the first bundled MCP server
-(`aivyx mcp-server web-search`); Phase 24 / 32 shipped the
+(`aivyx-pa mcp-server web-search`); Phase 24 / 32 shipped the
 external `[[mcp_server]]` TOML surface for plugging in any
 MCP-compatible binary; Phase 55 shipped the sandbox layer
 that wraps each spawn. What was missing was the **catalog** —
@@ -6764,11 +6764,11 @@ actually enable, and what do their blocks look like with the
 right sandbox config?" Phase 106 shipped that catalog as
 `docs/MCP_RECIPES.md` (12 worked recipes: filesystem, github,
 gitlab, sqlite, postgres, time, fetch, brave-search, slack,
-memory, puppeteer, everything) plus a new `aivyx mcp recipes
+memory, puppeteer, everything) plus a new `aivyx-pa mcp recipes
 [<name>]` CLI subcommand for in-shell discovery. Q1a chose
 recipes-only scope (no new bundled-server code paths); Q2a
 chose the doc + CLI surface (mirrors Phase 103's
-`aivyx tool init`); Q3a chose inline `[mcp_server.sandbox]`
+`aivyx-pa tool init`); Q3a chose inline `[mcp_server.sandbox]`
 per recipe so a copy-paste produces a sandboxed config out of
 the gate (Phase 55 substrate-default posture). All three
 streak predictions held: DESIGN.md → 53, PRODUCT.md → 6,
@@ -6782,7 +6782,7 @@ clearly than a single combined test would). New
 bundled-server code stays a Chapter D deferral pending
 operator pressure.
 
-## Phase 105 — Trajectory Logging (`aivyx audit export`) (Chapter D opener)
+## Phase 105 — Trajectory Logging (`aivyx-pa audit export`) (Chapter D opener)
 
 **Frozen — see [PHASE_105.md](archive/phases/PHASE_105.md).** Chapter D's
 opener and the easiest-wins-first item of the Hermes-
@@ -6796,7 +6796,7 @@ sequence-based only (`--from <seq>` + `--limit <N>` — Q2a)
 mapping directly to `PersistentAuditLog::entries_range`,
 which Phase 47 already shipped for the Web UI paginated
 viewer. Source path is offline-only via cold-start storage
-open (Q3a) — same code path as `aivyx --verify-only`,
+open (Q3a) — same code path as `aivyx-pa --verify-only`,
 requires the passphrase, no new IPC variant. All three
 streak predictions held: DESIGN.md → 52, PRODUCT.md → 5,
 `aivyx-core/src/lib.rs` → 5. Zero new workspace deps;
@@ -6810,7 +6810,7 @@ Three named deferrals at exit: time-range filters
 (`--session` / `--mission`), and daemon-mode export over
 the Phase 47 `Query` envelope.
 
-## Phase 104 — `aivyx init` Polish (Chapter C opener)
+## Phase 104 — `aivyx-pa init` Polish (Chapter C opener)
 
 **Frozen — see [PHASE_104.md](archive/phases/PHASE_104.md).** Chapter C's
 opener. After 60-plus phases of substrate work, the init
@@ -6889,14 +6889,14 @@ held — DESIGN.md → 48, PRODUCT.md and `aivyx-core/src/lib.rs`
 each re-establish to 1 after their Phase 100 breaks.
 Workspace tests `+9` → 1787.
 
-## Phase 102 — Tool Observability (`aivyx tools`) (Chapter B)
+## Phase 102 — Tool Observability (`aivyx-pa tools`) (Chapter B)
 
 **Frozen — see [PHASE_102.md](archive/phases/PHASE_102.md).** Chapter B's
 observability item. Phase 100 widened the tool surface and
 Phase 101 made tool calls more reliable; neither gave the
 operator a way to *see* the tool layer. Phase 102 adds
-`aivyx tools` — a read-only subcommand, sibling of `aivyx
-memory` / `aivyx learning`, that lists every registered
+`aivyx-pa tools` — a read-only subcommand, sibling of `aivyx-pa
+memory` / `aivyx-pa learning`, that lists every registered
 tool (name, description, capability base) and annotates
 each with audit-derived call statistics: total calls, the
 outcome breakdown (completed / failed / denied / …), and
@@ -6910,20 +6910,20 @@ untouched. Streaks at exit: all three held — DESIGN.md → 49,
 PRODUCT.md → 2, `aivyx-core/src/lib.rs` → 2. Zero new deps;
 workspace tests `+12` → 1799.
 
-## Phase 103 — External Tool Ergonomics (`aivyx tool init`) (Chapter B)
+## Phase 103 — External Tool Ergonomics (`aivyx-pa tool init`) (Chapter B)
 
 **Frozen — see [PHASE_103.md](archive/phases/PHASE_103.md).** Chapter B's
 closing item. Three Chapter B phases shipped the *operator's*
 tool experience (Phase 100 surface, Phase 101 reliability,
 Phase 102 observability); Phase 103 closes the chapter on the
-*third-party tool author's* experience. `aivyx tool init
+*third-party tool author's* experience. `aivyx-pa tool init
 <path>` writes a runnable Rust tool-process project: a
 `Cargo.toml` depending on the existing `aivyx-tool` crate
 (which already re-exports the wire types and framing — no new
 SDK helper to add), a `src/main.rs` with the handshake +
 invocation main loop and a handler stub the author replaces,
 a README, a conformance test, and a `[[tool_process]]`
-snippet to paste into `aivyx.toml`. Rust over Python at
+snippet to paste into `aivyx-pa.toml`. Rust over Python at
 operator choice (Q2): the existing `examples/python-tool/`
 already covers stdlib-Python, and the missing scaffold is for
 authors who want the `wire.rs` enums' type-safety and the
@@ -6937,8 +6937,8 @@ consecutive phases), PRODUCT.md → 3, `aivyx-core/src/lib.rs`
 (`fs.delete`, `fs.metadata`, A11 amending P10 to ten tools);
 Phase 101 added planner validate-before-dispatch + repair so
 malformed tool calls round-trip back to the model for fixing;
-Phase 102 added `aivyx tools`, the read-only observability
-view; Phase 103 added `aivyx tool init`, the scaffolder for
+Phase 102 added `aivyx-pa tools`, the read-only observability
+view; Phase 103 added `aivyx-pa tool init`, the scaffolder for
 third-party tool authors. All four expected items shipped;
 no further pre-named Chapter B phases remain.
 
@@ -6999,7 +6999,7 @@ operation, a future cleanup phase will absorb it.
 command-wrapper sandbox layer to `[[tool_process]]`.
 `[tool_process.sandbox] { wrapper, args }` is prepended to the
 spawn — `wrapper wrapper_args... command command_args...`.
-Aivyx supplies the policy slot; the operator supplies the
+Aivyx PA supplies the policy slot; the operator supplies the
 policy (bubblewrap, firejail, docker, sandbox-exec). Closes
 the Phase 49 sandboxing deferral and narrows THREAT_MODEL.md
 §5.6. New `aivyx-tool::SandboxConfig` + matching `aivyx-config`
@@ -7024,9 +7024,9 @@ Chapter A cleanup phase. Closed three independent items:
 2. **`handle_connection` → `ConnectionContext` lift.** Removes
    the Phase 47 Task 4 `#[allow(clippy::too_many_arguments)]`
    shortcut; same shape as Phase 41 `DaemonConfig`.
-3. **`AIVYX_PASSPHRASE` TOML/env inconsistency.** New
+3. **`AIVYX_PA_PASSPHRASE` TOML/env inconsistency.** New
    `PassphraseSource::FromConfig(SecretString)` makes the
-   `[aivyx] passphrase` TOML field actually drive Argon2id
+   `[aivyx_pa] passphrase` TOML field actually drive Argon2id
    derivation. Phase 47 visual-pass footgun closed.
 
 979 Rust tests (+6), zero clippy. lib.rs streak broke at 6

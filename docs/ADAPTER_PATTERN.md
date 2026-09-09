@@ -1,7 +1,7 @@
 # Adapter pattern — how to add a new `ChannelContext`
 
 This document is the **future-proof checklist** for adding a new
-channel adapter to Aivyx. It was written at Phase 9 exit with exactly
+channel adapter to Aivyx PA. It was written at Phase 9 exit with exactly
 two adapters in the tree (`LocalChannel` in `aivyx-channel` and
 `TelegramChannel` in `aivyx-telegram`). Phase 107 added the third
 data point (`DiscordChannel` in `aivyx-discord`); Phase 108 added
@@ -116,7 +116,7 @@ ladder is wrong," that's a D4 amendment, not a workaround — see
 
 ## The sibling `run_*_session` pattern
 
-Aivyx has two session drivers. They are **deliberately not a shared
+Aivyx PA has two session drivers. They are **deliberately not a shared
 function**:
 
 - `crates/aivyx-channel/src/session.rs:150` — `run_session` drives
@@ -225,7 +225,7 @@ the request/response pairs without standing up a mock HTTP server.
 
 ## `session_partition` and the multi-tenant story
 
-A single process running `aivyx --channel telegram` can serve N
+A single process running `aivyx-pa --channel telegram` can serve N
 Telegram chats. Each chat needs its own memory namespace or chats
 will see each other's `memory.read`/`memory.write` output. The
 mechanism is `ChannelContext::session_partition()`, which returns
@@ -371,7 +371,7 @@ When you sit down to add adapter #3, the concrete steps:
    persistent audit chain in the test — mock audits don't catch the
    bugs persistent audits do.
 6. **Wire the binary.** Add a `ChannelKind::<Yours>` variant to the
-   `aivyx` binary's channel dispatch. `aivyx-config` already owns
+   `aivyx-pa` binary's channel dispatch. `aivyx-config` already owns
    env-var / TOML / encrypted-store config loading, so your adapter
    plugs into the existing shape rather than inventing its own
    env-var vocabulary.
@@ -531,7 +531,7 @@ These hold regardless of language, library, transport-on-top,
 or distribution form:
 
 - The IPC socket is authenticated by file-mode 0600 + UID match
-  via `SO_PEERCRED` (Linux). No Aivyx-level password.
+  via `SO_PEERCRED` (Linux). No Aivyx PA-level password.
 - Every tool call is scope-checked before execution.
 - Every tool call, scope check, and outcome lands in the audit
   chain synchronously.

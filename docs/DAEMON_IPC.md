@@ -1,4 +1,4 @@
-## Aivyx Daemon IPC Protocol — Phase 16
+## Aivyx PA Daemon IPC Protocol — Phase 16
 
 A cross-phase reference document specifying the IPC protocol shape
 that the daemon (Phase 16+) and all frontends communicate over.
@@ -17,8 +17,8 @@ For the phase journal, see [`PHASE_16.md`](archive/phases/PHASE_16.md).
 **Unix domain socket** at a well-known path:
 
 ```text
-$XDG_RUNTIME_DIR/aivyx/daemon.sock      (preferred)
-$HOME/.local/share/aivyx/daemon.sock     (fallback when XDG_RUNTIME_DIR is unset)
+$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock      (preferred)
+$HOME/.local/share/aivyx-pa/daemon.sock     (fallback when XDG_RUNTIME_DIR is unset)
 ```
 
 The daemon creates the socket file with mode `0600`, owned by the
@@ -176,7 +176,7 @@ mode `0600`. On Linux, the daemon additionally verifies via
 daemon's own UID. A UID mismatch is a hard `Error` and the
 connection is closed immediately.
 
-There is no Aivyx-level password, token, or challenge-response
+There is no Aivyx PA-level password, token, or challenge-response
 handshake. Per P6, identity equals OS user.
 
 ---
@@ -291,7 +291,7 @@ pattern.
 ## Phase 102 addendum — `GetToolStats` tool-observability query
 
 `QueryPayload::GetToolStats { window_secs: Option<u64> }` is a
-read-only query backing the `aivyx tools` CLI subcommand.
+read-only query backing the `aivyx-pa tools` CLI subcommand.
 `window_secs = None` scopes the answer to the whole audit
 chain; `Some(n)` to `ToolCall` events from the last `n`
 seconds.

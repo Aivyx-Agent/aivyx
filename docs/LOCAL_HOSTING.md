@@ -3,14 +3,14 @@
 > **Who this is for.** [`LOCAL_FIRST_RUN.md`](LOCAL_FIRST_RUN.md) makes the *free
 > on-ramp* "just work" on modest hardware — a small tool-capable model
 > (`qwen3:8b`), a conservative auto `num_ctx` (≤16 384), zero config. **This
-> guide is the opposite end:** running Aivyx on a **dedicated or capable GPU
+> guide is the opposite end:** running Aivyx PA on a **dedicated or capable GPU
 > box** — e.g. a 24 GB **RTX 3090** — where the goal is to use the hardware
 > *well*: a bigger, more capable model, a larger context window, and (optionally)
 > embedded in-process inference.
 >
 > The defaults are deliberately tuned for the lowest common denominator, so on a
 > capable card they leave most of the GPU idle. Nothing here is a code change —
-> it's **how to configure** the local path Aivyx already supports. Treat every
+> it's **how to configure** the local path Aivyx PA already supports. Treat every
 > number below as a **starting point to verify on your own card**, not gospel:
 > model footprints, quantization quality, and token throughput vary, and the
 > whole point of a dedicated box is that you can *measure* and tune.
@@ -21,9 +21,9 @@
 
 | Path | What it is | When to choose it |
 |---|---|---|
-| **Ollama** *(recommended start)* | A separate local server (`ollama serve`) Aivyx talks to over HTTP. Manages models, GPU layers, and quantization for you. | Easiest. Great for a dedicated box — run it as a service, point Aivyx at it. |
+| **Ollama** *(recommended start)* | A separate local server (`ollama serve`) Aivyx PA talks to over HTTP. Manages models, GPU layers, and quantization for you. | Easiest. Great for a dedicated box — run it as a service, point Aivyx PA at it. |
 | **llama.cpp / Jan** | Any OpenAI-compatible local server. | You already run one, or want fine control over the server. |
-| **Embedded `mistralrs` (CUDA)** | Inference compiled *into* the Aivyx binary — no separate server. Built with `--features provider-mistral-rs-cuda`. | A single self-contained process; no server to manage. Heavier build; validate on your card. |
+| **Embedded `mistralrs` (CUDA)** | Inference compiled *into* the Aivyx PA binary — no separate server. Built with `--features provider-mistral-rs-cuda`. | A single self-contained process; no server to manage. Heavier build; validate on your card. |
 
 For a first dedicated-box setup, **Ollama is the path of least resistance.** The
 embedded CUDA route is the "one process, no server" option — worth it once the
@@ -51,15 +51,15 @@ grows with `num_ctx`. Bigger context = less room for weights, and vice-versa.
   long-running missions, big documents, or deep memory recall, and 14B's quality
   is enough.
 
-A dedicated box lets you keep *both* pulled and switch (`aivyx autonomy`/config +
+A dedicated box lets you keep *both* pulled and switch (`aivyx-pa autonomy`/config +
 restart) to compare on your actual tasks — which is exactly the capability
 testing you're planning. **Measure tokens/sec and answer quality; don't guess.**
 
 ## 3. Raise the context window (the one knob that matters most)
 
-Aivyx auto-sets `num_ctx = min(native, 16384)` **only when you haven't set it** —
+Aivyx PA auto-sets `num_ctx = min(native, 16384)` **only when you haven't set it** —
 a VRAM-safe default for unknown hardware. On a 24 GB card that's leaving capacity
-on the table. Set it explicitly in `aivyx.toml`:
+on the table. Set it explicitly in `aivyx-pa.toml`:
 
 ```toml
 [ollama]
@@ -69,13 +69,13 @@ num_ctx = 24576
 ```
 
 An explicit value **always wins** over the auto-cap. If you over-set it and the
-model OOMs or spills to system RAM (slow), step it down. `aivyx doctor` will tell
+model OOMs or spills to system RAM (slow), step it down. `aivyx-pa doctor` will tell
 you the model loads and replies; throughput you measure yourself.
 
 ## 4. Reliable tool-calling on a local model
 
 Local/quantized models are far less reliable than Claude at emitting clean tool
-calls — they drift, hallucinate tool names, or wrap JSON in prose. Aivyx has two
+calls — they drift, hallucinate tool names, or wrap JSON in prose. Aivyx PA has two
 defenses; **turn them on for a local host:**
 
 - **Grammar-constrained decoding** (Chapters Stencil/Emboss) — forces the model
@@ -91,7 +91,7 @@ defenses; **turn them on for a local host:**
   local model on an autonomous loop — and the daemon now survives a runaway turn
   rather than dying on it.
 
-`qwen3` is the family verified against Aivyx's thinking-field + tool-call
+`qwen3` is the family verified against Aivyx PA's thinking-field + tool-call
 handling; start there and branch out as you test.
 
 ## 5. Running it as a dedicated host
@@ -101,26 +101,26 @@ A recipe for a box whose job is to *be* the agent (e.g. the 3090 machine):
 1. **Install the GPU stack** — NVIDIA driver + CUDA; Ollama (it handles the GPU
    layers). Confirm the card is seen: `nvidia-smi`.
 2. **Pull a model for your tier** (§2) — keep two if you want to compare.
-3. **Configure** `aivyx.toml`: `provider = "ollama"`, `model = "<your choice>"`,
+3. **Configure** `aivyx-pa.toml`: `provider = "ollama"`, `model = "<your choice>"`,
    `[ollama] num_ctx = <your tier>`, and the tool-calling/safety knobs (§4).
 4. **Choose reach + autonomy deliberately** — this is a box you trust, so
    `[access] level` and `[autonomy] level` are real decisions; read
    [`SECURITY_POSTURE.md`](SECURITY_POSTURE.md) and [`AUTONOMY.md`](AUTONOMY.md)
    first. A dedicated box running autonomous loops is exactly where the
    containment model earns its keep.
-5. **Verify** with `aivyx doctor` (it runs a real tool-using generation through
-   the agent's path), then run the daemon (`aivyx daemon run`) and reach it from
+5. **Verify** with `aivyx-pa doctor` (it runs a real tool-using generation through
+   the agent's path), then run the daemon (`aivyx-pa daemon run`) and reach it from
    the Studio or a channel.
 6. **Run it as a service** so it survives reboots (systemd user unit around
-   `aivyx daemon run`); keep the audit chain and budgets on.
+   `aivyx-pa daemon run`); keep the audit chain and budgets on.
 
 ## 6. Verify, then tune — this *is* the capability test
 
 The dedicated box is the truest excellence test. As you exercise it:
 
-- **`aivyx doctor`** confirms the model loads and produces real tool-using
+- **`aivyx-pa doctor`** confirms the model loads and produces real tool-using
   replies, and points back here.
-- **Watch the audit chain + `aivyx cost`/budgets** — even local turns are
+- **Watch the audit chain + `aivyx-pa cost`/budgets** — even local turns are
   metered (tokens), so you can see where the agent spends effort.
 - **Measure** tokens/sec and answer quality on *your* tasks, then revisit §2/§3:
   bigger model or bigger context? More `num_ctx` or less?

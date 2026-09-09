@@ -2,10 +2,10 @@
 
 *Since v0.7.1.*
 
-When you run `aivyx init`, the wizard plants a small set of **scheduled
+When you run `aivyx-pa init`, the wizard plants a small set of **scheduled
 routines** — recurring background tasks the agent runs on its own so a fresh
 agent orients itself and stays useful unattended. They are ordinary
-[`[[schedule]]`](#the-schedule-primitive) entries in your `aivyx.toml`; nothing
+[`[[schedule]]`](#the-schedule-primitive) entries in your `aivyx-pa.toml`; nothing
 is hidden, and you can edit, disable, or delete any of them.
 
 > Design principle: a routine runs **unattended**, so every default routine is
@@ -41,7 +41,7 @@ scheduled run on a **cloud** provider silently spends tokens:
 | **Ollama (local)** | **enabled** (runs are free) | enabled **iff** you enabled web search |
 | **Anthropic / OpenAI (cloud)** | written **present-but-disabled** | written disabled |
 
-On a cloud provider the routines are still written to `aivyx.toml` so they're
+On a cloud provider the routines are still written to `aivyx-pa.toml` so they're
 discoverable — flip `enabled = true` on any you want (and mind your
 [`[budget]`](COST_GOVERNANCE.md)). The wizard prints a one-line summary of what
 it set up, so this is never surprise behavior.
@@ -87,9 +87,9 @@ goal = "Run end-of-day BOH close."
 # pack_config = "crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml"  # optional -- absolute, or relative to the daemon's own working directory. Omit for the daemon's default team.
 ```
 
-The mission runs exactly like a manually-run `aivyx team run` — if it
+The mission runs exactly like a manually-run `aivyx-pa team run` — if it
 hits a human gate, it parks in `AwaitingApproval` (visible in Mission
-Control / `aivyx team status`) rather than firing headless; a mission
+Control / `aivyx-pa team status`) rather than firing headless; a mission
 started this way is tagged with the schedule that started it. `enabled`/
 `notify_target`/`notify_targets` all work the same as a normal schedule
 (as long as they're placed above `[schedule.team_mission]`, per the
@@ -102,18 +102,18 @@ decompose) is unconditional today.
 
 Can also be created conversationally by asking the agent to schedule a
 team mission — the agent's own `schedule.create` tool accepts `goal`
-(never `pack_config`, which is operator-only, set via `aivyx.toml`
+(never `pack_config`, which is operator-only, set via `aivyx-pa.toml`
 directly) as an alternative to `prompt`.
 
 ### A third way to start one: `/team run <goal>` from chat
 
-Besides `aivyx team run "<goal>"` (CLI) and a `[schedule.team_mission]`
+Besides `aivyx-pa team run "<goal>"` (CLI) and a `[schedule.team_mission]`
 routine (above), a team mission can also be started **on demand from
 Telegram/Discord/Slack** by typing `/team run <goal>` in an opted-in
 channel — no daemon restart or config edit needed per-mission, unlike a
 schedule. The operator opts a channel in with `team_run_channel = true`
 in that channel's config (`[telegram]`/`[discord]`/`[slack]` in
-`aivyx.toml`; default `false` — off everywhere until set), and an
+`aivyx-pa.toml`; default `false` — off everywhere until set), and an
 optional `team_trigger_rate_limit` caps how many confirmed starts one
 chat can trigger per rolling hour. Every `/team run` is confirm-first:
 the bot asks "Start '<goal>' on the default team? Reply yes/no." and
@@ -142,7 +142,7 @@ sections for the config knobs.
   refuse when called from within a scheduled or triggered run (cron, webhook,
   file-watch, reflection, the autonomous loop, or any team mission started
   from within such a run), so an unattended run can't recursively create more
-  automation. Editing `aivyx.toml`'s `[[schedule]]` blocks directly is
+  automation. Editing `aivyx-pa.toml`'s `[[schedule]]` blocks directly is
   unaffected.
 
 ## See also

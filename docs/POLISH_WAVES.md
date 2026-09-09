@@ -71,9 +71,9 @@ default-members, full `cargo test` zero failures, throughout.
   after Vitrine itself — that hides the Create nav entry once a
   Profile exists. Shipped, just never recorded anywhere, same pattern
   as Vitrine/Fleet-panel's own staleness. No code change needed.
-- ✅ **Fixed** — Gatehouse token reveal affordance (§13). New `aivyx
+- ✅ **Fixed** — Gatehouse token reveal affordance (§13). New `aivyx-pa
   doctor` "Web UI (Gatehouse):" section reveals the configured token
-  instead of sending the operator to grep `aivyx.toml`. "Regenerate"
+  instead of sending the operator to grep `aivyx-pa.toml`. "Regenerate"
   (a write) stayed out of scope for this read-only command.
 - ✅ **Fixed** — `SkillInvocation.session_id` vs `TurnStarted.session_id`
   divergence (§6). Root-caused, not just logged: `IpcChannelBridge::
@@ -104,7 +104,7 @@ default-members, full `cargo test` zero failures, throughout.
   `docs/INSTALL.md` and a new `docs/GATEHOUSE.md` "Known gap" section
   cross-reference the same finding.
 - ✅ **Fixed** — rate-limited rejected-token log line (§0 P2). Both 401
-  rejection sites in `aivyx-channel/src/web_ui.rs` now log `aivyx web
+  rejection sites in `aivyx-channel/src/web_ui.rs` now log `aivyx-pa web
   ui: rejected token from <ip>`, rate-limited per-IP (boundary-tested)
   rather than once per request.
 
@@ -142,7 +142,7 @@ for each:
   `persona_selection`, `proactive`, `persona_lifecycle`,
   `accumulated_helpfulness`, `cooccurrence`, and `cluster_recall`. No
   capability was lost — every field is still available via the
-  `aivyx learning` CLI command — but the Studio's own GUI surface for
+  `aivyx-pa learning` CLI command — but the Studio's own GUI surface for
   this data narrowed on the port. Expanding the card to show the full
   field set is real, scoped follow-on work if wanted, not something
   assumed done here.
@@ -188,7 +188,7 @@ was simply never checked against `REPERTOIRE.md`'s later state.
 Only the **Studio "Add skill" write UI** was genuinely missing — closed
 by adding a "Teach a skill" form to the Skills screen, wired to Chapter
 Tutor's already-working `FrontendMessage::AuthorSkill`/
-`SkillAuthorOp::Teach` (already used by the CLI's `aivyx skills teach`;
+`SkillAuthorOp::Teach` (already used by the CLI's `aivyx-pa skills teach`;
 no backend changes needed at all). **Corrected mechanism assumption**:
 this row's own "reuses the proven `toml_edit` writer + ... restart-
 required UX recipe" claim was wrong — Chapter Tutor writes directly to
@@ -279,7 +279,7 @@ fixed before merge, then closed with a second follow-up plan:
   of the same "wrong marker occurrence" bug (the model's own organic
   text opening a paragraph with a bare "⚠ " could still misfire) —
   fixed. The review also found the daemon-backed CLI REPL (the default
-  `aivyx` interactive chat) had the identical gap; added as a 5th task
+  `aivyx-pa` interactive chat) had the identical gap; added as a 5th task
   and closed in the same pass.
 - **Deferred, not fixed on this branch** — the same final review named
   two more surfaces with the identical raw-event-vs-outcome gap:
@@ -328,7 +328,7 @@ it; no 6th item was hiding there.
   production and would have shown "attempt 1" during the actual 2nd
   attempt if it had). Fixed to `>= 1` / `verify_attempts + 1`.
 - ✅ **Handoff-fidelity prompts** (§3 P2 ×2). One string in
-  `aivyx-team`'s shared `build_input` (used by both the CLI's `aivyx
+  `aivyx-team`'s shared `build_input` (used by both the CLI's `aivyx-pa
   team run` and Mission-Control-driven missions) now states plainly
   that upstream context IS the specialist's real input.
 - ✅ **Mission topic-naming discipline** (§4 P2) — shipped 2026-09-03,
@@ -478,7 +478,7 @@ its click/select handler.
 
 ## 7 · Config-write surface area ("credentials in Studio") — V09_PLAN row 8 folded in
 
-The largest, most architecturally novel piece: the first time Aivyx
+The largest, most architecturally novel piece: the first time Aivyx PA
 handles real credentials (bot tokens, webhook URLs, SMTP creds, MCP
 server `env`/`headers`) through a web form rather than hand-edited
 TOML. Design:
@@ -516,7 +516,7 @@ tracking doc's own prose:
   found and fixed 2 Critical issues before merge**: the config-read
   path was sending the daemon's fully `${VAR}`-*resolved* env/header
   values to the browser, which Save then baked back into plaintext
-  `aivyx.toml` on a single click, permanently destroying the
+  `aivyx-pa.toml` on a single click, permanently destroying the
   placeholder (fixed with a raw-TOML, non-interpolating reader); and
   the array-of-table upsert was silently deleting `[mcp_server.
   sandbox]`/`bundled` on every edit, removing a documented
@@ -631,7 +631,7 @@ than trusted from connection-time status alone.
 doc's own framing half-stale**: item A ("a shared audit-chain
 call-stat aggregator") turned out to already be fully shipped — Phase
 102's `GetToolStats`/`fold_tool_stats`, already backing a working
-`aivyx tools` CLI command — nobody had cross-referenced it when this
+`aivyx-pa tools` CLI command — nobody had cross-referenced it when this
 sub-project was split out. But it has a real, unaddressed gap for MCP
 specifically: it groups by `Scope::base()`, which collapses every
 `[[mcp_server]]`'s tool calls into the single literal bucket
@@ -646,7 +646,7 @@ new aggregation dimension.
 - ✅ **B — TUI Tools view** (`VITRINE.md` §12) — `aivyx-tui`'s
   placeholder `View::Tools` now renders real `GetToolStats` data
   (tool name, `[unregistered]` marker, call count, outcome breakdown,
-  avg duration — mirroring the `aivyx tools` CLI's own text layout),
+  avg duration — mirroring the `aivyx-pa tools` CLI's own text layout),
   fetched once on switching into the view, following `View::Audit`'s
   own established "no background poll" posture exactly.
 - ✅ **C — MCP per-server health signal** (`VITRINE.md` §10) — a new

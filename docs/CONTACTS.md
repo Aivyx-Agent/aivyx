@@ -6,7 +6,7 @@
 > third-party tool-process binary over the Google People API (cloned from the
 > `aivyx-drive` OAuth-binary template, consuming `aivyx-google-oauth`), six
 > tools (`contacts.search` / `list` / `get` + `create` / `update` / `delete`),
-> and `aivyx connect contacts` guided onboarding. The first **Broaden** chapter
+> and `aivyx-pa connect contacts` guided onboarding. The first **Broaden** chapter
 > — the everyday-PA domain expansion seeded by finding **F4** of the
 > [2026-06-16 backend audit](BACKEND_AUDIT_2026-06-16.md) ("the covered set
 > still skews developer / knowledge-worker"). Contacts is the first slice:
@@ -25,7 +25,7 @@
 
 ## 1. The gap — the assistant doesn't know your people
 
-Aivyx can read your inbox (Gmail), your calendar, your files (Drive), your
+Aivyx PA can read your inbox (Gmail), your calendar, your files (Drive), your
 notes (Notion / Obsidian), and run your automations (n8n). What it cannot do
 is answer *"what's Dana's email?"* or *"add my new dentist to my contacts."*
 For a personal assistant, the address book is foundational — almost every
@@ -50,7 +50,7 @@ verbatim:
 |---|---|
 | Separate binary per service (`aivyx-drive`) | new `aivyx-contacts` binary |
 | Operator-provided Google OAuth client | same — reuses `aivyx-google-oauth` |
-| Per-process token file (`~/.aivyx/tool-processes/{service}/tokens.json`) | `.../contacts/tokens.json` |
+| Per-process token file (`~/.aivyx-pa/tool-processes/{service}/tokens.json`) | `.../contacts/tokens.json` |
 | Multi-tool IPC harness (`aivyx-tool`) | same harness, no copy |
 | `auth_cli/` (`init`/`status`/`revoke`) | same five-module CLI |
 | `[[tool_process]]` operator config entry | same — no daemon spawn code |
@@ -144,7 +144,7 @@ against a token whose `granted_scope` lacks it — the same startup check
 ## 6. Config
 
 No new config schema — Contacts is a `[[tool_process]]` like every Chapter F
-binary. The operator adds one entry to `aivyx.toml`:
+binary. The operator adds one entry to `aivyx-pa.toml`:
 
 ```toml
 [[tool_process]]
@@ -157,7 +157,7 @@ command = "aivyx-contacts"
 # [tool_process.scope_overrides]
 ```
 
-The fastest path is `aivyx connect contacts`, which writes the
+The fastest path is `aivyx-pa connect contacts`, which writes the
 config, runs the consent flow, and offers to add the
 `[[tool_process]]` entry for you. To do it by hand, run the
 one-time OAuth handshake out-of-band:
@@ -169,7 +169,7 @@ aivyx-contacts auth revoke    # delete the local token file
 ```
 
 OAuth client credentials live in
-`~/.aivyx/tool-processes/contacts/config.toml` (operator-supplied
+`~/.aivyx-pa/tool-processes/contacts/config.toml` (operator-supplied
 `client_id` / `client_secret` / `redirect_uri`), identical to Drive.
 
 ## 7. Phase plan

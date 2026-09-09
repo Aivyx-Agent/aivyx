@@ -3,7 +3,7 @@
 > **Status:** design contract. This is the spec Chapter O scaffolds from
 > (mirrors `docs/ACCESS_LEVELS.md` / `docs/HEADLESS_MODE.md`).
 >
-> Aivyx can put information in two places today: **memory** (`memory.*` —
+> Aivyx PA can put information in two places today: **memory** (`memory.*` —
 > discrete facts for semantic recall) and the **operator's `fs_root`** (the
 > shared work area, access-level-controlled by Chapter N — but those are the
 > *operator's* files, and `fs_root` may be a narrow sandbox or not granted).
@@ -21,7 +21,7 @@
 | Decision | Choice | Why |
 |---|---|---|
 | Shape | **Dedicated filesystem workspace** | Free-form, multi-file, hierarchical — fits "Projects" and evolving plans, which memory's flat topic-keyed recall cannot. Memory stays as-is for recall facts. |
-| Location | **Always-available private dir** (`~/.aivyx/workspace/`) | The agent ALWAYS has its own space — even at `access level = sandbox`. Independent of `fs_root`; cleanly separate from the operator's files. |
+| Location | **Always-available private dir** (`~/.aivyx-pa/workspace/`) | The agent ALWAYS has its own space — even at `access level = sandbox`. Independent of `fs_root`; cleanly separate from the operator's files. |
 | Autonomy | **Proactive journaling** | The agent periodically reflects on recent activity and writes to its journal on its own — not only when asked. Bounded (at most once per interval, only when there's activity). |
 | Reach | **The workspace only** | `workspace.*` tools are rooted at the workspace dir and contained there (the fs.rs fence). They never touch `fs_root` or anywhere else; they are NOT a way around the Chapter N access boundary. |
 | Safety posture | **No confirm-first** | It is the agent's own contained scratch space, not operator files — deleting its own note is not dangerous. Still capability-gated + on the HMAC audit chain. |
@@ -43,14 +43,14 @@ keep a journal, scaffold your own project → the workspace.
 
 ## 2. The workspace
 
-- **Default path:** `~/.aivyx/workspace/` (sibling of the existing
-  `~/.aivyx/tool-processes/`). Resolution: `AIVYX_WORKSPACE` env → `[workspace]
+- **Default path:** `~/.aivyx-pa/workspace/` (sibling of the existing
+  `~/.aivyx-pa/tool-processes/`). Resolution: `AIVYX_PA_WORKSPACE` env → `[workspace]
   path` → the default.
 - **Provisioned on startup**, idempotently — created if absent and seeded with a
   `README.md` (what this space is) and a light structure the agent is told about:
 
   ```text
-  ~/.aivyx/workspace/
+  ~/.aivyx-pa/workspace/
     README.md        ← what this space is, for the agent
     journal/         ← dated entries (manual + proactive)
     ideas/           ← sketches, half-thoughts
@@ -58,7 +58,7 @@ keep a journal, scaffold your own project → the workspace.
     projects/        ← the agent's own multi-file projects
   ```
 
-- **Transparent to the operator:** a real directory; `aivyx workspace ls / cat`
+- **Transparent to the operator:** a real directory; `aivyx-pa workspace ls / cat`
   lets the operator peek at what the agent is thinking and planning.
 
 ---
@@ -103,7 +103,7 @@ Gated by `[workspace.journaling] enabled` (default true) + `interval_secs`.
 ```toml
 [workspace]
 enabled = true                 # the whole subsystem; false ⇒ as today
-path = "~/.aivyx/workspace"     # optional override
+path = "~/.aivyx-pa/workspace"     # optional override
 
 [workspace.journaling]
 enabled = true
@@ -123,12 +123,12 @@ Absent `[workspace]` ⇒ defaults (enabled, default path, journaling on).
 | **O.1** | `[workspace]` config + path resolution + idempotent startup provisioning. |
 | **O.2** | `workspace.*` tools (reusing fs.rs containment), registered always-on. |
 | **O.3** | System-prompt awareness of the workspace (path + structure + intent). |
-| **O.4** | `aivyx workspace ls / cat / path` operator-visibility command. |
+| **O.4** | `aivyx-pa workspace ls / cat / path` operator-visibility command. |
 | **O.5** | Proactive journaling background task. |
 | **O.6** | Docs, example config, memory note. |
 
 **Status: O.0–O.6 complete and verified live.** At `access level = sandbox` the
-agent reads/writes its workspace (independent of `fs_root`); `aivyx workspace
+agent reads/writes its workspace (independent of `fs_root`); `aivyx-pa workspace
 ls/cat` shows the contents; and with a short journaling interval the agent
 journaled on its own — *"First session booting up… ready to dig in."*
 

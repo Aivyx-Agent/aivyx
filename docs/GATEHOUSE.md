@@ -34,10 +34,10 @@
 ## Known gap — the interlock says nothing about the host's own firewall
 
 `VITRINE.md` §0 (2026-07-05 rebuild baptism): UFW on the rig allowed
-port 22 and silently dropped 7843 — every Aivyx-side check was green
+port 22 and silently dropped 7843 — every Aivyx PA-side check was green
 (bind succeeded, token valid, cookie planted, `/ws` upgraded) while the
 operator's browser simply never populated, with zero feedback pointing
-at the real cause. The interlock above only reasons about Aivyx's own
+at the real cause. The interlock above only reasons about Aivyx PA's own
 config; it has no visibility into (and can't reach into) the host's
 packet-filtering rules. **2026-08-27:** the non-loopback startup
 warning (`aivyx-channel/src/web_ui.rs`) now explicitly names this —
@@ -51,7 +51,7 @@ from the daemon's own log instead of needing a packet capture.
 ## Deliberately not here
 
 - No accounts, sessions, or OIDC — Nexus/Passport-era.
-- No token generation in `aivyx daemon install` for native installs:
+- No token generation in `aivyx-pa daemon install` for native installs:
   they are loopback-default, the interlock only bites when an operator
   configures exposure, and the config error at that moment names the
   exact remedy. Add it only if operator friction shows up in practice.

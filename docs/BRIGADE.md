@@ -36,7 +36,7 @@ A new binary crate **`aivyx-kitchen-toolkit`** (mirroring `aivyx-gmail` /
 (`aivyx_tool::run_multi_tool_subprocess`), registering the kitchen tools. It is a
 **third-party tool process** per P10/P11/P12 — **not** in the thirteen-tool core
 cap, **not** an `aivyx-core` change. The operator declares it as a
-`[[tool_process]]` in `aivyx.toml`; the daemon spawns it and proxies its tools
+`[[tool_process]]` in `aivyx-pa.toml`; the daemon spawns it and proxies its tools
 (`ToolProxy` over the bridge) into the live `tool_list`. The `kitchen.*` bases
 **already exist** in `KNOWN_BASES` (registered when the pack landed), so Chapter
 Brigade adds **no capability base and is not a P10 amendment** — it is the
@@ -49,7 +49,7 @@ mature `kitchen_os_db` Postgres domain model — inventory, recipes, production,
 purchase_orders, receiving, suppliers, HACCP) owns all domain logic via its stable
 `get_*` / `*_v2` RPCs. The agent **calls** those RPCs; it never re-encodes inventory
 math or PO rules. Operator config lives at
-`~/.aivyx/tool-processes/kitchen/config.toml`: `base_url`, `api_key` (the PostgREST
+`~/.aivyx-pa/tool-processes/kitchen/config.toml`: `base_url`, `api_key` (the PostgREST
 `apikey` / bearer), `organization_id` (the multi-tenant key every RPC takes). No
 secret is ever logged; the config file is `0600` (the substrate norm).
 
@@ -85,7 +85,7 @@ IPC drive against a mock PostgREST + an operator live-DB runbook (BG.5). **Out:*
 re-implementing any KitchenDB domain logic (the DB owns it); a new capability base
 or P10 amendment (the `kitchen.*` bases exist); changes to `aivyx-core` / capability
 / the team engine / the daemon tool-list path; the Kitchen OS Flutter GUI (stays the
-operator's rich front-end); a second vertical; bundling Aivyx's own OAuth or a
+operator's rich front-end); a second vertical; bundling Aivyx PA's own OAuth or a
 hosted KitchenDB (the operator runs their own).
 
 ## 4. Phase plan (docs-first, small phases per convention)
@@ -93,7 +93,7 @@ hosted KitchenDB (the operator runs their own).
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **BG.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
-| **BG.1** ✅ | **Crate + RPC client + read tools** | DONE. New `aivyx-kitchen-toolkit` binary crate (workspace member, `dist=false`) over `run_multi_tool_subprocess`. `KitchenClient::call_rpc` = `POST <base>/rpc/<fn>` with `apikey`+`Bearer` headers and **client-injected `p_organization_id`** (always wins over caller-supplied — the tenant is the client's, not the LLM's); typed `KitchenError` (BadParams/Http/Status/Parse). `config.rs` loads `[kitchen_db]` (base_url/api_key/organization_id) from `~/.aivyx/tool-processes/kitchen/config.toml` (NotFound/MissingKitchenDb/Parse distinct). 5 `kitchen.read` tools: `kitchen.inventory.list` (optional `location`→`p_location`), `.low_stock`, `.value`, `kitchen.recipe.search` (`query`→`p_query`), `kitchen.supplier.list`; array→`{<key>:[...],count}`, scalar→`{<key>:v}`. **No new capability base** (kitchen.read already in KNOWN_BASES). 23 tests (config ×5, client ×7 incl. in-process PostgREST mock asserting path/auth/tenant-injection/error-status/parse, tool param-mapping + shape + names/scopes); clippy `-D warnings` + `cargo deny` green. RPC fn names (`get_inventory`/`get_low_stock_items`/`get_inventory_value`/`search_recipes`/`get_suppliers`) are the assumed KitchenDB convention — confirmed vs the live schema in-phase (OQ-3). |
+| **BG.1** ✅ | **Crate + RPC client + read tools** | DONE. New `aivyx-kitchen-toolkit` binary crate (workspace member, `dist=false`) over `run_multi_tool_subprocess`. `KitchenClient::call_rpc` = `POST <base>/rpc/<fn>` with `apikey`+`Bearer` headers and **client-injected `p_organization_id`** (always wins over caller-supplied — the tenant is the client's, not the LLM's); typed `KitchenError` (BadParams/Http/Status/Parse). `config.rs` loads `[kitchen_db]` (base_url/api_key/organization_id) from `~/.aivyx-pa/tool-processes/kitchen/config.toml` (NotFound/MissingKitchenDb/Parse distinct). 5 `kitchen.read` tools: `kitchen.inventory.list` (optional `location`→`p_location`), `.low_stock`, `.value`, `kitchen.recipe.search` (`query`→`p_query`), `kitchen.supplier.list`; array→`{<key>:[...],count}`, scalar→`{<key>:v}`. **No new capability base** (kitchen.read already in KNOWN_BASES). 23 tests (config ×5, client ×7 incl. in-process PostgREST mock asserting path/auth/tenant-injection/error-status/parse, tool param-mapping + shape + names/scopes); clippy `-D warnings` + `cargo deny` green. RPC fn names (`get_inventory`/`get_low_stock_items`/`get_inventory_value`/`search_recipes`/`get_suppliers`) are the assumed KitchenDB convention — confirmed vs the live schema in-phase (OQ-3). |
 | **BG.2** ✅ | **Gated write tools** | DONE. 3 `kitchen.write` tools reusing the BG.1 client via a new `run_write` helper (wraps the KitchenDB row as `{<key>:v}`, `Verification::Unverified` — Ok from the DB, no separate confirming read): `kitchen.inventory.adjust` (`sku`+signed `delta`+optional `reason` → `adjust_inventory`), `kitchen.batch.start` (`recipe_id`+positive `quantity`+optional `notes` → `start_production_batch`), `kitchen.batch.complete` (`batch_id`+optional `actual_yield` → `complete_production_batch`). KitchenDB owns the batch state machine + stock math; the tools only map params. No new base (`kitchen.write` already in KNOWN_BASES). +8 tests (param mapping incl. required/positivity/type rejects + names/scopes); crate at 31 tests, clippy `-D warnings` green. |
 | **BG.3** ✅ | **PO dispatch (confirm-first)** | DONE. `kitchen.order.send` (own base, distinct from `kitchen.write` — a roster can grant stock edits without ordering power) dispatches a drafted PO (`purchase_order_id` + optional `notes` → `send_purchase_order`). A pure `decide_order` applies the gate: malformed → `Failed`; well-formed but unconfirmed → **`ToolOutcome::RequiresEscalation`** (the daemon turns it into a human gate; [Chapter H](HEADLESS_MODE.md) auto-blocks it); `confirmed: true` → the RPC. +5 tests (escalate-when-unconfirmed incl. `confirmed:false`, send-when-confirmed with trimming, hard-error-on-missing-id-even-when-confirmed, name/scope); crate at 36 tests, clippy `-D warnings` green. |
 | **BG.4** ✅ | **HACCP + registration** | DONE. `kitchen.haccp.log` (own base; append-only; `check_type` required + optional `value`/`unit`/`location`/`passed`/`notes` → `log_haccp_record`; one HMAC audit row per call = tamper-evident, no new `AuditEvent`). `all_tools()` registry (10 tools across 4 bases) shared by the binary + tests. **Reconciled the BOH pack** (`kitchen_boh_team()` + `kitchen-boh.toml`) — its specialist `tool_allowlist`s named aspirational tools (`inventory.count`/`po.draft`/`haccp.log`) that didn't exist; now name the real toolkit tools (stocktake→`kitchen.inventory.list`+`.adjust`, inventory→`.low_stock`, purchasing→`kitchen.supplier.list`+`kitchen.order.send`, haccp→`kitchen.haccp.log`). A cross-crate **coherence test** (`tests/boh_coherence.rs`, `aivyx-kitchen` dev-dep, no cycle) fails if the pack ever references a `kitchen.*` tool the toolkit doesn't provide. Registration recipe (§6) + crate at 41 tests, clippy `-D warnings` green. |
@@ -130,14 +130,14 @@ harness gating + the e2e drive; price **~30–45 new tests**.
 **1. Operator config** — point the toolkit at the KitchenDB (PostgREST):
 
 ```toml
-# ~/.aivyx/tool-processes/kitchen/config.toml  (0600)
+# ~/.aivyx-pa/tool-processes/kitchen/config.toml  (0600)
 [kitchen_db]
 base_url = "https://your-kitchen.example/rest/v1"  # PostgREST base, no /rpc
 api_key = "..."                                     # PostgREST apikey / bearer
 organization_id = "00000000-0000-0000-0000-000000000000"  # the tenant
 ```
 
-**2. Register the tool process** in `aivyx.toml` — the daemon spawns it and
+**2. Register the tool process** in `aivyx-pa.toml` — the daemon spawns it and
 proxies its `kitchen.*` tools into the live tool list:
 
 ```toml
@@ -151,7 +151,7 @@ command = "aivyx-kitchen-toolkit"
 ```
 
 **3. Run the BOH brigade on it** — point the team at the bundled pack (Chapter
-Roster's `[team] config_path`, or `aivyx team init --pack
+Roster's `[team] config_path`, or `aivyx-pa team init --pack
 crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`):
 
 ```toml
@@ -193,5 +193,5 @@ drives the real binary end to end); the operator's live `kitchen_os_db` is a
 and Roster taught to organize — a lead and its least-privileged specialists — can
 finally do the work: read the walk-in, adjust a count, draft and (with a human nod)
 send the order, and write the HACCP log onto a tamper-evident chain. The system of
-record stays KitchenDB; Aivyx is the conversational, auditable, gate-safe hands on
+record stays KitchenDB; Aivyx PA is the conversational, auditable, gate-safe hands on
 it. The first vertical pack stops describing a kitchen and starts running one.*

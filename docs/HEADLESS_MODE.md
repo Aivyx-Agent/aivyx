@@ -3,7 +3,7 @@
 > **Status:** design contract. This is the spec Chapter H scaffolds from
 > (mirrors `docs/DAEMON_TEAMS.md` / `docs/WEB_MISSION_CONTROL.md`).
 >
-> Today every approval point in Aivyx assumes a **human is reachable**: a tool
+> Today every approval point in Aivyx PA assumes a **human is reachable**: a tool
 > that returns `RequiresEscalation` parks the turn behind an operator gate and
 > *waits* (the daemon emits `ApprovalGate`, the operator answers `ResolveGate`);
 > a team mission's `GateMode::Human` step pauses as `AwaitingApproval` until
@@ -121,7 +121,7 @@ enum GatePolicy {
   by construction — they default to the headless policy (today they'd hang on
   an escalation). Interactive channels (REPL/TUI/web/Telegram/…) stay
   `Interactive`.
-- **Explicit opt-in for interactive launchers.** `aivyx --headless "<task>"` (a
+- **Explicit opt-in for interactive launchers.** `aivyx-pa --headless "<task>"` (a
   one-shot unattended run) and an IPC/`SubmitInput`-adjacent field for a client
   that wants an unattended turn.
 
@@ -136,21 +136,21 @@ enum GatePolicy {
 | **H.2** | Single-agent turn path: the daemon honors `RejectAndAbort` on `TurnOutcome::Escalated` — record the refusal on the audit chain, finalize, no gate/wait. Tests over the escalation path. |
 | **H.3** | Team-mission path: a headless team run maps `AwaitingHuman` → `Rejected` (recorded reason), reusing the L.4 terminal path; `team_mission_driver` consults the policy. |
 | **H.4** | Operator-absent drivers (autonomous loop, schedules, webhook/file-watch triggers) default to headless; interactive channels stay interactive. The loop's mid-iteration escalations now resolve by policy instead of hanging. |
-| **H.5** | Surfaces: `aivyx --headless` one-shot + the IPC field for an unattended turn; surface the chosen policy in status/reporting. |
+| **H.5** | Surfaces: `aivyx-pa --headless` one-shot + the IPC field for an unattended turn; surface the chosen policy in status/reporting. |
 | **H.6** | Audit + observability: every policy-driven rejection is a clear, queryable audit event (who/what/why-refused); a "headless run summary" (what completed, what was refused-for-a-human). |
 
 ~6 phases, smaller than L/M — it's a policy + a handful of interception points, not a new subsystem.
 
-**Status: H.0–H.6 complete.** H.6 added a dedicated `AuditEvent::HeadlessRefusal { run_id, surface, reason }` (with a `HeadlessSurfaceSummary` of `AgentTurn` / `TeamMission { step }` / `Trigger { trigger_kind }`) emitted at all three refusal points — the single-agent turn (`daemon_server`) and trigger (`trigger.rs`) append it directly to the `PersistentAuditLog`; the team driver, which holds only an `Arc<dyn AuditHook>`, emits an `AuditTag::HeadlessRefusal` that the bridge maps onto the `TeamMission` surface. Each refusal also logs a one-line operator-readable summary to stderr. The event is queryable via `aivyx audit export --event-type HeadlessRefusal`.
+**Status: H.0–H.6 complete.** H.6 added a dedicated `AuditEvent::HeadlessRefusal { run_id, surface, reason }` (with a `HeadlessSurfaceSummary` of `AgentTurn` / `TeamMission { step }` / `Trigger { trigger_kind }`) emitted at all three refusal points — the single-agent turn (`daemon_server`) and trigger (`trigger.rs`) append it directly to the `PersistentAuditLog`; the team driver, which holds only an `Arc<dyn AuditHook>`, emits an `AuditTag::HeadlessRefusal` that the bridge maps onto the `TeamMission` surface. Each refusal also logs a one-line operator-readable summary to stderr. The event is queryable via `aivyx-pa audit export --event-type HeadlessRefusal`.
 
-**Follow-on (a) shipped — the `aivyx --headless "<task>"` CLI one-shot.** It
+**Follow-on (a) shipped — the `aivyx-pa --headless "<task>"` CLI one-shot.** It
 connects to a **running daemon** (no in-process fallback — headless relies on
 the daemon's gate interception), submits one turn via `submit_input_headless`
 (the per-run `headless: true` IPC field from H.5), streams the output through
 the shared `render_for_cli`, and maps the turn's terminal outcome onto a
 **process exit code** so cron/batch/autonomous callers can branch: `0`
 completed, `3` refused-at-a-gate (the distinct headless-refusal code), `1` any
-other non-completion. No daemon running → a clear "start `aivyx daemon run`
+other non-completion. No daemon running → a clear "start `aivyx-pa daemon run`
 first" error. No new base/P10/tool/dep; byte-identical when the flag is absent.
 
 Remaining (deferred, not blocking): team.run-from-loop per-call headless
@@ -186,5 +186,5 @@ code is the per-run summary today, not a cross-turn roll-up).
 - **`AutoApprove` later** — if/when it lands, the single-agent turn-resume
   design + the explicit confirm-first exclusion are its own scope.
 - **Per-channel default config** — whether the operator can declare a channel
-  (e.g. a specific webhook) interactive-vs-headless in `aivyx.toml`, beyond the
+  (e.g. a specific webhook) interactive-vs-headless in `aivyx-pa.toml`, beyond the
   built-in "operator-absent drivers default to headless."

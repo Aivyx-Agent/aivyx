@@ -1,16 +1,16 @@
 # Curated MCP Server Recipes
 
 This is the canonical catalog of MCP servers that pair cleanly with
-Aivyx today. Each recipe shows a paste-able `[[mcp_server]]` block,
+Aivyx PA today. Each recipe shows a paste-able `[[mcp_server]]` block,
 an inline `[mcp_server.sandbox]` block (sandbox-by-default is the
 Phase 55 substrate posture; copy-paste should produce a sandboxed
 config out of the gate), the required environment variables, and
 notes on what capability scopes the agent gets when the server is
 enabled.
 
-For the CLI surface, run `aivyx mcp recipes` to list every recipe
-in-shell, or `aivyx mcp recipes <name>` to print one recipe's worked
-snippet directly to stdout (handy for piping into `aivyx.toml`).
+For the CLI surface, run `aivyx-pa mcp recipes` to list every recipe
+in-shell, or `aivyx-pa mcp recipes <name>` to print one recipe's worked
+snippet directly to stdout (handy for piping into `aivyx-pa.toml`).
 
 > **Sandboxing note.** Every recipe in this doc shows a
 > `[mcp_server.sandbox]` block. The wrapper choices below (`bwrap`,
@@ -78,7 +78,7 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 > **Secrets & auth (Chapter Conduit).** Two `[[mcp_server]]` fields
 > carry credentials, both with `${VAR}` interpolation resolved from the
 > **daemon's own environment** at load — so the secret lives in your
-> shell/systemd environment, never in `aivyx.toml`. A `${VAR}` that is
+> shell/systemd environment, never in `aivyx-pa.toml`. A `${VAR}` that is
 > unset at startup is a hard config error (fail loud, not a silent empty
 > token); write `$$` for a literal `$`.
 >
@@ -110,7 +110,7 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 > sandbox-`--setenv` trick (and works with or without a sandbox; a bwrap
 > wrapper inherits the child's environment).
 
-> **Diagnosing a server that didn't come up.** Run **`aivyx mcp status`**
+> **Diagnosing a server that didn't come up.** Run **`aivyx-pa mcp status`**
 > after starting the daemon: it lists each configured server as
 > connected (with its tool count) or failed (with the error and the
 > server's captured stderr — the usual culprits are a missing `command`,
@@ -130,7 +130,7 @@ snippet directly to stdout (handy for piping into `aivyx.toml`).
 | [`fetch`](#fetch) | Medium | HTTP GET into markdown |
 | [`brave-search`](#brave-search) | Medium | Brave Search API |
 | [`slack`](#slack) | Medium | Channel read + post |
-| [`memory`](#memory) | Low | Knowledge-graph (distinct from Aivyx's own memory) |
+| [`memory`](#memory) | Low | Knowledge-graph (distinct from Aivyx PA's own memory) |
 | [`puppeteer`](#puppeteer) | Low | Headless browser; higher blast radius |
 | [`everything`](#everything) | First-run | Reference / smoke-test server |
 | [`aivyx-coder`](#aivyx-coder) | Low | Delegate coding tasks to a local aivyx-coder process |
@@ -166,7 +166,7 @@ args = [
 ]
 ```
 
-Verify it works: after `aivyx daemon stop && aivyx`, ask the
+Verify it works: after `aivyx-pa daemon stop && aivyx-pa`, ask the
 agent to "list the files in my projects directory" — it should
 call `mcp.call:fs-local:list_directory` and return a structured
 listing.
@@ -336,7 +336,7 @@ args = [
 ## fetch
 
 HTTP GET into clean markdown. Respects `robots.txt`. Mostly
-overlaps with Aivyx's first-party `web.fetch` tool (Phase 12); use
+overlaps with Aivyx PA's first-party `web.fetch` tool (Phase 12); use
 this recipe when an agent wants the markdown-conversion path
 rather than raw response bytes.
 
@@ -364,7 +364,7 @@ args = [
 
 ## Bundled `web-search` fallback backend
 
-Aivyx's own bundled `web-search` MCP server (`aivyx mcp-server`,
+Aivyx PA's own bundled `web-search` MCP server (`aivyx-pa mcp-server`,
 started automatically — no `[[mcp_server]]` entry needed) defaults to
 DuckDuckGo's zero-config HTML search with no API key required. Under
 sustained or automated use DuckDuckGo answers with HTTP **202** and a
@@ -381,7 +381,7 @@ order is Brave, then SerpAPI, then the DuckDuckGo fallback:
 - `BRAVE_SEARCH_API_KEY` — sign up at `api.search.brave.com`.
 - `SERPAPI_KEY` — sign up at `serpapi.com`.
 
-No `aivyx.toml` change needed; the bundled server checks these two
+No `aivyx-pa.toml` change needed; the bundled server checks these two
 env vars directly at request time. This is a *different* server from
 the `brave-search` recipe below — that recipe is the official
 `@modelcontextprotocol/server-brave-search` package (its own
@@ -393,11 +393,11 @@ instead of the bundled one.
 
 ## brave-search
 
-Web + local search via the Brave Search API. Aivyx already ships
+Web + local search via the Brave Search API. Aivyx PA already ships
 a bundled `web-search` MCP server with its own Brave fallback
 (Phase 46) — use this recipe only if you want the official Brave
 server's exact tool surface (`web_search` + `local_search`)
-rather than the bundled Aivyx surface.
+rather than the bundled Aivyx PA surface.
 
 **Required env:** `BRAVE_API_KEY` (sign up at
 `api.search.brave.com`).
@@ -428,7 +428,7 @@ args = [
 Read channel history; post messages. The `slack` MCP server is
 the "agent calls into Slack as a tool" surface — distinct from the
 planned Phase 108 first-party Aivyx-Slack channel adapter, which
-is the "operator talks to Aivyx from Slack" surface. They compose.
+is the "operator talks to Aivyx PA from Slack" surface. They compose.
 
 **Required env:** `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_TEAM_ID`.
 **Capability scopes the agent gets:** `mcp.call:slack:*`.
@@ -456,11 +456,11 @@ args = [
 ## memory
 
 Knowledge-graph memory the agent maintains across turns. Distinct
-from Aivyx's first-party `memory.*` tools — those write to
+from Aivyx PA's first-party `memory.*` tools — those write to
 encrypted `KeyDomain::Memory` in the redb store; this MCP server
 keeps a JSON knowledge graph the agent can walk by entity /
 relation. Useful when an agent wants structured relational recall
-that isn't a fit for the topic-keyed Aivyx memory.
+that isn't a fit for the topic-keyed Aivyx PA memory.
 
 **Required env:** none. The server writes its graph to a JSON
 file inside the sandbox bind path.
@@ -477,7 +477,7 @@ wrapper = "bwrap"
 args = [
     "--ro-bind", "/usr", "/usr",
     "--ro-bind", "/etc", "/etc",
-    "--bind", "/home/me/.aivyx/kg-memory", "/home/me/.aivyx/kg-memory",
+    "--bind", "/home/me/.aivyx-pa/kg-memory", "/home/me/.aivyx-pa/kg-memory",
     "--dev", "/dev", "--proc", "/proc",
     "--unshare-net",
     "--",
@@ -521,8 +521,8 @@ args = [
 ## everything
 
 The official reference / test server. Exposes one of each tool
-kind so an operator can verify Aivyx's MCP wiring without paying
-for a real-API setup. Useful first thing after `aivyx init`.
+kind so an operator can verify Aivyx PA's MCP wiring without paying
+for a real-API setup. Useful first thing after `aivyx-pa init`.
 
 **Required env:** none.
 **Capability scopes the agent gets:** `mcp.call:everything:*`.
@@ -588,7 +588,7 @@ args = ["--mcp-server"]
 # spawned over stdio (there's no separate `cwd` field to point it
 # elsewhere) -- bind that same directory, read-write, so its
 # fs/shell tools can actually reach your project; substitute the
-# real path, matching wherever your aivyx daemon runs. No
+# real path, matching wherever your aivyx-pa daemon runs. No
 # --unshare-net here (unlike filesystem/time/everything above):
 # aivyx-coder needs network to reach its own configured local LLM
 # backend (Ollama/vLLM/llama-server).
@@ -604,14 +604,14 @@ args = [
 ```
 
 Verify it works: after configuring `aivyx-coder`'s
-`max_access_level` and restarting the daemon (`aivyx daemon stop &&
-aivyx`), run `aivyx mcp status` — `aivyx-coder` should show
+`max_access_level` and restarting the daemon (`aivyx-pa daemon stop &&
+aivyx-pa`), run `aivyx-pa mcp status` — `aivyx-coder` should show
 connected with 2 tools (`code`, `code_reply`). See
 `docs/NONAGON.md` §9 for a worked example wiring this into a
 Nonagon specialist.
 
-**Pointing `aivyx-coder` at the same KV-cache store as `aivyx`:** if
-both `aivyx` and this delegated `aivyx-coder` process point at the
+**Pointing `aivyx-coder` at the same KV-cache store as `aivyx-pa`:** if
+both `aivyx-pa` and this delegated `aivyx-coder` process point at the
 *same* `llama-server` instance, that server has exactly **one**
 `--slot-save-path` — so both configs' kvcache store paths must agree
 for save/restore accounting to work correctly at all, not just as an
@@ -624,7 +624,7 @@ the *identical* absolute directory, matching whatever you pass to
 "KV-cache persistence" section):
 
 ```toml
-# aivyx's own config.toml
+# aivyx-pa's own config.toml
 [kvcache]
 store_path = "/home/me/.local/share/shared-kvcache"
 ```
@@ -638,7 +638,7 @@ kvcache_store_path = "/home/me/.local/share/shared-kvcache"
 **What this does and doesn't buy you.** Each app computes its own cache
 key from its own system prompt and tool set, so the two processes never
 actually produce matching cache keys — pointing both at one directory
-does *not* mean `aivyx-coder` reuses `aivyx`'s prefill work or vice
+does *not* mean `aivyx-coder` reuses `aivyx-pa`'s prefill work or vice
 versa. What it *does* buy: correct size accounting and eviction against
 the one real `--slot-save-path` directory the shared `llama-server`
 actually writes to (without this, whichever app's configured path
@@ -664,7 +664,7 @@ folder: harmless, but pointless.
 
 Recipes are static data in two places — `docs/MCP_RECIPES.md`
 (this file) and `crates/aivyx-cli/src/bin/aivyx_modules/mcp_recipes.rs`'s
-`RECIPES` slice. The `aivyx mcp recipes` CLI surface reads from
+`RECIPES` slice. The `aivyx-pa mcp recipes` CLI surface reads from
 the slice; the doc is the operator-facing reference. Both must be
 kept in sync — if you add a recipe to one, add the matching half
 to the other in the same commit. The module's
@@ -677,7 +677,7 @@ Recipes shipped here are limited to MCP servers that:
 
 1. Have an authoritative `@modelcontextprotocol/server-*` package
    on npm (the "official" set), or
-2. Have been used in tree by the Aivyx operator long enough to
+2. Have been used in tree by the Aivyx PA operator long enough to
    call them stable.
 
 Servers worth a recipe but not yet added land via a future
@@ -686,10 +686,10 @@ deliberately kept new bundled-server code out of scope; new
 recipes can land in a focused docs-only update).
 
 See also:
-- `examples/aivyx.toml` for the broader config-file context each
+- `examples/aivyx-pa.toml` for the broader config-file context each
   recipe drops into.
 - [`docs/TOOL_SDK.md`](TOOL_SDK.md) §9 for the substrate-level
   sandbox-layer reference.
 - [`docs/AUDIT_EXPORT.md`](AUDIT_EXPORT.md) for inspecting which
-  MCP tools an agent has actually called (`aivyx audit export |
+  MCP tools an agent has actually called (`aivyx-pa audit export |
   jq '.event.tool_id'`).

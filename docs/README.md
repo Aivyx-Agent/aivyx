@@ -1,4 +1,4 @@
-# Aivyx Docs
+# Aivyx PA Docs
 
 This directory holds the **living reference docs**, the **roadmaps**,
 and **amendments**. The frozen **phase journals** and point-in-time
@@ -7,7 +7,7 @@ below. The docs here are deliberately separate from the contract
 documents in the repo root:
 
 - **`VISION.md`** is the **north star** — the mission (*Build It Right
-  First*), what Aivyx is, the architecture's destination (local Nonagon
+  First*), what Aivyx PA is, the architecture's destination (local Nonagon
   teams generalizing into a network of agents), the order of growth, and
   the guiding test every chapter is held against. It sits *above* the two
   contracts: they say *how* the assistant works, it says *what* the
@@ -83,7 +83,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 - [`NONAGON.md`](NONAGON.md) — the **Nonagon** (Chapter J): the
   multi-agent team capability — a lead convening ≤9 attenuated
   specialists, the mission DAG, the safety invariant (NT-02), and the
-  `aivyx team` CLI. ✅ complete.
+  `aivyx-pa team` CLI. ✅ complete.
 - [`VERTICAL_PACKS.md`](VERTICAL_PACKS.md) — the **pack** model: how to
   specialize the one agent to a domain (template + toolkit + scopes +
   **team** + skills + integrations) without forking the substrate.
@@ -97,7 +97,7 @@ edited freely when a new adapter or subsystem teaches us something new.
   seed + live `SeedPersona` IPC + LLM "describe it" drafting), planted on the
   signed chain. ✅ complete.
 - [`COST_GOVERNANCE.md`](COST_GOVERNANCE.md) — **token accounting + budgets**
-  (Chapter K): per-turn dollar pricing, the `LlmCost` audit event, `aivyx cost`,
+  (Chapter K): per-turn dollar pricing, the `LlmCost` audit event, `aivyx-pa cost`,
   and `[budget]` caps that alert/deny. ✅ shipped.
 - [`RATE_LIMITS.md`](RATE_LIMITS.md) — **tool-call rate limits & quotas**
   (Chapter Throttle): the per-tool / per-turn / sliding-window gate that bounds
@@ -121,7 +121,7 @@ edited freely when a new adapter or subsystem teaches us something new.
 - [`AUTONOMY.md`](AUTONOMY.md) — **one dial the end user controls** (Chapter
   Reins, ✅ shipped — see the doc's closeout): a single `[autonomy] level`
   (`manual`→`unleashed`) that composes the scattered autonomy knobs into named
-  tiers + per-domain overrides, operable from `aivyx autonomy` and the Studio,
+  tiers + per-domain overrides, operable from `aivyx-pa autonomy` and the Studio,
   arming the autonomous loop. The two "loosening" levers (bounded AutoApprove,
   skill auto-adoption) were deliberately **not** built — one approves nothing
   today, the other violates PRODUCT.md P8 — which is the `SECURITY_POSTURE.md`
@@ -132,7 +132,7 @@ edited freely when a new adapter or subsystem teaches us something new.
   generalized across operators, the procedures-travel-data-never privacy line,
   one delegation protocol for local (Nonagon) and remote (Nexus) — designed now,
   built last. Unlocks both multi-node (Factory) and the agent network (Nexus).
-- [`LOCAL_HOSTING.md`](LOCAL_HOSTING.md) — **running Aivyx on a capable GPU box**
+- [`LOCAL_HOSTING.md`](LOCAL_HOSTING.md) — **running Aivyx PA on a capable GPU box**
   (e.g. a 24GB RTX 3090): VRAM-tiered model + `num_ctx` choices, the
   Ollama-vs-embedded-CUDA tradeoff, tool-calling reliability on local models, and
   a dedicated-host setup recipe. The capable-hardware counterpart to

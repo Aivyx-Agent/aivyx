@@ -5,7 +5,7 @@
 > bundles over the tool-process boundary** — the customer is an
 > *operator*, not a Rust developer. A pack is compiled tool-process
 > binaries + config TOMLs + a manifest in one Ed25519-signed archive;
-> `aivyx pack install` verifies and wires it the Mise way. Development
+> `aivyx-pa pack install` verifies and wires it the Mise way. Development
 > stays in the in-tree private workspace glob; customers only ever see
 > binaries. Kitchen is the free worked example proving the format.
 
@@ -35,7 +35,7 @@ optional `team_config` (a `config/`-relative path wired
 
 - Verification requires the publisher key to appear in
   `[pack] trusted_publishers` (base64 Ed25519 keys, operator config) —
-  **unioned with** the compiled-in `AIVYX_PUBLISHER_KEYS` (empty until
+  **unioned with** the compiled-in `AIVYX_PA_PUBLISHER_KEYS` (empty until
   the v1.0 web presence establishes the real publisher key; documented
   TODO, not a placeholder key).
 - The signature proves **authenticity and integrity** (protects the
@@ -45,18 +45,18 @@ optional `team_config` (a `config/`-relative path wired
 
 ## 3. CLI surface
 
-- `aivyx pack keygen <keyfile>` — publisher-side: new Ed25519 keypair
+- `aivyx-pa pack keygen <keyfile>` — publisher-side: new Ed25519 keypair
   (secret 0600; prints the base64 verifying key).
-- `aivyx pack build <staging-dir> --key <keyfile> --out <file>` —
+- `aivyx-pa pack build <staging-dir> --key <keyfile> --out <file>` —
   stage dir must hold `manifest.toml` + `bin/` + `config/`; builds the
   payload, signs, writes the bundle.
-- `aivyx pack inspect <file>` — verify + print the manifest (trust
+- `aivyx-pa pack inspect <file>` — verify + print the manifest (trust
   check included; `--allow-untrusted` prints anyway, loudly).
-- `aivyx pack install <file>` — verify → target/version checks →
-  unpack to `~/.aivyx/packs/<name>/<version>/` → Mise-pattern wiring
+- `aivyx-pa pack install <file>` — verify → target/version checks →
+  unpack to `~/.aivyx-pa/packs/<name>/<version>/` → Mise-pattern wiring
   (reuses `connect`'s `append_tool_process` / no-clobber
   `[team] config_path`).
-- `aivyx pack update` — **deferred to the v1.0 web presence** (there is
+- `aivyx-pa pack update` — **deferred to the v1.0 web presence** (there is
   no distribution endpoint to update from yet).
 
 ## 4. Phase plan
@@ -65,6 +65,6 @@ optional `team_config` (a `config/`-relative path wired
 |---|---|---|
 | **FR.0** ✅ | This doc. | Reviewed. |
 | **FR.1** | The format core: manifest types, build/sign, verify/inspect, path sanitization; `tar` + `flate2` workspace deps; `[pack] trusted_publishers` config. Round-trip + tamper + untrusted-key + sanitize tests with generated keys. | `cargo test`. |
-| **FR.2** | `aivyx pack` CLI (keygen/build/inspect/install) + the Mise-pattern install wiring. Temp-HOME install test. | `cargo test`. |
-| **FR.3** ✅ | **DONE (live on the rig).** `just pack-kitchen` stages the release kitchen-toolkit + `kitchen-boh.toml` + a generated manifest into a signed bundle (dev key in git-ignored `.pack-dev/`). Live proof: `pack inspect` → `signature: VERIFIED`; `pack install` unpacked to `~/.aivyx/packs/kitchen/0.8.0/` and wired both the tool process and `[team] config_path`; on restart the daemon **loaded the pack's team config** and launched the tool process sandboxed. The toolkit then exited at handshake wanting its KitchenDB credentials file — exactly the pre-`aivyx connect kitchen` state (the pack delivers capability; `connect` provides the operator's DB credentials; the two compose). Rig config restored to soak posture afterward. | Journal: `loaded team config from …/packs/kitchen/0.8.0/config/kitchen-boh.toml`. |
+| **FR.2** | `aivyx-pa pack` CLI (keygen/build/inspect/install) + the Mise-pattern install wiring. Temp-HOME install test. | `cargo test`. |
+| **FR.3** ✅ | **DONE (live on the rig).** `just pack-kitchen` stages the release kitchen-toolkit + `kitchen-boh.toml` + a generated manifest into a signed bundle (dev key in git-ignored `.pack-dev/`). Live proof: `pack inspect` → `signature: VERIFIED`; `pack install` unpacked to `~/.aivyx-pa/packs/kitchen/0.8.0/` and wired both the tool process and `[team] config_path`; on restart the daemon **loaded the pack's team config** and launched the tool process sandboxed. The toolkit then exited at handshake wanting its KitchenDB credentials file — exactly the pre-`aivyx-pa connect kitchen` state (the pack delivers capability; `connect` provides the operator's DB credentials; the two compose). Rig config restored to soak posture afterward. | Journal: `loaded team config from …/packs/kitchen/0.8.0/config/kitchen-boh.toml`. |
 | **FR.4** ✅ | **DONE.** INSTALL.md "Vertical packs" section: operator trust/inspect/install/connect flow + publisher keygen/build guide. | Committed 53f5e3a. |

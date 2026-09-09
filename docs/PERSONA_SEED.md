@@ -2,8 +2,8 @@
 
 ## Why
 
-`aivyx init` (the production first-launch wizard) captures the operator-declared
-**Profile** and writes `[profile]` to `aivyx.toml`, which the agent adopts at
+`aivyx-pa init` (the production first-launch wizard) captures the operator-declared
+**Profile** and writes `[profile]` to `aivyx-pa.toml`, which the agent adopts at
 load (verified in the post-V audit). But the agent's **Persona** and **Skills**
 are, by design, *self-learned* — they start empty and grow from reflection +
 operator-gated proposals (PRODUCT.md P14 / P8). There is **no path to plant an
@@ -33,9 +33,9 @@ the normal learned + gated path.
 ## Hard design facts
 
 1. **The persona chain needs the encrypted store + `persona_chain_key`**, which
-   is only open once the daemon is running — but `aivyx init` runs *before* the
+   is only open once the daemon is running — but `aivyx-pa init` runs *before* the
    daemon. So seeding is **config-driven**, not an init-time write to the chain:
-   the wizard writes a declarative `[persona_seed]` section to `aivyx.toml`; the
+   the wizard writes a declarative `[persona_seed]` section to `aivyx-pa.toml`; the
    **daemon seeds the chain at boot**, the same place it already opens
    `PersistentPersonaLog` and folds `shared_persona` (`aivyx.rs` ~4375).
 2. **Seed once, never overwrite.** The boot-seed fires **iff the persona chain is
@@ -57,7 +57,7 @@ Profile-mirror scalars) + starter Skills:
 - `learned_context` — facts about the operator/domain the agent should start with.
 - `communication_adaptations` — voice refinements beyond the Profile's style.
 - `character_traits` — emergent voice properties to start with.
-- `relationship_milestones` — seed continuity ("we started building Aivyx today").
+- `relationship_milestones` — seed continuity ("we started building Aivyx PA today").
 - `skills` — starter `LearnedSkill { name, trigger, procedure }` entries
   (`LearnedSkill` category, `AppendList` of the JSON payload).
 
@@ -72,7 +72,7 @@ Joins the existing `[persona_lifecycle]` / `[persona_consolidation]` /
 
 ```toml
 [persona_seed]
-learned_context = ["operator is building a Rust agent platform called Aivyx"]
+learned_context = ["operator is building a Rust agent platform called Aivyx PA"]
 communication_adaptations = ["leads with code, minimal preamble"]
 character_traits = ["pragmatic", "precise"]
 relationship_milestones = ["genesis: first launch"]
@@ -107,10 +107,10 @@ Parsed into a `PersonaSeed` (all fields optional/empty-default). Absent section 
 | **W.1** | `[persona_seed]` config schema + `PersonaSeed` parse in `aivyx-config` (incl. `[[persona_seed.skill]]`); unit tests. |
 | **W.2** | `AuditEvent::PersonaSeeded` + the `seed_persona_chain_if_empty` primitive in `aivyx-channel` (append operator-authored deltas, recompute, audit, refuse-on-non-empty); unit tests. |
 | **W.3** | Wire the boot-seed into `aivyx.rs` startup; e2e + live-verify the seeded Persona/Skills fold into the system prompt turn-one; full suite for audit-count fallout. |
-| **W.4** | `aivyx init` wizard capture → writes `[persona_seed]` via the config writer; optionally badge seeded deltas in the Agents Change History. |
+| **W.4** | `aivyx-pa init` wizard capture → writes `[persona_seed]` via the config writer; optionally badge seeded deltas in the Agents Change History. |
 | **W.5** | Finalize: e2e, docs, memory, push. |
 
-**Status: W.0–W.5 COMPLETE + live-verified.** `aivyx init` captures an optional
+**Status: W.0–W.5 COMPLETE + live-verified.** `aivyx-pa init` captures an optional
 seed → `[persona_seed]` → the daemon plants it on the signed chain at first boot
 (iff empty) → the agent adopts it turn-one. Live run: a 4-delta seed (traits +
 context + skill) appeared on `ListPersonaDeltas` all stamped `genesis-seed`,
@@ -145,7 +145,7 @@ seed, LLM-assisted seed drafting, and promoting `genesis.rs` into production.
 
 Closes the two Chapter-W follow-ons: a **web onboarding surface** that authors
 the seed live (no restart), and **LLM-assisted drafting** ("describe your
-assistant in words and Aivyx drafts the seed"), in both the Studio and the CLI.
+assistant in words and Aivyx PA drafts the seed"), in both the Studio and the CLI.
 
 ## What's new vs. W
 
@@ -244,12 +244,12 @@ charter (Chapter Keel): an opinionated, default-on starting posture.
 **The five starter skills** (`aivyx_config::default_starter_skills`):
 `summarize-document`, `research-and-summarize`, `draft-reply`, `daily-briefing`,
 `capture-note`. Each is a lightweight `{name, trigger, procedure}` recipe whose
-procedure composes Aivyx's own tools and pillars (the Sheaf readers, `web.search`
+procedure composes Aivyx PA's own tools and pillars (the Sheaf readers, `web.search`
 / `web.extract`, memory, workspace, persona) — the connective tissue that
 activates the capabilities the charter tells the agent to use.
 
 **Mechanism (compiled-in + genesis-planted).** The set is compiled into
-`aivyx-config`, not written into `aivyx.toml`. At config-load the loader merges
+`aivyx-config`, not written into `aivyx-pa.toml`. At config-load the loader merges
 it into `[persona_seed].skills` (`merge_starter_skills`), and the **existing**
 one-time `seed_persona_chain_if_empty` plants it onto the signed chain at first
 boot — so the seeding path is unchanged. A fresh agent (empty chain) gets the
@@ -291,24 +291,24 @@ channel, cleanly separated from agent self-teaching.
 hold the passphrase, set access, arm autonomy — none agent-reachable). So an
 operator-run teach command is *authoring*, not self-escalation. Tutor routes it
 through the daemon over the local socket (the same trust basis as
-`aivyx persona revert` / `proposals approve`), so it needs **no** agent scope and
+`aivyx-pa persona revert` / `proposals approve`), so it needs **no** agent scope and
 works on a grown chain. The agent's `skills.teach` tool and `skills.write` scope
 are unchanged.
 
 **CLI.**
 
 ```sh
-aivyx skills teach  <name> <trigger> <procedure>     # add (rejects a duplicate name)
-aivyx skills update <name> [--trigger T] [--procedure P]   # change; omitted field kept
-aivyx skills forget <name>                            # remove
+aivyx-pa skills teach  <name> <trigger> <procedure>     # add (rejects a duplicate name)
+aivyx-pa skills update <name> [--trigger T] [--procedure P]   # change; omitted field kept
+aivyx-pa skills forget <name>                            # remove
 ```
 
-Each requires a running daemon (`aivyx daemon run`), sends an `AuthorSkill` IPC,
+Each requires a running daemon (`aivyx-pa daemon run`), sends an `AuthorSkill` IPC,
 and the daemon appends a signed, operator-authored `LearnedSkill` delta via the
 **same** `skill_edit` op-builders + chain-append the agent tools use — so
 operator- and agent-authored skills land identically (audited on the persona
-chain, adopted next turn, reversible via `aivyx persona revert`). Listing skills
-is the Studio Repertoire screen; `aivyx persona list` shows the underlying chain.
+chain, adopted next turn, reversible via `aivyx-pa persona revert`). Listing skills
+is the Studio Repertoire screen; `aivyx-pa persona list` shows the underlying chain.
 
 ### Invariants (Tutor)
 

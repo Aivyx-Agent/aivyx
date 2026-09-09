@@ -16,7 +16,7 @@
 
 ## 1. Why this chapter
 
-The §6 backlog's last bucket is keyed integrations. But Aivyx already ships a mature
+The §6 backlog's last bucket is keyed integrations. But Aivyx PA already ships a mature
 MCP client, and the wider ecosystem already ships MCP servers for GitHub, weather,
 maps, Google Workspace, and far more. The leverage move is to make **adding any of
 them trivial and reliable**, rather than re-implementing three of them in-tree. Three
@@ -31,7 +31,7 @@ concrete blockers stand in the way today:
    authenticated MCP server needs `Authorization: Bearer …` (or an API-key header) —
    there is no way to supply one.
 3. **A broken server is invisible.** Stdio stderr is `Stdio::null()`, and there is no
-   `aivyx mcp status`. If a server's command is missing, its token is wrong, or it
+   `aivyx-pa mcp status`. If a server's command is missing, its token is wrong, or it
    exits on start, the operator sees no tools appear and **no reason why**.
 
 Conduit fixes exactly these: secrets in (stdio `env`), auth in (transport `headers`),
@@ -43,13 +43,13 @@ and a way to *see* what happened (captured stderr + a status command).
 No new tool, `KNOWN_BASES` base, scope, P10 amendment, or dependency. MCP tools
 already gate on the existing `mcp.call:<server>:<tool>` qualified scope; that is
 untouched. The change is three config fields (`env`, `headers`), threading them into
-the three transports, capturing stderr, and one read-only `aivyx mcp status` view.
+the three transports, capturing stderr, and one read-only `aivyx-pa mcp status` view.
 
 ### `env` mirrors `[[tool_process]]` — including `${HOST_VAR}` interpolation
 `[[mcp_server]]` gains an `env` table, exactly the shape `[[tool_process]]` already
 has (`Vec<(String, String)>`). A value may be a literal **or** a `${VAR}` reference
 resolved from the **daemon's own environment** at load time, so an operator keeps
-the actual secret in their shell/systemd environment and out of `aivyx.toml`:
+the actual secret in their shell/systemd environment and out of `aivyx-pa.toml`:
 
 ```toml
 [[mcp_server]]
@@ -82,7 +82,7 @@ Stdio servers stop sending stderr to `/dev/null`. Conduit captures it into a bou
 runtime error is diagnosable. Bounded so a chatty server can't grow memory; stdout
 (the JSON-RPC channel) is unaffected.
 
-### A read-only `aivyx mcp status`
+### A read-only `aivyx-pa mcp status`
 One operator command lists each configured server: transport, enabled, **connected /
 failed**, the **counts of tools / resources / prompts discovered**, and the **last
 error** (incl. captured stderr tail). Read-only, no new daemon write path; it answers
@@ -98,14 +98,14 @@ environment rather than on disk. No change to trust tiers or the audit chain.
 
 **In:** `env` on `[[mcp_server]]` + stdio spawn wiring (CD.1); `headers` on
 `[[mcp_server]]` + SSE/HTTP wiring (CD.2); `${HOST_VAR}` interpolation for both;
-captured-stderr ring buffer + `aivyx mcp status` (CD.3); config round-trip tests +
+captured-stderr ring buffer + `aivyx-pa mcp status` (CD.3); config round-trip tests +
 `docs/MCP_RECIPES.md` keyed example (CD.4); a live-verify against a real MCP server,
 including the secret path (CD.5). **Out:** a new capability base or P10 amendment;
 per-tool MCP `scope_overrides` (the `mcp.call:<server>:<tool>` qualified scope already
 allows per-tool role grants — note as deferred); a Studio MCP screen (CLI status
 first; web deferred); OAuth flows *for* MCP servers (a server that needs OAuth runs
 its own flow — Conduit only carries a static header/token); writing secrets into
-`aivyx.toml` on the operator's behalf (interpolation keeps them in the env).
+`aivyx-pa.toml` on the operator's behalf (interpolation keeps them in the env).
 
 ## 4. Phase plan (docs-first, small phases per convention)
 
@@ -114,9 +114,9 @@ its own flow — Conduit only carries a static header/token); writing secrets in
 | **CD.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
 | **CD.1** ✅ | **stdio `env` + interpolation** | DONE. `[[mcp_server]] env` table → `McpServerConfig.env: Vec<(String,String)>` (sorted by key), with `interpolate_host_env` resolving `${VAR}` from the daemon environment at load — **unset var = hard `ConfigError::Invalid`**, `$$`→literal `$` escape, unterminated/empty `${}` rejected. Threaded `env` through `McpServerBridge::start_with_sandbox` → `StdioTransport::start` → `cmd.envs(...)` (a sandbox wrapper inherits + passes them). Backward-compat `start()` + the two CLI-flag `McpServerConfig` literals pass empty env. Unblocks the GitHub MCP server (`GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}"`). 3 config tests (literal+interp+sort / unset-var error / `$$` escape); mcp (359) + config (44) suites green; clippy `-D warnings` (all-targets) clean. End-to-end secret delivery proven in CD.5. |
 | **CD.2** ✅ | **SSE/HTTP `headers` + interpolation** | DONE. `[[mcp_server]] headers` → `McpServerConfig.headers` (sorted, same `${VAR}` interpolation via the now-field-parameterized `interpolate_host_env`); **rejected on stdio** (no HTTP request to attach them to). Stored in both `SseTransport` + `StreamableHttpTransport` and re-applied to **every** request (SSE GET + POSTs; HTTP POSTs) via a shared `apply_operator_headers` that **skips protocol-reserved names** (case-insensitive: `accept`/`content-type`/`mcp-protocol-version`/`mcp-session-id`) so an operator can add `Authorization` but never clobber the wire contract. `connect()` signatures gained a `headers` param; daemon + test call sites updated. Unblocks remote authenticated servers (`headers = { Authorization = "Bearer ${TOKEN}" }`). 2 config tests (http interpolation+sort / stdio-rejection); config (361) + mcp suites green; clippy `-D warnings` clean. |
-| **CD.3** ✅ | **Diagnostics** | DONE. Stdio stderr is captured into a bounded ring buffer (`StderrLog`, last 50 lines) — caller-owned so the daemon holds a clone without touching the `McpTransport` trait; `Stdio::null()` only when no log is passed (backward-compat). The daemon threads a per-server log through `start_with_sandbox`, includes the stderr tail in its startup failure log, and writes an `McpStatusSnapshot` (per-server connected/tool-count or failed/error+stderr-tail) to `$XDG_DATA_HOME/aivyx/mcp-status.json` at the end of the MCP loop. New **`aivyx mcp status`** renders it: `✓ name (transport) — N tool(s)` / `✗ name — FAILED` + reason + captured stderr, with a friendly "no snapshot yet" message. Live-verified the renderer on a crafted snapshot (1/2 connected). mcp + cli suites green; clippy `-D warnings` clean. |
-| **CD.4** ✅ | **Docs + tests** | DONE. `docs/MCP_RECIPES.md` gains a **Secrets & auth** note (native `env`/`headers` + `${VAR}` + `$$` escape + unset-var-is-error) and a **Diagnosing** note (`aivyx mcp status`); every keyed recipe (github/gitlab/postgres/brave-search/slack) switched from the sandbox `--setenv` workaround to the clean native `env = { … = "${VAR}" }` field, and a remote `headers = { Authorization = "Bearer ${…}" }` example added. Tests: `mcp status` parse + extra-arg rejection, `McpStatusSnapshot` serde round-trip, `format_stderr_tail` 5-line cap (the CD.1/CD.2 config tests already cover env/headers interpolation + precedence). clippy `-D warnings` clean. |
-| **CD.5** ✅ | **Finalize + live-verify** | DONE. The secret path is **proven end-to-end** by `env_reaches_child_process`: an `env` entry handed to `start_with_sandbox` lands in the spawned MCP server's real environment — the mock server advertises an `env_probe` tool only when `AIVYX_MCP_ENV_PROBE` is set (its presence = delivery), and calling it returns the exact value passed (`s3cr3t-conduit`). Credential-free + deterministic (OQ-5). Full workspace suite + clippy `-D warnings` + `cargo deny` (advisories/bans/licenses/sources) green; chapter memory recorded; status → COMPLETE. |
+| **CD.3** ✅ | **Diagnostics** | DONE. Stdio stderr is captured into a bounded ring buffer (`StderrLog`, last 50 lines) — caller-owned so the daemon holds a clone without touching the `McpTransport` trait; `Stdio::null()` only when no log is passed (backward-compat). The daemon threads a per-server log through `start_with_sandbox`, includes the stderr tail in its startup failure log, and writes an `McpStatusSnapshot` (per-server connected/tool-count or failed/error+stderr-tail) to `$XDG_DATA_HOME/aivyx-pa/mcp-status.json` at the end of the MCP loop. New **`aivyx-pa mcp status`** renders it: `✓ name (transport) — N tool(s)` / `✗ name — FAILED` + reason + captured stderr, with a friendly "no snapshot yet" message. Live-verified the renderer on a crafted snapshot (1/2 connected). mcp + cli suites green; clippy `-D warnings` clean. |
+| **CD.4** ✅ | **Docs + tests** | DONE. `docs/MCP_RECIPES.md` gains a **Secrets & auth** note (native `env`/`headers` + `${VAR}` + `$$` escape + unset-var-is-error) and a **Diagnosing** note (`aivyx-pa mcp status`); every keyed recipe (github/gitlab/postgres/brave-search/slack) switched from the sandbox `--setenv` workaround to the clean native `env = { … = "${VAR}" }` field, and a remote `headers = { Authorization = "Bearer ${…}" }` example added. Tests: `mcp status` parse + extra-arg rejection, `McpStatusSnapshot` serde round-trip, `format_stderr_tail` 5-line cap (the CD.1/CD.2 config tests already cover env/headers interpolation + precedence). clippy `-D warnings` clean. |
+| **CD.5** ✅ | **Finalize + live-verify** | DONE. The secret path is **proven end-to-end** by `env_reaches_child_process`: an `env` entry handed to `start_with_sandbox` lands in the spawned MCP server's real environment — the mock server advertises an `env_probe` tool only when `AIVYX_PA_MCP_ENV_PROBE` is set (its presence = delivery), and calling it returns the exact value passed (`s3cr3t-conduit`). Credential-free + deterministic (OQ-5). Full workspace suite + clippy `-D warnings` + `cargo deny` (advisories/bans/licenses/sources) green; chapter memory recorded; status → COMPLETE. |
 
 **Discipline:** CD.1 lands the `env` + interpolation spine that CD.2 reuses for
 headers. CD.3 is independent (observability) and could ship first, but follows so the
@@ -141,13 +141,13 @@ config-parsing + interpolation edge cases dominate; price **~25–35 new tests**
   scope; revisit with an IPC query only if a use case needs it.
 - **OQ-5 — live-verify target (CD.5).** ✅ **Resolved: the mock server, env-gated.**
   Rather than depend on a real PAT, the existing `mock_mcp_server.py` grew an
-  `env_probe` tool advertised only when `AIVYX_MCP_ENV_PROBE` is set — a credential-
+  `env_probe` tool advertised only when `AIVYX_PA_MCP_ENV_PROBE` is set — a credential-
   free, deterministic, CI-able proof that `env` reaches the child. The GitHub recipe
   is documented in `MCP_RECIPES.md` for the real-token path.
 
 ---
 
-*Chapter Conduit turns Aivyx's MCP client from "connects to servers" into "connects to
+*Chapter Conduit turns Aivyx PA's MCP client from "connects to servers" into "connects to
 the servers operators actually want" — the keyed ones. The §6 integrations backlog
 doesn't need three hand-built tool-processes; it needs a token to reach the GitHub MCP
 server, a header to reach a remote one, and a way to see why a server didn't come up.

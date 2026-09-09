@@ -1,6 +1,6 @@
 # Containerized Deployment (Chapter Harbor)
 
-> **Status:** ✅ **shipped** (Chapter Harbor HB.0–HB.5 complete). Aivyx ships as a
+> **Status:** ✅ **shipped** (Chapter Harbor HB.0–HB.5 complete). Aivyx PA ships as a
 > **docker-compose appliance**: a one-command, always-on daemon + Studio for a
 > homelab box or VPS, no Rust toolchain on the operator's machine. The two opt-in
 > daemon changes (`web_ui_host` §4.1, `web_ui_allowed_origins` §4.2) are in; the
@@ -16,15 +16,15 @@
 > `ghcr.io/aivyx-agent/aivyx` (the `v0.5.0` Docker Publish run is green), the GHCR
 > package is **public** (anonymous `docker pull` works — `latest` tracks the newest
 > release), and the image is **verified to boot**: `docker run … -e
-> AIVYX_PROVIDER=ollama -e AIVYX_MODEL=… --network host` brings the daemon 0.5.0 up
+> AIVYX_PA_PROVIDER=ollama -e AIVYX_PA_MODEL=… --network host` brings the daemon 0.5.0 up
 > (store unlocked, socket listening, Studio served). No operational TODOs remain.
 
 ## 1. The gap — there is no "just run it" server deployment
 
-Today Aivyx installs as a native binary (the cargo-dist [shell installer](INSTALL.md#shell-installer-recommended))
+Today Aivyx PA installs as a native binary (the cargo-dist [shell installer](INSTALL.md#shell-installer-recommended))
 or builds from source. Both put the daemon on the operator's own machine, which
 is right for the **desktop, local-first** experience. There is **no packaged way
-to stand up Aivyx as an always-on service** — the homelab / VPS / "give me an
+to stand up Aivyx PA as an always-on service** — the homelab / VPS / "give me an
 assistant at `studio.mybox.lan`" deployment — without manually installing the
 binary, the tool processes, a config, and a process supervisor on the host.
 
@@ -37,7 +37,7 @@ daemon *is* a containerized daemon. The two reinforce each other.
 
 The single most important decision in this chapter is **what Harbor is not**.
 
-Aivyx's core promise is **local-first**: the agent reaches *your* files, *your*
+Aivyx PA's core promise is **local-first**: the agent reaches *your* files, *your*
 devices, *your* network, and your key talks straight to the LLM. A container
 inverts most of that — "the filesystem" is the container's, "localhost" is the
 container's, there are no audio devices. So Harbor is **explicitly the
@@ -48,17 +48,17 @@ server-appliance profile**, not a drop-in for the native desktop install:
 | Reaches the host's real files (`access` home/full) | Reaches a **bind-mounted data volume** (`/work`) — intentional, scoped |
 | OAuth via a host browser + loopback | OAuth via a **documented published-port recipe** |
 | Voice (host audio devices) | **No voice** (no `/dev/snd` in the profile) |
-| Interactive passphrase prompt | **`AIVYX_PASSPHRASE` via a Docker secret** |
+| Interactive passphrase prompt | **`AIVYX_PA_PASSPHRASE` via a Docker secret** |
 | Studio on `127.0.0.1:7843` for the local user | Studio exposed deliberately, **opt-in**, with auth/TLS in front |
 
 Pitching Harbor as "the same thing, in Docker" would half-defeat the local-first
-model and mislead users. Pitching it as "Aivyx-as-an-appliance" is honest and
+model and mislead users. Pitching it as "Aivyx PA-as-an-appliance" is honest and
 genuinely valuable. **The docs lead with that distinction.**
 
 ## 3. What already works (more container-ready than expected)
 
 - **Non-interactive unlock exists.** The daemon sources the store passphrase from
-  `AIVYX_PASSPHRASE` (`aivyx-channel::passphrase`, `DEFAULT_ENV_VAR`) before
+  `AIVYX_PA_PASSPHRASE` (`aivyx-channel::passphrase`, `DEFAULT_ENV_VAR`) before
   falling back to the interactive prompt. A detached container unlocks with **no
   code change** — supplied as a **Docker secret / file**, not a bare env var
   (§6).
@@ -69,7 +69,7 @@ genuinely valuable. **The docs lead with that distinction.**
 - **musl static builds exist.** cargo-dist already produces musl artifacts
   (Chapter Q), so the runtime image can be **distroless / `scratch`** — small,
   fast to pull, minimal attack surface.
-- **The config + state is one directory.** Everything lives under `~/.aivyx/`
+- **The config + state is one directory.** Everything lives under `~/.aivyx-pa/`
   (config, encrypted store, per-tool tokens) → a single named volume.
 
 ## 4. The two REQUIRED daemon changes (both opt-in, security-sensitive)
@@ -123,7 +123,7 @@ substitute — still terminate TLS at a reverse proxy for remote access.
    working in a data volume this is correct and even desirable. The docs set
    `access` to a workspace rooted at `/work` and explain the boundary. *Not a
    bug — a reframing.*
-2. **OAuth loopback.** `aivyx connect` opens a **host** browser to
+2. **OAuth loopback.** `aivyx-pa connect` opens a **host** browser to
    `127.0.0.1:<port>/callback`, but that loopback is the container's — and the
    listener binds `127.0.0.1` *inside* the container, which Docker port-publish
    can't reach (it forwards to the container's `0.0.0.0`). Google also **requires**
@@ -142,7 +142,7 @@ substitute — still terminate TLS at a reverse proxy for remote access.
 5. **Voice — excluded.** Needs host audio devices; INSTALL.md already notes
    containers don't do audio. Harbor is daemon + Studio + tools (+ optional
    Ollama). Voice stays a native host CLI.
-6. **Passphrase posture.** `AIVYX_PASSPHRASE` works but a passphrase in a plain
+6. **Passphrase posture.** `AIVYX_PA_PASSPHRASE` works but a passphrase in a plain
    env var is weaker than an interactive prompt (visible in `docker inspect` /
    process env). Harbor uses a **Docker secret mounted as a file** and documents
    the tradeoff honestly — it is the appliance security posture, a deliberate
@@ -156,12 +156,12 @@ services:
     image: ghcr.io/aivyx-agent/aivyx:latest      # HB.5 publishes this
     ports: ["127.0.0.1:7843:7843"]               # host-localhost only by default
     volumes:
-      - aivyx-data:/root/.aivyx                   # config + encrypted store + tokens
+      - aivyx-pa-data:/root/.aivyx-pa              # config + encrypted store + tokens
       - ./workspace:/work                         # the agent's fs_root (access level)
     environment:
-      - AIVYX_PROVIDER=anthropic                  # cloud profile first (no GPU/OAuth)
+      - AIVYX_PA_PROVIDER=anthropic                # cloud profile first (no GPU/OAuth)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-    secrets: [aivyx_passphrase]                   # → AIVYX_PASSPHRASE via file
+    secrets: [aivyx_pa_passphrase]                 # → AIVYX_PA_PASSPHRASE via file
     # config (baked or mounted) sets: [daemon] web_ui_host="0.0.0.0", web_ui=true,
     #   [access] level rooted at /work
   # ── optional local-model profile ──
@@ -169,14 +169,14 @@ services:
     image: ollama/ollama:latest
     profiles: ["ollama"]
     volumes: [ollama-data:/root/.ollama]
-volumes: { aivyx-data: , ollama-data: }
-secrets: { aivyx_passphrase: { file: ./secrets/passphrase } }
+volumes: { aivyx-pa-data: , ollama-data: }
+secrets: { aivyx_pa_passphrase: { file: ./secrets/passphrase } }
 ```
 
 The runtime image is multi-stage: a musl/static build stage → a distroless
-runtime carrying the `aivyx` daemon **plus every tool-process binary**, with the
+runtime carrying the `aivyx-pa` daemon **plus every tool-process binary**, with the
 embedded Studio bundle (already in the daemon binary). `CMD` runs the daemon
-(`aivyx daemon run`).
+(`aivyx-pa daemon run`).
 
 ## 7. OAuth in Docker — the recipe (HB.3)
 
@@ -191,7 +191,7 @@ one-time browser consent. Two facts force the shape of this (§5.2):
 The clean resolution is to run the consent **once** in a throwaway container that
 **shares the host network namespace**, so the container's `127.0.0.1` *is* the
 host's. Consent happens in the host browser; the resulting `config.toml` +
-`tokens.json` are written straight into the shared `aivyx-data` volume, and the
+`tokens.json` are written straight into the shared `aivyx-pa-data` volume, and the
 long-running daemon container picks them up.
 
 ### Linux (host networking)
@@ -201,17 +201,17 @@ long-running daemon container picks them up.
 # the same volume the daemon uses. Prompts for the Google client_id/secret,
 # prints a consent URL to open in your host browser, captures the redirect on
 # host-loopback, and offers to add the [[tool_process]] entry to the mounted
-# aivyx.toml.
+# aivyx-pa.toml.
 docker compose run --rm -it \
   --network host \
-  --entrypoint aivyx \
+  --entrypoint aivyx-pa \
   aivyx connect contacts
 
 # then restart the daemon so it loads the new tokens + [[tool_process]] entry
 docker compose restart aivyx
 ```
 
-Because `connect` writes to `/root/.aivyx/...` (the `aivyx-data` volume) and the
+Because `connect` writes to `/root/.aivyx-pa/...` (the `aivyx-data` volume) and the
 daemon mounts the same volume, the credential and the config edit are visible to
 the daemon after the restart. Nothing is published; the consent listener lives
 on host-loopback only for the duration of the one-shot.
@@ -219,10 +219,10 @@ on host-loopback only for the duration of the one-shot.
 ### Docker Desktop (macOS / Windows) — host networking caveat
 
 `--network host` does not share host-loopback the same way on Docker Desktop.
-There, run the per-service auth on the **host** instead — `aivyx connect <svc>`
-with a natively-installed `aivyx` + `aivyx-<svc>` (the cargo-dist binaries) — then
-make the resulting `~/.aivyx/tool-processes/<svc>/` directory available to the
-container (copy it into the `aivyx-data` volume, or bind-mount it). The token
+There, run the per-service auth on the **host** instead — `aivyx-pa connect <svc>`
+with a natively-installed `aivyx-pa` + `aivyx-<svc>` (the cargo-dist binaries) — then
+make the resulting `~/.aivyx-pa/tool-processes/<svc>/` directory available to the
+container (copy it into the `aivyx-pa-data` volume, or bind-mount it). The token
 file is host-portable; only the consent step needs native loopback.
 
 ### Why not a code change?
@@ -248,7 +248,7 @@ cross-platform fix, and the host-networking dance retires. Tracked, not built.
 | Phase | Deliverable |
 |---|---|
 | **HB.0** | This contract. |
-| **HB.1** | ✅ The **cloud-provider spike**: multi-stage `Dockerfile` (debian-slim runtime, daemon + all tool binaries) + `docker-compose.yml` for the Anthropic profile (no Ollama, no OAuth) + baked appliance config + secret-bridging entrypoint. Includes the §4.1 `web_ui_host` change (opt-in). **Built + ran end-to-end** (Docker 29.5, legacy builder): image builds (290 MB), daemon boots, Studio reachable through the published port, state persists across `down`/`up`, passphrase bridged from the Docker secret. Three build-verify fixes: `WORKDIR /root/.aivyx` (the daemon reads `./aivyx.toml` from the CWD), the appliance role named `default` (the active role), and a legacy-builder Dockerfile (no `buildx`/BuildKit cache mounts required). |
+| **HB.1** | ✅ The **cloud-provider spike**: multi-stage `Dockerfile` (debian-slim runtime, daemon + all tool binaries) + `docker-compose.yml` for the Anthropic profile (no Ollama, no OAuth) + baked appliance config + secret-bridging entrypoint. Includes the §4.1 `web_ui_host` change (opt-in). **Built + ran end-to-end** (Docker 29.5, legacy builder): image builds (290 MB), daemon boots, Studio reachable through the published port, state persists across `down`/`up`, passphrase bridged from the Docker secret. Three build-verify fixes: `WORKDIR /root/.aivyx-pa` (the daemon reads `./aivyx-pa.toml` from the CWD), the appliance role named `default` (the active role), and a legacy-builder Dockerfile (no `buildx`/BuildKit cache mounts required). |
 | **HB.2** | ✅ The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the F-4 non-loopback startup warning + the optional **Ollama sibling** (CPU default; opt-in GPU override `deploy/docker/compose.gpu.yml`). |
 | **HB.3** | ✅ The **OAuth-in-Docker recipe** (§7) — corrected from the original sketch: the callback listener binds container-loopback + Google mandates a loopback `redirect_uri`, so the flow uses **host networking** (Linux) / a host-run binary (Docker Desktop), tokens landing in the shared volume. Doc, not code. *Recipe is code-read-verified, not yet live-run against a real Google app.* |
 | **HB.4** | ✅ **Docs**: this file's status flipped to *usable from source* + an [INSTALL.md "Docker"](INSTALL.md#docker--the-server-appliance) section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, the Ollama/GPU + OAuth pointers, and the worked compose quick-start. |
@@ -256,7 +256,7 @@ cross-platform fix, and the host-networking dance retires. Tracked, not built.
 
 ## 10. Open questions (resolved)
 
-- **F-1 (HB.1):** does the image **bake a default `aivyx.toml`** and let a mounted
+- **F-1 (HB.1):** does the image **bake a default `aivyx-pa.toml`** and let a mounted
   config override it? **Resolved: yes** — `deploy/docker/aivyx.appliance.toml` is
   baked and the entrypoint seeds it on first boot; mount your own to override.
 - **F-2 (HB.1):** distroless vs `debian-slim` runtime. **Resolved: debian-slim**

@@ -8,7 +8,7 @@
 > byte-identical**; pages are always **derived** (memory stays the source of
 > truth); **zero new deps, no P10 amendment, no new capability base**; full
 > workspace suite + clippy + `cargo deny` green. The locked reference for the
-> chapter that gives Aivyx a **codex**: a synthesized, browsable, and
+> chapter that gives Aivyx PA a **codex**: a synthesized, browsable, and
 > retrievable layer of per-topic *wiki pages* built from the agent's own
 > memory. Each page is an LLM-consolidated summary of a topic's memory
 > entries, cross-linked to related topics by the co-occurrence graph, and
@@ -20,7 +20,7 @@
 
 ## 1. Why — memory has entries, not knowledge
 
-Aivyx remembers in **entries**: small, timestamped, topic-tagged notes.
+Aivyx PA remembers in **entries**: small, timestamped, topic-tagged notes.
 Recall (Chapter Loom) finds the right entries well. But a topic the agent
 has touched fifty times is fifty scattered fragments — there is no
 *consolidated* view of "what does the agent know about `deploy`?" Three

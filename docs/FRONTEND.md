@@ -3,7 +3,7 @@
 > **Status:** design contract + foundation. This is the spec Chapter R builds
 > from (mirrors `docs/ACCESS_LEVELS.md` / `docs/LOCAL_FIRST_RUN.md`).
 >
-> Aivyx has a mature visual identity — **"Stitch"** (*The Neon Cartographer*) —
+> Aivyx PA has a mature visual identity — **"Stitch"** (*The Neon Cartographer*) —
 > defined in the brand repo (`aivyx-brand/`: `brand-guidelines.md`,
 > `design-tokens.md`, 23 Stitch mockups). But the shipped web app
 > (`crates/aivyx-web`) was a minimal two-tab page with ad-hoc inline CSS. Chapter
@@ -35,14 +35,14 @@ invents colors.
 
 ## 1. Surface = the Agent (Studio). What's in scope.
 
-The Aivyx ecosystem has several surfaces. This contract — and Chapter R — cover
+The Aivyx PA ecosystem has several surfaces. This contract — and Chapter R — cover
 **only the Studio (the agent app)**, the Dioxus→WASM client served by the daemon
 at `:7843`.
 
 | Surface | What it is | In this chapter? |
 |---|---|---|
 | **Studio** | The agent app (chat, missions, dashboard, settings) | ✅ Yes |
-| **Genesis** | First-run setup wizard (`aivyx init`) | Roadmap (informs the look) |
+| **Genesis** | First-run setup wizard (`aivyx-pa init`) | Roadmap (informs the look) |
 | **Unlock** | Vault passphrase screen | Roadmap |
 | **TUI** | The ratatui terminal interface | ❌ Later pass |
 | **Creator** | Node-based visual flow / agent builder | ❌ Separate product |
@@ -198,26 +198,26 @@ their own contracts.
 
 Chapters R/S/T were **read-only** and added **no daemon API** — they painted
 existing IPC. **Settings is the first screen that writes.** It lets the operator
-read and change a deliberate, safe subset of `aivyx.toml` from the Studio. This
+read and change a deliberate, safe subset of `aivyx-pa.toml` from the Studio. This
 section is the contract Chapter U builds from; it intentionally breaks the
 "no new daemon API / read-only" invariant (that is the point of the chapter)
-while holding every safety invariant Aivyx already guarantees.
+while holding every safety invariant Aivyx PA already guarantees.
 
 ### 8.1 Three hard facts that shape the screen
 
 1. **The daemon does not hot-reload config.** Access level, budgets, provider,
    model — all are parsed **once at launch** (access level is load-time;
-   `aivyx access`: "takes effect on the next daemon start"). A write from the web
+   `aivyx-pa access`: "takes effect on the next daemon start"). A write from the web
    UI therefore **cannot apply live**. The screen is honest about this: every
    successful write returns `restart_required` and the UI shows a persistent
-   banner — *"Saved to aivyx.toml — restart the daemon to apply:
-   `aivyx daemon stop && aivyx daemon run`."* No self-restart (too invasive).
+   banner — *"Saved to aivyx-pa.toml — restart the daemon to apply:
+   `aivyx-pa daemon stop && aivyx-pa daemon run`."* No self-restart (too invasive).
 2. **The daemon doesn't retain the config-file path.** `DaemonConfig` holds
-   parsed sub-structs, not the path to `aivyx.toml`. The write path adds a
-   `config_toml_path` to `DaemonConfig`, threaded from `aivyx daemon run`, so the
+   parsed sub-structs, not the path to `aivyx-pa.toml`. The write path adds a
+   `config_toml_path` to `DaemonConfig`, threaded from `aivyx-pa daemon run`, so the
    daemon can both **re-read** the on-disk values (to populate the form) and
    **rewrite** the right file.
-3. **The write logic already exists** in `aivyx access set` (a `toml_edit`
+3. **The write logic already exists** in `aivyx-pa access set` (a `toml_edit`
    section-rewrite that preserves every other section, sets `0600`, drops a stale
    `[access] root`, and confirms expanded levels). Chapter U **factors it into a
    shared `aivyx-config` helper** so the CLI and the daemon write config
@@ -227,10 +227,10 @@ while holding every safety invariant Aivyx already guarantees.
 
 | Section | v1 | Why |
 |---|---|---|
-| **Access level + root** | ✅ Editable, **confirm-first** on expansion | The flagship; security-sensitive (Ch. N). Mirrors `aivyx access set`. |
-| **Autonomy level** | ✅ Editable, **confirm-first** on `autonomous`/`unleashed` | The autonomy dial (Ch. Reins). Level picker; mirrors `aivyx autonomy set`. Per-domain overrides + allowlist stay CLI/hand-edit. |
+| **Access level + root** | ✅ Editable, **confirm-first** on expansion | The flagship; security-sensitive (Ch. N). Mirrors `aivyx-pa access set`. |
+| **Autonomy level** | ✅ Editable, **confirm-first** on `autonomous`/`unleashed` | The autonomy dial (Ch. Reins). Level picker; mirrors `aivyx-pa autonomy set`. Per-domain overrides + allowlist stay CLI/hand-edit. |
 | **Budgets** (`per_run_usd`, `per_day_usd`, `on_exceeded`, `alert_at`) | ✅ Editable | Low-risk numeric caps (Ch. K). |
-| **Provider / model / num_ctx** | 👁 **Read-only** + "change via `aivyx init`" | Editing risks a daemon that won't start (bad model) and touches API keys in the encrypted store/env — out of v1. |
+| **Provider / model / num_ctx** | 👁 **Read-only** + "change via `aivyx-pa init`" | Editing risks a daemon that won't start (bad model) and touches API keys in the encrypted store/env — out of v1. |
 | **Profile** | ❌ A future Agents/Persona screen | Already served read-only by `GetProfile`; editing is its own surface. |
 
 ### 8.3 New IPC (request/response — fits the existing query pattern)
@@ -270,7 +270,7 @@ while holding every safety invariant Aivyx already guarantees.
 | Phase | Deliverable |
 |---|---|
 | **U.0** | This contract (§8). |
-| **U.1** | Shared `aivyx-config` write helpers + `config_toml_path` on `DaemonConfig` (threaded from `aivyx daemon run`); CLI refactored onto the helper (no behavior change). |
+| **U.1** | Shared `aivyx-config` write helpers + `config_toml_path` on `DaemonConfig` (threaded from `aivyx-pa daemon run`); CLI refactored onto the helper (no behavior change). |
 | **U.2** | `aivyx-ipc`: `GetSettings` + `SetAccessLevel` + `SetBudget` + `SettingsSnapshot`, with wire-compat round-trip tests. |
 | **U.3** | Daemon handlers: snapshot read; validate → rewrite → **`ConfigChanged`** audit → respond with `restart_required`. (Adds an `AuditEvent` variant → updates the e2e event-count assertions; full suite.) |
 | **U.4** | Web UI: `View::Settings` live — access selector + confirm modal, budget inputs, read-only provider/model card, restart banner; `ws_task` arms; `stitch.css`. |
@@ -290,9 +290,9 @@ governed differently and that difference is a feature, not an accident.
 
 | Layer | What it is | Edit model | Liveness |
 |---|---|---|---|
-| **Profile** | operator-**declared** identity — the `[profile]` table in `aivyx.toml` (`assistant_name`, `operator_profile`, `communication_style`, `primary_use_cases[]`, `behavioral_preferences[]`, `behavioral_constraints[]`) | **direct write** — surgical `toml_edit` rewrite of `[profile]`, exactly the Ch. U pattern (`aivyx profile edit` is the CLI twin) | **load-time** → `restart_required` (same as Settings; Profile shapes `assemble_session_prompt` at startup) |
+| **Profile** | operator-**declared** identity — the `[profile]` table in `aivyx-pa.toml` (`assistant_name`, `operator_profile`, `communication_style`, `primary_use_cases[]`, `behavioral_preferences[]`, `behavioral_constraints[]`) | **direct write** — surgical `toml_edit` rewrite of `[profile]`, exactly the Ch. U pattern (`aivyx-pa profile edit` is the CLI twin) | **load-time** → `restart_required` (same as Settings; Profile shapes `assemble_session_prompt` at startup) |
 | **Persona** | the agent's **self-learned** adaptations — an append-only, HMAC-signed **delta chain** (behavioral prefs, learned context, communication adaptations, character traits, relationship milestones) | **never free-edited.** The operator *governs* it: resolve agent **proposals** (approve / approve-with-edit / reject) and **revert** deltas. The chain's integrity is the point. | **live** — the daemon recomputes shared runtime state on resolve/revert, so the next turn picks it up (no restart) |
-| **Soul / Identity** | the combined Profile+Persona **export bundle** (`aivyx identity export`) | portability, not editing | n/a — **deferred** (a later read-only export button) |
+| **Soul / Identity** | the combined Profile+Persona **export bundle** (`aivyx-pa identity export`) | portability, not editing | n/a — **deferred** (a later read-only export button) |
 
 The screen never lets the operator hand-write persona deltas. That asymmetry —
 **you declare your Profile; the agent proposes its Persona and you gate it** — is
@@ -301,7 +301,7 @@ the self-learning contract (PRODUCT.md P13/P14) made visible.
 ### 9.2 What already exists (reuse, do not rebuild)
 
 Persona is a mature, gated subsystem; **almost all of its write IPC already
-ships** and is daemon-tested (the `aivyx persona` CLI + `/classic` use it):
+ships** and is daemon-tested (the `aivyx-pa persona` CLI + `/classic` use it):
 
 - **Read:** `GetProfile` → `ProfileSummary`; `GetEffectivePersona` →
   `EffectivePersonaSummary`; `ListPersonaDeltas` → `[PersonaDeltaSummary]`;
@@ -373,7 +373,7 @@ The Studio's window into **who the agent's team is**: the daemon's active
 lead + specialists, each with their role, trust ceiling, capability scopes,
 tool allowlist, and soul (system prompt). The live team *missions* already live
 on the Command Center + Missions screens; **Teams is the composition view**, the
-read-only counterpart to `aivyx team roster`.
+read-only counterpart to `aivyx-pa team roster`.
 
 ### 10.1 What's reused (almost everything)
 
@@ -429,8 +429,8 @@ renders the real `aivyx_team_types::TeamConfig`. Deferred: vertical-pack swappin
 
 ## 11. Documents — the file browser (Chapter Z)
 
-A **read-only** browser over the two document-shaped places Aivyx already knows:
-the agent's always-on **workspace** (`~/.aivyx/workspace`, Chapter O — its own
+A **read-only** browser over the two document-shaped places Aivyx PA already knows:
+the agent's always-on **workspace** (`~/.aivyx-pa/workspace`, Chapter O — its own
 thoughts/plans/projects) and the operator's **`fs_root`** (the access-scoped
 shared work, Chapter N). The Studio counterpart to `fs.read` / `fs.metadata` /
 `workspace.read` — but for a human, not the agent.
@@ -513,8 +513,8 @@ write/rename, a tree pane, syntax highlighting.
 
 ## 12. Voice — the host voice channel, configured (Chapter Voice)
 
-The final roadmap screen — and a deliberately **honest** one. Aivyx's voice is a
-**host-local CLI loop**: `aivyx --channel voice` runs an in-process
+The final roadmap screen — and a deliberately **honest** one. Aivyx PA's voice is a
+**host-local CLI loop**: `aivyx-pa --channel voice` runs an in-process
 mic → Whisper ASR → agent turn → Kokoro TTS → speakers loop on the operator's
 machine (`cpal`/`rodio`), configured by a `[voice]` TOML section. *"The audio
 loop never leaves the host."* The daemon doesn't run it and the browser can't
@@ -547,7 +547,7 @@ Read-only inspection; the daemon never loads the audio stack.
 ### 12.3 New IPC (mirrors Settings, Chapter U)
 
 - **`GetVoiceSettings`** → `VoiceSettingsSnapshot` (the nine `[voice]` fields +
-  the three readiness flags). Re-reads `aivyx.toml` from disk (the U on-disk
+  the three readiness flags). Re-reads `aivyx-pa.toml` from disk (the U on-disk
   convention), so the editor edits what it shows.
 - **`SetVoice { …nine fields… }`** → `VoiceApplied { settings, restart_required:
   true }`. Section-scoped `toml_edit` rewrite of `[voice]` via a new
@@ -559,7 +559,7 @@ Read-only inspection; the daemon never loads the audio stack.
 
 `View::Voice` + `VoicePanel`: the `[voice]` form (engine selects, path inputs,
 language, beam, devices), a **readiness panel** (a chip per prerequisite), the
-**launch command** (`aivyx --channel voice`, copy-able) with a one-line note
+**launch command** (`aivyx-pa --channel voice`, copy-able) with a one-line note
 that audio runs on the host, and the restart banner after a write. No audio APIs
 touched.
 

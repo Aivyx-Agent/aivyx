@@ -1,4 +1,4 @@
-## Aivyx Product Roadmap
+## Aivyx PA Product Roadmap
 
 A living list of **product-shape milestones** derived from the
 forward commitments in [`../PRODUCT.md`](../PRODUCT.md). This is
@@ -79,7 +79,7 @@ production-core streak at six consecutive phases (longest in
 project history). See [`docs/PHASE_17.md`](archive/phases/PHASE_17.md).
 
 **Phase 18 (Frontend Wiring, 2026-04-16):** wired the default
-`aivyx` invocation to auto-spawn a daemon, connect via
+`aivyx-pa` invocation to auto-spawn a daemon, connect via
 `DaemonSession`, and run a REPL loop rendering `StreamEventPayload`s
 via `render_for_cli()`. Daemon-first dispatch with in-process
 fallback. `DaemonCancelHandle` for ctrl-C cancellation over IPC
@@ -93,7 +93,7 @@ See [`docs/PHASE_18.md`](archive/phases/PHASE_18.md).
 upgraded the daemon from single-connection to multi-connection
 (task-per-connection with `ChannelFactory` dispatching on
 `FrontendType`). Ported the Telegram adapter behind the IPC
-boundary — `aivyx --channel telegram` now auto-attaches to the
+boundary — `aivyx-pa --channel telegram` now auto-attaches to the
 daemon the same way the local CLI does. Transport types widened
 to `pub` for binary access; binary line-count managed via
 extraction to `telegram_daemon_frontend.rs`. All byte-identity
@@ -158,7 +158,7 @@ directly via `Scope::parse` at config-load time and
 declared sets only, walking up through empty ancestors;
 an empty child's envelope triggers a one-step-deep
 backcompat-floor substitution at runtime. A
-worked-example `examples/aivyx.toml` demonstrates four
+worked-example `examples/aivyx-pa.toml` demonstrates four
 roles (`default`, `coder`, `researcher`,
 `junior_researcher`) including the deliberate empty-
 child surprise case, and a `--print-role <name>` debug
@@ -245,7 +245,7 @@ property is stronger in practice because the call site is
 auditable and the tests verify the invariant directly. The
 sub-session is one level deep (the child cannot itself invoke
 `role.switch` unless its own role declares the scope, which
-no role in `examples/aivyx.toml` does); multi-level nesting
+no role in `examples/aivyx-pa.toml` does); multi-level nesting
 is the single net-new Phase 14 deferral, with no urgency
 because the no-op-by-default failure mode is already correct.
 **P1.4 "each turn tagged by role active at turn-start" is
@@ -392,7 +392,7 @@ P12 (Tool Process IPC), Daemon Migration.
 The `Tool` trait's shape (`name`, `description`,
 `input_schema`, `required_scope`, `execute`) maps near-1:1
 to MCP's tool interface. This milestone adds an MCP client
-adapter that bridges external MCP servers into Aivyx's tool
+adapter that bridges external MCP servers into Aivyx PA's tool
 registry. Each MCP tool gets a declared scope in the
 capability system, audit logging as a standard tool call,
 and role allowlisting through the existing config surface.
@@ -489,12 +489,12 @@ fully delivered** across Phases 26–27.
 ## Milestone — Assistant Profile ✓ (delivered across Phases 57–58)
 
 **Forward commitment:** PRODUCT.md P13 (amendment A9, Phase 56).
-**Couples to:** Per-Role Envelope (P9), `aivyx init` wizard,
+**Couples to:** Per-Role Envelope (P9), `aivyx-pa init` wizard,
 system-prompt assembly.
 **Status:** Fully delivered. P13 closed at Phase 58 exit
 (2026-05-12).
 
-The operator's stated vision (post-Phase-55) reframes Aivyx
+The operator's stated vision (post-Phase-55) reframes Aivyx PA
 from "personal autonomous agent platform" into a
 *self-learning, self-improving AI-personal assistant with a
 user-defined **Profile** and **Persona** based on the
@@ -530,7 +530,7 @@ prompt at turn start (assembled alongside the role-derived
 envelope description). The per-role inheritance tree from
 P9 is unchanged — Profile is a peer concept that flavors
 the assistant's voice and judgment across every role.
-`aivyx init` extends with use-case prompts that populate
+`aivyx-pa init` extends with use-case prompts that populate
 Profile fields.
 
 **Expected phases:**
@@ -539,12 +539,12 @@ Profile fields.
   the Profile substrate. `aivyx-config::Profile` struct
   with six P13-commit-5 fields; `[profile]` TOML table
   parsed at config-load time per Q1(a); `Profile::default()`
-  synthesizing the Q5(b) `assistant_name = "Aivyx"` fallback
+  synthesizing the Q5(b) `assistant_name = "Aivyx PA"` fallback
   for legacy configs; `aivyx-channel::assemble_session_prompt`
   helper composing Profile + role envelope into a labeled
   system prompt per Q3(c); wiring through both the parent
   session-build path and the role-switch child factory so
-  sub-sessions inherit the same Profile section; `aivyx
+  sub-sessions inherit the same Profile section; `aivyx-pa
   init` extended with three opt-in Profile prompts per
   Q4(c) (assistant name, primary use case, communication
   style); startup-banner row surfacing Profile provenance
@@ -554,19 +554,19 @@ Profile fields.
   (longest run since Phase 51's deliberate break at 6).
 - **Phase 58 (Inspection, shipped 2026-05-12):** delivered
   the operator-facing CLI + Web UI surface and closed the
-  P13 milestone. `aivyx profile show` reads `aivyx.toml`
+  P13 milestone. `aivyx-pa profile show` reads `aivyx-pa.toml`
   via the existing config loader path and renders the
   resolved Profile in labeled banner-style format per
-  Q3(a). `aivyx profile edit` opens the `[profile]`
+  Q3(a). `aivyx-pa profile edit` opens the `[profile]`
   section in `$EDITOR` against a tempfile and merges the
   result back via `toml_edit` surgical update per Q2(a)
   — preserves comments, whitespace, and every other
-  section in `aivyx.toml`. New `CliMode::Profile(ProfileSubcommand)`
+  section in `aivyx-pa.toml`. New `CliMode::Profile(ProfileSubcommand)`
   nested enum per Q1(a). Web UI Profile pane shows live
   daemon state via a new `Query::GetProfile` IPC envelope
   + `ProfileSummary` wire-shape per Q4(a) read-only.
   Reload semantics: load-time-only per Q5(a) — edit
-  prints a `aivyx daemon stop && aivyx` restart reminder
+  prints a `aivyx-pa daemon stop && aivyx-pa` restart reminder
   on save. PRODUCT.md Delivery Status refreshed: P13 →
   Fully Delivered (Task 5 streak-breaker). `toml_edit =
   "0.22"` is the first new workspace crate added since
@@ -676,7 +676,7 @@ layer.
   take effect on next turn without restart);
   `Query::GetEffectivePersona` + `Query::ListPersonaDeltas`
   IPC envelopes + `FrontendMessage::RevertPersonaDelta`;
-  `aivyx persona show / list / revert` CLI subcommands
+  `aivyx-pa persona show / list / revert` CLI subcommands
   (daemon-IPC-backed per Q3(a) at sign-off); Web UI Persona
   pane with effective-state rendering and click-to-revert.
   Reverts are operator-only per Q5(a), auto-approved (the
@@ -686,8 +686,8 @@ layer.
   micro-phase if pressure surfaces — **fully closed:** export
   shipped in Phase 64 (2026-05-14), import shipped in Phase
   65 (2026-05-14). Operators can now transfer Profile +
-  Persona between hosts via `aivyx identity export <path>` +
-  `aivyx identity import <path> [--force]`. Tests +19
+  Persona between hosts via `aivyx-pa identity export <path>` +
+  `aivyx-pa identity import <path> [--force]`. Tests +19
   (1052 → 1071).
   All three streak predictions correct: DESIGN.md → 7,
   PRODUCT.md → broke at 2 (Task 7 Delivery Status refresh,
@@ -733,7 +733,7 @@ layer.
   encrypted proposal chain (KeyDomain::PersonaProposals,
   distinct genesis seed from the persona chain per Q4(a)) →
   operator reviews at leisure via the new Web UI Proposals
-  pane or `aivyx persona proposals` CLI → approve verbatim,
+  pane or `aivyx-pa persona proposals` CLI → approve verbatim,
   approve-with-edit (Q3(a) — operator tweaks the op before
   applying), or reject with optional reason → daemon
   validates, appends a PersonaDelta to the persona chain on
@@ -753,7 +753,7 @@ layer.
 
 **Forward commitment:** none — operator-feedback-shaped
 substrate-ergonomics work post-ledger-closure.
-**Couples to:** `aivyx init` (Phase 44 wizard), the operator
+**Couples to:** `aivyx-pa init` (Phase 44 wizard), the operator
 identity layer (P13 + P14).
 **Status:** Phase 1 of N delivered as "Pipeline Ready,
 Publication Held." First published release pending public
@@ -762,7 +762,7 @@ hosting; future micro-phases extend reach.
 After Phase 60 closed the forward-commitment ledger, the
 codebase review surfaced **distribution** as the largest
 adoption-shape gap: end users had to run `cargo run --release
---bin aivyx` from source because there were no prebuilt
+--bin aivyx-pa` from source because there were no prebuilt
 binaries on any platform. This milestone closes that gap
 incrementally — release pipeline first, then publication,
 then platform expansion (Windows, Homebrew, Docker, signing),
@@ -774,7 +774,7 @@ focused phase rather than one monolithic distribution effort.
 
 - **Phase 61 (Release Pipeline, shipped 2026-05-13 as
   "Pipeline Ready").** First phase of the milestone. Wired
-  the release substrate: `aivyx --version` flag, cargo-dist
+  the release substrate: `aivyx-pa --version` flag, cargo-dist
   config (`dist-workspace.toml`), four-target matrix (Linux
   x86_64/aarch64 musl + macOS x86_64/aarch64), three
   workflow files (`ci.yml`, `quality-gate.yml`, dist's
@@ -812,7 +812,7 @@ focused phase rather than one monolithic distribution effort.
 
 **Forward commitment:** none — operator-feedback-shaped
 substrate from the post-Phase-60 codebase review.
-**Couples to:** `aivyx init` (Phase 44 wizard).
+**Couples to:** `aivyx-pa init` (Phase 44 wizard).
 **Status:** Phase 66 delivered the substrate + three starter
 templates (2026-05-14). Future phases extend the template
 library and add parameter substitution / web UI surface /
@@ -821,7 +821,7 @@ sharing primitives as adoption shape demands.
 The original codebase review named three adoption-shape gaps
 post-Phase-60: Distribution (Phases 61), Reach (Phases 62–63),
 and Use-case onboarding. Phase 66 closes the third — operators
-no longer write `aivyx.toml` from scratch; the starter
+no longer write `aivyx-pa.toml` from scratch; the starter
 templates ship sensible defaults for the common archetypes.
 
 **Expected sub-phases / micro-phases:**
@@ -833,8 +833,8 @@ templates ship sensible defaults for the common archetypes.
   `TemplateDefaults` + `render_with_template` splice-back,
   three bundled templates (`coder` / `researcher` /
   `personal`). Operator can run
-  `aivyx init --template coder` and get a useful
-  `aivyx.toml` with role declarations, MCP web search,
+  `aivyx-pa init --template coder` and get a useful
+  `aivyx-pa.toml` with role declarations, MCP web search,
   and behavioral preferences baked in. Tests +18 (1176 →
   1194). All four streak predictions correct: DESIGN.md
   → 13, PRODUCT.md → 6, lib.rs → 14 (new record).
@@ -842,14 +842,14 @@ templates ship sensible defaults for the common archetypes.
 - **More starter templates (future).** `data-analyst`,
   `writer`, `student`, `devops-on-call`, etc. The substrate
   supports arbitrary additions — each is just a complete
-  `aivyx.toml` with archetype-appropriate defaults.
+  `aivyx-pa.toml` with archetype-appropriate defaults.
 - **Template parameter substitution (future).**
   `{{operator_name}}` placeholders prompted at init time
   (vs Phase 66's literal-default-per-prompt approach).
 - **Web UI template selection (future).** Today the
   template picker is CLI-only.
 - **Template sharing primitives (future).** Today operators
-  copy `.toml` files into `~/.local/share/aivyx/templates/`
+  copy `.toml` files into `~/.local/share/aivyx-pa/templates/`
   manually. A curl-from-URL or community registry would let
   templates spread.
 
@@ -989,7 +989,7 @@ respond to it. Closing the gap is the inflection point between
   bucket rate limits (Q3(a)) with the new
   `AutoNotifyOutcomeSummary::SkippedByRateLimit` audit
   variant. Notification history surface — both Web UI
-  Notifications pane and `aivyx notify history` CLI walk
+  Notifications pane and `aivyx-pa notify history` CLI walk
   the audit chain via the new `ListNotificationHistory`
   IPC (Q4(a)). After Phase 73 the Reach Milestone polish
   backlog is closed end-to-end. Tests +31 (1302 → 1333).
@@ -1008,7 +1008,7 @@ respond to it. Closing the gap is the inflection point between
   wins per Q2(a)); unmatched topics fall through to the
   global `ttl_secs`. Operator surfaces: `memory.search`
   agent tool + Web UI Memory pane (read-only browse +
-  search + per-topic evict per Q4(a)) + `aivyx memory
+  search + per-topic evict per Q4(a)) + `aivyx-pa memory
   list/show/search/evict` CLI. Keyword-only search per
   Q1(a) — no embedding dep; semantic RAG defers. Tests +45
   (1333 → 1378). All three streak predictions correct:
@@ -1027,7 +1027,7 @@ respond to it. Closing the gap is the inflection point between
   (non-fatal) + bounded hourly backfill on the GC cadence
   (Q2(a)); `memory.search` `mode = keyword|semantic` with
   transparent flagged keyword fallback (Q4(a)) across the agent
-  tool, `SearchMemory` IPC, `aivyx memory search --semantic`
+  tool, `SearchMemory` IPC, `aivyx-pa memory search --semantic`
   CLI, and a Web UI toggle. **Privacy is the operator's
   `base_url`** — cloud API or a local OpenAI-compatible server
   (fully on-device). Tests +46 (1378 → 1424). All three streak
@@ -1086,7 +1086,7 @@ respond to it. Closing the gap is the inflection point between
   per-window digest + per-Pending-proposal provenance tracing
   each recall-driven Persona proposal back to the recalls/turn
   outcomes that motivated it. Full parity: `GetLearningInsights`
-  IPC + `aivyx learning` CLI + a read-only Web UI Learning
+  IPC + `aivyx-pa learning` CLI + a read-only Web UI Learning
   tab; approve/reject stays in the existing operator gate.
   Reuses existing `aivyx-channel` machinery (correlate_detailed
   shares the loop's single matching pass), so the operator
@@ -1329,7 +1329,7 @@ respond to it. Closing the gap is the inflection point between
   34, PRODUCT.md → **27**, lib.rs → **35** (new project
   record, beating Phase 86's 34) — pass + config + Phase 78
   surface stat all live in `aivyx-channel` / `aivyx-config` /
-  `bin/aivyx`; proposals land through the existing chain API
+  `bin/aivyx-pa`; proposals land through the existing chain API
   (no new chain operation); no new AuditTag. Test count delta
   `+15` (workspace 1573 → 1588), exactly the upper edge of
   the predicted `+11-15` band. Zero new workspace deps.
@@ -1536,7 +1536,7 @@ respond to it. Closing the gap is the inflection point between
   facet + the `AppendList` half proposing the new one,
   cross-referenced via Phase 92's `supersedes_proposal_id`)
   now renders as one grouped unit in both the
-  `aivyx persona proposals` CLI and the Web UI Persona-
+  `aivyx-pa persona proposals` CLI and the Web UI Persona-
   pane Proposals tab, instead of two unrelated rows. The
   CLI gets `└─ supersedes:` / `└─ superseded by:`
   indicators under each half; the Web UI gets a single
@@ -1593,7 +1593,7 @@ respond to it. Closing the gap is the inflection point between
   passes that find nothing actionable when they opt in).
   First cycle after daemon boot is unconditional (no prior
   baseline); subsequent cycles consult audit-growth. The
-  `aivyx learning` surface gains a "Reflection cadence"
+  `aivyx-pa learning` surface gains a "Reflection cadence"
   block with per-schedule `K fired, S skipped` counts;
   daemon log shows skipped cycles in real time. Streak all
   three correct: DESIGN.md → **42**, PRODUCT.md → **35**,
@@ -1869,11 +1869,11 @@ Grouped by commitment for traceability.
   OpenAI-compatible, Ollama-first-class.
 - **Web UI Channel** — Phases 39, 47. Localhost-only chat
   surface + mission/audit/sessions inspection panes.
-- **Bundled MCP Web Search** — Phase 46. `aivyx mcp-server
+- **Bundled MCP Web Search** — Phase 46. `aivyx-pa mcp-server
   web-search` with Brave / SerpAPI / DuckDuckGo backend chain.
 - **Rich Input (Multimodal)** — Phase 45. `ContentBlock`,
   image input across Anthropic / OpenAI / Telegram / Web UI.
-- **`aivyx init` Wizard** — Phase 44. First-run interactive
+- **`aivyx-pa init` Wizard** — Phase 44. First-run interactive
   setup, Ollama auto-detection.
 
 ### Chapter A — Foundation Closeout (Phases 50–54)
@@ -1888,7 +1888,7 @@ close.
 - **Phase 51 — Cleanup.** Closed three pre-existing items:
   `AivyxError::{Storage,Crypto}` typed nested errors (D6
   honored after 50 phases), `handle_connection` parameter-struct
-  lift, `AIVYX_PASSPHRASE` TOML/env footgun (TOML path now
+  lift, `AIVYX_PA_PASSPHRASE` TOML/env footgun (TOML path now
   drives derivation).
 - **Phase 52 — Sandbox layer.** Generic command-wrapper
   sandbox for `[[tool_process]]`. Operator supplies the policy
@@ -1937,7 +1937,7 @@ chapters and tracked in [`ROADMAP.md`](ROADMAP.md), not here:
   thirteen-tool substrate core untouched (DESIGN A12).
 - **Phases 172–179** — the correction-signal learning loop
   (structural → LLM-judged → tool-attributed) and the
-  **Aivyx Ralph loop** (a capped, gate-verified autonomous
+  **Aivyx PA Ralph loop** (a capped, gate-verified autonomous
   agent loop over an HMAC-chained backlog).
 
 For the current point-in-time state (crate count, test count,

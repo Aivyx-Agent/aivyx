@@ -4,7 +4,7 @@
 >
 > Chapter J shipped the Nonagon — a lead agent convening up to nine
 > attenuated specialists over a mission **DAG** (`aivyx-team`). But it only
-> runs **in-process**, one shot, via `aivyx team run "<mission>"`: no daemon
+> runs **in-process**, one shot, via `aivyx-pa team run "<mission>"`: no daemon
 > ownership, no live view, no durability. The J.7 TUI **Missions panel**
 > (`MissionsState` / `MissionRow` / `Msg::MissionsUpdated`) is a finished
 > view-model that **nothing feeds** — it renders the empty state.
@@ -162,14 +162,14 @@ future option that doesn't change this contract.
 
 ## 6. CLI + TUI + Chat surface
 
-- **CLI** (`aivyx team`, extends `team.rs`):
-  - `aivyx team run "<goal>" [--config <pack.toml>]` → **daemon-first**
+- **CLI** (`aivyx-pa team`, extends `team.rs`):
+  - `aivyx-pa team run "<goal>" [--config <pack.toml>]` → **daemon-first**
     (sends `TeamRun`, then polls to render progress), **in-process fallback**
     when no daemon is running (today's path).
-  - `aivyx team status [<id>]` / `aivyx team list` → render snapshots
+  - `aivyx-pa team status [<id>]` / `aivyx-pa team list` → render snapshots
     (pure render fns, mirror `loop_cli::render_status`).
-  - `aivyx team approve|reject <id> <step>` → `ResolveTeamGate`.
-  - `aivyx team abort <id>` → `AbortTeamMission` (**Chapter Belay**): stop a
+  - `aivyx-pa team approve|reject <id> <step>` → `ResolveTeamGate`.
+  - `aivyx-pa team abort <id>` → `AbortTeamMission` (**Chapter Belay**): stop a
     **running** mission. It halts gracefully at its next wave boundary —
     in-flight specialist turns finish, completed outputs are preserved — landing
     in `Halted` (reason "aborted by operator"), the same terminal shape as a
@@ -178,7 +178,7 @@ future option that doesn't change this contract.
     at a human gate* isn't running, so it can't be aborted this way — `reject`
     its gate instead. Completing the operator control surface over autonomous
     missions: budget-halt (Ballast) + gate approve/reject (L) + **abort**.
-  - `aivyx team pause <id>` / `aivyx team resume <id>` → `PauseTeamMission` /
+  - `aivyx-pa team pause <id>` / `aivyx-pa team resume <id>` → `PauseTeamMission` /
     `ResumeTeamMission` (**Chapter Mission Control**): pause requests a
     graceful stop at the mission's next wave boundary — the same mechanism as
     abort (in-flight specialist turns finish, completed outputs are
@@ -206,7 +206,7 @@ future option that doesn't change this contract.
   CLI's fixed-width tables.
   - **Sender allowlist (2026-08-23).** The entire `/team ...` surface above
     — not just `/team run` below — is gated by a per-channel
-    `team_command_allowed_senders` list (`aivyx.toml`, `[telegram]`/
+    `team_command_allowed_senders` list (`aivyx-pa.toml`, `[telegram]`/
     `[discord]`/`[slack]`); an unset/empty list denies every `/team`
     command from every sender (deny-by-default). A bare "yes"/"no" reply
     to a `/team run` confirm prompt is separately bound to the sender who
@@ -226,7 +226,7 @@ future option that doesn't change this contract.
     `run_team_mission_channel` on a bare "yes" within 5 minutes ("no" or a
     stale "yes" cancels instead). The daemon only honors the request if the
     operator opted the channel in via `team_run_channel = true` in
-    `aivyx.toml` (default `false` — off for every channel until set); an
+    `aivyx-pa.toml` (default `false` — off for every channel until set); an
     optional `team_trigger_rate_limit` caps confirmed starts per rolling
     hour per chat. See `docs/INSTALL.md` and `docs/ROUTINES.md` for the
     operator-facing config and usage.
@@ -242,7 +242,7 @@ future option that doesn't change this contract.
 | **L.2** | Engine: `GateMode::{Auto,Human}` + the `run_until_pause` checkpoint/resume refactor (`run`/`run_observed` become wrappers). |
 | **L.3** | Persistence: `KeyDomain::TeamMissions` + `TeamMissionRecord` + `PersistentTeamMissionStore` + reload-on-startup. |
 | **L.4** | Daemon: `SharedMissionState` + `TeamRun` / `ResolveTeamGate` handlers (assemble over the real tool list, on the shared chain). |
-| **L.5** | IPC variants + `daemon_client` helpers + `aivyx team run\|status\|list\|approve\|reject`. |
+| **L.5** | IPC variants + `daemon_client` helpers + `aivyx-pa team run\|status\|list\|approve\|reject`. |
 | **L.6** | TUI poll tick + live `MissionsUpdated` feed + `AwaitingApproval` approve/reject UX. |
 | **Ch.M** ✅ | Web **Mission Control** GUI (separate chapter, unblocked by this one) — shipped 2026-08-22/23: live mission state, pause/resume, and the Studio's Mission Control nav view (LEAD/specialist graph, drill-in, abort/pause/resume controls). See `aivyx-ecosystem/ROADMAP.md`'s Mission Control entry for the full 3-piece account. |
 | _(deferred)_ | L.7 autonomous-loop ↔ team integration. |
@@ -254,7 +254,7 @@ future option that doesn't change this contract.
 - **NT-02 preserved.** Specialists stay attenuated (`declared ∩ lead`); the
   daemon path changes *who drives* the team, never the capability math.
 - **One HMAC chain.** Daemon-run specialist sub-turns append to the same
-  `KeyDomain::Audit` chain as every other turn — `aivyx audit export` /
+  `KeyDomain::Audit` chain as every other turn — `aivyx-pa audit export` /
   `--verify-only` see them.
 - **Resume idempotence.** `run_until_pause` from a checkpoint never re-runs a
   completed step; running a no-human-gate plan through the resume path equals

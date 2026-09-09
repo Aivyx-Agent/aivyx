@@ -19,7 +19,7 @@ Stencil proved grammar-constrained decoding fixes the small-local-model
 tool-calling wall — but only on the **in-process** mistral.rs provider, the one
 path with a direct `Constraint::JsonSchema` API. The most *popular* way people run
 a local GGUF is **`llama-server`** (llama.cpp's HTTP server) behind its
-OpenAI-compatible `/v1/chat/completions` endpoint — which Aivyx already supports as
+OpenAI-compatible `/v1/chat/completions` endpoint — which Aivyx PA already supports as
 `provider = "llamacpp"` (Phase 133, config sugar over the shared `OpenAiProvider`).
 That path gets the *unconstrained* OpenAI passthrough today, so it inherits the
 exact fragility Stencil cured everywhere else: hallucinated names, malformed
@@ -31,7 +31,7 @@ constrains decoding — the same outcome as Stencil's `Constraint::JsonSchema`,
 reached over HTTP instead of an in-process call. Feed it `tool_call_grammar(tools)`
 and a `llama-server`-hosted model is constrained to emit exactly one valid tool
 call (or the `respond` text escape). One primitive, now covering **both** local
-engines Aivyx ships.
+engines Aivyx PA ships.
 
 ## 2. Architecture & governance decisions (locked)
 
@@ -133,6 +133,6 @@ EB.3 (the request-shape branch + SSE accumulation + parse); price ~20–30 new t
 shouldn't depend on which local engine you happen to run. The same grammar that
 constrains the in-process mistral.rs engine, pressed into llama.cpp's server over
 the wire it already speaks — so whether an operator runs the embedded engine or
-points Aivyx at their own `llama-server`, a small local model emits valid,
+points Aivyx PA at their own `llama-server`, a small local model emits valid,
 real-named tool calls by construction. One primitive, both engines, no new
 dependency.*

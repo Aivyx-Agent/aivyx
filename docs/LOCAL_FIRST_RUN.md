@@ -3,9 +3,9 @@
 > **Status:** design contract. This is the spec Chapter P scaffolds from
 > (mirrors `docs/ACCESS_LEVELS.md` / `docs/AGENT_WORKSPACE.md`).
 >
-> Aivyx's headline pitch is **"runs on your hardware, no API key."** That free
+> Aivyx PA's headline pitch is **"runs on your hardware, no API key."** That free
 > front door is the local-LLM (Ollama) path. But the path is fragile in exactly
-> the way that ruins a first impression: a new user runs `aivyx init`, picks
+> the way that ruins a first impression: a new user runs `aivyx-pa init`, picks
 > local, and gets **empty replies**, **dropped tool calls**, or a model that
 > only generates one token — because of thinking-model quirks, a streaming
 > tool-call edge, and a starved `num_ctx`.
@@ -48,7 +48,7 @@ Observed live while testing local models this build:
 3. **Guided pull.** When the operator picks local and the recommended model is
    absent (or Ollama has none), the wizard *offers to download it* with streamed
    progress — not a copy-paste hint.
-4. **`aivyx doctor` + end-of-wizard check.** Confirms the path actually works:
+4. **`aivyx-pa doctor` + end-of-wizard check.** Confirms the path actually works:
    Ollama reachable → a usable model present → a real test turn returns
    **non-empty** text. Each failure prints a clear, actionable next step. Run
    automatically at the end of `init`, and on demand any time.
@@ -78,12 +78,12 @@ Observed live while testing local models this build:
 | **P.1** | Auto `num_ctx` from `/api/show` (the headline fix). |
 | **P.2** | Vetted recommended model + wizard default; verify live. |
 | **P.3** | Guided model pull in the wizard. |
-| **P.4** | `aivyx doctor` + end-of-wizard verification. |
+| **P.4** | `aivyx-pa doctor` + end-of-wizard verification. |
 | **P.5** | Docs (`INSTALL.md`), README, memory; tee up the Publish chapter. |
 
 **Status: P.0–P.5 complete and verified live.** A bare `provider=ollama,
 model=qwen3.6:27b` config now returns full responses (was 1 token); the 9B tier
-emits tool calls correctly; `aivyx doctor` reports green (`test reply OK: "OK"`)
+emits tool calls correctly; `aivyx-pa doctor` reports green (`test reply OK: "OK"`)
 and gives an actionable pull hint on a missing model. The recommended model is
 `qwen3:8b` (tool-capable qwen3, verified family). **Next chapter: Publish** —
 activate the cargo-dist pipeline into downloadable binaries + a one-line
@@ -96,7 +96,7 @@ installer, now that the local on-ramp is solid.
 Publishing downloadable binaries — activating the cargo-dist / GitHub-Actions
 release pipeline (`dist-workspace.toml`) into real installable releases + a
 one-line installer — was the **next chapter (Chapter Q — Publish)** and is now
-prepared: the release ships only the `aivyx` binary, the install docs resolve,
+prepared: the release ships only the `aivyx-pa` binary, the install docs resolve,
 and `v0.1.0` (pre-release) is ready to tag. It deliberately landed *on top of* a
 local on-ramp that already works; shipping a binary whose free path produces
 empty replies would have defeated the point. See
@@ -115,10 +115,10 @@ escape) *by construction*, not by hoping. Live-proven on Qwen3-4B.
 
 **Chapter Emboss** ([`docs/EMBOSS.md`](EMBOSS.md)) extends the *same* grammar to the
 **`llama-server`** path (`provider = "llamacpp"` / Jan, the OpenAI-compatible local
-backends): set `[openai] constrain_tool_calls = true` and Aivyx injects
+backends): set `[openai] constrain_tool_calls = true` and Aivyx PA injects
 `tool_call_grammar(tools)` as a `json_schema` constraint on the chat-completions
 body, so a GGUF served over HTTP is constrained the same way the in-process engine
-is. Default off. The grammar primitive now covers **both** local engines Aivyx
+is. Default off. The grammar primitive now covers **both** local engines Aivyx PA
 ships. Live-proven against a real `llama-server` on Qwen3-4B.
 
 ## 6. Making semantic memory work out of the box (Chapter Engram)
@@ -126,7 +126,7 @@ ships. Live-proven against a real `llama-server` on Qwen3-4B.
 Chapter P made a local model *reply*; **Chapter Engram** makes a fresh agent
 actually *remember and recall*. The gap it closes is structural: the daemon
 builds the auto-recall pipeline **only when `[embedding]` is configured**
-(`aivyx.rs` — `recall_context` is gated on the embedding provider), and `aivyx
+(`aivyx.rs` — `recall_context` is gated on the embedding provider), and `aivyx-pa
 init` never wrote one. So the whole memory stack (Loom/Codex/Lattice/Synapse)
 was dark for any operator who didn't hand-configure embeddings — flipping the
 `[memory] profile` did nothing on its own.
@@ -152,7 +152,7 @@ existing installs on upgrade, so the compiled default stays `Off` and only new
 configs opt in (the same planting model as the default cron routines). Local
 sweeps are free compute (just slower on a small model).
 
-**`aivyx doctor`** gained a Memory section: it reports the embedding provider +
+**`aivyx-pa doctor`** gained a Memory section: it reports the embedding provider +
 active profile, and on the local path verifies the embedding model is actually
 pulled (the common "configured but dark" failure) with an `ollama pull` hint. A
 config with no `[embedding]` is valid — the section says so and how to enable it,

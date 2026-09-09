@@ -185,8 +185,8 @@ now be generated and held on a YubiKey's OpenPGP card applet instead of a
 software key sealed at rest — `Identity::load_hardware`, behind
 `aivyx-federation`'s own `yubikey` Cargo feature (off by default: the
 `aivyx-yubi` crate this pulls in transitively needs `libpcsclite`/`pcscd`
-at build and run time — a real, separate system dependency no other Aivyx
-command requires). Provisioning is a one-time operator step, `aivyx
+at build and run time — a real, separate system dependency no other Aivyx PA
+command requires). Provisioning is a one-time operator step, `aivyx-pa
 federation yubikey-init` — see `docs/INSTALL.md`'s "Hardware-backed
 federation identity (YubiKey)" section for setup, the `pcscd` requirement,
 and usage.

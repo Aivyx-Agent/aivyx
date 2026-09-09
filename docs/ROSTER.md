@@ -54,15 +54,15 @@ the GUI, with the engine's safety model (validation + attenuation) intact.
 
 ## 2. Architecture & governance decisions (locked)
 
-### The team config becomes a loadable file — not hardcoded, not in `aivyx.toml`
+### The team config becomes a loadable file — not hardcoded, not in `aivyx-pa.toml`
 The daemon reads its `TeamConfig` from a **dedicated `[team]`-rooted file** (default
-path: `team.toml` beside `aivyx.toml`; overridable via a single new pointer key
-`[team] config_path` in `aivyx.toml`). Absent file → fall back to
+path: `team.toml` beside `aivyx-pa.toml`; overridable via a single new pointer key
+`[team] config_path` in `aivyx-pa.toml`). Absent file → fall back to
 `default_nonagon()` (today's behavior, byte-identical). This matches how packs
 already ship a team (`crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`) and how
 `TeamConfig::load` already works — the team document is **self-contained** (`[team]`
 + `[[team.member]]` array-of-tables + `[team.dialogue]`), so it does not belong
-inside the hand-maintained `aivyx.toml`. The writer owns the *whole* file, which
+inside the hand-maintained `aivyx-pa.toml`. The writer owns the *whole* file, which
 means **no `toml_edit` surgery** is needed — `TeamConfig::to_toml()` already
 round-trips it (proven by `roster.rs` tests). The writer is just
 `validate → to_toml → write_toml_0600` (reusing Chapter U's `0600` helper).
@@ -105,11 +105,11 @@ pattern).
 (RO.1); the shared team-file **writer** (`validate → to_toml → 0600`) + the
 `SetTeamRoster` IPC + daemon handler + `TeamRosterChanged` audit + restart-required
 (RO.2); the Studio Teams **edit mode** — member CRUD, lead pick, save, the
-no-widen hint (RO.3); the Genesis **starter-team** step + `aivyx team` write
+no-widen hint (RO.3); the Genesis **starter-team** step + `aivyx-pa team` write
 affordance (RO.4); tests; a served-in-browser/bundle-embed verify (RO.5).
 **Out:** **live** (no-restart) roster swap of a running Nonagon (restart only;
 additive later if wanted); editing the per-mission `MissionPlan`/DAG (this edits
-*who's on the team*, not *what they run* — that's `aivyx team run`); inventing new
+*who's on the team*, not *what they run* — that's `aivyx-pa team run`); inventing new
 capability bases or tools from the screen (scopes must already parse to a known
 base); the vertical-pack **marketplace**/download (Genesis offers known packs, not
 a registry); any change to `attenuate_for_member` or the trust model.
@@ -119,11 +119,11 @@ a registry); any change to `attenuate_for_member` or the trust model.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **RO.0** 🟡 | **This design contract** | Locked reference; banner flips per phase. |
-| **RO.1** ✅ | **Team config as a loadable file** | DONE. `[team] config_path` (`RawTeam` → `AivyxConfig::team_config_path: Option<PathBuf>`) points at a `[team]`-rooted file; `team::resolve_daemon_team_config(configured, base_dir)` resolves it at the team-mission build site — configured path (relative → joined to the `aivyx.toml` dir) → else a conventional `team.toml` beside `aivyx.toml` → else the built-in `default_nonagon()`. **Never errors** (a broken/unparseable file logs a warning + falls back so the daemon still boots); **byte-identical when no file exists**. Documented in `examples/aivyx.toml`. Tests: 5 resolver (`team.rs`) + 2 config-parse (`tests.rs`); example-config e2e + clippy `-D warnings` green. |
+| **RO.1** ✅ | **Team config as a loadable file** | DONE. `[team] config_path` (`RawTeam` → `AivyxConfig::team_config_path: Option<PathBuf>`) points at a `[team]`-rooted file; `team::resolve_daemon_team_config(configured, base_dir)` resolves it at the team-mission build site — configured path (relative → joined to the `aivyx-pa.toml` dir) → else a conventional `team.toml` beside `aivyx-pa.toml` → else the built-in `default_nonagon()`. **Never errors** (a broken/unparseable file logs a warning + falls back so the daemon still boots); **byte-identical when no file exists**. Documented in `examples/aivyx-pa.toml`. Tests: 5 resolver (`team.rs`) + 2 config-parse (`tests.rs`); example-config e2e + clippy `-D warnings` green. |
 | **RO.2** ✅ | **The writer + `SetTeamRoster` IPC** | DONE. `aivyx_channel::team_config_write::write_team_config` (validate → `to_toml` → `aivyx_config::write_toml_0600`, now pub; creates a missing parent; **validation first so an invalid roster never touches disk**). `QueryPayload::SetTeamRoster { roster }` + `QueryResponsePayload::TeamRosterApplied { roster, restart_required }` (aivyx-ipc, wasm-clean `TeamConfig`). Daemon handler resolves the pre-computed `team_config_write_path` (threaded parallel to `config_toml_path`; env-only launch → `no_config_file`), writes, re-reads → `TeamRosterApplied{restart_required:true}`, audits via `ConfigChanged` section `team`; invalid → `QueryError` `invalid_roster` (validator's message), write failure → `team_write_failed`. **NT-02 untouched.** Tests: 5 writer + IPC roundtrip; channel lib 1017 / e2e 30 / clippy `-D warnings` green. |
 | **RO.3** ✅ | **The Studio Teams edit mode** | DONE (host + release-wasm build + clippy `-D warnings` clean; bundle/`dist` rebuild deferred to RO.5 since RO.4 also touches the web). New `TeamsState` (roster + notice + restart_required) replaces the bare roster signal, fanned by `ws_task` (`GetTeamRoster` + the new `TeamRosterApplied` arm + an `mc-teams`-prefixed `QueryError` route). `TeamsPanel` is now an editor over a local `draft` (seeded once from the loaded roster): team name/description, lead `<select>`, per-member name/role/trust(`<select>`)/scopes/tools(textareas → `parse_token_list`)/soul, **add specialist** (≤9 guard) / **remove** (lead protected), **Save** → `set_team_roster_query` (`mc-teams-set`), **Discard**, the restart-required banner + the NT-02 **inert-scope hint** (specialist scopes the lead lacks). Reuses the U/V write UX + existing CSS (no new tokens). |
-| **RO.4** ✅ | **Genesis starter-team + CLI** | DONE. CLI: `aivyx team init [--pack <default\|path.toml>] [--out <path>] [--force]` (offline, like `roster`) writes a starter team file via the RO.2 `write_team_config` (validate → `to_toml` → `0600`); default Nonagon or any pack TOML by path; refuses overwrite without `--force`. Web: a 4th onboarding step — **`OnboardingTeamStep`** (Profile → Persona → **Team** → Access) shows the active roster (`GetTeamRoster`) + routes to the RO.3 Teams editor (`View::Teams`). **OQ-4 resolved:** the team engine isn't wasm, so the browser can't construct a pack — pack presets are the CLI's `--pack`; the web confirms the default + routes to the editor for full customization. Tests: 2 CLI (`init_source`, `run_init` write/refuse/force) + smoke-verified end-to-end (`team init` → `team roster --config`); host + release-wasm + clippy `-D warnings` green. |
-| **RO.5** ✅ | **Finalize** | DONE. `dx bundle --release` rebuilt + `dist/` reassembled (`.br` stripped) + committed — the new wasm carries the RO.3/RO.4 screen ("Save team", "Add specialist"/"Max 9 specialists", "Customize team", "inert until the lead", the onboarding "Team — who works for you") and the **release `aivyx` binary embeds it** (wasm hash + `SetTeamRoster`/`TeamRosterApplied` symbols present). **Live write→load proven**: `aivyx team init` writes a valid `[team]` file that `team roster --config` reads back (+ the RO.1 resolver / RO.2 writer unit tests). Full workspace suite + clippy `-D warnings` + `cargo deny` all green. Live browser auto-drive stays blocked in-sandbox (harness signal-16-reaps a TCP server; verified via bundle/embed + the data path per the [[chapter-lantern]] precedent). |
+| **RO.4** ✅ | **Genesis starter-team + CLI** | DONE. CLI: `aivyx-pa team init [--pack <default\|path.toml>] [--out <path>] [--force]` (offline, like `roster`) writes a starter team file via the RO.2 `write_team_config` (validate → `to_toml` → `0600`); default Nonagon or any pack TOML by path; refuses overwrite without `--force`. Web: a 4th onboarding step — **`OnboardingTeamStep`** (Profile → Persona → **Team** → Access) shows the active roster (`GetTeamRoster`) + routes to the RO.3 Teams editor (`View::Teams`). **OQ-4 resolved:** the team engine isn't wasm, so the browser can't construct a pack — pack presets are the CLI's `--pack`; the web confirms the default + routes to the editor for full customization. Tests: 2 CLI (`init_source`, `run_init` write/refuse/force) + smoke-verified end-to-end (`team init` → `team roster --config`); host + release-wasm + clippy `-D warnings` green. |
+| **RO.5** ✅ | **Finalize** | DONE. `dx bundle --release` rebuilt + `dist/` reassembled (`.br` stripped) + committed — the new wasm carries the RO.3/RO.4 screen ("Save team", "Add specialist"/"Max 9 specialists", "Customize team", "inert until the lead", the onboarding "Team — who works for you") and the **release `aivyx-pa` binary embeds it** (wasm hash + `SetTeamRoster`/`TeamRosterApplied` symbols present). **Live write→load proven**: `aivyx-pa team init` writes a valid `[team]` file that `team roster --config` reads back (+ the RO.1 resolver / RO.2 writer unit tests). Full workspace suite + clippy `-D warnings` + `cargo deny` all green. Live browser auto-drive stays blocked in-sandbox (harness signal-16-reaps a TCP server; verified via bundle/embed + the data path per the [[chapter-lantern]] precedent). |
 
 **Discipline:** RO.1 makes the roster a file the daemon already knows how to load
 (`TeamConfig::load`) so RO.2/RO.3 write *one* definition; the load-or-default must
@@ -134,9 +134,9 @@ screen itself is verified by the served/bundle check, per R–Z).
 
 ## 5. Open questions (resolve in-phase)
 
-- **OQ-1 — team-file home (RO.1).** A dedicated `team.toml` beside `aivyx.toml`
+- **OQ-1 — team-file home (RO.1).** A dedicated `team.toml` beside `aivyx-pa.toml`
   (locked default — matches packs + `TeamConfig::load`, keeps array-of-tables out
-  of the hand-maintained config) vs. a `[team]` block inside `aivyx.toml` (would
+  of the hand-maintained config) vs. a `[team]` block inside `aivyx-pa.toml` (would
   force `toml_edit` array-of-tables surgery — rejected).
 - **OQ-2 — no-widen scope: hint vs. block (RO.3).** Declaring a member scope the
   lead lacks is valid-but-inert. Lean **soft hint, non-blocking** (it's how packs

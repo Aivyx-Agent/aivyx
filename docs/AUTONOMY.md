@@ -16,8 +16,8 @@ the agent cannot gain reach, or rewrite itself, without the operator.**
 |---|---|
 | RN.0–RN.2 | The contract; `AutonomyLevel`/`AutonomyPosture` types + pure `expand()`; the `[autonomy]` config section (level + per-domain `[[autonomy.override]]` + `[autonomy.auto_approve]`) with `effective_autonomy(domain)` resolution. Default `assisted` = today, byte-for-byte. |
 | RN.3a | The **escalation primitive** — escalations carry their capability `scope`; `is_irreversible_base` classifies the dangerous bases. Groundwork, no behavior change. |
-| RN.5 | **Loop-arming** — `supervised`/`autonomous`/`unleashed` arm the autonomous loop (additive; arms availability only, a run still needs `aivyx loop start`). The dial's first runtime effect. |
-| RN.6a / RN.6b | The **surfaces** — `aivyx autonomy show/set` (CLI) and the Studio Settings "Autonomy" section (over `SetAutonomyLevel`, server-side confirm-first). |
+| RN.5 | **Loop-arming** — `supervised`/`autonomous`/`unleashed` arm the autonomous loop (additive; arms availability only, a run still needs `aivyx-pa loop start`). The dial's first runtime effect. |
+| RN.6a / RN.6b | The **surfaces** — `aivyx-pa autonomy show/set` (CLI) and the Studio Settings "Autonomy" section (over `SetAutonomyLevel`, server-side confirm-first). |
 
 **Deliberately not built (and why):**
 
@@ -266,7 +266,7 @@ Fences (all enforced, not advisory):
    `acknowledge` matches the exact required sentence. No accidental enablement.
 4. **Loud and audited.** Enabling it emits a distinct `UnsafeAutonomyEnabled`
    audit event at boot, prints a red banner on every daemon start, and is
-   surfaced in `aivyx doctor` and the Studio with a warning treatment.
+   surfaced in `aivyx-pa doctor` and the Studio with a warning treatment.
 5. **Still capped.** Budget/iteration/wall-clock caps and the HMAC audit chain
    still apply. The hatch lifts the *irreversibility* block; it does not lift
    *accountability* or *spend* limits. There is no flag that removes the audit
@@ -353,8 +353,8 @@ human hand.
 | **RN.3a** ✅ | **The escalation primitive** — `ToolOutcome::RequiresEscalation` / `TurnOutcome::Escalated` now carry the offending capability `scope` (stamped by the turn loop from the authoritative `required_scope`), and `aivyx_capability::is_irreversible_base` classifies the irreversible/outbound/governance bases. Safe groundwork, **no behavior change** (the scope rides along unconsumed); the exact context bounded `AutoApprove` needs to decide reversible-vs-irreversible / on-allowlist. Uncovered during RN.3: the escalation carried only a `reason` string, so AutoApprove had nothing to match on — this builds that. |
 | **RN.3b** *(deferred)* | Bounded `AutoApprove` `GatePolicy` (§5.1) **behavior** + the `[autonomy.auto_approve]` allowlist; irreversible exclusion as a type-level structural property; wire the posture's gate dimension onto `DaemonConfig.gate_policy`. **Needs turn-resume machinery** (proceeding past a single-agent escalation re-runs the turn — the exact thing Chapter H deferred as the risky case), so it is its own carefully-designed phase, reusing the interactive `ResolveGate`-approved re-drive with a per-gate approval bound. RN.3a is its prerequisite and is now in place. |
 | **RN.4** | The expert escape hatch (§6): flag + typed acknowledgment + `UnsafeAutonomyEnabled` audit event + boot banner + `doctor`/Studio surfacing. |
-| **RN.5** ✅ *(repurposed → loop-arming)* | The dial's first real **runtime effect**: `supervised`/`autonomous`/`unleashed` arm the autonomous loop (`AutonomyPosture::arms_loop` — additive, never disarms an explicit `[loop] enabled`; `assisted` adds nothing ⇒ byte-identical). Arming only makes the loop *available* (a run still needs `aivyx loop start`); it takes effect only when a `[loop]` section exists (where the caps live), warning otherwise. **The original "self-improvement graduation" (effectiveness-gated skill auto-adoption) was dropped: it violates PRODUCT.md P8/P14 (no operator-bypassed Persona modification — skills are Persona deltas).** See §7. |
-| **RN.6a** ✅ | CLI surface: `aivyx autonomy show` (renders the resolved level + the posture it expands to + per-domain overrides + the auto-approve allowlist) and `aivyx autonomy set <level> [--yes]` (rewrites `[autonomy] level` via the shared `write_autonomy_section`; `autonomous`/`unleashed` confirm first). Live-verified end-to-end. `set` is honest that the dial's runtime effects are wired incrementally. Pulled ahead of the gate work (RN.3b) because it has real value now and zero risk. |
+| **RN.5** ✅ *(repurposed → loop-arming)* | The dial's first real **runtime effect**: `supervised`/`autonomous`/`unleashed` arm the autonomous loop (`AutonomyPosture::arms_loop` — additive, never disarms an explicit `[loop] enabled`; `assisted` adds nothing ⇒ byte-identical). Arming only makes the loop *available* (a run still needs `aivyx-pa loop start`); it takes effect only when a `[loop]` section exists (where the caps live), warning otherwise. **The original "self-improvement graduation" (effectiveness-gated skill auto-adoption) was dropped: it violates PRODUCT.md P8/P14 (no operator-bypassed Persona modification — skills are Persona deltas).** See §7. |
+| **RN.6a** ✅ | CLI surface: `aivyx-pa autonomy show` (renders the resolved level + the posture it expands to + per-domain overrides + the auto-approve allowlist) and `aivyx-pa autonomy set <level> [--yes]` (rewrites `[autonomy] level` via the shared `write_autonomy_section`; `autonomous`/`unleashed` confirm first). Live-verified end-to-end. `set` is honest that the dial's runtime effects are wired incrementally. Pulled ahead of the gate work (RN.3b) because it has real value now and zero risk. |
 | **RN.6b** ✅ | Studio Settings "Autonomy" section: a level picker over a new `SetAutonomyLevel` IPC (server-side confirm-first on `autonomous`/`unleashed`, mirroring `SetAccessLevel`) + `autonomy_level` on the `GetSettings` snapshot + a confirm modal. Per-domain overrides + the hatch stay CLI/hand-edit for now. Verified via native+wasm compile, IPC round-trip, the writer test, and a bundle-string grep proving the UI is in the rebuilt `dist/` wasm (live-serve is impossible in-sandbox — the harness reaps TCP servers). |
 | **RN.7** | Checkpoint/rollback (§5.2) + capability-request channel (§5.3) — *may split out* if RN.0–RN.6 is already a full chapter. |
 
@@ -369,9 +369,9 @@ auto-approve) and RN.5/RN.7.
 
 - **Domain taxonomy for overrides.** Is `domain` the tool-name first segment,
   the group base, or a curated set? Decide in RN.2 by what reads cleanly in a
-  real `aivyx.toml`.
+  real `aivyx-pa.toml`.
 - **Batched-approval mechanics (`supervised`).** Where the queue lives and how
-  the operator reviews a batch (a Studio inbox? a `aivyx autonomy review`?).
+  the operator reviews a batch (a Studio inbox? a `aivyx-pa autonomy review`?).
 - **Per-channel autonomy.** Beyond Local, can a *specific* trusted webhook
   carry its own tier? Likely an `[[autonomy.override]]` keyed by channel later.
 - **Hatch + teams.** Whether a Nonagon specialist can ever inherit the §6 hatch

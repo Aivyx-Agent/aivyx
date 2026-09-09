@@ -43,7 +43,7 @@ everything network-shaped: transport choice, multi-tenancy, the fleet
 UI, and centralized audit aggregation.
 
 **Trigger:** real multi-node demand — an actual business/team wanting
-to run Aivyx across more than one person. Locked decision (2026-06-26):
+to run Aivyx PA across more than one person. Locked decision (2026-06-26):
 never build this speculatively; it's a license-boundary layer, not a
 second engine.
 
@@ -77,7 +77,7 @@ whether vLLM's guided/structured-output wire format matches what
 Chapter Emboss already sends for grammar-constrained tool-calling
 (json_schema shape) — untested, not confirmed compatible.
 
-**Trigger:** a real deployment need (someone running Aivyx for a team
+**Trigger:** a real deployment need (someone running Aivyx PA for a team
 off shared GPU hardware), or the Factory layer maturing to the point
 multi-instance serving is in scope anyway.
 
@@ -97,7 +97,7 @@ traction as a reason to consider doing it sooner.
 
 **Status:** same cheap-add shape as vLLM (OpenAI-compatible endpoint,
 rides the existing code path) — and arguably a *better* fit for
-Aivyx's personal-agent audience than vLLM, since it's about unlocking
+Aivyx PA's personal-agent audience than vLLM, since it's about unlocking
 hardware a home user already owns rather than enterprise throughput.
 Distinct from the existing `aivyx-llm::mistral_rs` in-process provider,
 which solves "zero-dependency embedded inference," not "exploit this

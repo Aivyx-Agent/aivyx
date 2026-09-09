@@ -3,7 +3,7 @@
 > **Status:** ✅ **COMPLETE** (J.1–J.7 shipped). This was the design
 > contract the phases scaffolded from; all seven phases landed. Engine:
 > `aivyx-team` (config/roster/attenuation/pool/message-bus/mission-DAG/
-> runtime/orchestration-tools/assembly). CLI: `aivyx team run|roster
+> runtime/orchestration-tools/assembly). CLI: `aivyx-pa team run|roster
 > [--config <pack.toml>]`. First vertical: `aivyx-kitchen` (BOH Nonagon).
 > TUI: the live Missions panel. Deferred follow-ons: specialist domain
 > `base_tools` (lands with the kitchen toolkit crate), daemon-side team
@@ -11,7 +11,7 @@
 > integration.
 >
 
-> The **Nonagon** is Aivyx's multi-agent capability: a *lead* agent that
+The **Nonagon** is Aivyx PA's multi-agent capability: a *lead* agent that
 > convenes up to **9 attenuated specialists**, decomposes a mission into
 > a DAG, delegates, verifies, and synthesizes — all inside the single
 > daemon, on the single HMAC audit chain. The engine is **free core**;
@@ -27,7 +27,7 @@
 
 ## 1. Why this preserves the single-agent ethos
 
-Aivyx is deliberately one daemon, one operator-facing agent. The Nonagon
+Aivyx PA is deliberately one daemon, one operator-facing agent. The Nonagon
 does **not** break that: there is still **one lead** the operator talks
 to. Specialists are **ephemeral, subordinate, attenuated** instances the
 lead convenes *within the same process*, sharing the lead's audit chain
@@ -102,7 +102,7 @@ message_bus_capacity    = 64
 ```
 
 - **Free core** ships a **default general-purpose Nonagon** (the 9 roles
-  in §5). `aivyx team run "<mission>"` works out of the box.
+  in §5). `aivyx-pa team run "<mission>"` works out of the box.
 - **A vertical pack overrides it** with a customised roster — its
   `TeamConfig` ships inside the pack, exactly as its tools/template/skills
   do. This is the commercial surface: the *engine* is free; the
@@ -190,7 +190,7 @@ parallel-ready — adding wide parallelism is a *flip*, not a redesign.
 >
 > To actually run this unattended every night rather than by hand, see
 > `docs/ROUTINES.md`'s "Scheduling a team mission" section --
-> `[schedule.team_mission]` in `aivyx.toml`. A mission can also be
+> `[schedule.team_mission]` in `aivyx-pa.toml`. A mission can also be
 > started on demand from chat -- typing `/team run <goal>` in an
 > operator-opted-in Telegram/Discord/Slack channel -- see that same
 > doc's "A third way to start one" subsection and `docs/DAEMON_TEAMS.md`
@@ -259,7 +259,7 @@ panel (mockup → live).
 
 **New (the `aivyx-team` crate):** `TeamConfig`, the 9-role roster,
 `SpecialistPool`, the delegation/message/orchestration tools, `MessageBus`,
-`MissionPlan` (DAG) + `TeamRuntime`, and the `aivyx team run` command.
+`MissionPlan` (DAG) + `TeamRuntime`, and the `aivyx-pa team run` command.
 
 ---
 
@@ -273,8 +273,8 @@ panel (mockup → live).
 | **J.2 Pool + delegation** ✅ | `SpecialistFactory` builds attenuated specialists; `SpecialistChannel` + `SpecialistPool::run` execute a sub-turn (trust-floored); `delegate_task`/`query_agent` tools over the new `team.delegate` scope. (`collect_results` deferred to J.4 where parallel delegation makes it meaningful.) | J.1 | **15 shipped** (J.2.1–3) |
 | **J.3 Message bus** ✅ | `MessageBus` (bounded broadcast, fan-out, lag/backpressure) + `send_message`/`read_message` tools over the new `team.message` scope + dialogue caps (peer-dialogue toggle, per-turn budget). Roster wiring deferred to J.5. | J.2 | **12 shipped** (J.3.1–2) |
 | **J.4 Mission DAG** ⭐ ✅ | `MissionPlan` DAG (cycle detection, ready-set); `TeamRuntime` runs independent branches concurrently (`join_all`); `decompose_task`/`synthesize_results`/`verify_output` over the existing `team.delegate` scope (no new base). `collect_results` lands as the `MissionReport`. | J.2, J.3 | **31 shipped** (J.4.1–3) |
-| **J.5 CLI + audit + loop** ✅ | `aivyx team run "<mission>"` (in-process) + `aivyx team roster`; the roster wiring (`TeamAssembly`, per-member dialogue tools via `SpecialistFactory::with_dialogue`, `team.message` on every default role); specialist sub-turns land on the same persistent HMAC `AuditHook`. (Loop integration deferred — optional.) | J.4 | **17 shipped** (J.5.1–2) |
-| **J.6 Kitchen Nonagon** 💰 ✅ | `aivyx-kitchen` pack crate: `kitchen_boh_team()` (Aria + 4 least-privileged specialists over `kitchen.*`; HACCP holds only `kitchen.haccp.log`) + `overnight_close_mission()` + the `kitchen-boh.toml` asset. Domain-neutral `aivyx team --config <pack.toml>` loads it. (Specialist domain tools land with the kitchen toolkit crate.) | J.5 | **11 shipped** (J.6.1–2) |
+| **J.5 CLI + audit + loop** ✅ | `aivyx-pa team run "<mission>"` (in-process) + `aivyx-pa team roster`; the roster wiring (`TeamAssembly`, per-member dialogue tools via `SpecialistFactory::with_dialogue`, `team.message` on every default role); specialist sub-turns land on the same persistent HMAC `AuditHook`. (Loop integration deferred — optional.) | J.4 | **17 shipped** (J.5.1–2) |
+| **J.6 Kitchen Nonagon** 💰 ✅ | `aivyx-kitchen` pack crate: `kitchen_boh_team()` (Aria + 4 least-privileged specialists over `kitchen.*`; HACCP holds only `kitchen.haccp.log`) + `overnight_close_mission()` + the `kitchen-boh.toml` asset. Domain-neutral `aivyx-pa team --config <pack.toml>` loads it. (Specialist domain tools land with the kitchen toolkit crate.) | J.5 | **11 shipped** (J.6.1–2) |
 | **J.7 TUI Missions/Fleet** ✅ | `View::Missions` panel in the live TUI (master/detail: mission stream + selected step timeline); `MissionRow`/`MissionStep`/`MissionsState` view-models + `Msg::MissionsUpdated` feed seam; ↑↓ selection + digit remap. The mockup → real. | J.5 | **12 shipped** |
 
 ```
@@ -287,7 +287,7 @@ J.5 lands.
 
 ## 12. Definition of done
 
-- Free core ships a working general Nonagon (`aivyx team run`, 9 roles,
+- Free core ships a working general Nonagon (`aivyx-pa team run`, 9 roles,
   attenuated delegation, DAG missions, message bus) — single-daemon, on
   the HMAC chain.
 - A vertical pack can ship a customised team; **kitchen's BOH Nonagon is

@@ -1,4 +1,4 @@
-# Aivyx Channel SDK
+# Aivyx PA Channel SDK
 
 **v0 — subject to change without deprecation policy.** Phase 48
 ships the *contract*; API stability is deferred per
@@ -6,7 +6,7 @@ ships the *contract*; API stability is deferred per
 real third-party use. Expect minor breaking changes; expect
 integration guarantees to hold.
 
-This document is the third-party contract for building an Aivyx
+This document is the third-party contract for building an Aivyx PA
 channel adapter — a process that attaches to a running daemon and
 relays user input + agent output to and from some transport
 (messenger app, terminal, web UI, voice, IDE plugin).
@@ -49,7 +49,7 @@ The reference implementation in this repo includes:
 
 An adapter is just a process that:
 
-1. Connects to `$XDG_RUNTIME_DIR/aivyx/daemon.sock` (mode 0600).
+1. Connects to `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock` (mode 0600).
 2. Reads and writes length-prefixed JSON frames.
 3. Maps user input on its transport to `SubmitInput` frames, and
    `StreamEvent` / `TurnComplete` frames back to its transport.
@@ -64,7 +64,7 @@ attenuation — all delivered by the daemon, automatically.
 The daemon authenticates frontends at the OS level. If you can
 `read(2)` the socket, you are by definition the operator (see
 [`PRODUCT.md` P6](../PRODUCT.md) and
-[`THREAT_MODEL.md` §4.4](THREAT_MODEL.md)). There is no Aivyx-level
+[`THREAT_MODEL.md` §4.4](THREAT_MODEL.md)). There is no Aivyx PA-level
 token, no password, no challenge.
 
 What your adapter brings to the table is a **trust tier**, baked
@@ -92,7 +92,7 @@ For the full per-scope ceiling table see [`DESIGN.md` D5](../DESIGN.md).
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  1. Connect to $XDG_RUNTIME_DIR/aivyx/daemon.sock              │
+│  1. Connect to $XDG_RUNTIME_DIR/aivyx-pa/daemon.sock              │
 │  2. ← DaemonLifecycleEvent::DaemonReady { version }            │
 │  3. (optional) → FrontendMessage::ProtocolNegotiation {        │
 │                    version: "0.1"                              │
@@ -151,7 +151,7 @@ is `crates/aivyx-channel/src/daemon_ipc.rs`.
 | `CancelTurn { session_id }` | Mid-turn | Cancellation checked between LLM steps; the in-flight tool call finishes. |
 | `ResolveGate { mission_id, gate_id, approved }` | When the operator answers an approval gate | Daemon resumes or aborts the mission accordingly. |
 | `Disconnect` | At end of session | Polite close. The daemon also cleans up if you just close the socket. |
-| `Shutdown` | Operator-driven daemon stop | Reserved for `aivyx daemon stop`; do not send from a normal adapter. |
+| `Shutdown` | Operator-driven daemon stop | Reserved for `aivyx-pa daemon stop`; do not send from a normal adapter. |
 | `ProtocolNegotiation { version }` | Optional, after `DaemonReady` | v0.1 always accepts. |
 | `Query { id, payload }` | Inspection (Phase 47) | Read-only queries: `ListSessions`, `ListMissions`, `GetMission`, `ListAuditEntries`, `VerifyAuditChain`. |
 
@@ -253,7 +253,7 @@ You **do not** need to:
 In ~80 lines of any language with sockets + JSON:
 
 ```text
-1. Connect to $XDG_RUNTIME_DIR/aivyx/daemon.sock
+1. Connect to $XDG_RUNTIME_DIR/aivyx-pa/daemon.sock
 2. read_frame() → expect DaemonReady
 3. write_frame({"type": "StartSession",
                 "role": null,
@@ -360,5 +360,5 @@ deserialization. The Python reference does this via
 
 If you're stuck, the canonical "does my adapter work?" test is
 to drive a successful turn end-to-end against a live daemon
-under Ollama — same setup we use for `aivyx daemon run`
+under Ollama — same setup we use for `aivyx-pa daemon run`
 acceptance.

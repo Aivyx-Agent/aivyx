@@ -94,11 +94,11 @@ the operator sets one stanza instead of hand-writing capability scopes.
 ## 4. Surfaces (the Settings System)
 
 1. **Config** — the `[access]` section above (hand-edit or via the command).
-2. **`aivyx init` wizard** — an access-level chooser replaces the bare
+2. **`aivyx-pa init` wizard** — an access-level chooser replaces the bare
    "Sandbox root" prompt: it names each level and its risk, and requires an
    explicit extra confirmation for `home`/`full`.
-3. **`aivyx access` command** — `show` (current level + resolved roots/scopes)
-   and `set <level> [--root P] [--yes]` (rewrites `aivyx.toml`; re-confirms
+3. **`aivyx-pa access` command** — `show` (current level + resolved roots/scopes)
+   and `set <level> [--root P] [--yes]` (rewrites `aivyx-pa.toml`; re-confirms
    `home`/`full`).
 
 ---
@@ -110,8 +110,8 @@ the operator sets one stanza instead of hand-writing capability scopes.
 | **N.0** | This design contract. |
 | **N.1** | `AccessLevel` + `[access]` section + resolution in `aivyx-config` (default `sandbox` = unchanged). Unit tests. |
 | **N.2** | Binary wiring: resolved access feeds `fs_root` + the operator/role grant set for the level; remote-channel attenuation verified. |
-| **N.3** | `aivyx init` access-level chooser (warning + confirm for `home`/`full`). |
-| **N.4** | `aivyx access show` / `set <level>` command. |
+| **N.3** | `aivyx-pa init` access-level chooser (warning + confirm for `home`/`full`). |
+| **N.4** | `aivyx-pa access show` / `set <level>` command. |
 | **N.5** | Hard confirm-first gate for irreversible ops (`fs.delete`, `fs.write` overwrite, destructive `shell.exec`) when `confirm_destructive` is on. |
 | **N.6** | `examples/templates/aivyx-full-access.toml`, docs polish, memory note. |
 
@@ -154,4 +154,4 @@ deferred.
   reject (headless, per Chapter H). The seatbelt is on by default for broad
   levels.
 - **`home`/`full` are deliberate.** Selecting them requires an explicit
-  confirmation in the wizard and in `aivyx access set`.
+  confirmation in the wizard and in `aivyx-pa access set`.

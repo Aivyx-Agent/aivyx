@@ -50,7 +50,7 @@ new mechanism:
 | pre-call **reserve** = dollar deny gate | pre-call **check** = call-count deny gate |
 | `[budget]` config (`per_run_usd` / `per_day_usd`) | `[rate_limit]` config (call caps, per-tool overrides) |
 | `AuditEvent::LlmCost` per turn | `AuditEvent::RateLimited` per throttled call |
-| `aivyx cost [--today]` surfacing | a line in `aivyx loop status` / report |
+| `aivyx-pa cost [--today]` surfacing | a line in `aivyx-pa loop status` / report |
 
 The limiter logic lives in **`aivyx-cost`** (renamed in spirit to "the
 governance crate"; no new crate — it already owns `BudgetEnforcer`, and a
@@ -137,7 +137,7 @@ All phases ✅ shipped.
 | **TH.0** | This contract. |
 | **TH.1** | Limiter core in `aivyx-cost` (or a sibling module): `RateAction`, the per-turn + sliding-window counters, a pre-call `check(tool, now) -> RateDecision` that mirrors `BudgetEnforcer::reserve`. Unit-tested in isolation (per-tool cap, total cap, window expiry, alert-vs-deny), mirroring `budget.rs`. |
 | **TH.2** | `RateGate` trait in `aivyx-core` + `ToolOutcome::RateLimited`. This adds an enum variant, so it ripples through the workspace's exhaustive `match` sites (the `AuditEvent`-variant lesson — run the **full** suite; expect several count-assertion and match-arm fixups). |
-| **TH.3** | `[rate_limit]` config (`aivyx-config` parse + a `write_rate_limit_section` writer) + wire the gate into the turn-loop tool dispatch **beside the budget gate**; emit `AuditEvent::RateLimited`; surface counts in `aivyx loop status` (and/or the cost report). |
+| **TH.3** | `[rate_limit]` config (`aivyx-config` parse + a `write_rate_limit_section` writer) + wire the gate into the turn-loop tool dispatch **beside the budget gate**; emit `AuditEvent::RateLimited`; surface counts in `aivyx-pa loop status` (and/or the cost report). |
 | **TH.4** | Finalize: **F7 count-assertion tests** (`assert_eq!(KNOWN_BASES.len(), N)` + storage-domain + substrate-tool counts) bundled here as the "hardening" coda; docs (a `THREAT_MODEL.md` note that autonomous-loop tool-rate is now bounded; flip audit **F2 → resolved** + **F7 → resolved**); README/CHANGELOG; live-verify a deny + an alert on a real daemon. |
 
 ## 8. Locked decisions

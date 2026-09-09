@@ -102,7 +102,7 @@ persona-proposal governance, and rides the **existing** reflection
 cadence. It sits squarely in PRODUCT.md **P8** (outcome-/knowledge-driven
 audited reflection) + **P14** (persona governance) — the same envelope as
 the auto-proposer and Whetstone. Opt-in, default byte-identical,
-propose-only, reversible (`aivyx persona revert`).
+propose-only, reversible (`aivyx-pa persona revert`).
 
 ## 3. Scope
 
@@ -127,7 +127,7 @@ authored skill without operator approval (it stays a proposal).
 | **PX.0** | **This design contract** | locked reference; banner flips per phase |
 | **PX.1** ✅ | **The specialization engine** | DONE. `skill_authoring.rs`: `propose_specialized_skills(wiki_store, graph_store, learned_skills_raw, drafter, proposal_log, config, …)` selects knowledge-rich + skill-less topics (`min_summary_chars` floor + `min_edges` neighbourhood via `out_edges` + dedup vs `learned_skills` name/`domain`), renders the wiki summary + `subject predicate object` edges, drafts `{trigger, procedure}` via a `SpecializationDrafter` (trait + production `LlmSpecializationDrafter` with a tolerant `parse_drafted` JSON), and files a governed `AppendList` proposal (`version 1`, `provenance: agent` + reason, `domain = topic`). `SkillAuthoringConfig` added to `aivyx-config`. 4 tests (rich+skill-less → proposal w/ domain + agent provenance; thin page / sparse graph / already-skilled / disabled → none; dedup on re-run; JSON parse tolerance). Channel 1008 + clippy green. |
 | **PX.2** ✅ | **Wire it live** | DONE. `[skill_authoring]` config (`RawSkillAuthoring` + `build_skill_authoring_config` in `aivyx-config`, default `None`). A `SkillAuthoringDeps` bundle + `run_skill_authoring_pass` (reads the effective persona's `learned_skills` + the wiki/graph stores → `propose_specialized_skills`), threaded as a new `Option<SkillAuthoringDeps>` through `run_reflection_scheduler`/`fire_reflection` beside Whetstone's pass. `rs_skill_authoring` assembled in `daemon_server` from the existing `DaemonConfig` `wiki_store`/`graph_store` + proposal/persona logs + a production `LlmSpecializationDrafter` built in `aivyx.rs`, armed only when `[skill_authoring].enabled`. 1 config test + the daemon/e2e literals. Channel 1008 / e2e 30 / cli 470 / config 351 + clippy green. |
-| **PX.3** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps. README (Praxis in phases; Rust tests; the "skills sharpen" highlight extended to "and authors new ones"), CHANGELOG entry, and a `[skill_authoring]` section in `examples/aivyx.toml` (propose-only, surfaces in Agents UI). Status flipped to COMPLETE; recorded. |
+| **PX.3** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps. README (Praxis in phases; Rust tests; the "skills sharpen" highlight extended to "and authors new ones"), CHANGELOG entry, and a `[skill_authoring]` section in `examples/aivyx-pa.toml` (propose-only, surfaces in Agents UI). Status flipped to COMPLETE; recorded. |
 
 **Discipline:** PX.1 is the testable engine (reads the stores, files
 proposals — no scheduling). PX.2 only schedules it (no behaviour the engine

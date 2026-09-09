@@ -12,11 +12,11 @@
 
 ## 1. Why this chapter
 
-An operator (or a contributor extending Aivyx) who wants to know "what can this
+An operator (or a contributor extending Aivyx PA) who wants to know "what can this
 agent actually do?" currently has three options: read `docs/TOOLS.md` (accurate but
 static — it documents the *design*, not a specific running daemon's *registered*
 set), ask the agent to call `tools.list` (accurate and live, but conversational —
-no browse/search UI), or run `aivyx tools` (audit-derived call stats, gated on an
+no browse/search UI), or run `aivyx-pa tools` (audit-derived call stats, gated on an
 audit log, not a pure catalog). None of these is "open the Studio and browse." This
 chapter closes that gap the same way Repertoire did for skills and Lantern did for
 MCP servers: a dedicated screen over a purpose-built read-only query.
