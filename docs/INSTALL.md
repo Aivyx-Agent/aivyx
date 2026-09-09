@@ -59,26 +59,26 @@ Linux binary**, with no loss of functionality.
 Linux kernel under Windows. Aivyx PA installs and behaves there exactly
 as a Linux x86_64 install — the local-first model holds (the agent
 reaches your files inside the WSL2 filesystem, accessible from Windows
-at `\\wsl$\`). There are two WSL paths: a **pre-built Aivyx distro**
+at `\\wsl$\`). There are two WSL paths: a **pre-built Aivyx PA distro**
 (fastest — daemon already installed) or a **manual install** into your
 existing Ubuntu.
 
-### Option A1 (fastest) — the pre-built Aivyx WSL distribution
+### Option A1 (fastest) — the pre-built Aivyx PA WSL distribution
 
-Every release attaches a ready-to-run WSL distribution, **`Aivyx.wsl`**,
+Every release attaches a ready-to-run WSL distribution, **`Aivyx-PA.wsl`**,
 with the daemon and all tool binaries pre-installed — no in-distro
 install step, no Ubuntu to set up first. It runs the exact same Linux
 binary as every other target.
 
 ```powershell
-# In Windows PowerShell — download Aivyx.wsl from the latest release, then:
-wsl --install --from-file Aivyx.wsl        # WSL 2.4.4+ (installs a distro named "Aivyx")
+# In Windows PowerShell — download Aivyx-PA.wsl from the latest release, then:
+wsl --install --from-file Aivyx-PA.wsl        # WSL 2.4.4+ (installs a distro named "Aivyx-PA")
 
 # On older WSL, import it manually instead:
-#   wsl --import Aivyx C:\WSL\Aivyx Aivyx.wsl
+#   wsl --import Aivyx-PA C:\WSL\Aivyx-PA Aivyx-PA.wsl
 ```
 
-Grab `Aivyx.wsl` from the
+Grab `Aivyx-PA.wsl` from the
 [latest release](https://github.com/Aivyx-Agent/aivyx/releases/latest)
 (or double-click it in Explorer on WSL 2.4.4+). On first launch it
 creates your user, then:

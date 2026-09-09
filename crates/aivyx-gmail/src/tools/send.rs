@@ -69,7 +69,7 @@ impl Tool for GmailSend {
 
     fn description(&self) -> &str {
         "Send a Gmail message directly. **The message goes out \
-         immediately — Aivyx has no undo.** Input is a JSON \
+         immediately — Aivyx PA has no undo.** Input is a JSON \
          object with required `to`, `subject`, `body_text` \
          fields, an optional `from` (send-as alias the \
          operator's Gmail account has authorized; defaults to \

@@ -241,7 +241,7 @@ release is `v0.9.4` (see the CHANGELOG for what shipped):
 - `.github/workflows/docker-publish.yml` builds + pushes the **server
   appliance image** to GHCR on the same tag.
 - `.github/workflows/wsl-release.yml` reuses that appliance image to export
-  a **WSL distribution** (`Aivyx.wsl`) — the daemon pre-installed for
+  a **WSL distribution** (`Aivyx-PA.wsl`) — the daemon pre-installed for
   Windows/WSL2 users — and attaches it to the release. This is the
   cheapest real "Aivyx PA on Windows" path: it sidesteps the deferred native
   Windows port (the daemon's Unix-socket IPC just works inside WSL2's Linux

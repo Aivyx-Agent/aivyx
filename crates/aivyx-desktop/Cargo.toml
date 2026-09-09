@@ -56,13 +56,13 @@ dist = false
 # system runtime deps so an install pulls them in (Debian/Ubuntu names; the
 # desktop CI runs on Ubuntu).
 [package.metadata.bundle]
-name = "Aivyx"
+name = "Aivyx PA"
 identifier = "com.aivyx-pa.desktop"
 icon = ["assets/icon-256.png"]
 category = "Utility"
-short_description = "Aivyx — your personal AI assistant, in a native window."
+short_description = "Aivyx PA — your personal AI assistant, in a native window."
 long_description = """
-The native desktop app for Aivyx: a system-tray assistant that hosts the local
+The native desktop app for Aivyx PA: a system-tray assistant that hosts the local
 Studio, manages the daemon, and notifies you when a mission needs your approval.
 """
 deb_depends = [
