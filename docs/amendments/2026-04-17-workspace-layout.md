@@ -59,7 +59,7 @@ serves as the platform's integration hub.
 ├── README.md
 ├── .gitignore
 ├── examples/
-│   ├── aivyx.toml        four-role worked example (Phase 13)
+│   ├── aivyx-pa.toml        four-role worked example (Phase 13)
 │   └── aivyx-semitrusted.toml  semitrusted tier example (Phase 15)
 ├── docs/
 │   ├── README.md         phase status table

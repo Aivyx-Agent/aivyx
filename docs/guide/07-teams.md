@@ -2,7 +2,7 @@
 
 For big jobs, one assistant can lead a **team** of specialists — a crew where a
 lead delegates steps to members, each holding only the access its role needs.
-This is how Aivyx tackles work that's too broad or too sensitive for a single
+This is how Aivyx PA tackles work that's too broad or too sensitive for a single
 agent.
 
 ## How a team works
@@ -33,7 +33,7 @@ roster here: adjust roles, characters, and scopes, within the nine-member limit.
 
 ## Vertical packs
 
-A team can be tailored to a domain. Aivyx ships an open example — a
+A team can be tailored to a domain. Aivyx PA ships an open example — a
 back-of-house kitchen crew (a manager leading stocktake, inventory, purchasing,
 and food-safety specialists) — that shows how a team plus a set of domain tools
 becomes a ready-made expert crew for a specific line of work. These domain

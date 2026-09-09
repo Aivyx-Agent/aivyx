@@ -1,6 +1,6 @@
 # The desktop app
 
-Aivyx has a **native desktop app** — an alternative to opening the Studio in a
+Aivyx PA has a **native desktop app** — an alternative to opening the Studio in a
 browser. It puts your assistant in your system tray (menu bar), so it's always a
 click away, and it can notify you when something needs your attention even when
 no window is open.
@@ -19,7 +19,7 @@ extras. Everything in this guide works exactly the same way there.
   have to keep a tab open to catch an approval.
 - **A global hotkey** — press **Ctrl + Shift + A** from anywhere to summon (or
   hide) the window.
-- **Start at login** — optionally have Aivyx launch automatically when you sign
+- **Start at login** — optionally have Aivyx PA launch automatically when you sign
   in, so it's ready whenever you are.
 
 ## The tray menu
@@ -29,7 +29,7 @@ Right-click (or click) the tray icon for:
 - **Open Studio** — show and focus the window.
 - **Restart daemon** — restart the background service if something seems stuck.
 - **Start at login** — toggle launch-on-login on or off.
-- **Quit Aivyx** — fully exit (this stops the background service too).
+- **Quit Aivyx PA** — fully exit (this stops the background service too).
 
 ## Getting it
 
@@ -43,7 +43,7 @@ for downloads and the build-from-source steps.
 
 ## Daemon and the desktop app
 
-Like every Aivyx interface, the desktop app is a window onto the background
+Like every Aivyx PA interface, the desktop app is a window onto the background
 service (the *daemon*). It starts the daemon for you if it isn't already running
 and attaches to it if it is — so your conversation, memory, and settings are the
 same whether you use the desktop app, the browser, or the terminal.

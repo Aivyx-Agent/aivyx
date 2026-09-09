@@ -1,4 +1,4 @@
-# Aivyx Tool Catalog
+# Aivyx PA Tool Catalog
 
 > **Chapter Atlas (AT.1).** The reference for *what tools the agent has*, the
 > capability scope each needs, the minimum trust tier it's available at by default,
@@ -18,7 +18,7 @@ computes the capability the call needs, which the daemon enforces **before**
 |---|---|---|
 | **Substrate** | the irreducible in-process core, **capped at 13** (amendment-gated) | `aivyx-core` |
 | **Infrastructure** | in-process agent machinery (missions, schedules, reflection, …), uncapped | `aivyx-channel`, `aivyx-core` |
-| **Tool process** | out-of-process binaries over the Tool SDK; connected via `aivyx connect <x>` | `aivyx-gmail`, `aivyx-calendar`, … |
+| **Tool process** | out-of-process binaries over the Tool SDK; connected via `aivyx-pa connect <x>` | `aivyx-gmail`, `aivyx-calendar`, … |
 | **MCP** | external Model Context Protocol servers, bridged through one `mcp.call` tool | operator-configured |
 
 ## How to read the scope / tier columns

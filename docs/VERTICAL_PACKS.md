@@ -1,6 +1,6 @@
-# Aivyx Vertical Packs
+# Aivyx PA Vertical Packs
 
-How to specialize the *one* Aivyx agent to a domain **without forking
+How to specialize the *one* Aivyx PA agent to a domain **without forking
 the substrate**. A vertical pack is configuration + a tool bundle, not a
 codebase branch — so every pack inherits all future foundation work for
 free. This document defines the pack format, gives a **step-by-step build
@@ -20,8 +20,8 @@ existing KitchenDB.
 > real domain tools: the `aivyx-kitchen-toolkit` tool-process is a PostgREST
 > RPC client to the operator's KitchenDB exposing eleven `kitchen.*` tools
 > across four scope bases (read / write / `order.send` confirm-first /
-> `haccp.log` append-only). It installs via `aivyx connect kitchen` and is
-> visible to `aivyx doctor`. Chapters **J.6 / Brigade / Lockup / Mise**.
+> `haccp.log` append-only). It installs via `aivyx-pa connect kitchen` and is
+> visible to `aivyx-pa doctor`. Chapters **J.6 / Brigade / Lockup / Mise**.
 
 > **The boundary (new):** both kitchen crates now depend on **one** crate —
 > [`aivyx-vertical-sdk`](../crates/aivyx-vertical-sdk) — a thin, semver-stable
@@ -36,11 +36,11 @@ existing KitchenDB.
 
 ## 1. Why packs, not forks
 
-Aivyx is **one** agent, shaped by Profile (P13) + Persona (P14) + Roles
+Aivyx PA is **one** agent, shaped by Profile (P13) + Persona (P14) + Roles
 + Skills + Tools + MCP + capability scopes + trust tiers. A "Chef agent"
 is that same agent, configured — never a second codebase. Forking would
 mean porting every hardened foundation fix forever; a pack **inherits**
-them. For an *ecosystem* ("Aivyx core + a marketplace of vertical
+them. For an *ecosystem* ("Aivyx PA core + a marketplace of vertical
 packs"), this is the load-bearing decision.
 
 `aivyx-core` / `aivyx-capability` / the daemon / the audit chain stay
@@ -52,12 +52,12 @@ A vertical pack is up to six things, each riding an existing primitive:
 
 | Component | Primitive | New code? |
 |---|---|---|
-| **Template** | `aivyx init --template <name>` (Phase 66) → seeds Profile + default Role | config only |
+| **Template** | `aivyx-pa init --template <name>` (Phase 66) → seeds Profile + default Role | config only |
 | **Toolkit crate** | a bundled multi-tool process, same shape as `aivyx-toolkit`/`aivyx-gmail` (Chapter F/G), built against `aivyx-vertical-sdk` (the `Tool` trait + `run_multi_tool_subprocess`) | new sibling crate |
 | **Scopes + gate policy** | capability scope bases (additive to `aivyx-capability` `KNOWN_BASES`) + trust ceiling + gates | additive bases |
-| **Team (Nonagon)** | a customised `aivyx_team::TeamConfig` — a lead + ≤9 least-privileged specialists over the pack's scopes — loaded by `aivyx team run --config <pack.toml>` (Chapter J) | config (TOML) |
+| **Team (Nonagon)** | a customised `aivyx_team::TeamConfig` — a lead + ≤9 least-privileged specialists over the pack's scopes — loaded by `aivyx-pa team run --config <pack.toml>` (Chapter J) | config (TOML) |
 | **Skills bundle** | starter conversationally-taught `LearnedSkill`s | config only |
-| **Integrations** | `aivyx connect` tool-processes / MCP servers (Chapter F) | config only |
+| **Integrations** | `aivyx-pa connect` tool-processes / MCP servers (Chapter F) | config only |
 
 The **Team** component is what makes a pack a *force multiplier*: the same
 free engine, shaped into a domain expert crew. The kitchen pack's BOH Nonagon
@@ -115,7 +115,7 @@ existing `public.*` RPCs. Two front-ends coexist on one DB:
           ▲                                   ▲
           │ RPCs                              │ RPCs (read/write, gated)
    Kitchen OS (Flutter)              aivyx-kitchen toolkit
-   rich GUI for managers      ←→     Aivyx agent: chat / voice / loop / TUI
+   rich GUI for managers      ←→     Aivyx PA agent: chat / voice / loop / TUI
 ```
 
 The Flutter app is the *look-at* surface (dashboards, bulk entry); the
@@ -192,7 +192,7 @@ verification + HACCP semantics are independently checked.**
 ### 3.5 Autonomous reorder — wiring the loop
 
 The headline autonomy story, and the reason the gate model matters. The
-loop itself is **existing daemon machinery** (`aivyx loop`, the
+loop itself is **existing daemon machinery** (`aivyx-pa loop`, the
 HMAC-chained backlog, the `max_iterations` / wall-clock / token caps,
 driver-side gate verification) + the **`[[schedule]]`** cron triggers —
 the kitchen pack doesn't reimplement any of it. It just provides the
@@ -201,8 +201,8 @@ tools and a starter routine; the loop points at them.
 **The nightly flow:**
 
 ```
-[[schedule]] cron 02:00  →  aivyx loop add "nightly par reorder"
-        aivyx loop start --max-iterations 3
+[[schedule]] cron 02:00  →  aivyx-pa loop add "nightly par reorder"
+        aivyx-pa loop start --max-iterations 3
                 │
    ┌────────────┴─────────────────────────────────────────────┐
    │  agent works the story with the kitchen tools:            │
@@ -249,7 +249,7 @@ protocol), both audited.
    `aivyx-capability::KNOWN_BASES` (Trusted ceiling) + a generic
    `KitchenToolBinding` adapting every catalog entry to
    `aivyx_core::Tool` + the `aivyx-kitchen` binary serving them via
-   `run_multi_tool_subprocess`. Register in `aivyx.toml`:
+   `run_multi_tool_subprocess`. Register in `aivyx-pa.toml`:
    `[[tool_process]]` `name = "kitchen"`, `command =
    "…/aivyx-kitchen"`. *(done — needs a live KitchenDB + config to run
    end-to-end)*
@@ -265,7 +265,7 @@ protocol), both audited.
    registered.
 4. **Loop + PO** ✅ — `kitchen.par.reorder` now emits per-supplier draft
    POs (`group_into_pos`); the nightly autonomy flow is wired via the
-   existing `aivyx loop` + `[[schedule]]` machinery (§3.5): unattended
+   existing `aivyx-pa loop` + `[[schedule]]` machinery (§3.5): unattended
    draft, halt at the confirm-first `po.send` gate, human approves in
    the morning. Live supplier dispatch (the real `po.send` payload) is
    the remaining integration detail.
@@ -277,7 +277,7 @@ protocol), both audited.
    durable record store + the EHO export (the chain filtered to
    `kitchen.haccp.log`, paired with the records its input hashes
    anchor).
-6. **`kitchen` template + skills bundle** ✅ — `aivyx init --template
+6. **`kitchen` template + skills bundle** ✅ — `aivyx-pa init --template
    kitchen` (examples/templates/aivyx-kitchen.toml, wired into the
    bundled-template registry): a BOH role with the `kitchen.*` scopes,
    the `aivyx-kitchen` `[[tool_process]]`, and the opt-in nightly
@@ -298,8 +298,8 @@ protocol), both audited.
   crate). Still open: bundling template + toolkit + skills + scopes into a
   single installable artifact, and the out-of-tree / separate-repo packaging
   once a second pack exists.
-- **Brand** — the Kitchen OS Flutter UI uses an Aivyx-Studio-inspired
-  coral/purple palette; the Aivyx TUI uses amber-on-near-black. Reconcile
+- **Brand** — the Kitchen OS Flutter UI uses an Aivyx PA Studio-inspired
+  coral/purple palette; the Aivyx PA TUI uses amber-on-near-black. Reconcile
   if the agent and the app are to feel like one product.
 
 ---
@@ -376,7 +376,7 @@ Two rules the engine enforces, so design for them:
   (`nt02_haccp_cannot_exceed_aria_and_cannot_order`).
 - **Ship the same roster as a committed TOML asset** and round-trip-test it
   against the constructor (`toml_asset_round_trips_with_the_constructor`), so
-  the loadable `aivyx team run --config <path>` artifact can't drift from the
+  the loadable `aivyx-pa team run --config <path>` artifact can't drift from the
   code.
 
 ### Step 2 — the toolkit crate (the real tools)
@@ -445,17 +445,17 @@ in `docs/TOOLS.md` (a drift-guard test checks the catalog against
   in `crates/verticals-private/` instead — the `crates/verticals-private/*`
   member glob picks it up automatically, no `Cargo.toml` edit (and it stays
   git-ignored). Either way the toolkit binary wants
-  `[package.metadata.dist] dist = false` so only the top-level `aivyx` binary
+  `[package.metadata.dist] dist = false` so only the top-level `aivyx-pa` binary
   ships as a release artifact.
-- **Tool process** — `[[tool_process]]` in `aivyx.toml` (`name`, `command`
+- **Tool process** — `[[tool_process]]` in `aivyx-pa.toml` (`name`, `command`
   → the built binary) so the daemon spawns it and its tools reach the team
   via the `tool_list → TeamAssembly::base_tools` path.
 - **Team config** — point `[team] config_path` at your roster TOML (or ship
   it as a template).
-- **Onboarding** — a `aivyx connect <pack>` branch that writes the pack's
+- **Onboarding** — a `aivyx-pa connect <pack>` branch that writes the pack's
   config and probes reachability (the non-OAuth vertical pattern, Chapter
-  Mise: `aivyx connect kitchen` writes `[kitchen_db]`, plants the roster,
-  and probes KitchenDB), plus an `aivyx doctor` section.
+  Mise: `aivyx-pa connect kitchen` writes `[kitchen_db]`, plants the roster,
+  and probes KitchenDB), plus an `aivyx-pa doctor` section.
 
 ### Step 5 — test it
 
@@ -519,7 +519,7 @@ aivyx-<domain>-toolkit/             # the TOOLKIT crate — the real domain tool
 | The **domain tools** as `Tool` impls | toolkit `src/tools/*.rs` | each has a **pure `required_scope(input)`**; side-effects gated by a base; money/outbound = **confirm-first**; append-only logs never updated/deleted |
 | **Scope bases** the tools need | one engine touch — `KNOWN_BASES` in `aivyx-capability` | additive; the only edit a pack makes to the core. Group bases (`<domain>.read/write/...`) keep the surface small |
 | An **integration boundary** | toolkit `config.rs` + `client.rs` | the system-of-record (a DB, an API); creds via env / per-tool-process token file, never hard-coded |
-| **Install + reachability** | `aivyx connect <domain>` + an `aivyx doctor` section | writes the pack's config, plants the roster (no-clobber), probes the SoR = the "connected" signal |
+| **Install + reachability** | `aivyx-pa connect <domain>` + an `aivyx-pa doctor` section | writes the pack's config, plants the roster (no-clobber), probes the SoR = the "connected" signal |
 | **Three test shapes** | as above | team/mission validity · name-coherence · real-binary e2e vs a mock SoR |
 
 **What a pack must NOT do** (the invariants that keep it maintainable + safe):

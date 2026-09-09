@@ -14,7 +14,7 @@ see ROADMAP.md.
 
 PRODUCT.md gains a thirteenth Product Commitment: **P13 —
 Assistant Profile**. P13 establishes Profile as the
-operator-declared, mostly-static identity layer of an Aivyx
+operator-declared, mostly-static identity layer of an Aivyx PA
 instance. Profile is distinct from:
 
 - the **role envelope** (P7 + P9), which gates *what the
@@ -32,7 +32,7 @@ do not substitute.
 
 ## The new rule
 
-> **Every Aivyx instance carries an operator-declared
+> **Every Aivyx PA instance carries an operator-declared
 > Profile that pins who this assistant is for and how it
 > communicates. Profile is loaded once per daemon lifetime
 > and injects into every turn's system prompt regardless of
@@ -54,7 +54,7 @@ do not substitute.
 2. **Profile is single-instance per operator.** Per P6
    (OS-Level Operator Identity) and P1 (Single Operator,
    Single Primary Agent), there is exactly one Profile
-   per Aivyx daemon. There is no "switch profile" gesture
+   per Aivyx PA daemon. There is no "switch profile" gesture
    parallel to "switch role." A second operator means a
    second OS user means a second daemon means a second
    Profile.
@@ -69,7 +69,7 @@ do not substitute.
 
 4. **Profile is plain-text-inspectable.** Profile lives
    in a plain-text operator-readable file (most likely
-   sharing the existing `aivyx.toml`, but the contract
+   sharing the existing `aivyx-pa.toml`, but the contract
    commits only to operator-readability, not the storage
    shape). The operator can read their Profile without
    unlocking the redb store, the same way they read role
@@ -100,7 +100,7 @@ do not substitute.
      commands"*).
    - **Assistant name** — what the operator calls this
      specific assistant. Distinct from product name
-     (*Aivyx*) and from role names (*coder*,
+     (*Aivyx PA*) and from role names (*coder*,
      *researcher*).
 
    The contract pins these **categories**, not the field
@@ -130,7 +130,7 @@ do not substitute.
 
 - **It does not pin the field names or the exact storage
   shape.** Per P9 precedent. Phase 57 chooses TOML vs JSON,
-  flat vs nested, separate file vs section of `aivyx.toml`,
+  flat vs nested, separate file vs section of `aivyx-pa.toml`,
   exact field naming.
 
 - **It does not require Profile to be encrypted.** Profile
@@ -138,7 +138,7 @@ do not substitute.
   property is intentional — operators read their Profile
   without ceremony.
 
-- **It does not require `aivyx init` to be the only entry
+- **It does not require `aivyx-pa init` to be the only entry
   point for Profile creation.** Phase 57 extends the init
   wizard (Phase 44) with use-case prompts, but a future
   channel adapter or Web UI surface may also bootstrap a
@@ -224,7 +224,7 @@ Per ROADMAP.md (committed 2026-05-12):
   assembly composing Profile alongside the role-envelope
   description.
 - **Phase 58 — Profile Inspection (closes P13).**
-  `aivyx profile show` / `aivyx profile edit` CLI
+  `aivyx-pa profile show` / `aivyx-pa profile edit` CLI
   subcommands; Web UI Profile pane mirroring the CLI surface
   via the existing Query/QueryResponse IPC envelope (Phase
   47). After Phase 58 the operator has a fully-shaped

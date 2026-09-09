@@ -48,8 +48,8 @@ summarizes the load-bearing decisions.
 
 Unix domain socket at:
 ```
-$XDG_RUNTIME_DIR/aivyx/daemon.sock   (preferred)
-$HOME/.local/share/aivyx/daemon.sock  (fallback)
+$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock   (preferred)
+$HOME/.local/share/aivyx-pa/daemon.sock  (fallback)
 ```
 
 Socket mode `0600`, owned by the daemon's effective UID.

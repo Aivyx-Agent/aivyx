@@ -137,5 +137,5 @@ fold (micro-refactor, only if it falls out naturally).
   right knob for "don't refine on one incident" — weight asymmetry
   would duplicate it on a worse axis.
 - **ST-OQ3** ✅ **RESOLVED (ST.2): yes.** One breadcrumb, only when
-  N > 0: `aivyx skill-effectiveness: retro-folded N corrected skill
+  N > 0: `aivyx-pa skill-effectiveness: retro-folded N corrected skill
   turn(s) for schedule "…"`.

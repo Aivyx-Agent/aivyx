@@ -59,7 +59,7 @@ default** — the model should see the conversation the operator sees.
   (Ember/lite) installs.
 - **WI.2 amendment:** Chapter Wire's "sessions do not add transcript
   injection" statement is revised by this chapter. Piped
-  `aivyx --headless` multi-turn sessions get replay too — a batch of
+  `aivyx-pa --headless` multi-turn sessions get replay too — a batch of
   related steps now reads as one conversation, which is what Wire's
   operators wanted anyway. One-shot `--headless "task"` turns have no
   prior window and are unchanged.

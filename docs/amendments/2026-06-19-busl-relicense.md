@@ -55,9 +55,9 @@ business is sustainable* — is fully preserved:
 
 - **Not "open source" anymore — "source-available."** BUSL-1.1 is **not** an
   OSI-approved open-source license. Every doc claim of "open source" / "MIT" for
-  the Aivyx code is corrected to "source-available under BUSL-1.1" (CR.5). This
+  the Aivyx PA code is corrected to "source-available under BUSL-1.1" (CR.5). This
   honesty is load-bearing for the privacy/trust story.
-- **Trademark posture is unchanged.** The "Aivyx" name/logo remain trademarked
+- **Trademark posture is unchanged.** The "Aivyx" and "Aivyx PA" names/logos remain trademarked
   ([`TRADEMARK.md`](../../TRADEMARK.md)); a code license (free or commercial)
   grants no brand rights. Deliverable 2's `aivyx-pa` "MIT + branded" exception
   becomes "BUSL-1.1 + branded" — the *branding* rule is identical.

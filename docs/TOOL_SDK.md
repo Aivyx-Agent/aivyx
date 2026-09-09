@@ -1,4 +1,4 @@
-# Aivyx Tool SDK
+# Aivyx PA Tool SDK
 
 **v0 — subject to change without deprecation policy.** Phase 49
 ships the *contract*; API stability is deferred per
@@ -6,7 +6,7 @@ ships the *contract*; API stability is deferred per
 real third-party use. Expect minor breaking changes; expect
 integration guarantees to hold.
 
-This document is the third-party contract for building an Aivyx
+This document is the third-party contract for building an Aivyx PA
 **tool process** — a process spawned by the daemon at startup
 that registers one or more tools and answers invocation requests
 during agent turns.
@@ -36,7 +36,7 @@ worked example.
 A tool process is a long-running OS process the daemon spawns
 at startup, communicating with it via JSON frames on its
 **stdin and stdout**. The daemon spawns one process per
-`[[tool_process]]` entry in `aivyx.toml`; the process is killed
+`[[tool_process]]` entry in `aivyx-pa.toml`; the process is killed
 on daemon shutdown.
 
 Stdin = daemon-to-tool messages.
@@ -301,7 +301,7 @@ You **do not** need to:
 ## 6. Capability scope declaration and operator override
 
 The tool declares `required_scope` per tool in `ToolRegister`.
-The operator's `aivyx.toml` may override:
+The operator's `aivyx-pa.toml` may override:
 
 ```toml
 [[tool_process]]
@@ -392,14 +392,14 @@ The following are **not** stable:
 
 ---
 
-## 8.4 Starting a new Rust tool — `aivyx tool init`
+## 8.4 Starting a new Rust tool — `aivyx-pa tool init`
 
 > *Section added at Phase 103 exit.*
 
 The fastest path to a runnable Rust tool process is:
 
 ```sh
-aivyx tool init my-aivyx-tool
+aivyx-pa tool init my-aivyx-tool
 ```
 
 This writes a starter project at `my-aivyx-tool/` —
@@ -417,12 +417,12 @@ yet on crates.io (the Distribution milestone is in progress),
 so the generated dep uses a `path` placeholder the operator
 fills in once.
 
-`aivyx tool init` complements the existing scaffolds:
+`aivyx-pa tool init` complements the existing scaffolds:
 
-- `aivyx init` scaffolds an operator config (Phase 44).
-- `aivyx init --template <name>` scaffolds a named profile
+- `aivyx-pa init` scaffolds an operator config (Phase 44).
+- `aivyx-pa init --template <name>` scaffolds a named profile
   (Phase 66).
-- `aivyx tool init <path>` scaffolds a third-party tool
+- `aivyx-pa tool init <path>` scaffolds a third-party tool
   project (Phase 103).
 
 For non-Rust tool authors, `examples/python-tool/` remains
@@ -478,7 +478,7 @@ hardening, or to test the protocol equivalence end-to-end.
 
 ## 9. Sandboxing tool processes
 
-> *Section added at Phase 52. Generic-wrapper design — Aivyx
+> *Section added at Phase 52. Generic-wrapper design — Aivyx PA
 > supplies the policy slot; the operator supplies the policy.*
 
 Phase 49 ships **process isolation** for third-party tools:
@@ -515,8 +515,8 @@ bwrap --ro-bind / / --proc /proc --dev /dev --tmpfs /tmp \
 ```
 
 The trailing `--` separator between wrapper args and command is
-the wrapper's convention, not Aivyx's — it lives in
-`tool_process.sandbox.args`. Aivyx makes no assumptions about
+the wrapper's convention, not Aivyx PA's — it lives in
+`tool_process.sandbox.args`. Aivyx PA makes no assumptions about
 wrapper-arg shape; whatever you put in `args` goes verbatim
 before the wrapped command.
 
@@ -644,7 +644,7 @@ proves this against POSIX `env` (no-op wrapper).
 If `bwrap` is not on `$PATH` the daemon's startup log shows:
 
 ```
-aivyx: tool process "wordcount" failed to start: failed to spawn tool process `bwrap`: No such file or directory (os error 2)
+aivyx-pa: tool process "wordcount" failed to start: failed to spawn tool process `bwrap`: No such file or directory (os error 2)
 ```
 
 Note that the error names `bwrap` — the **wrapper**, not the
@@ -702,7 +702,7 @@ remain readable; the kernel is shared with the host.
   JSON-RPC 2.0 over stdio. The wrapper must not buffer or
   transform stdio — `bwrap` and `firejail` default to this;
   `docker run -i` needs the `-i` flag.
-- **No reflection through the Aivyx audit chain at the wrapper
+- **No reflection through the Aivyx PA audit chain at the wrapper
   layer.** The daemon records every `mcp.call` as a `ToolCall`
   audit event regardless of whether the server was sandboxed.
   The sandbox layer hardens the OS-level surface; the audit

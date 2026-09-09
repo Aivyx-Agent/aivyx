@@ -1,13 +1,13 @@
 # Turns Down a Pipe — headless multi-turn sessions (Chapter Wire)
 
-> **Status: COMPLETE (WI.0–WI.2, 2026-07-04).** `aivyx --headless "<task>"` is
+> **Status: COMPLETE (WI.0–WI.2, 2026-07-04).** `aivyx-pa --headless "<task>"` is
 > one-task-per-process: every invocation is a fresh session, so no
 > same-session conversation can be driven from a terminal, a script, or a
 > test harness. The Chapter Strop live verification hit this wall
 > directly — a correction (a turn the operator immediately reworks) is
 > *definitionally* a same-session pair, so the correction retro-fold
 > could not be live-staged from the CLI. Wire adds the missing mode:
-> pipe newline-delimited turns into `aivyx --headless` and they run as
+> pipe newline-delimited turns into `aivyx-pa --headless` and they run as
 > consecutive turns of **one** daemon-routed session. No new tool,
 > capability base, amendment, IPC message, or dependency — the daemon
 > already supports exactly this (a `DaemonSession` is stable across
@@ -25,7 +25,7 @@ machinery is complete — Chapter H's headless posture (gates refuse
 instead of parking) applies per-submit, and the interactive REPL already
 drives multi-turn sessions over the same IPC.
 
-**What a session is NOT (WI.2 finding):** Aivyx turns are deliberately
+**What a session is NOT (WI.2 finding):** Aivyx PA turns are deliberately
 fresh-context; there is no verbatim transcript replay between turns of a
 session — continuity flows through memory/recall (the Etch/charter
 "save it, the conversation alone will not persist it" design) plus the
@@ -43,17 +43,17 @@ that exist; it does not add transcript injection.
 
 ## 2. Architecture & decisions (locked)
 
-- **Invocation shape:** `aivyx --headless` with **no task argument** and
+- **Invocation shape:** `aivyx-pa --headless` with **no task argument** and
   **non-TTY stdin** reads stdin line by line; each non-empty line is one
   turn in a single `DaemonSession`. EOF ends the session.
-  `aivyx --headless "<task>"` is byte-identical to today. Bare
+  `aivyx-pa --headless "<task>"` is byte-identical to today. Bare
   `--headless` on a TTY keeps erroring, now with the pipe hint.
 - **Fail-fast:** the stream stops at the first non-completed turn and
   exits with that turn's existing Chapter-H code (`3` gate-refusal, `1`
   other) — later lines in a broken conversation are nonsense, and batch
   callers keep the branchable codes. All turns completed → `0`.
 - **Rendering unchanged:** each turn streams via the shared
-  `render_for_cli` to stdout and its `aivyx --headless: <outcome>` line
+  `render_for_cli` to stdout and its `aivyx-pa --headless: <outcome>` line
   to stderr, exactly like the one-shot path — a pipe consumer sees the
   same shape N times.
 - **Headless posture per turn:** every line submits with

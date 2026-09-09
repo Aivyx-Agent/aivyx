@@ -39,7 +39,7 @@ merely shipped the tool that exercises it.
 
 ## The amended rule
 
-> **Aivyx core ships exactly eight first-party tools forever:
+> **Aivyx PA core ships exactly eight first-party tools forever:
 > `fs.read`, `fs.write`, `memory.read`, `memory.write`,
 > `memory.forget`, `shell.exec`, `web.fetch`, `web.post`.
 > Adding to or removing from this list requires a

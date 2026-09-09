@@ -34,7 +34,7 @@ How a mission works:
    surfaces the decision. You approve or reject, and it continues.
 5. When it's done, you get a summary of what happened.
 
-Missions are where Aivyx's **teams** come in — for a complex job, a lead
+Missions are where Aivyx PA's **teams** come in — for a complex job, a lead
 assistant can delegate steps to a crew of specialists, each with only the access
 its job needs. See the [Teams](07-teams.md) page for how that's set up.
 

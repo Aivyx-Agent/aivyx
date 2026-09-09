@@ -13,7 +13,7 @@
 ### 0 · Pre-walkthrough (the Gatehouse baptism attempt)
 - **P2 — host firewalls are invisible in the exposure story.** UFW on the
   rig allowed 22 and silently dropped 7843: the operator saw a browser
-  that "never populated" with zero feedback, while every Aivyx-side
+  that "never populated" with zero feedback, while every Aivyx PA-side
   check was green (bind, token, cookie, /ws upgrade). Fix candidates:
   INSTALL.md + GATEHOUSE.md mention distro firewalls next to the bind
   knobs; possibly a startup hint when binding off-loopback ("if clients
@@ -266,7 +266,7 @@
   or member prompts should say "your inputs arrive in the message,
   not on disk."
 - **Positives:** mission journaling is rich and readable
-  (`aivyx team: [researcher] → web.fetch` per call); the artifact
+  (`aivyx-pa team: [researcher] → web.fetch` per call); the artifact
   verdict honestly REJECTED the mission with a precise reason ("the
   one-line summary was stored in memory, but no conditions-brief.md
   exists"); member envelopes are correctly attenuated per role (the
@@ -326,7 +326,7 @@
   `22012KT` (220° at 12 kt) rendered as "220 kt" in the wind column —
   the identifier/precision family again, now in structured-data
   reading. Feeds the same Candor-style fidelity-check candidate.
-- **Positive — abort:** `aivyx team abort <id>` on an executing
+- **Positive — abort:** `aivyx-pa team abort <id>` on an executing
   mission halted it at the next step boundary; phase flipped to
   `halted` with `halt_reason: "aborted by operator"` persisted and the
   journal line matching. **Section 3 complete** — open items feed the
@@ -353,7 +353,7 @@
   `overall_conditions` holds 6 entries from the mission retries,
   including a direct contradiction ("No METAR data available" vs "All
   three Australian airports are VFR"). Concord detects conflicts but
-  only the CLI (`aivyx memory conflicts`) surfaces them — the Memory
+  only the CLI (`aivyx-pa memory conflicts`) surfaces them — the Memory
   screen should badge conflicted topics.
 - _(watch-item)_ wiki page keyed `operator-note` (singular) vs live
   memory topic `operator-notes` (plural) — verify backlinks connect;
@@ -403,7 +403,7 @@
   `suggest-next-steps` 0.72; negatives (arithmetic, raw METAR ask)
   stay silent at the 0.50 floor; an ambiguous multi-intent goal
   injected exactly ONE skill (top-1 discipline). **Teach→use proven
-  end-to-end**: `aivyx skills teach metar-decode …` was live on the
+  end-to-end**: `aivyx-pa skills teach metar-decode …` was live on the
   next turn with no restart, injected at 0.76, and the reply followed
   the taught procedure's format. **Update→use proven** after the check
   caught two more bugs, both fixed same-day (a237e44 + 2055272):
@@ -550,7 +550,7 @@ provide a quick summary" →
   observation shows the *invocation* carries the true channel
   session id and `TurnStarted` the divergent one.)
 
-### 12 · TUI (`aivyx tui` on the rig)
+### 12 · TUI (`aivyx-pa tui` on the rig)
 - 5 views (Chat / Missions / Dashboard / Audit / Tools); Chat +
   Missions live, Dashboard minimal-live, **Audit + Tools are known
   placeholders** (the /classic-port backlog — not new findings).
@@ -592,7 +592,7 @@ provide a quick summary" →
 - **P2 FOUND + FIXED before launch (af9e8be):** the shell hardcoded
   `http://127.0.0.1:7843` and would spawn a *local* daemon when
   nothing listened — unusable against the rig/Harbor topology.
-  `AIVYX_STUDIO_URL` now overrides the webview URL, reachability
+  `AIVYX_PA_STUDIO_URL` now overrides the webview URL, reachability
   probe, and gate-watcher ws endpoint; daemon spawn/stop stays
   local-only.
 - **Operator walkthrough (2026-07-06, launched from the dev machine
@@ -603,15 +603,15 @@ provide a quick summary" →
   (process verified alive). The full remote-appliance path a Harbor
   user will take works end-to-end.
 - **P3 FOUND + FIXED:** the gate watcher hot-looped 1/s against the
-  Gatehouse's permanent 401. Now: `AIVYX_STUDIO_TOKEN` authenticates
+  Gatehouse's permanent 401. Now: `AIVYX_PA_STUDIO_TOKEN` authenticates
   the watcher (`Authorization: Bearer` on the ws upgrade — remote
   gate notifications enabled), and an unauthorized connection says
   why once and stops instead of retrying forever.
 - Cosmetic (platform, not ours): libayatana-appindicator deprecation
   warning from the distro tray library.
 - Operator UX note: the Gatehouse token had been forgotten — recovery
-  was reading it from the rig's `aivyx.toml`. A future
-  "reveal/regenerate token" affordance (CLI `aivyx doctor` hint or
+  was reading it from the rig's `aivyx-pa.toml`. A future
+  "reveal/regenerate token" affordance (CLI `aivyx-pa doctor` hint or
   Settings) would smooth this; backlog.
 
 **CHAPTER VITRINE WALKTHROUGH COMPLETE — sections 0–13 all walked
@@ -691,7 +691,7 @@ Create-Agent nav, Nonagon role templates).
   config).
 - **P2 (product) — settings coverage is thin.** Operator verdict: the
   screen exposes a limited subset of the config surface; he wants a
-  future chapter to inventory `aivyx.toml`'s operator-relevant knobs
+  future chapter to inventory `aivyx-pa.toml`'s operator-relevant knobs
   and expose them properly ("more settings for the end user"). Queue
   as a v0.9 chapter candidate alongside the UI modernization pass.
 - **P3 (safety UX) — autonomy-tier knobs deserve a louder confirm.**
@@ -705,7 +705,7 @@ Create-Agent nav, Nonagon role templates).
 ### 10 · MCP (Lantern) + Voice
 - **MCP — P2 (product, the operator's headline): the screen is
   read-only.** No add, edit, update, or remove — MCP servers are
-  manageable only by hand-editing `[[mcp_server]]` in `aivyx.toml` +
+  manageable only by hand-editing `[[mcp_server]]` in `aivyx-pa.toml` +
   restart. Operator wants full lifecycle management in the Studio.
   Chapter candidate: the established write-half recipe (shared
   toml_edit writer + server-side validation + restart-required UX,

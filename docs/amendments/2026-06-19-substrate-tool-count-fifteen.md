@@ -66,7 +66,7 @@ count post-A12 is now fifteen.
 
 ## The amended rule
 
-> **Aivyx core ships exactly fifteen first-party tools forever:
+> **Aivyx PA core ships exactly fifteen first-party tools forever:
 > `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`,
 > `memory.read`, `memory.write`, `memory.forget`,
 > `shell.exec`, `web.fetch`, `web.post`, `web.extract`,
@@ -83,7 +83,7 @@ does not say" section — is unchanged.
 ## Why these are substrate, not third-party
 
 P10's burden of proof is on every core addition: a tool belongs
-in substrate only if Aivyx without it cannot do basic
+in substrate only if Aivyx PA without it cannot do basic
 operator-useful work, and the default answer is "third party."
 
 - **`web.extract`** clears the bar the same way `web.fetch`

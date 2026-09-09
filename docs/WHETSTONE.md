@@ -9,7 +9,7 @@
 > default byte-identical, propose-only; **no new agent tool, capability base,
 > or P10 amendment** (one routine storage domain, 23→24). Full suite + clippy +
 > `cargo deny` green; zero new deps. The locked reference for the
-> chapter that turns Aivyx's skills from a *static list* into something
+> chapter that turns Aivyx PA's skills from a *static list* into something
 > that **gets better through use**. Skills already exist as first-class,
 > governed parts of the agent's identity — authored by the operator
 > (`skills.teach`) or proposed by the agent (the auto-proposer) — and a
@@ -97,7 +97,7 @@ samples to be confident, the pass:
 
 This reuses `skills.propose` / `reflection.propose` and the persona
 governance wholesale: a refinement is operator-approved, on the signed
-chain, audited, and revertible (`aivyx persona revert`) — the persona
+chain, audited, and revertible (`aivyx-pa persona revert`) — the persona
 invariant (every applied delta is operator-approved) holds.
 
 ### Opt-in, best-effort, byte-identical default
@@ -142,7 +142,7 @@ proposals).
 | **WH.3** ✅ | **The refinement engine** | DONE. `skill_refinement.rs`: `propose_skill_refinements(ledger, learned_skills_raw, drafter, proposal_log, config, …)` reads `underperformers`, drafts a sharper procedure (`RefinementDrafter` trait + production `LlmRefinementDrafter`), and files the **linked supersession pair** — `AppendList(v2)` (`provenance: agent` + reason, `refined_from`, `version+1`) + `RemoveList(raw v1 JSON)`, cross-linked via `supersedes_proposal_id` — through `append_pending`. Takes the **raw** stored JSON so the retire matches even a pre-Whetstone entry; deterministic ids dedup re-runs; `enabled=false` default. 3 tests (underperformer → cross-linked pair w/ agent provenance + lineage + exact-v1 retire; healthy/disabled/missing → nothing; re-run dedups). Channel 1004 + clippy green. |
 | **WH.3b** ✅ | **Wire the measurement live** | DONE. The `[skill_refinement]` config (`aivyx-config`: `SkillRefinementConfig` + `RawSkillRefinement` + `build_skill_refinement_config`, default `None`/byte-identical). `Option<Arc<SkillEffectivenessLedger>>` plumbed through `DaemonConfig` → `ConnectionContext`, built in `aivyx.rs` only when `[skill_refinement]` is present. `record_turn_skills` folded at the turn-finalize spawn (`helpful = TurnOutcome::Completed`), detached + failure-isolated, mirroring the tool-relevance hook. Channel 1004 / e2e 30 / cli 470 / config 350 + clippy green. |
 | **WH.3c** ✅ | **Schedule the pass** | DONE. `SkillRefinementDeps` bundle + `run_skill_refinement_pass` in `reflection_scheduler` (reads the effective persona's `learned_skills` via `compute_effective_persona` + the ledger → `propose_skill_refinements`), threaded as a new `Option<SkillRefinementDeps>` through `run_reflection_scheduler`/`fire_reflection` alongside the consolidation passes. Deps assembled in `daemon_server` from `DaemonConfig` (config + ledger + proposal/persona logs + a production `LlmRefinementDrafter` built in `aivyx.rs`), armed only when `[skill_refinement].enabled`. Channel 1004 / e2e 30 / cli 470 + clippy green. |
-| **WH.4** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps. README (Whetstone in phases shipped; storage domains 23→24; Rust tests), CHANGELOG entry, and an `[skill_refinement]` section in `examples/aivyx.toml` (with the "refinements surface in the Agents UI" note). Status flipped to COMPLETE; recorded. |
+| **WH.4** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps. README (Whetstone in phases shipped; storage domains 23→24; Rust tests), CHANGELOG entry, and an `[skill_refinement]` section in `examples/aivyx-pa.toml` (with the "refinements surface in the Agents UI" note). Status flipped to COMPLETE; recorded. |
 
 **Discipline:** WH.1 ships the model substrate **inert** (a backward-
 compatible format extension, no behavior). WH.2 adds the *signal*

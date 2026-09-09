@@ -80,7 +80,7 @@ evolution step is operator-approved and audit-verifiable.
    parallel chain (implementation choice for Phase 59); the
    contract pins the *property* (HMAC-chained,
    append-only, offline-verifiable). The operator can run
-   `aivyx --verify-only` (or its successor) and confirm
+   `aivyx-pa --verify-only` (or its successor) and confirm
    that the Persona delta log has not been tampered with
    since it was last verified.
 
@@ -105,7 +105,7 @@ evolution step is operator-approved and audit-verifiable.
 
 5. **Persona is single-instance per operator.** Per **P1**
    and **P6**, there is exactly one Persona delta log per
-   Aivyx daemon, parallel to the single Profile. There is
+   Aivyx PA daemon, parallel to the single Profile. There is
    no "switch persona" gesture parallel to "switch role."
 
 6. **Persona writes are capability-secured.** The agent
@@ -138,7 +138,7 @@ evolution step is operator-approved and audit-verifiable.
   delta kinds*.
 
 - **It does not say reflection *must* propose Persona
-  deltas.** An operator may run Aivyx for years with an
+  deltas.** An operator may run Aivyx PA for years with an
   empty delta log. The contract pins what *happens when*
   Persona evolves, not that Persona *must* evolve.
 
@@ -176,7 +176,7 @@ evolution step is operator-approved and audit-verifiable.
 
 ## Why this is the most differentiating commitment after P8
 
-P8 already commits Aivyx to outcome-driven audited
+P8 already commits Aivyx PA to outcome-driven audited
 self-improvement at the *behavior* level: memory writes
 and role-config updates. P14 extends that posture to the
 *identity* level: the assistant's *voice* itself can
@@ -184,7 +184,7 @@ evolve, but every evolution step is operator-approved and
 audit-verifiable.
 
 This is the second time the contract pins a property that
-distinguishes Aivyx from "Claude with a memory store" or
+distinguishes Aivyx PA from "Claude with a memory store" or
 "AutoGPT with self-improvement." P8 was the first — *outcome-
 driven evolution with full audit legibility*. P14 is the
 second — *identity evolution with full audit legibility*.

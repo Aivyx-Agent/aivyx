@@ -1,7 +1,7 @@
 # Create your agent
 
 This is the guided setup that gives your assistant its identity. You can run it
-in the terminal (`aivyx init`) or in the Studio's **Create** screen — both do the
+in the terminal (`aivyx-pa init`) or in the Studio's **Create** screen — both do the
 same thing and write to the same place.
 
 It has three steps: **Profile → Persona seed → Access**.
@@ -57,7 +57,7 @@ deleting or overwriting a file, sending an email, spending money. Access level
 sets the *reach*; the confirmation step is your safety net on top.
 
 You can change the level any time later (the **Settings** screen, or
-`aivyx access`).
+`aivyx-pa access`).
 
 ## After setup
 

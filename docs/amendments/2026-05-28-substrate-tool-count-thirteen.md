@@ -67,7 +67,7 @@ qualifier pattern).
 
 ## The amended rule
 
-> **Aivyx core ships exactly thirteen first-party tools
+> **Aivyx PA core ships exactly thirteen first-party tools
 > forever: `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`,
 > `memory.read`, `memory.write`, `memory.forget`,
 > `shell.exec`, `web.fetch`, `web.post`, `git.status`,
@@ -128,10 +128,10 @@ The other seven declared-but-toolless scopes stay deferred:
 - `shell.spawn` — long-running process spawn; distinct from
   `shell.exec`'s short-lived shape. Phase-later.
 - `audit.read` — agent-facing read of the audit chain.
-  Overlaps with `aivyx audit export` (Phase 105) but at the
+  Overlaps with `aivyx-pa audit export` (Phase 105) but at the
   agent layer; phase-later if pressure surfaces.
 - `config.read` / `config.write` — agent introspection /
-  mutation of `aivyx.toml`. Substrate-design adjacent;
+  mutation of `aivyx-pa.toml`. Substrate-design adjacent;
   phase-later.
 - `audit.read`, `shell.spawn` are the most likely
   near-term candidates. The others may stay reserved.

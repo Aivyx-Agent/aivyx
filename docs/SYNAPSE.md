@@ -97,7 +97,7 @@ as a **documented runbook** + whatever the chapter can verify
 automatically (e.g., a `profile = "smart"` daemon boots, the sweeps arm,
 the Studio screens are reachable). The runbook walks the operator through
 arming `smart`, writing memories, watching the breadcrumbs
-(`aivyx graph-sweep: …`, `aivyx recall-graph: …`), and confirming the
+(`aivyx-pa graph-sweep: …`, `aivyx-pa recall-graph: …`), and confirming the
 Studio Wiki/Graph fill in.
 
 ### Affordances — the agent knows the tools, the operator sees the path
@@ -135,7 +135,7 @@ two flaky tests surfaced during the arc (`budget_gate`, persona-log) is a
 | **SY.0** | **This design contract** | locked reference; banner flips per phase |
 | **SY.1** ✅ | **`[memory] profile` switch** | DONE. `MemoryProfile` {`Off` (default), `Smart`} + `[memory] profile` on the existing `[memory]` section; the load-time expansion: `build_embedding_config(raw, smart)` arms `recall_hybrid` / `recall_graph_hops=1` / `recall_wiki_weight=1.0` / `recall_graph_typed_weight=1.0` when unset, and `[recall_cluster]` / `[wiki]` / `[graph]` are synthesized `enabled` (default caps) when *absent* (an explicitly-present section wins). Default `off` ⇒ byte-identical; expansion fills the fields the daemon already reads (zero daemon wiring; `Config.memory_profile` is introspection-only). 3 tests (off unchanged; smart arms the bundle; explicit `recall_hybrid=false` + `[wiki] enabled=false` beat smart). |
 | **SY.2** ✅ | **End-to-end integration proof** | DONE. `crates/aivyx-channel/tests/memory_stack_e2e.rs` — a `RoutingProvider` (answers the wiki call with a summary, the graph call with a JSON triple array, switching on the system prompt) + a `ConstEmbed`; seeds memory (`deploy` semantically reachable, `ci` reachable *only* via the graph), runs the wiki + graph sweeps, asserts a page + a *canonical* `depends-on` triple (Lexicon fold of `requires`), runs `graph.query` (store + the tool), then a `recall_hybrid` + wiki + typed-graph context and asserts the block fuses the semantic entry **+** the wiki summary **+** the typed-graph-only `ci` entry — the whole stack in one turn. Passes; clippy clean. |
-| **SY.3** ✅ | **Affordance + activation docs** | DONE. `graph.query` description sharpened to a when-to-use affordance (relate/depend/connect/caused/owns/contains questions). Studio Wiki + Graph empty states repointed at `[memory] profile = "smart"` (bundle rebuilt `dx bundle --release` + `dist/` committed; wasm carries the new strings). A "smart memory — one switch" section added to `examples/aivyx.toml` + the README highlight. The operator live-verify runbook lands as **§6** (real-Ollama, ~10 min, steps + the one expected escalation). |
+| **SY.3** ✅ | **Affordance + activation docs** | DONE. `graph.query` description sharpened to a when-to-use affordance (relate/depend/connect/caused/owns/contains questions). Studio Wiki + Graph empty states repointed at `[memory] profile = "smart"` (bundle rebuilt `dx bundle --release` + `dist/` committed; wasm carries the new strings). A "smart memory — one switch" section added to `examples/aivyx-pa.toml` + the README highlight. The operator live-verify runbook lands as **§6** (real-Ollama, ~10 min, steps + the one expected escalation). |
 | **SY.4** ✅ | **Finalize** | DONE. Full workspace suite + `cargo clippy --workspace` (0) + `cargo deny` (licenses + advisories) green; zero new deps; README phases line + CHANGELOG note the switch; banner flipped to COMPLETE; recorded. |
 
 **Discipline:** SY.1's default stays `off` (byte-identical) — the switch
@@ -166,14 +166,14 @@ runbook is the human check that a **real model** drives it — the
 verification the arc skipped. ~10 minutes, needs Ollama + a tool-capable
 model.
 
-1. **Configure smart memory.** In `aivyx.toml`, set an `[embedding]`
+1. **Configure smart memory.** In `aivyx-pa.toml`, set an `[embedding]`
    section (a real or local OpenAI-compatible embedder) and the one
    switch:
    ```toml
    [memory]
    profile = "smart"
    ```
-2. **Boot the daemon** (`aivyx`). You should see the sweep timers arm; no
+2. **Boot the daemon** (`aivyx-pa`). You should see the sweep timers arm; no
    error. Open the Studio (`:7843`) — the **Wiki** and **Graph** screens
    are reachable (empty for now).
 3. **Give it something to remember.** Over a few turns, tell the agent
@@ -183,7 +183,7 @@ model.
 4. **Wait one sweep interval** (default 1 h; lower `[wiki].interval_secs`
    / `[graph].interval_secs` to a minute to verify fast). Watch the daemon
    log for the breadcrumbs:
-   - `aivyx graph-sweep: N triple(s) from M topic(s) …`
+   - `aivyx-pa graph-sweep: N triple(s) from M topic(s) …`
    - (the wiki sweep writes silently; check the screen)
 5. **Confirm the layers filled in (Studio).** The **Wiki** screen now
    lists pages with LLM summaries; the **Graph** screen shows entity nodes
@@ -193,7 +193,7 @@ model.
    pipeline?" The agent should call **`graph.query`** (visible in the audit
    chain) and answer from the graph.
 7. **Confirm recall fuses it.** Ask about a topic; the daemon log's
-   `aivyx recall: …` / `aivyx recall-graph: …` breadcrumbs should show the
+   `aivyx-pa recall: …` / `aivyx-pa recall-graph: …` breadcrumbs should show the
    wiki summary + typed-graph neighbors entering the turn's context.
 
 If steps 5–7 hold, the whole Loom→Lexicon stack is live and working from

@@ -49,7 +49,7 @@ Phase 100 merely shipped the tools that exercise them.
 
 ## The amended rule
 
-> **Aivyx core ships exactly ten first-party tools forever:
+> **Aivyx PA core ships exactly ten first-party tools forever:
 > `fs.read`, `fs.write`, `fs.delete`, `fs.metadata`,
 > `memory.read`, `memory.write`, `memory.forget`,
 > `shell.exec`, `web.fetch`, `web.post`. Adding to or

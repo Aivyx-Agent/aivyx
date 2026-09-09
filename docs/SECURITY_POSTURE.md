@@ -1,4 +1,4 @@
-# Aivyx Security Posture — what an autonomous agent can and cannot do
+# Aivyx PA Security Posture — what an autonomous agent can and cannot do
 
 > **Status:** living reference. This document describes the **actual,
 > in-tree containment model** as the codebase stands today — not a future
@@ -6,7 +6,7 @@
 > *"If I give my agent real reach and let it run on its own, what's the
 > blast radius?"*
 >
-> The honest one-line answer: **Aivyx is a deliberately-contained capable
+> The honest one-line answer: **Aivyx PA is a deliberately-contained capable
 > agent.** The dangerous-autonomy potential is genuinely present in the
 > capability surface, but four enforced layers stand between that surface
 > and a runaway — and the agent **cannot widen its own authority or arm
@@ -175,7 +175,7 @@ The agent's authority is a fixed point the operator sets. It can act
 
 Every tool call, escalation, refusal, config change, and persona mutation
 is an `AuditEvent` appended to a single **HMAC-chained** audit log
-(`aivyx audit export`, `aivyx --verify-only`). Headless refusals are their
+(`aivyx-pa audit export`, `aivyx-pa --verify-only`). Headless refusals are their
 own queryable event (`HeadlessRefusal`). There is no off-the-record path:
 "removes the human, never removes the audit" is a structural invariant. A
 later forensic walk sees exactly what was done, attempted, and declined.
@@ -207,7 +207,7 @@ security failure:
   `fs.read` `~/.aws/credentials`, `.env` files, SSH keys — and exfiltrate them.
   The **sensitive-path read guard** now refuses reads of a curated secret set
   (`~/.ssh`, `~/.aws`, `~/.gnupg`, cloud/k8s/docker creds, browser profiles,
-  `.env`, private keys, **and Aivyx's own encrypted store + `daemon.env`
+  `.env`, private keys, **and Aivyx PA's own encrypted store + `daemon.env`
   passphrase**) by default at every reach level, independent of `fs_root` — the
   read tools (`fs.read`, the data readers) refuse on the *canonical* path, so a
   symlink to a secret is caught too. The operator opts specific paths back in

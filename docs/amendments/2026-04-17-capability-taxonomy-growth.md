@@ -133,7 +133,7 @@ rejects any base not in the array at parse time.
 
 ## Kitchen vertical-pack addendum — `kitchen.*` (2026-06-07)
 
-> *Added with the first Aivyx **vertical pack** — Kitchen /
+> *Added with the first Aivyx PA **vertical pack** — Kitchen /
 > Back-of-House (see `docs/VERTICAL_PACKS.md`). Three new bases gate
 > the `aivyx-kitchen` tool process over the existing KitchenDB:
 > `kitchen.read` (inventory / recipe / supplier / PO / alert reads +
@@ -439,7 +439,7 @@ Total: 16 + 5 + 28 + 18 = 67.
 > task.* + health.* surface. The aivyx-toolkit
 > harness gains two budget-tracking tools surfacing
 > a JSON-persisted entry store at
-> `~/.aivyx/tool-processes/toolkit/budget.json`:
+> `~/.aivyx-pa/tool-processes/toolkit/budget.json`:
 > reads via `budget.summary` (aggregate totals +
 > by-category breakdown over a period); writes via
 > `budget.record` (single new entry append). Two
@@ -488,7 +488,7 @@ Total: 16 + 5 + 28 + 20 = 69.
 
 ## Phase 173 addendum — Autonomous Loop backlog tools (2026-06-05)
 
-> *Added at Phase 173 exit. The Aivyx-native answer to the
+> *Added at Phase 173 exit. The Aivyx PA-native answer to the
 > Ralph technique (snarktank/ralph): an autonomous,
 > self-re-arming task loop that fires a fresh-context agent
 > turn per iteration over an operator-stocked backlog. Two
@@ -520,7 +520,7 @@ Total: 16 + 5 + 30 + 20 = 71.
 
 ## Phase 175 addendum — Loop progress log (2026-06-06)
 
-> *Added at Phase 175 exit. The Aivyx Ralph loop's
+> *Added at Phase 175 exit. The Aivyx PA Ralph loop's
 > cross-iteration learning: a reserved memory topic
 > (`loop:progress`) holds durable notes the driver injects
 > into each fresh iteration's prompt. One new channel-tier

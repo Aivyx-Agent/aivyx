@@ -15,13 +15,13 @@ Phase 56 batch).
 
 The original pitch sentence read:
 
-> **Aivyx is a personal autonomous agent platform that runs on
+> **Aivyx PA is a personal autonomous agent platform that runs on
 > your hardware, talks to cloud LLMs under your own API key, and
 > never compromises privacy or auditability for the sake of a
 > feature.**
 
 After Phase 55, the operator restated the vision more
-specifically — Aivyx is being built as a self-learning,
+specifically — Aivyx PA is being built as a self-learning,
 self-improving AI-*personal-assistant* with a user-defined
 Profile and Persona, not as a generic *"autonomous agent
 platform."* The pitch is amended to reflect the narrower
@@ -29,7 +29,7 @@ target.
 
 The new pitch is:
 
-> **Aivyx is a self-learning, self-improving AI-personal
+> **Aivyx PA is a self-learning, self-improving AI-personal
 > assistant with a user-defined Profile and Persona, running
 > on your hardware, talking to cloud or local LLMs under
 > your own credentials, and never compromising privacy or
@@ -50,7 +50,7 @@ did not name.
 Three substantive shifts:
 
 1. **"Personal autonomous agent platform" → "AI-personal
-   assistant".** The original framing positioned Aivyx as a
+   assistant".** The original framing positioned Aivyx PA as a
    generic substrate for autonomous agents of any shape. The
    amended framing positions it as a personal-assistant
    product. The substrate is unchanged; the lens is

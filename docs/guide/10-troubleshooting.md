@@ -7,7 +7,7 @@ Most problems fall into a handful of buckets. Start here before digging deeper.
 Whatever's wrong, this is the fastest first move:
 
 ```sh
-aivyx doctor
+aivyx-pa doctor
 ```
 
 It checks your model connection, your config, and a live test reply, and tells
@@ -16,22 +16,22 @@ you specifically what's broken and how to fix it.
 ## Common issues
 
 **The first reply is empty or cut off.**
-Usually a local-model setup issue. Aivyx normally sizes the model's context
+Usually a local-model setup issue. Aivyx PA normally sizes the model's context
 window for you; if you set it manually and made it too small, the assistant can
-get starved. Run `aivyx doctor` — it flags this. Make sure you pulled a
+get starved. Run `aivyx-pa doctor` — it flags this. Make sure you pulled a
 **tool-capable** model (for example `qwen3:8b`); very small models that can't
 call tools won't work well as an assistant.
 
 **The Studio won't load / says disconnected.**
 The Studio is just a window onto the background daemon. If it can't connect, the
-daemon probably isn't running. Launch `aivyx` from a terminal and reload the
+daemon probably isn't running. Launch `aivyx-pa` from a terminal and reload the
 page. The Studio is served at **http://127.0.0.1:7843** by default.
 
 **"Connection refused" to the model.**
 Your model backend isn't reachable. For a local model, make sure Ollama (or your
 chosen runtime) is running. For a provider, check that your API key is set and
 valid — the setup wizard verifies the key before saving, so a re-run of
-`aivyx init` will catch a bad one.
+`aivyx-pa init` will catch a bad one.
 
 **The assistant won't do something / says it's not allowed.**
 That's the access and permission system working as intended. Check your **access
@@ -54,6 +54,6 @@ lists the exact package names.
 
 - **The audit log** records every action the assistant took — the ground truth
   when you want to know exactly what happened.
-- **Run `aivyx doctor`** any time; it's safe to run repeatedly.
+- **Run `aivyx-pa doctor`** any time; it's safe to run repeatedly.
 - For installation and platform-specific help, see the
   [install guide](https://github.com/Aivyx-Agent/aivyx/blob/main/docs/INSTALL.md).

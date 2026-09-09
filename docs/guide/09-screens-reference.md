@@ -37,7 +37,7 @@ recorded.
 
 ## Voice
 
-Aivyx can talk and listen. Voice runs as a local loop on your own machine — your
+Aivyx PA can talk and listen. Voice runs as a local loop on your own machine — your
 audio is processed locally, not streamed to a cloud service. The Voice screen is
 where you configure it and see whether it's ready; you start a voice session from
 the command line.

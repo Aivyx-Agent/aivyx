@@ -15,7 +15,7 @@
 
 ## 1. Why this chapter
 
-Aivyx is an agent platform; it lives and dies on tool-calling. The free local
+Aivyx PA is an agent platform; it lives and dies on tool-calling. The free local
 on-ramp (Chapter P) gets a user inferring with Ollama / llama.cpp / an in-process
 GGUF in minutes — but **small local models are fragile on the agent loop in a way
 no amount of prompting has fixed.** Four substrate phases proved the ceiling is at
@@ -219,9 +219,9 @@ Run the same prompt twice — once with `constrain_tool_calls = false`, once
 
 ```sh
 mkdir -p /tmp/aivyx-stencil && echo "stencil ok" > /tmp/aivyx-stencil/probe.txt
-AIVYX_PASSPHRASE=… aivyx daemon run            # start the daemon with the config above
+AIVYX_PA_PASSPHRASE=… aivyx-pa daemon run            # start the daemon with the config above
 # In another shell, drive one turn:
-aivyx say "read probe.txt and tell me what it contains"
+aivyx-pa say "read probe.txt and tell me what it contains"
 ```
 
 **Pass criteria (flag ON):**
