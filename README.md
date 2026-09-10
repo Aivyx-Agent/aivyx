@@ -41,7 +41,7 @@ one-line shell installer (a prebuilt binary for your platform):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh | sh
+  https://github.com/Aivyx-Agent/aivyx-pa/releases/latest/download/aivyx-cli-installer.sh | sh
 ```
 
 Prefer to compile? The build-from-source steps below work too.
@@ -56,7 +56,7 @@ and [`docs/DOCKER.md`](docs/DOCKER.md).
 **Want a native app instead of the CLI?** Aivyx PA ships **`aivyx-desktop`** —
 the Studio in a native window with a system tray, approval notifications, and a
 summon hotkey. Grab the `.deb` (Linux) or `.app` (macOS) from the
-[latest release](https://github.com/Aivyx-Agent/aivyx/releases/latest), or see
+[latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest), or see
 [`docs/INSTALL.md`](docs/INSTALL.md#desktop-app).
 
 **On Windows?** There's no native Windows binary yet (the daemon's
@@ -77,8 +77,8 @@ contains. The manual path below is shown for reference.
 ollama pull qwen3:8b
 
 # 2. Build aivyx-pa
-git clone https://github.com/Aivyx-Agent/aivyx
-cd aivyx
+git clone https://github.com/Aivyx-Agent/aivyx-pa
+cd aivyx-pa
 cargo build --release --bin aivyx-pa
 
 # 3. Drop a minimal config in your CWD
