@@ -568,12 +568,6 @@ against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
 agent to anything sensitive.
 
-**You're running.** Open the Studio in a browser — it has its own
-built-in guide (Welcome → Getting started → Create your agent) that
-picks up exactly where this file leaves off. Everything below this
-point is reference material for specific channels and features, not
-required reading.
-
 ## Running as a service — runs for days (Chapter Anchor)
 
 `aivyx-pa` is most useful left running: the daemon keeps its scheduled
@@ -619,6 +613,12 @@ aivyx-pa daemon uninstall
 
 Re-running `aivyx-pa daemon install` is idempotent — it rewrites the unit
 and restarts the service, picking up a new binary path or `--web-ui`.
+
+**You're running.** Open the Studio in a browser — it has its own
+built-in guide (Welcome → Getting started → Create your agent) that
+picks up exactly where this file leaves off. Everything below this
+point is reference material for specific channels and features, not
+required reading.
 
 ## Running Aivyx PA on Discord (Phase 107)
 
