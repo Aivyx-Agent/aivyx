@@ -3,6 +3,13 @@
 This doc covers the full install matrix. For the abbreviated
 "Five-minute setup" path, see the [root README](../README.md).
 
+**This file has two parts.** Everything from here through "Running as a
+service" (a few hundred lines) is the actual install-and-first-run path
+— read that much and you'll have a working, running daemon. Everything
+after that point is a per-channel, per-feature reference (Discord, Slack,
+the TUI, memory internals, and 60+ more) — useful once you're running,
+not required reading to get there.
+
 Aivyx PA ships a single binary, `aivyx-pa`, plus five optional channel
 adapters baked into it (CLI, Telegram, Discord, Slack, Web UI).
 There are no hosted dependencies — your binary talks directly to
@@ -79,7 +86,7 @@ wsl --install --from-file Aivyx-PA.wsl        # WSL 2.4.4+ (installs a distro na
 ```
 
 Grab `Aivyx-PA.wsl` from the
-[latest release](https://github.com/Aivyx-Agent/aivyx/releases/latest)
+[latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest)
 (or double-click it in Explorer on WSL 2.4.4+). On first launch it
 creates your user, then:
 
@@ -99,7 +106,7 @@ wsl --install            # installs WSL2 + a default Ubuntu
 ```sh
 # Inside the WSL2 (Ubuntu) shell — the normal Linux install:
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
+  https://github.com/Aivyx-Agent/aivyx-pa/releases/latest/download/aivyx-cli-installer.sh \
   | sh
 aivyx-pa --version
 aivyx-pa init
@@ -186,8 +193,8 @@ of the repository:
   equivalent
 
 ```sh
-git clone https://github.com/Aivyx-Agent/aivyx
-cd aivyx
+git clone https://github.com/Aivyx-Agent/aivyx-pa
+cd aivyx-pa
 cargo build --release --bin aivyx-pa
 # binary lands at target/release/aivyx-pa
 ```
@@ -266,19 +273,19 @@ the right tarball, verifies its checksum, and drops `aivyx-pa` into
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Aivyx-Agent/aivyx/releases/latest/download/aivyx-cli-installer.sh \
+  https://github.com/Aivyx-Agent/aivyx-pa/releases/latest/download/aivyx-cli-installer.sh \
   | sh
 aivyx-pa --version
 # aivyx-pa x.y.z
 ```
 
 For a specific version, replace `latest` with the tag (see the
-[Releases page](https://github.com/Aivyx-Agent/aivyx/releases) for
+[Releases page](https://github.com/Aivyx-Agent/aivyx-pa/releases) for
 available tags):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Aivyx-Agent/aivyx/releases/download/vX.Y.Z/aivyx-cli-installer.sh \
+  https://github.com/Aivyx-Agent/aivyx-pa/releases/download/vX.Y.Z/aivyx-cli-installer.sh \
   | sh
 ```
 
@@ -560,6 +567,12 @@ For deployment guidance (threat model, what Aivyx PA defends
 against, what it doesn't), read
 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) before exposing the
 agent to anything sensitive.
+
+**You're running.** Open the Studio in a browser — it has its own
+built-in guide (Welcome → Getting started → Create your agent) that
+picks up exactly where this file leaves off. Everything below this
+point is reference material for specific channels and features, not
+required reading.
 
 ## Running as a service — runs for days (Chapter Anchor)
 
