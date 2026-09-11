@@ -1,5 +1,8 @@
 # Aivyx PA
 
+[![CI](https://github.com/Aivyx-Agent/aivyx-pa/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Aivyx-Agent/aivyx-pa/actions/workflows/ci.yml)
+[![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
+
 > A personal autonomous agent platform that runs on your hardware,
 > talks to cloud LLMs under your own API key, and never compromises
 > privacy or auditability for the sake of a feature.
